@@ -1,0 +1,63 @@
+// UniFFI interface definition for Aether
+//
+// This file defines the FFI boundary between Rust and native clients (Swift, Kotlin, C#).
+// UniFFI will automatically generate type-safe bindings from this definition.
+
+namespace aether {};
+
+// Processing states for Aether system
+enum ProcessingState {
+  "Idle",
+  "Listening",
+  "Processing",
+  "Success",
+  "Error"
+};
+
+// Error type for all Aether operations
+[Error]
+enum AetherError {
+  "HotkeyError",
+  "ClipboardError",
+  "CallbackError",
+  "Other"
+};
+
+// Main interface for Aether core
+interface AetherCore {
+  // Constructor - creates new AetherCore with event handler
+  [Throws=AetherError]
+  constructor(AetherEventHandler handler);
+
+  // Start listening for hotkey events
+  [Throws=AetherError]
+  void start_listening();
+
+  // Stop listening for hotkey events
+  [Throws=AetherError]
+  void stop_listening();
+
+  // Get current clipboard text
+  [Throws=AetherError]
+  string get_clipboard_text();
+
+  // Check if currently listening
+  boolean is_listening();
+};
+
+// Callback interface for events from Rust to client
+callback interface AetherEventHandler {
+  // Called when processing state changes
+  void on_state_changed(ProcessingState state);
+
+  // Called when hotkey is detected with clipboard content
+  void on_hotkey_detected(string clipboard_content);
+
+  // Called when an error occurs
+  void on_error(string message);
+};
+
+// Configuration dictionary (stub for Phase 1)
+dictionary Config {
+  string default_hotkey;
+};

@@ -1,0 +1,189 @@
+name: Aether
+options:
+  bundleIdPrefix: Rootazero
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+  generateEmptyDirectories: false
+
+settings:
+  base:
+    SWIFT_VERSION: 5.0
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+    MACOSX_DEPLOYMENT_TARGET: 13.0
+    SDKROOT: macosx
+    SUPPORTED_PLATFORMS: macosx
+    ENABLE_PREVIEWS: YES
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+    SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
+    STRING_CATALOG_GENERATE_SYMBOLS: YES
+
+targets:
+  Aether:
+    type: application
+    platform: macOS
+    sources:
+      - path: Aether/Sources
+        name: Sources
+        type: group
+    resources:
+      - path: Aether/Assets.xcassets
+        name: Assets
+      - path: Aether/Resources
+        name: Resources
+    info:
+      path: Aether/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: $(DEVELOPMENT_LANGUAGE)
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundlePackageType: $(PRODUCT_BUNDLE_PACKAGE_TYPE)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: "13.0"
+        LSUIElement: true
+        NSAppleEventsUsageDescription: "Aether needs to simulate keyboard input to paste AI responses into your applications."
+        NSHumanReadableCopyright: "Copyright © 2025 Aether. All rights reserved."
+        NSPrincipalClass: NSApplication
+    entitlements:
+      path: Aether/Aether.entitlements
+      properties:
+        com.apple.security.automation.apple-events: true
+        com.apple.security.device.audio-input: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: Rootazero.Aether
+        PRODUCT_NAME: $(TARGET_NAME)
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_APP_SANDBOX: YES
+        ENABLE_USER_SELECTED_FILES: readonly
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Aether/Info.plist
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path/../Frameworks"
+        OTHER_LDFLAGS:
+          - -Xlinker
+          - -no_application_extension
+        LIBRARY_SEARCH_PATHS:
+          - $(inherited)
+          - $(PROJECT_DIR)/Aether/Frameworks
+          - $(PROJECT_DIR)/Aether/core/target/debug
+        FRAMEWORK_SEARCH_PATHS:
+          - $(inherited)
+          - $(PROJECT_DIR)/Aether/Frameworks
+        HEADER_SEARCH_PATHS:
+          - $(inherited)
+          - $(PROJECT_DIR)/Aether/Sources/Generated
+        SWIFT_INCLUDE_PATHS:
+          - $(inherited)
+          - $(PROJECT_DIR)/Aether/Sources/Generated
+        # Enable module import for UniFFI FFI
+        # Import bridging header for UniFFI (provides access to aetherFFI.h)
+        SWIFT_OBJC_BRIDGING_HEADER: $(PROJECT_DIR)/Aether/Sources/AetherBridgingHeader.h
+        CLANG_ENABLE_MODULES: YES
+    dependencies:
+      - framework: Aether/Frameworks/libaethecore.dylib
+        embed: true
+        link: true
+    preBuildScripts:
+      - name: "Build Rust Core"
+        script: |
+          # Build Rust core library if needed
+          if [ "${CONFIGURATION}" = "Debug" ]; then
+              cd "${PROJECT_DIR}/Aether/core"
+              cargo build
+              # Copy debug library
+              cp target/debug/libaethecore.dylib "${PROJECT_DIR}/Aether/Frameworks/"
+          else
+              cd "${PROJECT_DIR}/Aether/core"
+              cargo build --release
+              # Copy release library
+              cp target/release/libaethecore.dylib "${PROJECT_DIR}/Aether/Frameworks/"
+          fi
+        basedOnDependencyAnalysis: false
+      - name: "Generate UniFFI Bindings"
+        script: |
+          # Generate Swift bindings from Rust
+          cd "${PROJECT_DIR}/Aether/core"
+
+          # Ensure bindings directory exists
+          mkdir -p bindings
+
+          # Use Python uniffi-bindgen to generate bindings
+          python3 "${PROJECT_DIR}/Aether/core/generate_bindings.py"
+
+          # Copy generated files to Xcode source directory
+          cp bindings/aether.swift "${PROJECT_DIR}/Aether/Sources/Generated/"
+          cp bindings/aetherFFI.h "${PROJECT_DIR}/Aether/Sources/Generated/"
+          cp bindings/aetherFFI.modulemap "${PROJECT_DIR}/Aether/Sources/Generated/"
+
+          # Fix unnecessary 'try' expressions in generated Swift code
+          # These callback methods don't throw, so 'try' causes warnings
+          sed -i '' 's/try swiftCallbackInterface\.onStateChanged(/swiftCallbackInterface.onStateChanged(/g' "${PROJECT_DIR}/Aether/Sources/Generated/aether.swift"
+          sed -i '' 's/try swiftCallbackInterface\.onHotkeyDetected(/swiftCallbackInterface.onHotkeyDetected(/g' "${PROJECT_DIR}/Aether/Sources/Generated/aether.swift"
+          sed -i '' 's/try swiftCallbackInterface\.onError(/swiftCallbackInterface.onError(/g' "${PROJECT_DIR}/Aether/Sources/Generated/aether.swift"
+
+          echo "UniFFI bindings generated, fixed, and copied successfully"
+        basedOnDependencyAnalysis: false
+
+  AetherTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: AetherTests
+        name: AetherTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: Rootazero.AetherTests
+        PRODUCT_NAME: $(TARGET_NAME)
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        BUNDLE_LOADER: $(TEST_HOST)
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Aether.app/Contents/MacOS/Aether
+        SWIFT_EMIT_LOC_STRINGS: NO
+    dependencies:
+      - target: Aether
+
+  AetherUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: AetherUITests
+        name: AetherUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: Rootazero.AetherUITests
+        PRODUCT_NAME: $(TARGET_NAME)
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Aether
+        SWIFT_EMIT_LOC_STRINGS: NO
+    dependencies:
+      - target: Aether
+
+schemes:
+  Aether:
+    build:
+      targets:
+        Aether: all
+        AetherTests: [test]
+        AetherUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - AetherTests
+        - AetherUITests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
