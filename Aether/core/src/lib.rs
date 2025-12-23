@@ -82,7 +82,7 @@ pub use crate::clipboard::{ArboardManager, ClipboardManager};
 pub use crate::config::Config;
 pub use crate::core::AetherCore;
 pub use crate::error::{AetherError, Result};
-pub use crate::event_handler::{AetherEventHandler, ProcessingState};
+pub use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 pub use crate::hotkey::{HotkeyListener, RdevListener};
 pub use crate::input::InputSimulator;
 

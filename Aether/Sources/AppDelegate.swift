@@ -24,8 +24,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Settings window
     private var settingsWindow: NSWindow?
 
-    // Permission manager
-    private var permissionManager = PermissionManager()
+    // Theme engine
+    private var themeEngine: ThemeEngine?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hide from Dock (menu bar only)
@@ -34,14 +34,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Set up menu bar
         setupMenuBar()
 
-        // Create Halo window
-        haloWindow = HaloWindow()
+        // Initialize theme engine
+        themeEngine = ThemeEngine()
+
+        // Create Halo window with theme engine
+        guard let themeEngine = themeEngine else {
+            print("[Aether] Error: ThemeEngine not initialized")
+            return
+        }
+        haloWindow = HaloWindow(themeEngine: themeEngine)
 
         // Initialize event handler
         eventHandler = EventHandler(haloWindow: haloWindow)
 
-        // Check permissions before initializing core
-        checkAndRequestPermissions()
+        // Connect event handler to halo window for error action callbacks
+        haloWindow?.setEventHandler(eventHandler!)
+
+        // Initialize Rust core
+        initializeRustCore()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -93,7 +103,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             settingsWindow = nil
         }
 
-        let settingsView = SettingsView()
+        guard let themeEngine = themeEngine else {
+            print("[Aether] Error: ThemeEngine not initialized")
+            return
+        }
+
+        let settingsView = SettingsView(themeEngine: themeEngine)
         let hostingController = NSHostingController(rootView: settingsView)
 
         let window = NSWindow(contentViewController: hostingController)
@@ -115,65 +130,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApplication.shared.terminate(nil)
     }
 
-    // MARK: - Permissions
-
-    private func checkAndRequestPermissions() {
-        if permissionManager.checkAccessibility() {
-            print("[Aether] Accessibility permission granted")
-            initializeRustCore()
-        } else {
-            print("[Aether] Accessibility permission not granted")
-            // Request permission (this adds app to Accessibility list but doesn't show system dialog)
-            permissionManager.requestAccessibility()
-            // Show our custom alert immediately
-            showPermissionAlert()
-        }
-    }
-
-    private func showPermissionAlert() {
-        let alert = NSAlert()
-        alert.messageText = "Accessibility Permission Required"
-        alert.informativeText = """
-        Aether needs Accessibility permission to:
-        • Detect global hotkey (⌘~)
-        • Read clipboard content
-        • Simulate keyboard input
-
-        Please grant permission in System Settings.
-        """
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Open System Settings")
-        alert.addButton(withTitle: "Quit")
-
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            // First, request accessibility permission (this adds app to the list)
-            permissionManager.requestAccessibility()
-            // Then open System Settings for user to enable it
-            permissionManager.openAccessibilitySettings()
-            // Start polling for permission grant
-            startPermissionPolling()
-        } else {
-            NSApplication.shared.terminate(nil)
-        }
-    }
-
-    private func startPermissionPolling() {
-        Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
-            guard let self = self else {
-                timer.invalidate()
-                return
-            }
-
-            if self.permissionManager.checkAccessibility() {
-                print("[Aether] Accessibility permission granted (polled)")
-                timer.invalidate()
-                self.initializeRustCore()
-            }
-        }
-    }
-
     // MARK: - Rust Core Initialization
+
+    private var coreInitRetryCount = 0
+    private let maxRetryAttempts = 3
 
     private func initializeRustCore() {
         guard let eventHandler = eventHandler else {
@@ -186,16 +146,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             core = try AetherCore(handler: eventHandler)
             print("[Aether] AetherCore initialized")
 
+            // Set core reference in event handler for retry functionality
+            eventHandler.setCore(core!)
+
             // Start listening for hotkeys
             try core?.startListening()
             print("[Aether] Hotkey listening started (⌘~)")
+
+            // Reset retry count on success
+            coreInitRetryCount = 0
 
             // Update menu bar icon to show active state
             updateMenuBarIcon(state: .listening)
 
         } catch {
             print("[Aether] Error initializing core: \(error)")
-            showErrorAlert(message: "Failed to initialize Aether core: \(error)")
+
+            // Attempt retry with exponential backoff
+            if coreInitRetryCount < maxRetryAttempts {
+                coreInitRetryCount += 1
+                let retryDelay = Double(coreInitRetryCount) * 2.0 // 2s, 4s, 6s
+
+                print("[Aether] Retrying initialization in \(retryDelay)s (attempt \(coreInitRetryCount)/\(maxRetryAttempts))")
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + retryDelay) { [weak self] in
+                    self?.initializeRustCore()
+                }
+            } else {
+                // Max retries exceeded, show error to user
+                print("[Aether] Max retry attempts exceeded, giving up")
+                showErrorAlert(message: "Failed to initialize Aether core after \(maxRetryAttempts) attempts.\n\nError: \(error)\n\nPlease check:\n1. Accessibility permissions are granted\n2. libaethecore.dylib is properly bundled\n3. Rust core is built correctly")
+            }
         }
     }
 

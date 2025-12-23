@@ -54,7 +54,6 @@ targets:
       path: Aether/Aether.entitlements
       properties:
         com.apple.security.automation.apple-events: true
-        com.apple.security.device.audio-input: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: Rootazero.Aether

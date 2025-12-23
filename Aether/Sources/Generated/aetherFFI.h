@@ -67,13 +67,23 @@ void uniffi_aethecore_fn_free_aethercore(void*_Nonnull ptr, RustCallStatus *_Non
 );
 void*_Nonnull uniffi_aethecore_fn_constructor_aethercore_new(uint64_t handler, RustCallStatus *_Nonnull out_status
 );
+void uniffi_aethecore_fn_method_aethercore_clear_request_context(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_clipboard_text(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 int8_t uniffi_aethecore_fn_method_aethercore_is_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
+void uniffi_aethecore_fn_method_aethercore_retry_last_request(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
 void uniffi_aethecore_fn_method_aethercore_start_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 void uniffi_aethecore_fn_method_aethercore_stop_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+void uniffi_aethecore_fn_method_aethercore_store_request_context(void*_Nonnull ptr, RustBuffer clipboard_content, RustBuffer provider, RustCallStatus *_Nonnull out_status
+);
+void uniffi_aethecore_fn_method_aethercore_test_streaming_response(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+void uniffi_aethecore_fn_method_aethercore_test_typed_error(void*_Nonnull ptr, RustBuffer error_type, RustBuffer message, RustCallStatus *_Nonnull out_status
 );
 void uniffi_aethecore_fn_init_callback_aethereventhandler(ForeignCallback _Nonnull callback_stub, RustCallStatus *_Nonnull out_status
 );
@@ -191,16 +201,31 @@ void ffi_aethecore_rust_future_free_void(void* _Nonnull handle
 );
 void ffi_aethecore_rust_future_complete_void(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
 );
+uint16_t uniffi_aethecore_checksum_method_aethercore_clear_request_context(void
+    
+);
 uint16_t uniffi_aethecore_checksum_method_aethercore_get_clipboard_text(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_is_listening(void
     
 );
+uint16_t uniffi_aethecore_checksum_method_aethercore_retry_last_request(void
+    
+);
 uint16_t uniffi_aethecore_checksum_method_aethercore_start_listening(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_stop_listening(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethercore_store_request_context(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethercore_test_streaming_response(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethercore_test_typed_error(void
     
 );
 uint16_t uniffi_aethecore_checksum_constructor_aethercore_new(void
@@ -213,6 +238,15 @@ uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_hotkey_detected(
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_error(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_response_chunk(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_error_typed(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_progress(void
     
 );
 uint32_t ffi_aethecore_uniffi_contract_version(void

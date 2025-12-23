@@ -2,13 +2,19 @@
 //  HaloView.swift
 //  Aether
 //
-//  SwiftUI view for Halo animations with state machine.
+//  SwiftUI view for Halo animations with state machine and theme support.
 //
 
 import SwiftUI
 
 struct HaloView: View {
     @State var state: HaloState = .idle
+    @ObservedObject var themeEngine: ThemeEngine
+    var eventHandler: EventHandler?
+
+    private var theme: any HaloTheme {
+        themeEngine.activeTheme
+    }
 
     var body: some View {
         ZStack {
@@ -17,24 +23,56 @@ struct HaloView: View {
                 EmptyView()
 
             case .listening:
-                PulsingRingView()
+                theme.listeningView()
                     .transition(.scale.combined(with: .opacity))
 
-            case .processing(let color):
-                SpinnerView(color: color)
+            case .processing(let providerColor, let streamingText):
+                theme.processingView(providerColor: providerColor, streamingText: streamingText)
                     .transition(.scale.combined(with: .opacity))
 
-            case .success:
-                CheckmarkView()
+            case .success(let finalText):
+                theme.successView(finalText: finalText)
                     .transition(.scale.combined(with: .opacity))
 
-            case .error:
-                ErrorView()
-                    .transition(.scale.combined(with: .opacity))
+            case .error(let type, let message):
+                theme.errorView(
+                    type: type,
+                    message: message,
+                    onRetry: eventHandler?.handleRetry,
+                    onOpenSettings: eventHandler?.handleOpenSettings,
+                    onDismiss: eventHandler?.handleDismiss
+                )
+                .transition(.scale.combined(with: .opacity))
             }
         }
-        .frame(width: 120, height: 120)
-        .animation(.easeInOut(duration: 0.3), value: state)
+        .frame(width: dynamicWidth, height: dynamicHeight)
+        .animation(.spring(response: 0.4), value: state)
+        .animation(.easeInOut(duration: 0.5), value: themeEngine.currentTheme)
+    }
+
+    // Dynamic sizing based on state
+    private var dynamicWidth: CGFloat {
+        switch state {
+        case .processing(_, let text), .success(let text):
+            return text != nil ? 300 : 120
+        case .error:
+            return 300
+        default:
+            return 120
+        }
+    }
+
+    private var dynamicHeight: CGFloat {
+        switch state {
+        case .processing(_, let text):
+            return text != nil ? 200 : 120
+        case .success(let text):
+            return text != nil ? 150 : 120
+        case .error:
+            return 180
+        default:
+            return 120
+        }
     }
 }
 

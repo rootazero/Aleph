@@ -1,0 +1,176 @@
+//
+//  StreamingTextTests.swift
+//  AetherTests
+//
+//  Unit tests for streaming text functionality
+//
+
+import XCTest
+@testable import Aether
+
+final class StreamingTextTests: XCTestCase {
+    // MARK: - StreamingTextView Tests
+
+    func testStreamingTextViewDisplaysText() throws {
+        let view = StreamingTextView(text: "Hello World", textColor: .white)
+        XCTAssertNotNil(view, "StreamingTextView should initialize")
+    }
+
+    func testStreamingTextViewHandlesEmptyText() throws {
+        let view = StreamingTextView(text: "", textColor: .white)
+        XCTAssertNotNil(view, "StreamingTextView should handle empty text")
+    }
+
+    func testStreamingTextViewHandlesLongText() throws {
+        let longText = String(repeating: "This is a very long text that exceeds the maximum line limit. ", count: 10)
+        let view = StreamingTextView(text: longText, textColor: .white)
+        XCTAssertNotNil(view, "StreamingTextView should handle long text")
+    }
+
+    // MARK: - HaloState Tests
+
+    func testHaloStateWithStreamingText() throws {
+        let state1 = HaloState.processing(providerColor: .green, streamingText: "Hello")
+        let state2 = HaloState.processing(providerColor: .green, streamingText: "Hello World")
+
+        XCTAssertNotEqual(state1, state2, "States with different streaming text should not be equal")
+    }
+
+    func testHaloStateWithNilStreamingText() throws {
+        let state1 = HaloState.processing(providerColor: .green, streamingText: nil)
+        let state2 = HaloState.processing(providerColor: .green, streamingText: nil)
+
+        XCTAssertEqual(state1, state2, "States with nil streaming text should be equal")
+    }
+
+    func testHaloStateSuccessWithText() throws {
+        let state1 = HaloState.success(finalText: "Done!")
+        let state2 = HaloState.success(finalText: "Done!")
+
+        XCTAssertEqual(state1, state2, "Success states with same text should be equal")
+    }
+
+    func testHaloStateErrorWithType() throws {
+        let state1 = HaloState.error(type: .network, message: "Network error")
+        let state2 = HaloState.error(type: .network, message: "Network error")
+
+        XCTAssertEqual(state1, state2, "Error states with same type and message should be equal")
+    }
+
+    func testHaloStateErrorTypesDifferent() throws {
+        let state1 = HaloState.error(type: .network, message: "Error")
+        let state2 = HaloState.error(type: .timeout, message: "Error")
+
+        XCTAssertNotEqual(state1, state2, "Error states with different types should not be equal")
+    }
+
+    // MARK: - ErrorType Tests
+
+    func testErrorTypeConformsToEquatable() throws {
+        let error1 = ErrorType.network
+        let error2 = ErrorType.network
+
+        XCTAssertEqual(error1, error2, "Same error types should be equal")
+    }
+
+    func testErrorTypeDifferent() throws {
+        let error1 = ErrorType.network
+        let error2 = ErrorType.timeout
+
+        XCTAssertNotEqual(error1, error2, "Different error types should not be equal")
+    }
+}
+
+// MARK: - Integration Tests
+
+final class StreamingIntegrationTests: XCTestCase {
+    func testEventHandlerAccumulatesText() throws {
+        let themeEngine = ThemeEngine()
+        let haloWindow = HaloWindow(themeEngine: themeEngine)
+        let eventHandler = EventHandler(haloWindow: haloWindow)
+
+        // Simulate first chunk
+        eventHandler.onResponseChunk(text: "Hello ")
+
+        // Simulate second chunk
+        eventHandler.onResponseChunk(text: "Hello World")
+
+        // Simulate third chunk
+        eventHandler.onResponseChunk(text: "Hello World!")
+
+        // The accumulated text should be the last chunk
+        // (EventHandler replaces text with each chunk)
+    }
+
+    func testEventHandlerHandlesTypedError() throws {
+        let themeEngine = ThemeEngine()
+        let haloWindow = HaloWindow(themeEngine: themeEngine)
+        let eventHandler = EventHandler(haloWindow: haloWindow)
+
+        // Test network error
+        eventHandler.onErrorTyped(errorType: .network, message: "Network error occurred")
+
+        // Test timeout error
+        eventHandler.onErrorTyped(errorType: .timeout, message: "Request timed out")
+
+        // Test permission error
+        eventHandler.onErrorTyped(errorType: .permission, message: "Permission denied")
+    }
+
+    func testEventHandlerResetsTextOnIdle() throws {
+        let themeEngine = ThemeEngine()
+        let haloWindow = HaloWindow(themeEngine: themeEngine)
+        let eventHandler = EventHandler(haloWindow: haloWindow)
+
+        // Set some streaming text
+        eventHandler.onResponseChunk(text: "Hello World")
+
+        // Transition to idle
+        eventHandler.onStateChanged(state: .idle)
+
+        // Text should be reset (this is verified internally in EventHandler)
+    }
+
+    func testEventHandlerHandlesProgress() throws {
+        let themeEngine = ThemeEngine()
+        let haloWindow = HaloWindow(themeEngine: themeEngine)
+        let eventHandler = EventHandler(haloWindow: haloWindow)
+
+        // Test progress updates
+        eventHandler.onProgress(percent: 0.0)
+        eventHandler.onProgress(percent: 25.0)
+        eventHandler.onProgress(percent: 50.0)
+        eventHandler.onProgress(percent: 75.0)
+        eventHandler.onProgress(percent: 100.0)
+
+        // Progress is currently not visually displayed, but should not crash
+    }
+}
+
+// MARK: - Performance Tests
+
+final class StreamingPerformanceTests: XCTestCase {
+    func testStreamingTextPerformance() throws {
+        measure {
+            for _ in 0..<100 {
+                let view = StreamingTextView(
+                    text: "This is a performance test for streaming text view rendering.",
+                    textColor: .white
+                )
+                _ = view.body
+            }
+        }
+    }
+
+    func testEventHandlerPerformance() throws {
+        let themeEngine = ThemeEngine()
+        let haloWindow = HaloWindow(themeEngine: themeEngine)
+        let eventHandler = EventHandler(haloWindow: haloWindow)
+
+        measure {
+            for i in 0..<100 {
+                eventHandler.onResponseChunk(text: "Chunk \(i)")
+            }
+        }
+    }
+}

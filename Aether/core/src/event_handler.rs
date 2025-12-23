@@ -19,6 +19,21 @@ pub enum ProcessingState {
     Error,
 }
 
+/// Error types for typed error handling
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorType {
+    /// Network connectivity error
+    Network,
+    /// Permission denied error
+    Permission,
+    /// API quota exceeded
+    Quota,
+    /// Request timeout
+    Timeout,
+    /// Unknown error type
+    Unknown,
+}
+
 /// Trait for receiving events from Aether core
 ///
 /// Clients (Swift, Kotlin, etc.) implement this trait to receive
@@ -30,8 +45,17 @@ pub trait AetherEventHandler: Send + Sync {
     /// Called when a hotkey is detected with clipboard content
     fn on_hotkey_detected(&self, clipboard_content: String);
 
-    /// Called when an error occurs
+    /// Called when an error occurs (legacy, will be deprecated)
     fn on_error(&self, message: String);
+
+    /// Called when AI response chunk arrives (for streaming display)
+    fn on_response_chunk(&self, text: String);
+
+    /// Called when typed error occurs with error type
+    fn on_error_typed(&self, error_type: ErrorType, message: String);
+
+    /// Called when progress update is available
+    fn on_progress(&self, percent: f32);
 }
 
 /// Mock event handler for testing
@@ -42,6 +66,9 @@ pub struct MockEventHandler {
     pub state_changes: std::sync::Arc<std::sync::Mutex<Vec<ProcessingState>>>,
     pub hotkey_events: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     pub errors: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    pub response_chunks: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    pub typed_errors: std::sync::Arc<std::sync::Mutex<Vec<(ErrorType, String)>>>,
+    pub progress_updates: std::sync::Arc<std::sync::Mutex<Vec<f32>>>,
 }
 
 #[cfg(test)]
@@ -51,6 +78,9 @@ impl MockEventHandler {
             state_changes: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             hotkey_events: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             errors: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            response_chunks: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            typed_errors: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            progress_updates: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -64,6 +94,18 @@ impl MockEventHandler {
 
     pub fn get_errors(&self) -> Vec<String> {
         self.errors.lock().unwrap().clone()
+    }
+
+    pub fn get_response_chunks(&self) -> Vec<String> {
+        self.response_chunks.lock().unwrap().clone()
+    }
+
+    pub fn get_typed_errors(&self) -> Vec<(ErrorType, String)> {
+        self.typed_errors.lock().unwrap().clone()
+    }
+
+    pub fn get_progress_updates(&self) -> Vec<f32> {
+        self.progress_updates.lock().unwrap().clone()
     }
 }
 
@@ -79,6 +121,18 @@ impl AetherEventHandler for MockEventHandler {
 
     fn on_error(&self, message: String) {
         self.errors.lock().unwrap().push(message);
+    }
+
+    fn on_response_chunk(&self, text: String) {
+        self.response_chunks.lock().unwrap().push(text);
+    }
+
+    fn on_error_typed(&self, error_type: ErrorType, message: String) {
+        self.typed_errors.lock().unwrap().push((error_type, message));
+    }
+
+    fn on_progress(&self, percent: f32) {
+        self.progress_updates.lock().unwrap().push(percent);
     }
 }
 

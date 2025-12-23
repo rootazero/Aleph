@@ -12,10 +12,14 @@ import SwiftUI
 class HaloWindow: NSWindow {
     private var haloHostingView: NSHostingView<HaloView>?
     private var haloView: HaloView
+    private let themeEngine: ThemeEngine
+    private weak var eventHandler: EventHandler?
 
-    init() {
-        // Create HaloView
-        haloView = HaloView()
+    init(themeEngine: ThemeEngine) {
+        self.themeEngine = themeEngine
+
+        // Create HaloView with theme engine (event handler will be set later)
+        haloView = HaloView(themeEngine: themeEngine)
 
         // Initialize window with borderless style
         super.init(
@@ -44,10 +48,11 @@ class HaloWindow: NSWindow {
 
         // Set up hosting view for SwiftUI content
         haloHostingView = NSHostingView(rootView: haloView)
-        haloHostingView?.frame = self.contentView!.bounds
-        haloHostingView?.autoresizingMask = [.width, .height]
-
-        self.contentView?.addSubview(haloHostingView!)
+        if let contentView = self.contentView, let hostingView = haloHostingView {
+            hostingView.frame = contentView.bounds
+            hostingView.autoresizingMask = [.width, .height]
+            contentView.addSubview(hostingView)
+        }
 
         // Start hidden
         self.alphaValue = 0
@@ -56,18 +61,39 @@ class HaloWindow: NSWindow {
 
     // MARK: - Public API
 
+    /// Set event handler reference for error action callbacks
+    func setEventHandler(_ handler: EventHandler) {
+        self.eventHandler = handler
+        haloView.eventHandler = handler
+    }
+
     func show(at position: NSPoint) {
-        // Position window at cursor
-        let screenFrame = NSScreen.main?.frame ?? .zero
+        // Find the screen containing the cursor position
+        // This properly handles multi-monitor setups
+        let targetScreen = NSScreen.screens.first { screen in
+            NSPointInRect(position, screen.frame)
+        } ?? NSScreen.main ?? NSScreen.screens.first
+
+        guard let screen = targetScreen else {
+            print("[HaloWindow] Warning: No screen found, cannot display Halo")
+            return
+        }
+
+        let screenFrame = screen.frame
+
+        // Get dynamic window size based on current state
+        let windowSize = getWindowSize()
+        self.setContentSize(windowSize)
+
         var windowOrigin = position
 
         // Center window on cursor
-        windowOrigin.x -= self.frame.width / 2
-        windowOrigin.y -= self.frame.height / 2
+        windowOrigin.x -= windowSize.width / 2
+        windowOrigin.y -= windowSize.height / 2
 
-        // Clamp to screen bounds
-        windowOrigin.x = max(0, min(windowOrigin.x, screenFrame.width - self.frame.width))
-        windowOrigin.y = max(0, min(windowOrigin.y, screenFrame.height - self.frame.height))
+        // Clamp to screen bounds (prevents Halo from appearing off-screen)
+        windowOrigin.x = max(screenFrame.minX, min(windowOrigin.x, screenFrame.maxX - windowSize.width))
+        windowOrigin.y = max(screenFrame.minY, min(windowOrigin.y, screenFrame.maxY - windowSize.height))
 
         self.setFrameOrigin(windowOrigin)
 
@@ -93,5 +119,46 @@ class HaloWindow: NSWindow {
 
     func updateState(_ state: HaloState) {
         haloView.state = state
+
+        // Dynamically resize window based on new state
+        let newSize = getWindowSize()
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.4
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+
+            // Update window size with animation
+            var newFrame = self.frame
+            let widthDiff = newSize.width - newFrame.size.width
+            let heightDiff = newSize.height - newFrame.size.height
+
+            // Keep window centered during resize
+            newFrame.origin.x -= widthDiff / 2
+            newFrame.origin.y -= heightDiff / 2
+            newFrame.size = newSize
+
+            self.animator().setFrame(newFrame, display: true)
+        })
+    }
+
+    // MARK: - Private Helpers
+
+    private func getWindowSize() -> NSSize {
+        switch haloView.state {
+        case .processing(_, let text), .success(let text):
+            let width: CGFloat = text != nil ? 300 : 120
+            let height: CGFloat
+            if case .processing = haloView.state {
+                height = text != nil ? 200 : 120
+            } else {
+                height = text != nil ? 150 : 120
+            }
+            return NSSize(width: width, height: height)
+
+        case .error:
+            return NSSize(width: 300, height: 180)
+
+        default:
+            return NSSize(width: 120, height: 120)
+        }
     }
 }
