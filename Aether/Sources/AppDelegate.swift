@@ -34,6 +34,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Set up menu bar
         setupMenuBar()
 
+        // Check and request Accessibility permission for context capture
+        checkAccessibilityPermission()
+
         // Initialize theme engine
         themeEngine = ThemeEngine()
 
@@ -207,5 +210,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.alertStyle = .critical
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    // MARK: - Accessibility Permission Check
+
+    private func checkAccessibilityPermission() {
+        if !ContextCapture.hasAccessibilityPermission() {
+            print("[Aether] Accessibility permission not granted, requesting...")
+
+            // Show info alert first
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                let alert = NSAlert()
+                alert.messageText = "Accessibility Permission Needed"
+                alert.informativeText = """
+                Aether uses Accessibility permission to:
+                • Capture window context for memory features
+                • Provide context-aware AI responses
+
+                You'll see a system prompt next. Please grant permission.
+                """
+                alert.alertStyle = .informational
+                alert.addButton(withTitle: "Continue")
+                alert.runModal()
+
+                // Request permission (shows system prompt)
+                ContextCapture.requestAccessibilityPermission()
+            }
+        } else {
+            print("[Aether] Accessibility permission already granted")
+        }
     }
 }

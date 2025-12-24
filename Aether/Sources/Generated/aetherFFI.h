@@ -91,6 +91,8 @@ void uniffi_aethecore_fn_method_aethercore_start_listening(void*_Nonnull ptr, Ru
 );
 void uniffi_aethecore_fn_method_aethercore_stop_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
+RustBuffer uniffi_aethecore_fn_method_aethercore_store_interaction_memory(void*_Nonnull ptr, RustBuffer user_input, RustBuffer ai_output, RustCallStatus *_Nonnull out_status
+);
 void uniffi_aethecore_fn_method_aethercore_store_request_context(void*_Nonnull ptr, RustBuffer clipboard_content, RustBuffer provider, RustCallStatus *_Nonnull out_status
 );
 void uniffi_aethecore_fn_method_aethercore_test_streaming_response(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -249,6 +251,9 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_start_listening(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_stop_listening(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethercore_store_interaction_memory(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_store_request_context(void

@@ -99,6 +99,10 @@ interface AetherCore {
 
   // Set current context (called from Swift when hotkey pressed)
   void set_current_context(CapturedContext context);
+
+  // Store interaction memory with current context
+  [Throws=AetherError]
+  string store_interaction_memory(string user_input, string ai_output);
 };
 
 // Callback interface for events from Rust to client

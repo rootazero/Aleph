@@ -297,6 +297,71 @@ private func uniffiCheckCallStatus(
 // Public interface members begin here.
 
 
+fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
+    typealias FfiType = UInt32
+    typealias SwiftType = UInt32
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
+    typealias FfiType = UInt64
+    typealias SwiftType = UInt64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+fileprivate struct FfiConverterInt64: FfiConverterPrimitive {
+    typealias FfiType = Int64
+    typealias SwiftType = Int64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int64 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Int64, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+fileprivate struct FfiConverterFloat: FfiConverterPrimitive {
+    typealias FfiType = Float
+    typealias SwiftType = Float
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Float {
+        return try lift(readFloat(&buf))
+    }
+
+    public static func write(_ value: Float, into buf: inout [UInt8]) {
+        writeFloat(&buf, lower(value))
+    }
+}
+
+fileprivate struct FfiConverterDouble: FfiConverterPrimitive {
+    typealias FfiType = Double
+    typealias SwiftType = Double
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Double {
+        return try lift(readDouble(&buf))
+    }
+
+    public static func write(_ value: Double, into buf: inout [UInt8]) {
+        writeDouble(&buf, lower(value))
+    }
+}
+
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -358,10 +423,23 @@ fileprivate struct FfiConverterString: FfiConverter {
 
 
 public protocol AetherCoreProtocol {
+    func clearMemories(appBundleId: String?, windowTitle: String?)  throws -> UInt64
+    func clearRequestContext()  
+    func deleteMemory(id: String)  throws
     func getClipboardText()  throws -> String
+    func getMemoryConfig()   -> MemoryConfig
+    func getMemoryStats()  throws -> MemoryStats
     func isListening()   -> Bool
+    func retryLastRequest()  throws
+    func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32)  throws -> [MemoryEntry]
+    func setCurrentContext(context: CapturedContext)  
     func startListening()  throws
     func stopListening()  throws
+    func storeInteractionMemory(userInput: String, aiOutput: String)  throws -> String
+    func storeRequestContext(clipboardContent: String, provider: String)  
+    func testStreamingResponse()  
+    func testTypedError(errorType: ErrorType, message: String)  
+    func updateMemoryConfig(config: MemoryConfig)  throws
     
 }
 
@@ -390,11 +468,62 @@ public class AetherCore: AetherCoreProtocol {
     
     
 
+    public func clearMemories(appBundleId: String?, windowTitle: String?) throws -> UInt64 {
+        return try  FfiConverterUInt64.lift(
+            try 
+    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    uniffi_aethecore_fn_method_aethercore_clear_memories(self.pointer, 
+        FfiConverterOptionString.lower(appBundleId),
+        FfiConverterOptionString.lower(windowTitle),$0
+    )
+}
+        )
+    }
+
+    public func clearRequestContext()  {
+        try! 
+    rustCall() {
+    
+    uniffi_aethecore_fn_method_aethercore_clear_request_context(self.pointer, $0
+    )
+}
+    }
+
+    public func deleteMemory(id: String) throws {
+        try 
+    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    uniffi_aethecore_fn_method_aethercore_delete_memory(self.pointer, 
+        FfiConverterString.lower(id),$0
+    )
+}
+    }
+
     public func getClipboardText() throws -> String {
         return try  FfiConverterString.lift(
             try 
     rustCallWithError(FfiConverterTypeAetherError.lift) {
     uniffi_aethecore_fn_method_aethercore_get_clipboard_text(self.pointer, $0
+    )
+}
+        )
+    }
+
+    public func getMemoryConfig()  -> MemoryConfig {
+        return try!  FfiConverterTypeMemoryConfig.lift(
+            try! 
+    rustCall() {
+    
+    uniffi_aethecore_fn_method_aethercore_get_memory_config(self.pointer, $0
+    )
+}
+        )
+    }
+
+    public func getMemoryStats() throws -> MemoryStats {
+        return try  FfiConverterTypeMemoryStats.lift(
+            try 
+    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    uniffi_aethecore_fn_method_aethercore_get_memory_stats(self.pointer, $0
     )
 }
         )
@@ -411,6 +540,37 @@ public class AetherCore: AetherCoreProtocol {
         )
     }
 
+    public func retryLastRequest() throws {
+        try 
+    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    uniffi_aethecore_fn_method_aethercore_retry_last_request(self.pointer, $0
+    )
+}
+    }
+
+    public func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32) throws -> [MemoryEntry] {
+        return try  FfiConverterSequenceTypeMemoryEntry.lift(
+            try 
+    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    uniffi_aethecore_fn_method_aethercore_search_memories(self.pointer, 
+        FfiConverterString.lower(appBundleId),
+        FfiConverterOptionString.lower(windowTitle),
+        FfiConverterUInt32.lower(limit),$0
+    )
+}
+        )
+    }
+
+    public func setCurrentContext(context: CapturedContext)  {
+        try! 
+    rustCall() {
+    
+    uniffi_aethecore_fn_method_aethercore_set_current_context(self.pointer, 
+        FfiConverterTypeCapturedContext.lower(context),$0
+    )
+}
+    }
+
     public func startListening() throws {
         try 
     rustCallWithError(FfiConverterTypeAetherError.lift) {
@@ -423,6 +583,58 @@ public class AetherCore: AetherCoreProtocol {
         try 
     rustCallWithError(FfiConverterTypeAetherError.lift) {
     uniffi_aethecore_fn_method_aethercore_stop_listening(self.pointer, $0
+    )
+}
+    }
+
+    public func storeInteractionMemory(userInput: String, aiOutput: String) throws -> String {
+        return try  FfiConverterString.lift(
+            try 
+    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    uniffi_aethecore_fn_method_aethercore_store_interaction_memory(self.pointer, 
+        FfiConverterString.lower(userInput),
+        FfiConverterString.lower(aiOutput),$0
+    )
+}
+        )
+    }
+
+    public func storeRequestContext(clipboardContent: String, provider: String)  {
+        try! 
+    rustCall() {
+    
+    uniffi_aethecore_fn_method_aethercore_store_request_context(self.pointer, 
+        FfiConverterString.lower(clipboardContent),
+        FfiConverterString.lower(provider),$0
+    )
+}
+    }
+
+    public func testStreamingResponse()  {
+        try! 
+    rustCall() {
+    
+    uniffi_aethecore_fn_method_aethercore_test_streaming_response(self.pointer, $0
+    )
+}
+    }
+
+    public func testTypedError(errorType: ErrorType, message: String)  {
+        try! 
+    rustCall() {
+    
+    uniffi_aethecore_fn_method_aethercore_test_typed_error(self.pointer, 
+        FfiConverterTypeErrorType.lower(errorType),
+        FfiConverterString.lower(message),$0
+    )
+}
+    }
+
+    public func updateMemoryConfig(config: MemoryConfig) throws {
+        try 
+    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    uniffi_aethecore_fn_method_aethercore_update_memory_config(self.pointer, 
+        FfiConverterTypeMemoryConfig.lower(config),$0
     )
 }
     }
@@ -468,13 +680,70 @@ public func FfiConverterTypeAetherCore_lower(_ value: AetherCore) -> UnsafeMutab
 }
 
 
-public struct Config {
-    public var defaultHotkey: String
+public struct CapturedContext {
+    public var appBundleId: String
+    public var windowTitle: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultHotkey: String) {
+    public init(appBundleId: String, windowTitle: String?) {
+        self.appBundleId = appBundleId
+        self.windowTitle = windowTitle
+    }
+}
+
+
+extension CapturedContext: Equatable, Hashable {
+    public static func ==(lhs: CapturedContext, rhs: CapturedContext) -> Bool {
+        if lhs.appBundleId != rhs.appBundleId {
+            return false
+        }
+        if lhs.windowTitle != rhs.windowTitle {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(appBundleId)
+        hasher.combine(windowTitle)
+    }
+}
+
+
+public struct FfiConverterTypeCapturedContext: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CapturedContext {
+        return try CapturedContext(
+            appBundleId: FfiConverterString.read(from: &buf), 
+            windowTitle: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CapturedContext, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.appBundleId, into: &buf)
+        FfiConverterOptionString.write(value.windowTitle, into: &buf)
+    }
+}
+
+
+public func FfiConverterTypeCapturedContext_lift(_ buf: RustBuffer) throws -> CapturedContext {
+    return try FfiConverterTypeCapturedContext.lift(buf)
+}
+
+public func FfiConverterTypeCapturedContext_lower(_ value: CapturedContext) -> RustBuffer {
+    return FfiConverterTypeCapturedContext.lower(value)
+}
+
+
+public struct Config {
+    public var defaultHotkey: String
+    public var memory: MemoryConfig
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(defaultHotkey: String, memory: MemoryConfig) {
         self.defaultHotkey = defaultHotkey
+        self.memory = memory
     }
 }
 
@@ -484,11 +753,15 @@ extension Config: Equatable, Hashable {
         if lhs.defaultHotkey != rhs.defaultHotkey {
             return false
         }
+        if lhs.memory != rhs.memory {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(defaultHotkey)
+        hasher.combine(memory)
     }
 }
 
@@ -496,12 +769,14 @@ extension Config: Equatable, Hashable {
 public struct FfiConverterTypeConfig: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Config {
         return try Config(
-            defaultHotkey: FfiConverterString.read(from: &buf)
+            defaultHotkey: FfiConverterString.read(from: &buf), 
+            memory: FfiConverterTypeMemoryConfig.read(from: &buf)
         )
     }
 
     public static func write(_ value: Config, into buf: inout [UInt8]) {
         FfiConverterString.write(value.defaultHotkey, into: &buf)
+        FfiConverterTypeMemoryConfig.write(value.memory, into: &buf)
     }
 }
 
@@ -512,6 +787,275 @@ public func FfiConverterTypeConfig_lift(_ buf: RustBuffer) throws -> Config {
 
 public func FfiConverterTypeConfig_lower(_ value: Config) -> RustBuffer {
     return FfiConverterTypeConfig.lower(value)
+}
+
+
+public struct MemoryConfig {
+    public var enabled: Bool
+    public var embeddingModel: String
+    public var maxContextItems: UInt32
+    public var retentionDays: UInt32
+    public var vectorDb: String
+    public var similarityThreshold: Float
+    public var excludedApps: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(enabled: Bool, embeddingModel: String, maxContextItems: UInt32, retentionDays: UInt32, vectorDb: String, similarityThreshold: Float, excludedApps: [String]) {
+        self.enabled = enabled
+        self.embeddingModel = embeddingModel
+        self.maxContextItems = maxContextItems
+        self.retentionDays = retentionDays
+        self.vectorDb = vectorDb
+        self.similarityThreshold = similarityThreshold
+        self.excludedApps = excludedApps
+    }
+}
+
+
+extension MemoryConfig: Equatable, Hashable {
+    public static func ==(lhs: MemoryConfig, rhs: MemoryConfig) -> Bool {
+        if lhs.enabled != rhs.enabled {
+            return false
+        }
+        if lhs.embeddingModel != rhs.embeddingModel {
+            return false
+        }
+        if lhs.maxContextItems != rhs.maxContextItems {
+            return false
+        }
+        if lhs.retentionDays != rhs.retentionDays {
+            return false
+        }
+        if lhs.vectorDb != rhs.vectorDb {
+            return false
+        }
+        if lhs.similarityThreshold != rhs.similarityThreshold {
+            return false
+        }
+        if lhs.excludedApps != rhs.excludedApps {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(enabled)
+        hasher.combine(embeddingModel)
+        hasher.combine(maxContextItems)
+        hasher.combine(retentionDays)
+        hasher.combine(vectorDb)
+        hasher.combine(similarityThreshold)
+        hasher.combine(excludedApps)
+    }
+}
+
+
+public struct FfiConverterTypeMemoryConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MemoryConfig {
+        return try MemoryConfig(
+            enabled: FfiConverterBool.read(from: &buf), 
+            embeddingModel: FfiConverterString.read(from: &buf), 
+            maxContextItems: FfiConverterUInt32.read(from: &buf), 
+            retentionDays: FfiConverterUInt32.read(from: &buf), 
+            vectorDb: FfiConverterString.read(from: &buf), 
+            similarityThreshold: FfiConverterFloat.read(from: &buf), 
+            excludedApps: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MemoryConfig, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterString.write(value.embeddingModel, into: &buf)
+        FfiConverterUInt32.write(value.maxContextItems, into: &buf)
+        FfiConverterUInt32.write(value.retentionDays, into: &buf)
+        FfiConverterString.write(value.vectorDb, into: &buf)
+        FfiConverterFloat.write(value.similarityThreshold, into: &buf)
+        FfiConverterSequenceString.write(value.excludedApps, into: &buf)
+    }
+}
+
+
+public func FfiConverterTypeMemoryConfig_lift(_ buf: RustBuffer) throws -> MemoryConfig {
+    return try FfiConverterTypeMemoryConfig.lift(buf)
+}
+
+public func FfiConverterTypeMemoryConfig_lower(_ value: MemoryConfig) -> RustBuffer {
+    return FfiConverterTypeMemoryConfig.lower(value)
+}
+
+
+public struct MemoryEntry {
+    public var id: String
+    public var appBundleId: String
+    public var windowTitle: String
+    public var userInput: String
+    public var aiOutput: String
+    public var timestamp: Int64
+    public var similarityScore: Float?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, appBundleId: String, windowTitle: String, userInput: String, aiOutput: String, timestamp: Int64, similarityScore: Float?) {
+        self.id = id
+        self.appBundleId = appBundleId
+        self.windowTitle = windowTitle
+        self.userInput = userInput
+        self.aiOutput = aiOutput
+        self.timestamp = timestamp
+        self.similarityScore = similarityScore
+    }
+}
+
+
+extension MemoryEntry: Equatable, Hashable {
+    public static func ==(lhs: MemoryEntry, rhs: MemoryEntry) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.appBundleId != rhs.appBundleId {
+            return false
+        }
+        if lhs.windowTitle != rhs.windowTitle {
+            return false
+        }
+        if lhs.userInput != rhs.userInput {
+            return false
+        }
+        if lhs.aiOutput != rhs.aiOutput {
+            return false
+        }
+        if lhs.timestamp != rhs.timestamp {
+            return false
+        }
+        if lhs.similarityScore != rhs.similarityScore {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(appBundleId)
+        hasher.combine(windowTitle)
+        hasher.combine(userInput)
+        hasher.combine(aiOutput)
+        hasher.combine(timestamp)
+        hasher.combine(similarityScore)
+    }
+}
+
+
+public struct FfiConverterTypeMemoryEntry: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MemoryEntry {
+        return try MemoryEntry(
+            id: FfiConverterString.read(from: &buf), 
+            appBundleId: FfiConverterString.read(from: &buf), 
+            windowTitle: FfiConverterString.read(from: &buf), 
+            userInput: FfiConverterString.read(from: &buf), 
+            aiOutput: FfiConverterString.read(from: &buf), 
+            timestamp: FfiConverterInt64.read(from: &buf), 
+            similarityScore: FfiConverterOptionFloat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MemoryEntry, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.appBundleId, into: &buf)
+        FfiConverterString.write(value.windowTitle, into: &buf)
+        FfiConverterString.write(value.userInput, into: &buf)
+        FfiConverterString.write(value.aiOutput, into: &buf)
+        FfiConverterInt64.write(value.timestamp, into: &buf)
+        FfiConverterOptionFloat.write(value.similarityScore, into: &buf)
+    }
+}
+
+
+public func FfiConverterTypeMemoryEntry_lift(_ buf: RustBuffer) throws -> MemoryEntry {
+    return try FfiConverterTypeMemoryEntry.lift(buf)
+}
+
+public func FfiConverterTypeMemoryEntry_lower(_ value: MemoryEntry) -> RustBuffer {
+    return FfiConverterTypeMemoryEntry.lower(value)
+}
+
+
+public struct MemoryStats {
+    public var totalMemories: UInt64
+    public var totalApps: UInt64
+    public var databaseSizeMb: Double
+    public var oldestMemoryTimestamp: Int64
+    public var newestMemoryTimestamp: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(totalMemories: UInt64, totalApps: UInt64, databaseSizeMb: Double, oldestMemoryTimestamp: Int64, newestMemoryTimestamp: Int64) {
+        self.totalMemories = totalMemories
+        self.totalApps = totalApps
+        self.databaseSizeMb = databaseSizeMb
+        self.oldestMemoryTimestamp = oldestMemoryTimestamp
+        self.newestMemoryTimestamp = newestMemoryTimestamp
+    }
+}
+
+
+extension MemoryStats: Equatable, Hashable {
+    public static func ==(lhs: MemoryStats, rhs: MemoryStats) -> Bool {
+        if lhs.totalMemories != rhs.totalMemories {
+            return false
+        }
+        if lhs.totalApps != rhs.totalApps {
+            return false
+        }
+        if lhs.databaseSizeMb != rhs.databaseSizeMb {
+            return false
+        }
+        if lhs.oldestMemoryTimestamp != rhs.oldestMemoryTimestamp {
+            return false
+        }
+        if lhs.newestMemoryTimestamp != rhs.newestMemoryTimestamp {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(totalMemories)
+        hasher.combine(totalApps)
+        hasher.combine(databaseSizeMb)
+        hasher.combine(oldestMemoryTimestamp)
+        hasher.combine(newestMemoryTimestamp)
+    }
+}
+
+
+public struct FfiConverterTypeMemoryStats: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MemoryStats {
+        return try MemoryStats(
+            totalMemories: FfiConverterUInt64.read(from: &buf), 
+            totalApps: FfiConverterUInt64.read(from: &buf), 
+            databaseSizeMb: FfiConverterDouble.read(from: &buf), 
+            oldestMemoryTimestamp: FfiConverterInt64.read(from: &buf), 
+            newestMemoryTimestamp: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MemoryStats, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.totalMemories, into: &buf)
+        FfiConverterUInt64.write(value.totalApps, into: &buf)
+        FfiConverterDouble.write(value.databaseSizeMb, into: &buf)
+        FfiConverterInt64.write(value.oldestMemoryTimestamp, into: &buf)
+        FfiConverterInt64.write(value.newestMemoryTimestamp, into: &buf)
+    }
+}
+
+
+public func FfiConverterTypeMemoryStats_lift(_ buf: RustBuffer) throws -> MemoryStats {
+    return try FfiConverterTypeMemoryStats.lift(buf)
+}
+
+public func FfiConverterTypeMemoryStats_lower(_ value: MemoryStats) -> RustBuffer {
+    return FfiConverterTypeMemoryStats.lower(value)
 }
 
 public enum AetherError {
@@ -526,6 +1070,9 @@ public enum AetherError {
     
     // Simple error enums only carry a message
     case CallbackError(message: String)
+    
+    // Simple error enums only carry a message
+    case ConfigError(message: String)
     
     // Simple error enums only carry a message
     case Other(message: String)
@@ -559,7 +1106,11 @@ public struct FfiConverterTypeAetherError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 4: return .Other(
+        case 4: return .ConfigError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 5: return .Other(
             message: try FfiConverterString.read(from: &buf)
         )
         
@@ -580,8 +1131,10 @@ public struct FfiConverterTypeAetherError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(2))
         case .CallbackError(_ /* message is ignored*/):
             writeInt(&buf, Int32(3))
-        case .Other(_ /* message is ignored*/):
+        case .ConfigError(_ /* message is ignored*/):
             writeInt(&buf, Int32(4))
+        case .Other(_ /* message is ignored*/):
+            writeInt(&buf, Int32(5))
 
         
         }
@@ -592,6 +1145,79 @@ public struct FfiConverterTypeAetherError: FfiConverterRustBuffer {
 extension AetherError: Equatable, Hashable {}
 
 extension AetherError: Error { }
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+public enum ErrorType {
+    
+    case network
+    case permission
+    case quota
+    case timeout
+    case unknown
+}
+
+public struct FfiConverterTypeErrorType: FfiConverterRustBuffer {
+    typealias SwiftType = ErrorType
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ErrorType {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .network
+        
+        case 2: return .permission
+        
+        case 3: return .quota
+        
+        case 4: return .timeout
+        
+        case 5: return .unknown
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ErrorType, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .network:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .permission:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .quota:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .timeout:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .unknown:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+public func FfiConverterTypeErrorType_lift(_ buf: RustBuffer) throws -> ErrorType {
+    return try FfiConverterTypeErrorType.lift(buf)
+}
+
+public func FfiConverterTypeErrorType_lower(_ value: ErrorType) -> RustBuffer {
+    return FfiConverterTypeErrorType.lower(value)
+}
+
+
+extension ErrorType: Equatable, Hashable {}
+
+
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
@@ -737,6 +1363,9 @@ public protocol AetherEventHandler : AnyObject {
     func onStateChanged(state: ProcessingState) 
     func onHotkeyDetected(clipboardContent: String) 
     func onError(message: String) 
+    func onResponseChunk(text: String) 
+    func onErrorTyped(errorType: ErrorType, message: String) 
+    func onProgress(percent: Float) 
     
 }
 
@@ -772,6 +1401,40 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
         func makeCall() throws -> Int32 {
             try swiftCallbackInterface.onError(
                     message:  try FfiConverterString.read(from: &reader)
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        return try makeCall()
+    }
+
+    func invokeOnResponseChunk(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.onResponseChunk(
+                    text:  try FfiConverterString.read(from: &reader)
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        return try makeCall()
+    }
+
+    func invokeOnErrorTyped(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.onErrorTyped(
+                    errorType:  try FfiConverterTypeErrorType.read(from: &reader), 
+                    message:  try FfiConverterString.read(from: &reader)
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        return try makeCall()
+    }
+
+    func invokeOnProgress(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.onProgress(
+                    percent:  try FfiConverterFloat.read(from: &reader)
                     )
             return UNIFFI_CALLBACK_SUCCESS
         }
@@ -823,6 +1486,48 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
             }
             do {
                 return try invokeOnError(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        case 4:
+            let cb: AetherEventHandler
+            do {
+                cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("AetherEventHandler: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeOnResponseChunk(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        case 5:
+            let cb: AetherEventHandler
+            do {
+                cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("AetherEventHandler: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeOnErrorTyped(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        case 6:
+            let cb: AetherEventHandler
+            do {
+                cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("AetherEventHandler: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeOnProgress(cb, argsData, argsLen, out_buf)
             } catch let error {
                 out_buf.pointee = FfiConverterString.lower(String(describing: error))
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
@@ -888,6 +1593,92 @@ extension FfiConverterCallbackInterfaceAetherEventHandler : FfiConverter {
     }
 }
 
+fileprivate struct FfiConverterOptionFloat: FfiConverterRustBuffer {
+    typealias SwiftType = Float?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterFloat.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterFloat.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
+    typealias SwiftType = String?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterString.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
+    typealias SwiftType = [String]
+
+    public static func write(_ value: [String], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterString.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [String]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+fileprivate struct FfiConverterSequenceTypeMemoryEntry: FfiConverterRustBuffer {
+    typealias SwiftType = [MemoryEntry]
+
+    public static func write(_ value: [MemoryEntry], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeMemoryEntry.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [MemoryEntry] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [MemoryEntry]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeMemoryEntry.read(from: &buf))
+        }
+        return seq
+    }
+}
+
 private enum InitializationResult {
     case ok
     case contractVersionMismatch
@@ -903,16 +1694,55 @@ private var initializationResult: InitializationResult {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_clear_memories() != 29393) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_clear_request_context() != 2809) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_delete_memory() != 41638) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_get_clipboard_text() != 59270) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_get_memory_config() != 37662) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_memory_stats() != 6087) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_is_listening() != 51411) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_retry_last_request() != 41056) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_search_memories() != 47510) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_set_current_context() != 13853) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_start_listening() != 43329) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_stop_listening() != 7743) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_store_interaction_memory() != 42867) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_store_request_context() != 34566) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_test_streaming_response() != 24597) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_test_typed_error() != 39352) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_update_memory_config() != 64538) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_constructor_aethercore_new() != 63574) {
@@ -925,6 +1755,15 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_error() != 24904) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_response_chunk() != 1231) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_error_typed() != 36058) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_progress() != 44714) {
         return InitializationResult.apiChecksumMismatch
     }
 

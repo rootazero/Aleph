@@ -45,6 +45,19 @@ class EventHandler: AetherEventHandler {
     func onHotkeyDetected(clipboardContent: String) {
         print("[EventHandler] Hotkey detected, clipboard: \(clipboardContent.prefix(50))...")
 
+        // Capture context when hotkey is detected
+        let context = ContextCapture.captureContext()
+        print("[EventHandler] Captured context: app=\(context.bundleId ?? "nil"), window=\(context.windowTitle ?? "nil")")
+
+        // Send context to Rust core
+        if let bundleId = context.bundleId {
+            let capturedContext = CapturedContext(
+                appBundleId: bundleId,
+                windowTitle: context.windowTitle
+            )
+            core?.setCurrentContext(context: capturedContext)
+        }
+
         DispatchQueue.main.async { [weak self] in
             self?.handleHotkeyDetected(clipboardContent: clipboardContent)
         }

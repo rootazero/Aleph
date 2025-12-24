@@ -435,6 +435,7 @@ public protocol AetherCoreProtocol {
     func setCurrentContext(context: CapturedContext)  
     func startListening()  throws
     func stopListening()  throws
+    func storeInteractionMemory(userInput: String, aiOutput: String)  throws -> String
     func storeRequestContext(clipboardContent: String, provider: String)  
     func testStreamingResponse()  
     func testTypedError(errorType: ErrorType, message: String)  
@@ -584,6 +585,18 @@ public class AetherCore: AetherCoreProtocol {
     uniffi_aethecore_fn_method_aethercore_stop_listening(self.pointer, $0
     )
 }
+    }
+
+    public func storeInteractionMemory(userInput: String, aiOutput: String) throws -> String {
+        return try  FfiConverterString.lift(
+            try 
+    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    uniffi_aethecore_fn_method_aethercore_store_interaction_memory(self.pointer, 
+        FfiConverterString.lower(userInput),
+        FfiConverterString.lower(aiOutput),$0
+    )
+}
+        )
     }
 
     public func storeRequestContext(clipboardContent: String, provider: String)  {
@@ -1715,6 +1728,9 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_stop_listening() != 7743) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_store_interaction_memory() != 42867) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_store_request_context() != 34566) {

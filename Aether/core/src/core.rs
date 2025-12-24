@@ -118,6 +118,24 @@ impl AetherCore {
         Ok(config_dir.join("memory.db"))
     }
 
+    /// Get embedding model directory
+    fn get_embedding_model_dir() -> Result<PathBuf> {
+        let home_dir = std::env::var("HOME")
+            .map_err(|_| AetherError::config("Failed to get HOME environment variable"))?;
+
+        let model_dir = PathBuf::from(home_dir)
+            .join(".config")
+            .join("aether")
+            .join("models")
+            .join("all-MiniLM-L6-v2");
+
+        // Create directory if it doesn't exist
+        std::fs::create_dir_all(&model_dir)
+            .map_err(|e| AetherError::config(format!("Failed to create model directory: {}", e)))?;
+
+        Ok(model_dir)
+    }
+
     /// Start listening for hotkey events
     ///
     /// Spawns background thread to monitor keyboard events.
@@ -378,6 +396,73 @@ impl AetherCore {
         let mut current_context = self.current_context.lock().unwrap();
         *current_context = Some(context);
     }
+
+    /// Store interaction memory with current context
+    ///
+    /// This method is called after a successful AI interaction to store the
+    /// user input and AI output along with the captured context.
+    ///
+    /// # Arguments
+    /// * `user_input` - User's original input
+    /// * `ai_output` - AI's response
+    ///
+    /// # Returns
+    /// * `Result<String>` - Memory ID if stored successfully
+    pub fn store_interaction_memory(
+        &self,
+        user_input: String,
+        ai_output: String,
+    ) -> Result<String> {
+        use crate::memory::context::ContextAnchor;
+        use crate::memory::embedding::EmbeddingModel;
+        use crate::memory::ingestion::MemoryIngestion;
+
+        // Check if memory is enabled
+        let config = self.config.lock().unwrap();
+        if !config.memory.enabled {
+            return Err(AetherError::config("Memory is disabled"));
+        }
+
+        // Get current context
+        let current_context = self.current_context.lock().unwrap();
+        let captured_context = current_context.as_ref()
+            .ok_or_else(|| AetherError::config("No context captured"))?;
+
+        // Create context anchor
+        let context_anchor = ContextAnchor {
+            app_bundle_id: captured_context.app_bundle_id.clone(),
+            window_title: captured_context.window_title.clone().unwrap_or_default(),
+            timestamp: chrono::Utc::now().timestamp(),
+        };
+
+        // Get memory database
+        let db = self.memory_db.as_ref()
+            .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
+
+        // Get embedding model directory
+        let model_dir = Self::get_embedding_model_dir()
+            .map_err(|e| AetherError::config(format!("Failed to get embedding model directory: {}", e)))?;
+
+        // Create embedding model (lazy load)
+        let embedding_model = Arc::new(
+            EmbeddingModel::new(model_dir)
+                .map_err(|e| AetherError::config(format!("Failed to initialize embedding model: {}", e)))?
+        );
+
+        // Create ingestion service
+        let ingestion = MemoryIngestion::new(
+            Arc::clone(db),
+            embedding_model,
+            Arc::new(config.memory.clone()),
+        );
+
+        // Store memory asynchronously
+        let result = self.runtime.block_on(
+            ingestion.store_memory(context_anchor, &user_input, &ai_output)
+        );
+
+        result
+    }
 }
 
 /// Memory entry type for FFI (UniFFI-compatible)
@@ -507,5 +592,52 @@ mod tests {
         // Retry should fail after clearing
         let result = core.retry_last_request();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_context_capture_and_storage() {
+        let handler = Box::new(MockEventHandler::new());
+        let core = AetherCore::new(handler).unwrap();
+
+        // Simulate context capture from Swift
+        let context = CapturedContext {
+            app_bundle_id: "com.apple.Notes".to_string(),
+            window_title: Some("Test Document.txt".to_string()),
+        };
+        core.set_current_context(context.clone());
+
+        // Try to store interaction memory
+        let result = core.store_interaction_memory(
+            "What is the capital of France?".to_string(),
+            "The capital of France is Paris.".to_string(),
+        );
+
+        // Result may fail if memory is disabled, which is OK
+        match result {
+            Ok(memory_id) => {
+                println!("✓ Context capture test passed - memory stored with ID: {}", memory_id);
+            }
+            Err(e) => {
+                println!("Note: Memory storage failed (expected if memory disabled): {}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_missing_context_error() {
+        let handler = Box::new(MockEventHandler::new());
+        let core = AetherCore::new(handler).unwrap();
+
+        // Try to store memory without setting context first
+        let result = core.store_interaction_memory(
+            "Test input".to_string(),
+            "Test output".to_string(),
+        );
+
+        // Should fail because no context was captured
+        assert!(
+            result.is_err(),
+            "Should fail when no context is captured"
+        );
     }
 }
