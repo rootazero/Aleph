@@ -11,7 +11,11 @@ pub enum ProcessingState {
     Idle,
     /// Listening for hotkey events
     Listening,
-    /// Processing AI request
+    /// Retrieving memories from database (Phase 7 - Task 7.5)
+    RetrievingMemory,
+    /// AI provider is processing the request (Phase 7 - Task 7.5)
+    ProcessingWithAI,
+    /// Processing AI request (kept for backward compatibility)
     Processing,
     /// Operation completed successfully
     Success,
@@ -56,6 +60,12 @@ pub trait AetherEventHandler: Send + Sync {
 
     /// Called when progress update is available
     fn on_progress(&self, percent: f32);
+
+    /// Called when AI processing starts with provider information (Phase 7 - Task 7.4)
+    fn on_ai_processing_started(&self, provider_name: String, provider_color: String);
+
+    /// Called when AI response is received with response preview (Phase 7 - Task 7.4)
+    fn on_ai_response_received(&self, response_preview: String);
 }
 
 /// Mock event handler for testing
@@ -69,6 +79,8 @@ pub struct MockEventHandler {
     pub response_chunks: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     pub typed_errors: std::sync::Arc<std::sync::Mutex<Vec<(ErrorType, String)>>>,
     pub progress_updates: std::sync::Arc<std::sync::Mutex<Vec<f32>>>,
+    pub ai_processing_started: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    pub ai_responses: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 #[cfg(test)]
@@ -81,6 +93,8 @@ impl MockEventHandler {
             response_chunks: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             typed_errors: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             progress_updates: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            ai_processing_started: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            ai_responses: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -106,6 +120,14 @@ impl MockEventHandler {
 
     pub fn get_progress_updates(&self) -> Vec<f32> {
         self.progress_updates.lock().unwrap().clone()
+    }
+
+    pub fn get_ai_processing_started(&self) -> Vec<(String, String)> {
+        self.ai_processing_started.lock().unwrap().clone()
+    }
+
+    pub fn get_ai_responses(&self) -> Vec<String> {
+        self.ai_responses.lock().unwrap().clone()
     }
 }
 
@@ -133,6 +155,14 @@ impl AetherEventHandler for MockEventHandler {
 
     fn on_progress(&self, percent: f32) {
         self.progress_updates.lock().unwrap().push(percent);
+    }
+
+    fn on_ai_processing_started(&self, provider_name: String, provider_color: String) {
+        self.ai_processing_started.lock().unwrap().push((provider_name, provider_color));
+    }
+
+    fn on_ai_response_received(&self, response_preview: String) {
+        self.ai_responses.lock().unwrap().push(response_preview);
     }
 }
 

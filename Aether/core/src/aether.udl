@@ -9,7 +9,9 @@ namespace aether {};
 enum ProcessingState {
   "Idle",
   "Listening",
-  "Processing",
+  "RetrievingMemory",    // Phase 7 - Task 7.5: Retrieving memories from database
+  "ProcessingWithAI",    // Phase 7 - Task 7.5: AI provider is processing the request
+  "Processing",          // Generic processing (kept for backward compatibility)
   "Success",
   "Error"
 };
@@ -115,6 +117,16 @@ interface AetherCore {
   // This is the main entry point for integrating memory into AI request pipeline
   [Throws=AetherError]
   string retrieve_and_augment_prompt(string base_prompt, string user_input);
+
+  // AI PROCESSING METHODS (Phase 7 - Task 7.2, 7.3)
+  // Process input with AI using the complete pipeline: Memory → Router → Provider → Storage
+  // This integrates all Phase 5 & 6 components
+  [Throws=AetherError]
+  string process_with_ai(string input, CapturedContext context);
+
+  // Manually trigger memory cleanup
+  [Throws=AetherError]
+  u64 cleanup_old_memories();
 };
 
 // Callback interface for events from Rust to client
@@ -136,6 +148,13 @@ callback interface AetherEventHandler {
 
   // NEW: Called when progress update is available
   void on_progress(f32 percent);
+
+  // AI PROCESSING CALLBACKS (Phase 7 - Task 7.4)
+  // Called when AI processing starts with provider information
+  void on_ai_processing_started(string provider_name, string provider_color);
+
+  // Called when AI response is received with response preview
+  void on_ai_response_received(string response_preview);
 };
 
 // Configuration dictionaries

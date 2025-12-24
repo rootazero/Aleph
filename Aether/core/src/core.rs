@@ -703,7 +703,7 @@ impl AetherCore {
     /// // let response = core.process_with_ai("Explain Rust ownership", &context).await?;
     /// # }
     /// ```
-    pub fn process_with_ai(&self, input: &str, _context: &CapturedContext) -> Result<String> {
+    pub fn process_with_ai(&self, input: String, _context: CapturedContext) -> Result<String> {
         use std::time::Instant;
 
         let start_time = Instant::now();
@@ -719,7 +719,10 @@ impl AetherCore {
         drop(config); // Release lock before async operations
 
         let augmented_input = if self.memory_db.is_some() {
-            match self.retrieve_and_augment_prompt(base_system_prompt.clone(), input.to_string()) {
+            // Notify UI that we're retrieving memory
+            self.event_handler.on_state_changed(ProcessingState::RetrievingMemory);
+
+            match self.retrieve_and_augment_prompt(base_system_prompt.clone(), input.clone()) {
                 Ok(augmented) => {
                     println!("[AI Pipeline] Memory augmentation succeeded");
                     augmented
@@ -738,7 +741,7 @@ impl AetherCore {
         println!("[AI Pipeline] Memory retrieval time: {:?}", memory_time);
 
         // Step 3: Route to appropriate provider
-        let (provider, system_prompt_override) = router.route(input)
+        let (provider, system_prompt_override) = router.route(&input)
             .ok_or_else(|| AetherError::NoProviderAvailable)?;
 
         let provider_name = provider.name().to_string();
@@ -749,8 +752,9 @@ impl AetherCore {
             provider_name, provider_color
         );
 
-        // Notify UI about AI processing start
-        self.event_handler.on_state_changed(ProcessingState::Processing);
+        // Notify UI about AI processing start (Task 7.4)
+        self.event_handler.on_ai_processing_started(provider_name.clone(), provider_color.clone());
+        self.event_handler.on_state_changed(ProcessingState::ProcessingWithAI);
 
         // Step 4: Call AI provider
         let routing_time = start_time.elapsed();
@@ -767,9 +771,17 @@ impl AetherCore {
             ai_time
         );
 
+        // Notify UI about AI response (Task 7.4)
+        let response_preview = if response.len() > 100 {
+            format!("{}...", &response[..100])
+        } else {
+            response.clone()
+        };
+        self.event_handler.on_ai_response_received(response_preview);
+
         // Step 5: Store interaction asynchronously (non-blocking)
         if self.memory_db.is_some() {
-            let user_input = input.to_string();
+            let user_input = input.clone();
             let ai_output = response.clone();
             let core_clone = self.clone_for_storage();
 
