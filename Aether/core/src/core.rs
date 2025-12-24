@@ -8,6 +8,7 @@ use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 use crate::hotkey::{HotkeyListener, RdevListener};
 use crate::memory::database::{MemoryStats, VectorDatabase};
 use crate::memory::cleanup::CleanupService;
+use crate::router::Router;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
@@ -45,6 +46,8 @@ pub struct AetherCore {
     cleanup_service: Option<Arc<CleanupService>>,
     #[allow(dead_code)]
     cleanup_task_handle: Option<tokio::task::JoinHandle<()>>,
+    // AI routing
+    router: Option<Arc<Router>>,
 }
 
 impl AetherCore {
@@ -83,6 +86,22 @@ impl AetherCore {
 
         // Initialize configuration
         let config = Arc::new(Mutex::new(Config::default()));
+
+        // Initialize router (if providers are configured)
+        let router = {
+            let cfg = config.lock().unwrap();
+            if !cfg.providers.is_empty() {
+                match Router::new(&cfg) {
+                    Ok(r) => Some(Arc::new(r)),
+                    Err(e) => {
+                        eprintln!("Warning: Failed to initialize router: {}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        };
 
         // Initialize memory database and cleanup service if enabled
         let (memory_db, cleanup_service, cleanup_task_handle) = {
@@ -143,6 +162,7 @@ impl AetherCore {
             current_context: Arc::new(Mutex::new(None)),
             cleanup_service,
             cleanup_task_handle,
+            router,
         })
     }
 
@@ -646,6 +666,209 @@ impl AetherCore {
         );
 
         Ok(augmented_prompt)
+    }
+
+    /// Process input with AI using the complete pipeline: Memory → Router → Provider → Storage
+    ///
+    /// This is the main entry point for AI processing that integrates all Phase 5 & 6 components:
+    /// 1. Retrieve relevant memories based on context
+    /// 2. Augment prompt with memory context
+    /// 3. Route to appropriate AI provider
+    /// 4. Call provider.process() with augmented input
+    /// 5. Store interaction for future retrieval (async, non-blocking)
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - User input text from clipboard
+    /// * `context` - Captured context (app bundle ID + window title)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(String)` - AI-generated response
+    /// * `Err(AetherError)` - Various errors:
+    ///   - `NoProviderAvailable` - No router configured
+    ///   - `NetworkError`, `AuthenticationError`, etc. - From provider
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use aethecore::core::{AetherCore, CapturedContext};
+    /// # fn example(core: &AetherCore) {
+    /// let context = CapturedContext {
+    ///     app_bundle_id: "com.apple.Notes".to_string(),
+    ///     window_title: Some("Document.txt".to_string()),
+    /// };
+    ///
+    /// // This will be called from Swift when user presses Cmd+~
+    /// // let response = core.process_with_ai("Explain Rust ownership", &context).await?;
+    /// # }
+    /// ```
+    pub fn process_with_ai(&self, input: &str, _context: &CapturedContext) -> Result<String> {
+        use std::time::Instant;
+
+        let start_time = Instant::now();
+        println!("[AI Pipeline] Starting processing for input: {} chars", input.len());
+
+        // Step 1: Check if router is available
+        let router = self.router.as_ref()
+            .ok_or_else(|| AetherError::NoProviderAvailable)?;
+
+        // Step 2: Retrieve memories and augment prompt (if enabled)
+        let config = self.config.lock().unwrap();
+        let base_system_prompt = "You are a helpful AI assistant.".to_string();
+        drop(config); // Release lock before async operations
+
+        let augmented_input = if self.memory_db.is_some() {
+            match self.retrieve_and_augment_prompt(base_system_prompt.clone(), input.to_string()) {
+                Ok(augmented) => {
+                    println!("[AI Pipeline] Memory augmentation succeeded");
+                    augmented
+                }
+                Err(e) => {
+                    println!("[AI Pipeline] Warning: Memory augmentation failed: {}", e);
+                    // Fallback to original input
+                    format!("{}\n\nUser: {}", base_system_prompt, input)
+                }
+            }
+        } else {
+            format!("{}\n\nUser: {}", base_system_prompt, input)
+        };
+
+        let memory_time = start_time.elapsed();
+        println!("[AI Pipeline] Memory retrieval time: {:?}", memory_time);
+
+        // Step 3: Route to appropriate provider
+        let (provider, system_prompt_override) = router.route(input)
+            .ok_or_else(|| AetherError::NoProviderAvailable)?;
+
+        let provider_name = provider.name().to_string();
+        let provider_color = provider.color().to_string();
+
+        println!(
+            "[AI Pipeline] Routed to provider: {} (color: {})",
+            provider_name, provider_color
+        );
+
+        // Notify UI about AI processing start
+        self.event_handler.on_state_changed(ProcessingState::Processing);
+
+        // Step 4: Call AI provider
+        let routing_time = start_time.elapsed();
+        let system_prompt = system_prompt_override.unwrap_or(&base_system_prompt);
+
+        let response = self.runtime.block_on(async {
+            provider.process(&augmented_input, Some(system_prompt)).await
+        })?;
+
+        let ai_time = start_time.elapsed();
+        println!(
+            "[AI Pipeline] AI response received in {:?} (total: {:?})",
+            ai_time - routing_time,
+            ai_time
+        );
+
+        // Step 5: Store interaction asynchronously (non-blocking)
+        if self.memory_db.is_some() {
+            let user_input = input.to_string();
+            let ai_output = response.clone();
+            let core_clone = self.clone_for_storage();
+
+            // Spawn background task to store memory
+            self.runtime.spawn(async move {
+                match core_clone.store_interaction_memory(user_input, ai_output) {
+                    Ok(memory_id) => {
+                        println!("[AI Pipeline] Memory stored: {}", memory_id);
+                    }
+                    Err(e) => {
+                        eprintln!("[AI Pipeline] Warning: Failed to store memory: {}", e);
+                    }
+                }
+            });
+        }
+
+        let total_time = start_time.elapsed();
+        println!("[AI Pipeline] Total processing time: {:?}", total_time);
+
+        Ok(response)
+    }
+
+    /// Clone necessary fields for async memory storage
+    ///
+    /// This creates a lightweight clone that can be moved into async tasks
+    /// for non-blocking memory storage operations.
+    fn clone_for_storage(&self) -> StorageHelper {
+        StorageHelper {
+            config: Arc::clone(&self.config),
+            memory_db: self.memory_db.clone(),
+            current_context: Arc::clone(&self.current_context),
+            runtime: Arc::clone(&self.runtime),
+        }
+    }
+}
+
+/// Helper struct for async memory storage operations
+///
+/// This is a lightweight clone of AetherCore fields needed for
+/// storing interactions in the background without blocking the main flow.
+struct StorageHelper {
+    config: Arc<Mutex<Config>>,
+    memory_db: Option<Arc<VectorDatabase>>,
+    current_context: Arc<Mutex<Option<CapturedContext>>>,
+    runtime: Arc<Runtime>,
+}
+
+impl StorageHelper {
+    /// Store interaction memory (used in async context)
+    fn store_interaction_memory(&self, user_input: String, ai_output: String) -> Result<String> {
+        use crate::memory::context::ContextAnchor;
+        use crate::memory::embedding::EmbeddingModel;
+        use crate::memory::ingestion::MemoryIngestion;
+
+        // Check if memory is enabled
+        let config = self.config.lock().unwrap();
+        if !config.memory.enabled {
+            return Err(AetherError::config("Memory is disabled"));
+        }
+
+        // Get current context
+        let current_context = self.current_context.lock().unwrap();
+        let captured_context = current_context.as_ref()
+            .ok_or_else(|| AetherError::config("No context captured"))?;
+
+        // Create context anchor
+        let context_anchor = ContextAnchor {
+            app_bundle_id: captured_context.app_bundle_id.clone(),
+            window_title: captured_context.window_title.clone().unwrap_or_default(),
+            timestamp: chrono::Utc::now().timestamp(),
+        };
+
+        // Get memory database
+        let db = self.memory_db.as_ref()
+            .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
+
+        // Get embedding model directory
+        let model_dir = AetherCore::get_embedding_model_dir()
+            .map_err(|e| AetherError::config(format!("Failed to get embedding model directory: {}", e)))?;
+
+        // Create embedding model (lazy load)
+        let embedding_model = Arc::new(
+            EmbeddingModel::new(model_dir)
+                .map_err(|e| AetherError::config(format!("Failed to initialize embedding model: {}", e)))?
+        );
+
+        // Create ingestion service
+        let ingestion = MemoryIngestion::new(
+            Arc::clone(db),
+            embedding_model,
+            Arc::new(config.memory.clone()),
+        );
+
+        // Store memory
+        let result = self.runtime.block_on(
+            ingestion.store_memory(context_anchor, &user_input, &ai_output)
+        );
+
+        result
     }
 }
 

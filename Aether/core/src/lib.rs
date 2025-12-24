@@ -92,6 +92,10 @@ pub use crate::memory::database::MemoryStats;
 pub use crate::providers::AiProvider;
 pub use crate::router::{Router, RoutingRule};
 
+// Test-only exports
+#[cfg(test)]
+pub use crate::event_handler::MockEventHandler;
+
 // Include UniFFI scaffolding
 // This generates all the FFI glue code at compile time
 uniffi::include_scaffolding!("aether");
