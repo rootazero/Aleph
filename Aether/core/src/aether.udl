@@ -103,6 +103,11 @@ interface AetherCore {
   // Store interaction memory with current context
   [Throws=AetherError]
   string store_interaction_memory(string user_input, string ai_output);
+
+  // Retrieve memories and augment prompt with context (Phase 4 - Task 14)
+  // This is the main entry point for integrating memory into AI request pipeline
+  [Throws=AetherError]
+  string retrieve_and_augment_prompt(string base_prompt, string user_input);
 };
 
 // Callback interface for events from Rust to client
