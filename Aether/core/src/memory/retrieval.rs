@@ -1,0 +1,286 @@
+/// Memory retrieval module
+///
+/// This module handles retrieval of semantically similar past interactions
+/// filtered by current context (app + window).
+
+use crate::config::MemoryConfig;
+use crate::error::AetherError;
+use crate::memory::context::{ContextAnchor, MemoryEntry};
+use crate::memory::database::VectorDatabase;
+use crate::memory::embedding::EmbeddingModel;
+use std::sync::Arc;
+
+/// Memory retrieval service for searching past interactions
+pub struct MemoryRetrieval {
+    database: Arc<VectorDatabase>,
+    embedding_model: Arc<EmbeddingModel>,
+    config: Arc<MemoryConfig>,
+}
+
+impl MemoryRetrieval {
+    /// Create new retrieval service
+    pub fn new(
+        database: Arc<VectorDatabase>,
+        embedding_model: Arc<EmbeddingModel>,
+        config: Arc<MemoryConfig>,
+    ) -> Self {
+        Self {
+            database,
+            embedding_model,
+            config,
+        }
+    }
+
+    /// Retrieve memories for current context
+    ///
+    /// Process flow:
+    /// 1. Check if memory is enabled
+    /// 2. Generate embedding for query
+    /// 3. Search database filtered by context
+    /// 4. Filter by similarity threshold
+    /// 5. Return top-K results
+    ///
+    /// # Arguments
+    /// * `context` - Context anchor (app + window)
+    /// * `query` - User query text
+    ///
+    /// # Returns
+    /// * `Result<Vec<MemoryEntry>>` - List of relevant memories with similarity scores
+    pub async fn retrieve_memories(
+        &self,
+        context: &ContextAnchor,
+        query: &str,
+    ) -> Result<Vec<MemoryEntry>, AetherError> {
+        // 1. Check if memory is enabled
+        if !self.config.enabled {
+            return Ok(Vec::new());
+        }
+
+        // 2. Generate query embedding
+        let query_embedding = self
+            .embedding_model
+            .embed_text(query)
+            .await
+            .map_err(|e| AetherError::config(format!("Failed to generate query embedding: {}", e)))?;
+
+        // 3. Search database with context filter
+        let mut memories = self
+            .database
+            .search_memories(
+                &context.app_bundle_id,
+                &context.window_title,
+                &query_embedding,
+                self.config.max_context_items,
+            )
+            .await?;
+
+        // 4. Filter by similarity threshold
+        memories.retain(|m| {
+            m.similarity_score.unwrap_or(0.0) >= self.config.similarity_threshold
+        });
+
+        // 5. Results are already sorted by similarity (descending) from database
+        Ok(memories)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::MemoryIngestion;
+    use uuid::Uuid;
+
+    fn create_test_db() -> Arc<VectorDatabase> {
+        let temp_dir = std::env::temp_dir();
+        let db_path = temp_dir.join(format!("test_retrieval_{}.db", Uuid::new_v4()));
+        Arc::new(VectorDatabase::new(db_path).unwrap())
+    }
+
+    fn create_test_model() -> Arc<EmbeddingModel> {
+        let model_path = EmbeddingModel::get_default_model_path().unwrap();
+        Arc::new(EmbeddingModel::new(model_path).unwrap())
+    }
+
+    fn create_test_config() -> Arc<MemoryConfig> {
+        let mut config = MemoryConfig::default();
+        config.similarity_threshold = 0.0; // Accept all similarities for testing
+        Arc::new(config)
+    }
+
+    #[test]
+    fn test_retrieval_creation() {
+        let db = create_test_db();
+        let model = create_test_model();
+        let config = create_test_config();
+        let _retrieval = MemoryRetrieval::new(db, model, config);
+    }
+
+    #[tokio::test]
+    async fn test_retrieve_empty_database() {
+        let db = create_test_db();
+        let model = create_test_model();
+        let config = create_test_config();
+        let retrieval = MemoryRetrieval::new(db, model, config);
+
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+        let memories = retrieval
+            .retrieve_memories(&context, "any query")
+            .await
+            .unwrap();
+
+        assert!(memories.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_retrieve_with_stored_memory() {
+        let db = create_test_db();
+        let model = create_test_model();
+        let config = create_test_config();
+
+        // Store a memory first
+        let ingestion = MemoryIngestion::new(db.clone(), model.clone(), config.clone());
+        let retrieval = MemoryRetrieval::new(db.clone(), model.clone(), config.clone());
+
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+        ingestion
+            .store_memory(
+                context.clone(),
+                "What is Paris?",
+                "Paris is the capital of France.",
+            )
+            .await
+            .unwrap();
+
+        // Retrieve
+        let memories = retrieval
+            .retrieve_memories(&context, "Tell me about France")
+            .await
+            .unwrap();
+
+        assert_eq!(memories.len(), 1);
+        assert!(memories[0].user_input.contains("Paris"));
+        assert!(memories[0].similarity_score.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_retrieve_respects_max_context_items() {
+        let db = create_test_db();
+        let model = create_test_model();
+        let mut config = MemoryConfig::default();
+        config.max_context_items = 2; // Limit to 2
+        let config = Arc::new(config);
+
+        let ingestion = MemoryIngestion::new(db.clone(), model.clone(), config.clone());
+        let retrieval = MemoryRetrieval::new(db.clone(), model.clone(), config.clone());
+
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+
+        // Store 5 memories
+        for i in 0..5 {
+            ingestion
+                .store_memory(
+                    context.clone(),
+                    &format!("Question {}", i),
+                    &format!("Answer {}", i),
+                )
+                .await
+                .unwrap();
+        }
+
+        // Retrieve - should get at most 2
+        let memories = retrieval
+            .retrieve_memories(&context, "questions")
+            .await
+            .unwrap();
+
+        assert!(memories.len() <= 2);
+    }
+
+    #[tokio::test]
+    async fn test_retrieve_filters_by_threshold() {
+        let db = create_test_db();
+        let model = create_test_model();
+        let mut config = MemoryConfig::default();
+        config.similarity_threshold = 1.0; // Impossibly high threshold
+        let config = Arc::new(config);
+
+        let ingestion = MemoryIngestion::new(db.clone(), model.clone(), config.clone());
+        let retrieval = MemoryRetrieval::new(db.clone(), model.clone(), config.clone());
+
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+
+        // Store a memory
+        ingestion
+            .store_memory(context.clone(), "test input", "test output")
+            .await
+            .unwrap();
+
+        // Retrieve with different query (low similarity)
+        let memories = retrieval
+            .retrieve_memories(&context, "completely different topic")
+            .await
+            .unwrap();
+
+        // Should be empty due to high threshold
+        assert!(memories.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_retrieve_when_disabled() {
+        let db = create_test_db();
+        let model = create_test_model();
+        let mut config = MemoryConfig::default();
+        config.enabled = false;
+        let config = Arc::new(config);
+
+        let retrieval = MemoryRetrieval::new(db, model, config);
+
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+        let memories = retrieval
+            .retrieve_memories(&context, "any query")
+            .await
+            .unwrap();
+
+        assert!(memories.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_retrieve_context_isolation() {
+        let db = create_test_db();
+        let model = create_test_model();
+        let config = create_test_config();
+
+        let ingestion = MemoryIngestion::new(db.clone(), model.clone(), config.clone());
+        let retrieval = MemoryRetrieval::new(db.clone(), model.clone(), config.clone());
+
+        // Store in context 1
+        let context1 = ContextAnchor::now("com.apple.Notes".to_string(), "Doc1.txt".to_string());
+        ingestion
+            .store_memory(context1.clone(), "Context 1 memory", "Response 1")
+            .await
+            .unwrap();
+
+        // Store in context 2
+        let context2 = ContextAnchor::now("com.apple.Notes".to_string(), "Doc2.txt".to_string());
+        ingestion
+            .store_memory(context2.clone(), "Context 2 memory", "Response 2")
+            .await
+            .unwrap();
+
+        // Retrieve from context 1 - should only get context 1 memory
+        let memories1 = retrieval
+            .retrieve_memories(&context1, "memory")
+            .await
+            .unwrap();
+        assert_eq!(memories1.len(), 1);
+        assert!(memories1[0].user_input.contains("Context 1"));
+
+        // Retrieve from context 2 - should only get context 2 memory
+        let memories2 = retrieval
+            .retrieve_memories(&context2, "memory")
+            .await
+            .unwrap();
+        assert_eq!(memories2.len(), 1);
+        assert!(memories2[0].user_input.contains("Context 2"));
+    }
+}
