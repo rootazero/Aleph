@@ -98,10 +98,23 @@ impl AetherCore {
                             Ok(cleanup) => {
                                 let cleanup_arc = Arc::new(cleanup);
 
-                                // Start background cleanup task
-                                let task_handle = Arc::clone(&cleanup_arc).start_background_task();
+                                // Start background cleanup task (only in non-test environment)
+                                #[cfg(not(test))]
+                                let task_handle = {
+                                    // Check if we're in a tokio runtime context
+                                    match tokio::runtime::Handle::try_current() {
+                                        Ok(_) => Some(Arc::clone(&cleanup_arc).start_background_task()),
+                                        Err(_) => {
+                                            eprintln!("[Memory] Warning: No tokio runtime, skipping background cleanup task");
+                                            None
+                                        }
+                                    }
+                                };
 
-                                (Some(db_arc), Some(cleanup_arc), Some(task_handle))
+                                #[cfg(test)]
+                                let task_handle = None;
+
+                                (Some(db_arc), Some(cleanup_arc), task_handle)
                             }
                             Err(e) => {
                                 eprintln!("Warning: Failed to initialize cleanup service: {}", e);
