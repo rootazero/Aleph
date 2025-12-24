@@ -67,13 +67,25 @@ void uniffi_aethecore_fn_free_aethercore(void*_Nonnull ptr, RustCallStatus *_Non
 );
 void*_Nonnull uniffi_aethecore_fn_constructor_aethercore_new(uint64_t handler, RustCallStatus *_Nonnull out_status
 );
+uint64_t uniffi_aethecore_fn_method_aethercore_clear_memories(void*_Nonnull ptr, RustBuffer app_bundle_id, RustBuffer window_title, RustCallStatus *_Nonnull out_status
+);
 void uniffi_aethecore_fn_method_aethercore_clear_request_context(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
+void uniffi_aethecore_fn_method_aethercore_delete_memory(void*_Nonnull ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
+);
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_clipboard_text(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_config(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_stats(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 int8_t uniffi_aethecore_fn_method_aethercore_is_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 void uniffi_aethecore_fn_method_aethercore_retry_last_request(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_aethecore_fn_method_aethercore_search_memories(void*_Nonnull ptr, RustBuffer app_bundle_id, RustBuffer window_title, uint32_t limit, RustCallStatus *_Nonnull out_status
+);
+void uniffi_aethecore_fn_method_aethercore_set_current_context(void*_Nonnull ptr, RustBuffer context, RustCallStatus *_Nonnull out_status
 );
 void uniffi_aethecore_fn_method_aethercore_start_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
@@ -84,6 +96,8 @@ void uniffi_aethecore_fn_method_aethercore_store_request_context(void*_Nonnull p
 void uniffi_aethecore_fn_method_aethercore_test_streaming_response(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 void uniffi_aethecore_fn_method_aethercore_test_typed_error(void*_Nonnull ptr, RustBuffer error_type, RustBuffer message, RustCallStatus *_Nonnull out_status
+);
+void uniffi_aethecore_fn_method_aethercore_update_memory_config(void*_Nonnull ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 void uniffi_aethecore_fn_init_callback_aethereventhandler(ForeignCallback _Nonnull callback_stub, RustCallStatus *_Nonnull out_status
 );
@@ -201,16 +215,34 @@ void ffi_aethecore_rust_future_free_void(void* _Nonnull handle
 );
 void ffi_aethecore_rust_future_complete_void(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
 );
+uint16_t uniffi_aethecore_checksum_method_aethercore_clear_memories(void
+    
+);
 uint16_t uniffi_aethecore_checksum_method_aethercore_clear_request_context(void
     
 );
+uint16_t uniffi_aethecore_checksum_method_aethercore_delete_memory(void
+    
+);
 uint16_t uniffi_aethecore_checksum_method_aethercore_get_clipboard_text(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethercore_get_memory_config(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethercore_get_memory_stats(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_is_listening(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_retry_last_request(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethercore_search_memories(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethercore_set_current_context(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_start_listening(void
@@ -226,6 +258,9 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_test_streaming_response(voi
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_test_typed_error(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethercore_update_memory_config(void
     
 );
 uint16_t uniffi_aethecore_checksum_constructor_aethercore_new(void

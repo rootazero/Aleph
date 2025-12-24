@@ -29,6 +29,7 @@ enum AetherError {
   "HotkeyError",
   "ClipboardError",
   "CallbackError",
+  "ConfigError",
   "Other"
 };
 
@@ -70,6 +71,34 @@ interface AetherCore {
 
   // Clear stored request context
   void clear_request_context();
+
+  // MEMORY MANAGEMENT METHODS (Phase 4 - Contextual Memory)
+
+  // Get memory database statistics
+  [Throws=AetherError]
+  MemoryStats get_memory_stats();
+
+  // Search memories by context
+  [Throws=AetherError]
+  sequence<MemoryEntry> search_memories(string app_bundle_id, string? window_title, u32 limit);
+
+  // Delete specific memory by ID
+  [Throws=AetherError]
+  void delete_memory(string id);
+
+  // Clear memories (with optional filters)
+  [Throws=AetherError]
+  u64 clear_memories(string? app_bundle_id, string? window_title);
+
+  // Get memory configuration
+  MemoryConfig get_memory_config();
+
+  // Update memory configuration
+  [Throws=AetherError]
+  void update_memory_config(MemoryConfig config);
+
+  // Set current context (called from Swift when hotkey pressed)
+  void set_current_context(CapturedContext context);
 };
 
 // Callback interface for events from Rust to client
@@ -93,7 +122,44 @@ callback interface AetherEventHandler {
   void on_progress(f32 percent);
 };
 
-// Configuration dictionary (stub for Phase 1)
+// Configuration dictionaries
 dictionary Config {
   string default_hotkey;
+  MemoryConfig memory;
+};
+
+dictionary MemoryConfig {
+  boolean enabled;
+  string embedding_model;
+  u32 max_context_items;
+  u32 retention_days;
+  string vector_db;
+  f32 similarity_threshold;
+  sequence<string> excluded_apps;
+};
+
+// Memory entry for a single interaction
+dictionary MemoryEntry {
+  string id;
+  string app_bundle_id;
+  string window_title;
+  string user_input;
+  string ai_output;
+  i64 timestamp;
+  f32? similarity_score;
+};
+
+// Memory database statistics
+dictionary MemoryStats {
+  u64 total_memories;
+  u64 total_apps;
+  f64 database_size_mb;
+  i64 oldest_memory_timestamp;
+  i64 newest_memory_timestamp;
+};
+
+// Captured context from active application
+dictionary CapturedContext {
+  string app_bundle_id;
+  string? window_title;
 };

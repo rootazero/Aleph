@@ -2,9 +2,12 @@
 ///
 /// Orchestrates hotkey listening, clipboard management, and event callbacks.
 use crate::clipboard::{ArboardManager, ClipboardManager};
+use crate::config::{Config, MemoryConfig};
 use crate::error::{AetherError, Result};
 use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 use crate::hotkey::{HotkeyListener, RdevListener};
+use crate::memory::database::{MemoryStats, VectorDatabase};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 
@@ -14,6 +17,13 @@ struct RequestContext {
     clipboard_content: String,
     provider: String,
     retry_count: u32,
+}
+
+/// Captured context from active application (Swift → Rust)
+#[derive(Debug, Clone)]
+pub struct CapturedContext {
+    pub app_bundle_id: String,
+    pub window_title: Option<String>,
 }
 
 /// Main core struct for Aether
@@ -27,6 +37,10 @@ pub struct AetherCore {
     #[allow(dead_code)]
     runtime: Arc<Runtime>,
     last_request: Arc<Mutex<Option<RequestContext>>>,
+    // Memory management
+    config: Arc<Mutex<Config>>,
+    memory_db: Option<Arc<VectorDatabase>>,
+    current_context: Arc<Mutex<Option<CapturedContext>>>,
 }
 
 impl AetherCore {
@@ -63,13 +77,45 @@ impl AetherCore {
             }
         }));
 
+        // Initialize configuration
+        let config = Arc::new(Mutex::new(Config::default()));
+
+        // Initialize memory database if enabled
+        let memory_db = {
+            let cfg = config.lock().unwrap();
+            if cfg.memory.enabled {
+                let db_path = Self::get_memory_db_path()?;
+                match VectorDatabase::new(db_path) {
+                    Ok(db) => Some(Arc::new(db)),
+                    Err(e) => {
+                        eprintln!("Warning: Failed to initialize memory database: {}", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        };
+
         Ok(Self {
             event_handler,
             hotkey_listener,
             clipboard_manager,
             runtime: Arc::new(runtime),
             last_request: Arc::new(Mutex::new(None)),
+            config,
+            memory_db,
+            current_context: Arc::new(Mutex::new(None)),
         })
+    }
+
+    /// Get the path for the memory database file
+    fn get_memory_db_path() -> Result<PathBuf> {
+        let home_dir = std::env::var("HOME")
+            .map_err(|_| AetherError::config("Failed to get HOME environment variable"))?;
+
+        let config_dir = PathBuf::from(home_dir).join(".config").join("aether");
+        Ok(config_dir.join("memory.db"))
     }
 
     /// Start listening for hotkey events
@@ -153,6 +199,18 @@ impl AetherCore {
             .on_error_typed(error_type, message);
     }
 
+    /// Test method: No-op in release mode
+    #[cfg(not(debug_assertions))]
+    pub fn test_streaming_response(&self) {
+        // No-op in release mode
+    }
+
+    /// Test method: No-op in release mode
+    #[cfg(not(debug_assertions))]
+    pub fn test_typed_error(&self, _error_type: ErrorType, _message: String) {
+        // No-op in release mode
+    }
+
     /// Retry the last failed request
     ///
     /// Implements exponential backoff: 2s, 4s, 8s
@@ -234,6 +292,104 @@ impl AetherCore {
         let mut last_request = self.last_request.lock().unwrap();
         *last_request = None;
     }
+
+    // MEMORY MANAGEMENT METHODS (Phase 4)
+
+    /// Get memory database statistics
+    pub fn get_memory_stats(&self) -> Result<MemoryStats> {
+        let db = self.memory_db.as_ref()
+            .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
+
+        self.runtime.block_on(db.get_stats())
+    }
+
+    /// Search memories by context
+    pub fn search_memories(
+        &self,
+        app_bundle_id: String,
+        window_title: Option<String>,
+        limit: u32,
+    ) -> Result<Vec<MemoryEntryFFI>> {
+        let db = self.memory_db.as_ref()
+            .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
+
+        // Use empty window title if not provided
+        let window = window_title.as_deref().unwrap_or("");
+
+        // For search without embedding, we'll return recent memories only
+        // TODO: In Phase 4B, implement actual embedding-based search
+        let memories = self.runtime.block_on(
+            db.search_memories(&app_bundle_id, window, &[], limit)
+        )?;
+
+        // Convert to FFI type
+        Ok(memories.into_iter().map(|m| MemoryEntryFFI {
+            id: m.id,
+            app_bundle_id: m.context.app_bundle_id,
+            window_title: m.context.window_title,
+            user_input: m.user_input,
+            ai_output: m.ai_output,
+            timestamp: m.context.timestamp,
+            similarity_score: m.similarity_score,
+        }).collect())
+    }
+
+    /// Delete specific memory by ID
+    pub fn delete_memory(&self, id: String) -> Result<()> {
+        let db = self.memory_db.as_ref()
+            .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
+
+        self.runtime.block_on(db.delete_memory(&id))
+    }
+
+    /// Clear memories (with optional filters)
+    pub fn clear_memories(
+        &self,
+        app_bundle_id: Option<String>,
+        window_title: Option<String>,
+    ) -> Result<u64> {
+        let db = self.memory_db.as_ref()
+            .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
+
+        self.runtime.block_on(
+            db.clear_memories(
+                app_bundle_id.as_deref(),
+                window_title.as_deref(),
+            )
+        )
+    }
+
+    /// Get memory configuration
+    pub fn get_memory_config(&self) -> MemoryConfig {
+        let config = self.config.lock().unwrap();
+        config.memory.clone()
+    }
+
+    /// Update memory configuration
+    pub fn update_memory_config(&self, new_config: MemoryConfig) -> Result<()> {
+        let mut config = self.config.lock().unwrap();
+        config.memory = new_config;
+        // TODO: Persist config to file in Phase 4
+        Ok(())
+    }
+
+    /// Set current context (called from Swift when hotkey pressed)
+    pub fn set_current_context(&self, context: CapturedContext) {
+        let mut current_context = self.current_context.lock().unwrap();
+        *current_context = Some(context);
+    }
+}
+
+/// Memory entry type for FFI (UniFFI-compatible)
+#[derive(Debug, Clone)]
+pub struct MemoryEntryFFI {
+    pub id: String,
+    pub app_bundle_id: String,
+    pub window_title: String,
+    pub user_input: String,
+    pub ai_output: String,
+    pub timestamp: i64,
+    pub similarity_score: Option<f32>,
 }
 
 #[cfg(test)]

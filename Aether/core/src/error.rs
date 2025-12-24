@@ -19,6 +19,10 @@ pub enum AetherError {
     #[error("FFI callback error: {0}")]
     CallbackError(String),
 
+    /// Error occurred during configuration or database operations
+    #[error("Configuration/Database error: {0}")]
+    ConfigError(String),
+
     /// Generic error for other cases
     #[error("Aether error: {0}")]
     Other(String),
@@ -38,6 +42,11 @@ impl AetherError {
     /// Create a callback error with a message
     pub fn callback<S: Into<String>>(msg: S) -> Self {
         AetherError::CallbackError(msg.into())
+    }
+
+    /// Create a config/database error with a message
+    pub fn config<S: Into<String>>(msg: S) -> Self {
+        AetherError::ConfigError(msg.into())
     }
 
     /// Create a generic error with a message
