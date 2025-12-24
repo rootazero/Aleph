@@ -6,9 +6,8 @@
 mod integration_tests {
     use crate::config::MemoryConfig;
     use crate::memory::{
-        ContextAnchor, EmbeddingModel, MemoryIngestion, MemoryRetrieval, VectorDatabase,
+        ContextAnchor, EmbeddingModel, MemoryIngestion, MemoryRetrieval, PromptAugmenter, VectorDatabase,
     };
-    use std::path::PathBuf;
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -73,6 +72,7 @@ mod integration_tests {
         let model = create_test_model();
         let mut config = MemoryConfig::default();
         config.max_context_items = 3; // Limit to top 3
+        config.similarity_threshold = 0.0; // Accept all for testing
         let config = Arc::new(config);
 
         let ingestion = MemoryIngestion::new(db.clone(), model.clone(), config.clone());
@@ -338,5 +338,191 @@ mod integration_tests {
                     >= memories[i].similarity_score.unwrap()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_full_pipeline_store_retrieve_augment() {
+        // This test demonstrates the complete workflow:
+        // 1. Store memories (past interactions)
+        // 2. Retrieve relevant memories based on new query
+        // 3. Augment prompt with retrieved memories
+
+        let db = create_test_db();
+        let model = create_test_model();
+        let mut config = MemoryConfig::default();
+        config.max_context_items = 3;
+        config.similarity_threshold = 0.0;
+        let config = Arc::new(config);
+
+        let ingestion = MemoryIngestion::new(db.clone(), model.clone(), config.clone());
+        let retrieval = MemoryRetrieval::new(db.clone(), model.clone(), config.clone());
+        let augmenter = PromptAugmenter::new();
+
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Coding.txt".to_string());
+
+        // Phase 1: Store past interactions (simulating conversation history)
+        let past_interactions = vec![
+            (
+                "How do I write a function in Rust?",
+                "In Rust, you use the `fn` keyword followed by the function name and parameters.",
+            ),
+            (
+                "What is ownership in Rust?",
+                "Ownership is Rust's unique feature for memory management without garbage collection.",
+            ),
+            (
+                "How do I handle errors in Rust?",
+                "Rust uses Result<T, E> and Option<T> types for error handling.",
+            ),
+        ];
+
+        for (input, output) in &past_interactions {
+            ingestion
+                .store_memory(context.clone(), input, output)
+                .await
+                .unwrap();
+        }
+
+        // Phase 2: Retrieve relevant memories for new query
+        let new_query = "Show me an example of error handling";
+        let memories = retrieval
+            .retrieve_memories(&context, new_query)
+            .await
+            .unwrap();
+
+        // Verify we got some relevant memories
+        assert!(!memories.is_empty());
+        println!("Retrieved {} memories for query: {}", memories.len(), new_query);
+
+        for memory in &memories {
+            println!(
+                "  - Similarity: {:.2} | {}",
+                memory.similarity_score.unwrap(),
+                memory.user_input
+            );
+        }
+
+        // Phase 3: Augment prompt with retrieved memories
+        let base_prompt = "You are a helpful Rust programming assistant.";
+        let augmented_prompt = augmenter.augment_prompt(
+            base_prompt,
+            &memories,
+            new_query,
+        );
+
+        // Verify the augmented prompt structure
+        assert!(augmented_prompt.contains(base_prompt));
+        assert!(augmented_prompt.contains("Context History"));
+        assert!(augmented_prompt.contains(new_query));
+
+        // Verify at least one past interaction is included
+        let found_relevant = memories.iter().any(|m| {
+            augmented_prompt.contains(&m.user_input) && augmented_prompt.contains(&m.ai_output)
+        });
+        assert!(found_relevant, "Augmented prompt should contain retrieved memories");
+
+        // Print the final augmented prompt for manual inspection
+        println!("\n=== Augmented Prompt ===");
+        println!("{}", augmented_prompt);
+        println!("=== End ===\n");
+
+        // Verify proper formatting
+        assert!(augmented_prompt.contains("User:"));
+        assert!(augmented_prompt.contains("Assistant:"));
+        assert!(augmented_prompt.contains("###")); // Memory headers
+    }
+
+    #[tokio::test]
+    async fn test_augmenter_with_no_memories() {
+        let augmenter = PromptAugmenter::new();
+
+        let base_prompt = "You are a helpful assistant.";
+        let user_input = "Hello, how are you?";
+
+        let result = augmenter.augment_prompt(base_prompt, &[], user_input);
+
+        // Should not include context history section when no memories
+        assert!(!result.contains("Context History"));
+        assert!(result.contains(base_prompt));
+        assert!(result.contains(user_input));
+    }
+
+    #[tokio::test]
+    async fn test_augmenter_respects_max_memories() {
+        let db = create_test_db();
+        let model = create_test_model();
+        let config = create_test_config();
+
+        let ingestion = MemoryIngestion::new(db.clone(), model.clone(), config.clone());
+        let retrieval = MemoryRetrieval::new(db.clone(), model.clone(), config.clone());
+
+        // Create augmenter with max 2 memories
+        let augmenter = PromptAugmenter::with_config(2, false);
+
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+
+        // Store 5 memories
+        for i in 0..5 {
+            ingestion
+                .store_memory(
+                    context.clone(),
+                    &format!("Question {}", i),
+                    &format!("Answer {}", i),
+                )
+                .await
+                .unwrap();
+        }
+
+        // Retrieve all
+        let memories = retrieval
+            .retrieve_memories(&context, "questions")
+            .await
+            .unwrap();
+
+        // Augment with all memories, but augmenter should limit to 2
+        let result = augmenter.augment_prompt(
+            "System prompt",
+            &memories,
+            "New question",
+        );
+
+        // Count how many memories are in the augmented prompt
+        let memory_count = result.matches("Question").count();
+        assert!(memory_count <= 2, "Should include at most 2 memories");
+    }
+
+    #[tokio::test]
+    async fn test_memory_summary() {
+        let db = create_test_db();
+        let model = create_test_model();
+        let config = create_test_config();
+
+        let ingestion = MemoryIngestion::new(db.clone(), model.clone(), config.clone());
+        let retrieval = MemoryRetrieval::new(db.clone(), model.clone(), config.clone());
+        let augmenter = PromptAugmenter::new();
+
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+
+        // Store 3 memories
+        for i in 0..3 {
+            ingestion
+                .store_memory(
+                    context.clone(),
+                    &format!("Q{}", i),
+                    &format!("A{}", i),
+                )
+                .await
+                .unwrap();
+        }
+
+        // Retrieve
+        let memories = retrieval
+            .retrieve_memories(&context, "questions")
+            .await
+            .unwrap();
+
+        // Get summary
+        let summary = augmenter.get_memory_summary(&memories);
+        assert!(summary.contains("3") || summary.contains("relevant"));
     }
 }

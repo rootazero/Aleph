@@ -62,7 +62,7 @@ fn default_vector_db() -> String {
 }
 
 fn default_similarity_threshold() -> f32 {
-    0.3  // Lower threshold for hash-based embeddings
+    0.7  // Minimum similarity score for real embedding models
 }
 
 impl Default for MemoryConfig {
