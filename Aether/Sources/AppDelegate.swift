@@ -111,7 +111,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let settingsView = SettingsView(themeEngine: themeEngine)
+        let settingsView = SettingsView(themeEngine: themeEngine, core: core)
         let hostingController = NSHostingController(rootView: settingsView)
 
         let window = NSWindow(contentViewController: hostingController)

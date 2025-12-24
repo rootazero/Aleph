@@ -12,11 +12,18 @@ enum SettingsTab {
     case providers
     case routing
     case shortcuts
+    case memory
 }
 
 struct SettingsView: View {
     @State private var selectedTab: SettingsTab = .general
     @ObservedObject var themeEngine: ThemeEngine
+    let core: AetherCore?
+
+    init(themeEngine: ThemeEngine, core: AetherCore? = nil) {
+        self.themeEngine = themeEngine
+        self.core = core
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -33,6 +40,9 @@ struct SettingsView: View {
 
                 Label("Shortcuts", systemImage: "command")
                     .tag(SettingsTab.shortcuts)
+
+                Label("Memory", systemImage: "brain")
+                    .tag(SettingsTab.memory)
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 250)
             .listStyle(.sidebar)
@@ -48,6 +58,14 @@ struct SettingsView: View {
                     RoutingView()
                 case .shortcuts:
                     ShortcutsView()
+                case .memory:
+                    if let core = core {
+                        MemoryView(core: core)
+                    } else {
+                        Text("Memory management requires AetherCore initialization")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -207,6 +225,6 @@ struct ThemePreviewCard: View {
 
 struct SettingsView_Previews: PreviewProvider {
     static var previews: some View {
-        SettingsView()
+        SettingsView(themeEngine: ThemeEngine())
     }
 }

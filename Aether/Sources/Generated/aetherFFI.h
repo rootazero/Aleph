@@ -81,6 +81,8 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_stats(void*_Nonnull 
 );
 int8_t uniffi_aethecore_fn_method_aethercore_is_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
+RustBuffer uniffi_aethecore_fn_method_aethercore_retrieve_and_augment_prompt(void*_Nonnull ptr, RustBuffer base_prompt, RustBuffer user_input, RustCallStatus *_Nonnull out_status
+);
 void uniffi_aethecore_fn_method_aethercore_retry_last_request(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_aethecore_fn_method_aethercore_search_memories(void*_Nonnull ptr, RustBuffer app_bundle_id, RustBuffer window_title, uint32_t limit, RustCallStatus *_Nonnull out_status
@@ -236,6 +238,9 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_get_memory_stats(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_is_listening(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethercore_retrieve_and_augment_prompt(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_retry_last_request(void

@@ -430,6 +430,7 @@ public protocol AetherCoreProtocol {
     func getMemoryConfig()   -> MemoryConfig
     func getMemoryStats()  throws -> MemoryStats
     func isListening()   -> Bool
+    func retrieveAndAugmentPrompt(basePrompt: String, userInput: String)  throws -> String
     func retryLastRequest()  throws
     func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32)  throws -> [MemoryEntry]
     func setCurrentContext(context: CapturedContext)  
@@ -535,6 +536,18 @@ public class AetherCore: AetherCoreProtocol {
     rustCall() {
     
     uniffi_aethecore_fn_method_aethercore_is_listening(self.pointer, $0
+    )
+}
+        )
+    }
+
+    public func retrieveAndAugmentPrompt(basePrompt: String, userInput: String) throws -> String {
+        return try  FfiConverterString.lift(
+            try 
+    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    uniffi_aethecore_fn_method_aethercore_retrieve_and_augment_prompt(self.pointer, 
+        FfiConverterString.lower(basePrompt),
+        FfiConverterString.lower(userInput),$0
     )
 }
         )
@@ -1713,6 +1726,9 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_is_listening() != 51411) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_retrieve_and_augment_prompt() != 38143) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_retry_last_request() != 41056) {
