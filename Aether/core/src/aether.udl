@@ -25,39 +25,29 @@ enum ErrorType {
   "Unknown"
 };
 
-// Error type for all Aether operations
+// Simple error enum for UniFFI 0.25 compatibility (unit variant, no associated data)
+// This avoids the flat_error derivation bug. UniFFI uses the Display trait for error messages.
 [Error]
-enum AetherError {
-  "HotkeyError",
-  "ClipboardError",
-  "CallbackError",
-  "ConfigError",
-  "NetworkError",
-  "AuthenticationError",
-  "RateLimitError",
-  "ProviderError",
-  "Timeout",
-  "NoProviderAvailable",
-  "InvalidConfig",
-  "Other"
+enum AetherException {
+  "Error"
 };
 
 // Main interface for Aether core
 interface AetherCore {
   // Constructor - creates new AetherCore with event handler
-  [Throws=AetherError]
+  [Throws=AetherException]
   constructor(AetherEventHandler handler);
 
   // Start listening for hotkey events
-  [Throws=AetherError]
+  [Throws=AetherException]
   void start_listening();
 
   // Stop listening for hotkey events
-  [Throws=AetherError]
+  [Throws=AetherException]
   void stop_listening();
 
   // Get current clipboard text
-  [Throws=AetherError]
+  [Throws=AetherException]
   string get_clipboard_text();
 
   // Check if currently listening
@@ -72,7 +62,7 @@ interface AetherCore {
 
   // RETRY METHODS (Phase 3 - Error Handling)
   // Retry the last failed request with exponential backoff
-  [Throws=AetherError]
+  [Throws=AetherException]
   void retry_last_request();
 
   // Store request context for retry capability
@@ -84,49 +74,83 @@ interface AetherCore {
   // MEMORY MANAGEMENT METHODS (Phase 4 - Contextual Memory)
 
   // Get memory database statistics
-  [Throws=AetherError]
+  [Throws=AetherException]
   MemoryStats get_memory_stats();
 
   // Search memories by context
-  [Throws=AetherError]
+  [Throws=AetherException]
   sequence<MemoryEntry> search_memories(string app_bundle_id, string? window_title, u32 limit);
 
   // Delete specific memory by ID
-  [Throws=AetherError]
+  [Throws=AetherException]
   void delete_memory(string id);
 
   // Clear memories (with optional filters)
-  [Throws=AetherError]
+  [Throws=AetherException]
   u64 clear_memories(string? app_bundle_id, string? window_title);
 
   // Get memory configuration
   MemoryConfig get_memory_config();
 
   // Update memory configuration
-  [Throws=AetherError]
+  [Throws=AetherException]
   void update_memory_config(MemoryConfig config);
 
   // Set current context (called from Swift when hotkey pressed)
   void set_current_context(CapturedContext context);
 
   // Store interaction memory with current context
-  [Throws=AetherError]
+  [Throws=AetherException]
   string store_interaction_memory(string user_input, string ai_output);
 
   // Retrieve memories and augment prompt with context (Phase 4 - Task 14)
   // This is the main entry point for integrating memory into AI request pipeline
-  [Throws=AetherError]
+  [Throws=AetherException]
   string retrieve_and_augment_prompt(string base_prompt, string user_input);
 
   // AI PROCESSING METHODS (Phase 7 - Task 7.2, 7.3)
   // Process input with AI using the complete pipeline: Memory → Router → Provider → Storage
   // This integrates all Phase 5 & 6 components
-  [Throws=AetherError]
+  [Throws=AetherException]
   string process_with_ai(string input, CapturedContext context);
 
   // Manually trigger memory cleanup
-  [Throws=AetherError]
+  [Throws=AetherException]
   u64 cleanup_old_memories();
+
+  // CONFIG MANAGEMENT METHODS (Phase 6 - Settings UI)
+
+  // Load configuration from file
+  [Throws=AetherException]
+  FullConfig load_config();
+
+  // Update provider configuration
+  [Throws=AetherException]
+  void update_provider(string name, ProviderConfig provider);
+
+  // Delete provider configuration
+  [Throws=AetherException]
+  void delete_provider(string name);
+
+  // Update routing rules
+  [Throws=AetherException]
+  void update_routing_rules(sequence<RoutingRuleConfig> rules);
+
+  // Update shortcuts configuration
+  [Throws=AetherException]
+  void update_shortcuts(ShortcutsConfig shortcuts);
+
+  // Update behavior configuration
+  [Throws=AetherException]
+  void update_behavior(BehaviorConfig behavior);
+
+  // Validate regex pattern
+  [Throws=AetherException]
+  boolean validate_regex(string pattern);
+
+  // Test provider connection
+  [Throws=AetherException]
+  string test_provider_connection(string provider_name);
 };
 
 // Callback interface for events from Rust to client
@@ -159,6 +183,30 @@ callback interface AetherEventHandler {
   // FALLBACK CALLBACK (Phase 10 - Task 10.2)
   // Called when primary provider fails and fallback is attempted
   void on_provider_fallback(string from_provider, string to_provider);
+
+  // CONFIG HOT-RELOAD CALLBACK (Phase 6 - Task 6.1)
+  // Called when config file changes externally
+  void on_config_changed();
+};
+
+// Keychain manager for secure API key storage (Phase 6 - Task 1.2)
+// Implemented in Swift using Security.framework
+callback interface KeychainManager {
+  // Store API key securely in Keychain
+  [Throws=AetherException]
+  void set_api_key(string provider, string key);
+
+  // Retrieve API key from Keychain
+  [Throws=AetherException]
+  string? get_api_key(string provider);
+
+  // Delete API key from Keychain
+  [Throws=AetherException]
+  void delete_api_key(string provider);
+
+  // Check if API key exists
+  [Throws=AetherException]
+  boolean has_api_key(string provider);
 };
 
 // Configuration dictionaries
@@ -177,6 +225,56 @@ dictionary MemoryConfig {
   string vector_db;
   f32 similarity_threshold;
   sequence<string> excluded_apps;
+};
+
+// Provider configuration (Phase 6 - Task 1.5)
+dictionary ProviderConfig {
+  string? provider_type;
+  string? api_key;
+  string model;
+  string? base_url;
+  string color;
+  u64 timeout_seconds;
+  u32? max_tokens;
+  f32? temperature;
+};
+
+// Routing rule configuration (Phase 6 - Task 1.5)
+dictionary RoutingRuleConfig {
+  string regex;
+  string provider;
+  string? system_prompt;
+};
+
+// Shortcuts configuration (Phase 6 - Task 4.2)
+dictionary ShortcutsConfig {
+  string summon;
+  string? cancel;
+};
+
+// Behavior configuration (Phase 6 - Task 5.1)
+dictionary BehaviorConfig {
+  string input_mode;
+  string output_mode;
+  u32 typing_speed;
+  boolean pii_scrubbing_enabled;
+};
+
+// Full configuration (all settings combined)
+dictionary FullConfig {
+  string default_hotkey;
+  GeneralConfig general;
+  MemoryConfig memory;
+  sequence<ProviderConfigEntry> providers;
+  sequence<RoutingRuleConfig> rules;
+  ShortcutsConfig? shortcuts;
+  BehaviorConfig? behavior;
+};
+
+// Provider config entry (name + config)
+dictionary ProviderConfigEntry {
+  string name;
+  ProviderConfig config;
 };
 
 // Memory entry for a single interaction

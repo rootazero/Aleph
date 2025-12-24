@@ -4,11 +4,19 @@ use crate::error::{AetherError, Result};
 /// Phase 1: Stub implementation with basic fields.
 /// Phase 4: Added memory configuration support.
 /// Phase 5: Added AI provider configuration support.
+/// Phase 6: Added Keychain integration and file watching support.
 /// Phase 8: Added config file loading from ~/.config/aether/config.toml
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+// Submodules
+pub mod keychain;
+pub mod watcher;
+pub use keychain::KeychainManager;
+#[allow(unused_imports)]
+pub use watcher::ConfigWatcher;
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +44,108 @@ pub struct GeneralConfig {
     /// Default provider to use when no routing rule matches
     #[serde(default)]
     pub default_provider: Option<String>,
+}
+
+/// Shortcuts configuration (Phase 6 - Task 4.2)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShortcutsConfig {
+    /// Global summon hotkey (e.g., "Command+Grave")
+    pub summon: String,
+    /// Cancel operation hotkey (optional)
+    #[serde(default)]
+    pub cancel: Option<String>,
+}
+
+impl Default for ShortcutsConfig {
+    fn default() -> Self {
+        Self {
+            summon: "Command+Grave".to_string(),
+            cancel: Some("Escape".to_string()),
+        }
+    }
+}
+
+/// Behavior configuration (Phase 6 - Task 5.1)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BehaviorConfig {
+    /// Input mode: "cut" or "copy"
+    #[serde(default = "default_input_mode")]
+    pub input_mode: String,
+    /// Output mode: "typewriter" or "instant"
+    #[serde(default = "default_output_mode")]
+    pub output_mode: String,
+    /// Typing speed in characters per second (10-200)
+    #[serde(default = "default_typing_speed")]
+    pub typing_speed: u32,
+    /// Enable PII scrubbing (email, phone, SSN, etc.)
+    #[serde(default)]
+    pub pii_scrubbing_enabled: bool,
+}
+
+fn default_input_mode() -> String {
+    "cut".to_string()
+}
+
+fn default_output_mode() -> String {
+    "typewriter".to_string()
+}
+
+fn default_typing_speed() -> u32 {
+    50 // 50 characters per second
+}
+
+impl Default for BehaviorConfig {
+    fn default() -> Self {
+        Self {
+            input_mode: default_input_mode(),
+            output_mode: default_output_mode(),
+            typing_speed: default_typing_speed(),
+            pii_scrubbing_enabled: false,
+        }
+    }
+}
+
+/// Provider config entry with name (for UniFFI)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderConfigEntry {
+    pub name: String,
+    #[serde(flatten)]
+    pub config: ProviderConfig,
+}
+
+/// Full configuration exposed through UniFFI
+/// This wraps Config with a flattened provider list
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FullConfig {
+    pub default_hotkey: String,
+    pub general: GeneralConfig,
+    pub memory: MemoryConfig,
+    pub providers: Vec<ProviderConfigEntry>,
+    pub rules: Vec<RoutingRuleConfig>,
+    #[serde(default)]
+    pub shortcuts: Option<ShortcutsConfig>,
+    #[serde(default)]
+    pub behavior: Option<BehaviorConfig>,
+}
+
+impl From<Config> for FullConfig {
+    fn from(config: Config) -> Self {
+        let providers = config
+            .providers
+            .into_iter()
+            .map(|(name, config)| ProviderConfigEntry { name, config })
+            .collect();
+
+        Self {
+            default_hotkey: config.default_hotkey,
+            general: config.general,
+            memory: config.memory,
+            providers,
+            rules: config.rules,
+            shortcuts: None, // TODO: Add to Config
+            behavior: None,  // TODO: Add to Config
+        }
+    }
 }
 
 /// Routing rule configuration for TOML parsing
@@ -400,7 +510,27 @@ impl Config {
         Ok(())
     }
 
-    /// Save configuration to a TOML file
+    /// Save configuration to a TOML file with atomic write
+    ///
+    /// This method uses atomic write operation to prevent corruption:
+    /// 1. Write to temporary file (.tmp suffix)
+    /// 2. fsync() to ensure data is on disk
+    /// 3. Atomic rename to target path
+    ///
+    /// This ensures that the config file is never in a partially written state,
+    /// even if the application crashes or loses power during the write.
+    ///
+    /// # Arguments
+    /// * `path` - Target path for config file
+    ///
+    /// # Errors
+    /// * `AetherError::InvalidConfig` - Failed to serialize or write config
+    ///
+    /// # Example
+    /// ```no_run
+    /// let config = Config::default();
+    /// config.save_to_file("config.toml")?;
+    /// ```
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let path = path.as_ref();
 
@@ -420,17 +550,65 @@ impl Config {
             AetherError::InvalidConfig(format!("Failed to serialize config: {}", e))
         })?;
 
-        // Write to file
-        fs::write(path, contents).map_err(|e| {
+        // Create temporary file in the same directory (atomic rename requirement)
+        let temp_path = path.with_extension("tmp");
+
+        // Write to temp file
+        fs::write(&temp_path, &contents).map_err(|e| {
             AetherError::InvalidConfig(format!(
-                "Failed to write config file {}: {}",
+                "Failed to write temp config file {}: {}",
+                temp_path.display(),
+                e
+            ))
+        })?;
+
+        // fsync the temp file to ensure data is on disk
+        #[cfg(unix)]
+        {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&temp_path)
+                .map_err(|e| {
+                    AetherError::InvalidConfig(format!(
+                        "Failed to open temp file for fsync: {}",
+                        e
+                    ))
+                })?;
+
+            // Sync file data and metadata
+            file.sync_all().map_err(|e| {
+                AetherError::InvalidConfig(format!("Failed to fsync temp file: {}", e))
+            })?;
+        }
+
+        // Atomic rename (overwrites target if exists)
+        fs::rename(&temp_path, path).map_err(|e| {
+            // Clean up temp file on error
+            let _ = fs::remove_file(&temp_path);
+            AetherError::InvalidConfig(format!(
+                "Failed to rename temp config to {}: {}",
                 path.display(),
                 e
             ))
         })?;
 
-        log::info!("Config saved to {}", path.display());
+        log::info!("Config atomically saved to {}", path.display());
         Ok(())
+    }
+
+    /// Save configuration to default path with atomic write
+    ///
+    /// This is a convenience method that saves to ~/.config/aether/config.toml
+    /// using atomic write operation.
+    ///
+    /// # Example
+    /// ```no_run
+    /// let mut config = Config::default();
+    /// config.default_hotkey = "Command+Shift+A".to_string();
+    /// config.save()?;
+    /// ```
+    pub fn save(&self) -> Result<()> {
+        self.save_to_file(Self::default_path())
     }
 }
 

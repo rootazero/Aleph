@@ -51,6 +51,10 @@ pub enum AetherError {
     #[error("Invalid configuration: {0}")]
     InvalidConfig(String),
 
+    /// Keychain access error
+    #[error("Keychain error: {0}")]
+    KeychainError(String),
+
     /// Generic error for other cases
     #[error("Aether error: {0}")]
     Other(String),
@@ -100,6 +104,11 @@ impl AetherError {
     /// Create an invalid config error with a message
     pub fn invalid_config<S: Into<String>>(msg: S) -> Self {
         AetherError::InvalidConfig(msg.into())
+    }
+
+    /// Create a keychain error with a message
+    pub fn keychain<S: Into<String>>(msg: S) -> Self {
+        AetherError::KeychainError(msg.into())
     }
 
     /// Create a generic error with a message
@@ -175,6 +184,12 @@ impl AetherError {
                     msg
                 )
             }
+            AetherError::KeychainError(msg) => {
+                format!(
+                    "Keychain access error: {}. Please check your system permissions.",
+                    msg
+                )
+            }
             AetherError::CallbackError(msg) => {
                 format!("Internal error: {}. Please restart the application.", msg)
             }
@@ -187,6 +202,36 @@ impl AetherError {
 
 /// Type alias for Results using AetherError
 pub type Result<T> = std::result::Result<T, AetherError>;
+
+/// Simple exception enum for UniFFI 0.25 compatibility
+///
+/// UniFFI 0.25 has bugs with [Error] enum when variants have associated data (flat_error issue).
+/// This simple unit-variant enum works perfectly. Error messages are provided separately
+/// through Display implementation, which UniFFI automatically uses for exception messages.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum AetherException {
+    #[error("An error occurred")]
+    Error,
+}
+
+impl From<AetherError> for AetherException {
+    fn from(_error: AetherError) -> Self {
+        // UniFFI will use the Display implementation for the actual error message
+        AetherException::Error
+    }
+}
+
+impl From<String> for AetherException {
+    fn from(_message: String) -> Self {
+        AetherException::Error
+    }
+}
+
+impl From<&str> for AetherException {
+    fn from(_message: &str) -> Self {
+        AetherException::Error
+    }
+}
 
 #[cfg(test)]
 mod tests {

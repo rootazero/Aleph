@@ -69,6 +69,9 @@ pub trait AetherEventHandler: Send + Sync {
 
     /// Called when primary provider fails and fallback is attempted (Phase 10 - Task 10.2)
     fn on_provider_fallback(&self, from_provider: String, to_provider: String);
+
+    /// Called when config file changes externally (Phase 6 - Task 6.1)
+    fn on_config_changed(&self);
 }
 
 /// Mock event handler for testing
@@ -85,6 +88,7 @@ pub struct MockEventHandler {
     pub ai_processing_started: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
     pub ai_responses: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     pub provider_fallbacks: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    pub config_changes: std::sync::Arc<std::sync::Mutex<u32>>, // Count of config change events
 }
 
 #[cfg(test)]
@@ -100,6 +104,7 @@ impl MockEventHandler {
             ai_processing_started: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             ai_responses: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             provider_fallbacks: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            config_changes: std::sync::Arc::new(std::sync::Mutex::new(0)),
         }
     }
 
@@ -137,6 +142,10 @@ impl MockEventHandler {
 
     pub fn get_provider_fallbacks(&self) -> Vec<(String, String)> {
         self.provider_fallbacks.lock().unwrap().clone()
+    }
+
+    pub fn get_config_change_count(&self) -> u32 {
+        *self.config_changes.lock().unwrap()
     }
 }
 
@@ -185,6 +194,11 @@ impl AetherEventHandler for MockEventHandler {
             .lock()
             .unwrap()
             .push((from_provider, to_provider));
+    }
+
+    fn on_config_changed(&self) {
+        let mut count = self.config_changes.lock().unwrap();
+        *count += 1;
     }
 }
 

@@ -32,6 +32,9 @@ log = "0.4"
 # For structured logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+# For config file watching
+notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
+notify-debouncer-full = "0.3"
 
 [build-dependencies]
 uniffi = { version = "0.25", features = ["build"] }

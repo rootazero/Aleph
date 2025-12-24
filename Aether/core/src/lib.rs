@@ -82,9 +82,12 @@ pub mod router;
 
 // Re-export public types
 pub use crate::clipboard::{ArboardManager, ClipboardManager};
-pub use crate::config::{Config, GeneralConfig, MemoryConfig, ProviderConfig, RoutingRuleConfig};
+pub use crate::config::{
+    BehaviorConfig, Config, FullConfig, GeneralConfig, KeychainManager, MemoryConfig,
+    ProviderConfig, ProviderConfigEntry, RoutingRuleConfig, ShortcutsConfig,
+};
 pub use crate::core::{AetherCore, CapturedContext, MemoryEntryFFI as MemoryEntry};
-pub use crate::error::{AetherError, Result};
+pub use crate::error::{AetherError, AetherException, Result};
 pub use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 pub use crate::hotkey::{HotkeyListener, RdevListener};
 pub use crate::input::InputSimulator;

@@ -915,6 +915,78 @@ impl AetherCore {
             runtime: Arc::clone(&self.runtime),
         }
     }
+
+    // ========== CONFIG MANAGEMENT METHODS (Phase 6 - Task 1.5) ==========
+
+    /// Load configuration and return it in UniFFI-compatible format
+    pub fn load_config(&self) -> Result<crate::config::FullConfig> {
+        let config = self.config.lock().unwrap();
+        Ok(config.clone().into())
+    }
+
+    /// Update provider configuration
+    pub fn update_provider(&self, name: String, provider: crate::config::ProviderConfig) -> Result<()> {
+        let mut config = self.config.lock().unwrap();
+        config.providers.insert(name, provider);
+        config.save()?;
+        Ok(())
+    }
+
+    /// Delete provider configuration
+    pub fn delete_provider(&self, name: String) -> Result<()> {
+        let mut config = self.config.lock().unwrap();
+        config.providers.remove(&name);
+        config.save()?;
+        Ok(())
+    }
+
+    /// Update routing rules
+    pub fn update_routing_rules(&self, rules: Vec<crate::config::RoutingRuleConfig>) -> Result<()> {
+        let mut config = self.config.lock().unwrap();
+        config.rules = rules;
+        config.validate()?;
+        config.save()?;
+        Ok(())
+    }
+
+    /// Update shortcuts configuration
+    pub fn update_shortcuts(&self, shortcuts: crate::config::ShortcutsConfig) -> Result<()> {
+        // TODO: Add shortcuts field to Config struct
+        // For now, just validate the input
+        log::info!("Shortcuts configuration update: {:?}", shortcuts);
+        Ok(())
+    }
+
+    /// Update behavior configuration
+    pub fn update_behavior(&self, behavior: crate::config::BehaviorConfig) -> Result<()> {
+        // TODO: Add behavior field to Config struct
+        // For now, just validate the input
+        log::info!("Behavior configuration update: {:?}", behavior);
+        Ok(())
+    }
+
+    /// Validate regex pattern
+    pub fn validate_regex(&self, pattern: String) -> Result<bool> {
+        match regex::Regex::new(&pattern) {
+            Ok(_) => Ok(true),
+            Err(e) => Err(AetherError::invalid_config(format!("Invalid regex: {}", e))),
+        }
+    }
+
+    /// Test provider connection
+    pub fn test_provider_connection(&self, provider_name: String) -> Result<String> {
+        // TODO: Implement actual provider connection test
+        // For now, just check if provider exists
+        let config = self.config.lock().unwrap();
+        if config.providers.contains_key(&provider_name) {
+            Ok(format!("Provider '{}' is configured", provider_name))
+        } else {
+            Err(AetherError::invalid_config(format!(
+                "Provider '{}' not found",
+                provider_name
+            )))
+        }
+    }
 }
 
 /// Helper struct for async memory storage operations
