@@ -6,7 +6,8 @@
 mod integration_tests {
     use crate::config::MemoryConfig;
     use crate::memory::{
-        ContextAnchor, EmbeddingModel, MemoryIngestion, MemoryRetrieval, PromptAugmenter, VectorDatabase,
+        ContextAnchor, EmbeddingModel, MemoryEntry, MemoryIngestion, MemoryRetrieval,
+        PromptAugmenter, VectorDatabase,
     };
     use std::sync::Arc;
     use uuid::Uuid;
@@ -524,5 +525,247 @@ mod integration_tests {
         // Get summary
         let summary = augmenter.get_memory_summary(&memories);
         assert!(summary.contains("3") || summary.contains("relevant"));
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_memory_insertions() {
+        use tokio::task::JoinSet;
+
+        let db = create_test_db();
+        let model = create_test_model();
+        let config = create_test_config();
+
+        let ingestion = MemoryIngestion::new(db.clone(), model, config);
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+
+        // Spawn 10 concurrent insertion tasks
+        let mut join_set = JoinSet::new();
+
+        for i in 0..10 {
+            let ingestion_clone = ingestion.clone();
+            let context_clone = context.clone();
+
+            join_set.spawn(async move {
+                ingestion_clone
+                    .store_memory(
+                        context_clone,
+                        &format!("concurrent input {}", i),
+                        &format!("concurrent output {}", i)
+                    )
+                    .await
+                    .unwrap();
+            });
+        }
+
+        // Wait for all tasks to complete
+        while join_set.join_next().await.is_some() {}
+
+        // Verify all memories were stored
+        let stats = db.get_stats().await.unwrap();
+        assert_eq!(stats.total_memories, 10);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_memory_retrievals() {
+        use tokio::task::JoinSet;
+
+        let db = create_test_db();
+        let model = create_test_model();
+        let config = create_test_config();
+
+        let ingestion = MemoryIngestion::new(db.clone(), model.clone(), config.clone());
+        let retrieval = MemoryRetrieval::new(db, model, config);
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+
+        // Store some memories first
+        for i in 0..5 {
+            ingestion
+                .store_memory(
+                    context.clone(),
+                    &format!("query test {}", i),
+                    &format!("response {}", i)
+                )
+                .await
+                .unwrap();
+        }
+
+        // Spawn 10 concurrent retrieval tasks
+        let mut join_set = JoinSet::new();
+
+        for i in 0..10 {
+            let retrieval_clone = retrieval.clone();
+            let context_clone = context.clone();
+
+            join_set.spawn(async move {
+                let memories = retrieval_clone
+                    .retrieve_memories(&context_clone, &format!("query test {}", i % 5))
+                    .await
+                    .unwrap();
+                memories
+            });
+        }
+
+        // Collect results
+        let mut all_results = Vec::new();
+        while let Some(result) = join_set.join_next().await {
+            all_results.push(result.unwrap());
+        }
+
+        // Verify all retrievals succeeded
+        assert_eq!(all_results.len(), 10);
+        for results in all_results {
+            assert!(!results.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_mixed_operations() {
+        use tokio::task::JoinSet;
+
+        let db = create_test_db();
+        let model = create_test_model();
+        let config = create_test_config();
+
+        let ingestion = MemoryIngestion::new(db.clone(), model.clone(), config.clone());
+        let retrieval = MemoryRetrieval::new(db.clone(), model, config);
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+
+        let mut join_set = JoinSet::new();
+
+        // Mix of insertions and retrievals
+        for i in 0..20 {
+            if i % 2 == 0 {
+                // Insert
+                let ingestion_clone = ingestion.clone();
+                let context_clone = context.clone();
+                join_set.spawn(async move {
+                    ingestion_clone
+                        .store_memory(
+                            context_clone,
+                            &format!("mixed input {}", i),
+                            &format!("mixed output {}", i)
+                        )
+                        .await
+                        .unwrap();
+                    "insert"
+                });
+            } else {
+                // Retrieve
+                let retrieval_clone = retrieval.clone();
+                let context_clone = context.clone();
+                join_set.spawn(async move {
+                    let _ = retrieval_clone
+                        .retrieve_memories(&context_clone, "mixed")
+                        .await
+                        .unwrap();
+                    "retrieve"
+                });
+            }
+        }
+
+        // Wait for all operations to complete
+        let mut operation_count = 0;
+        while join_set.join_next().await.is_some() {
+            operation_count += 1;
+        }
+
+        assert_eq!(operation_count, 20);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_deletes() {
+        use tokio::task::JoinSet;
+
+        let db = create_test_db();
+        let model = create_test_model();
+        let config = create_test_config();
+
+        let ingestion = MemoryIngestion::new(db.clone(), model, config);
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+
+        // Store 10 memories with known IDs
+        let mut memory_ids = Vec::new();
+        for i in 0..10 {
+            let id = format!("mem-{}", i);
+            memory_ids.push(id.clone());
+
+            let embedding = vec![1.0; 4];
+            let memory = MemoryEntry::with_embedding(
+                id,
+                context.clone(),
+                format!("input {}", i),
+                format!("output {}", i),
+                embedding
+            );
+            db.insert_memory(memory).await.unwrap();
+        }
+
+        // Spawn concurrent delete tasks
+        let mut join_set = JoinSet::new();
+
+        for id in memory_ids.iter().take(5) {
+            let db_clone = db.clone();
+            let id_clone = id.clone();
+
+            join_set.spawn(async move {
+                db_clone.delete_memory(&id_clone).await
+            });
+        }
+
+        // Wait for all deletes
+        while let Some(result) = join_set.join_next().await {
+            // Some deletes may succeed, some may fail if already deleted
+            let _ = result.unwrap();
+        }
+
+        // Verify at least 5 memories remain
+        let stats = db.get_stats().await.unwrap();
+        assert!(stats.total_memories >= 5);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_stats_queries() {
+        use tokio::task::JoinSet;
+
+        let db = create_test_db();
+        let model = create_test_model();
+        let config = create_test_config();
+
+        let ingestion = MemoryIngestion::new(db.clone(), model, config);
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+
+        // Store some initial memories
+        for i in 0..5 {
+            ingestion
+                .store_memory(
+                    context.clone(),
+                    &format!("input {}", i),
+                    &format!("output {}", i)
+                )
+                .await
+                .unwrap();
+        }
+
+        // Spawn 20 concurrent stats queries
+        let mut join_set = JoinSet::new();
+
+        for _ in 0..20 {
+            let db_clone = db.clone();
+            join_set.spawn(async move {
+                db_clone.get_stats().await.unwrap()
+            });
+        }
+
+        // Collect all stats
+        let mut all_stats = Vec::new();
+        while let Some(result) = join_set.join_next().await {
+            all_stats.push(result.unwrap());
+        }
+
+        // Verify all queries succeeded and returned reasonable values
+        assert_eq!(all_stats.len(), 20);
+        for stats in all_stats {
+            assert!(stats.total_memories >= 5);
+        }
     }
 }

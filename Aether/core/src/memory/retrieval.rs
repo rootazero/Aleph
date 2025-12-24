@@ -11,6 +11,7 @@ use crate::memory::embedding::EmbeddingModel;
 use std::sync::Arc;
 
 /// Memory retrieval service for searching past interactions
+#[derive(Clone)]
 pub struct MemoryRetrieval {
     database: Arc<VectorDatabase>,
     embedding_model: Arc<EmbeddingModel>,
@@ -282,5 +283,200 @@ mod tests {
             .unwrap();
         assert_eq!(memories2.len(), 1);
         assert!(memories2[0].user_input.contains("Context 2"));
+    }
+
+    #[tokio::test]
+    async fn test_retrieve_with_empty_query() {
+        let db = create_test_db();
+        let model = create_test_model();
+        let config = create_test_config();
+
+        let ingestion = MemoryIngestion::new(db.clone(), model.clone(), config.clone());
+        let retrieval = MemoryRetrieval::new(db.clone(), model.clone(), config.clone());
+
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+
+        // Store a memory
+        ingestion
+            .store_memory(context.clone(), "test input", "test output")
+            .await
+            .unwrap();
+
+        // Retrieve with empty query - should work without error
+        // Result depends on embedding similarity with empty string
+        let result = retrieval
+            .retrieve_memories(&context, "")
+            .await;
+
+        // Should not error
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_retrieve_with_long_query() {
+        let db = create_test_db();
+        let model = create_test_model();
+        let config = create_test_config();
+
+        let ingestion = MemoryIngestion::new(db.clone(), model.clone(), config.clone());
+        let retrieval = MemoryRetrieval::new(db.clone(), model.clone(), config.clone());
+
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+
+        // Store a memory
+        ingestion
+            .store_memory(context.clone(), "test input", "test output")
+            .await
+            .unwrap();
+
+        // Retrieve with very long query
+        let long_query = "word ".repeat(1000); // 5000 characters
+        let memories = retrieval
+            .retrieve_memories(&context, &long_query)
+            .await
+            .unwrap();
+
+        // Should handle long queries without error
+        assert!(memories.len() <= 1);
+    }
+
+    #[tokio::test]
+    async fn test_retrieve_with_special_characters_in_query() {
+        let db = create_test_db();
+        let model = create_test_model();
+        let config = create_test_config();
+
+        let ingestion = MemoryIngestion::new(db.clone(), model.clone(), config.clone());
+        let retrieval = MemoryRetrieval::new(db.clone(), model.clone(), config.clone());
+
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+
+        // Store a memory with special characters
+        ingestion
+            .store_memory(
+                context.clone(),
+                "Input with 'quotes' and \"double quotes\"",
+                "Output with <tags> & ampersands"
+            )
+            .await
+            .unwrap();
+
+        // Retrieve with special characters in query
+        let memories = retrieval
+            .retrieve_memories(&context, "quotes & <tags>")
+            .await
+            .unwrap();
+
+        // Should handle special characters without error
+        assert!(!memories.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_retrieve_max_context_items_boundary() {
+        let db = create_test_db();
+        let model = create_test_model();
+        let mut config = MemoryConfig::default();
+        config.max_context_items = 3;
+        let config = Arc::new(config);
+
+        let ingestion = MemoryIngestion::new(db.clone(), model.clone(), config.clone());
+        let retrieval = MemoryRetrieval::new(db.clone(), model.clone(), config.clone());
+
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+
+        // Store 10 memories
+        for i in 0..10 {
+            ingestion
+                .store_memory(
+                    context.clone(),
+                    &format!("input {}", i),
+                    &format!("output {}", i)
+                )
+                .await
+                .unwrap();
+        }
+
+        // Retrieve should return at most max_context_items
+        let memories = retrieval
+            .retrieve_memories(&context, "input")
+            .await
+            .unwrap();
+
+        assert!(memories.len() <= 3);
+    }
+
+    #[tokio::test]
+    async fn test_retrieve_different_apps_isolation() {
+        let db = create_test_db();
+        let model = create_test_model();
+        let config = create_test_config();
+
+        let ingestion = MemoryIngestion::new(db.clone(), model.clone(), config.clone());
+        let retrieval = MemoryRetrieval::new(db.clone(), model.clone(), config.clone());
+
+        // Store in different apps
+        let context1 = ContextAnchor::now("com.apple.Notes".to_string(), "Doc.txt".to_string());
+        let context2 = ContextAnchor::now("com.google.Chrome".to_string(), "Doc.txt".to_string());
+
+        ingestion
+            .store_memory(context1.clone(), "Notes input", "Notes output")
+            .await
+            .unwrap();
+
+        ingestion
+            .store_memory(context2.clone(), "Chrome input", "Chrome output")
+            .await
+            .unwrap();
+
+        // Retrieve from Notes should not get Chrome memories
+        let memories = retrieval
+            .retrieve_memories(&context1, "input")
+            .await
+            .unwrap();
+
+        assert_eq!(memories.len(), 1);
+        assert!(memories[0].user_input.contains("Notes"));
+    }
+
+    #[tokio::test]
+    async fn test_retrieve_similarity_ordering() {
+        let db = create_test_db();
+        let model = create_test_model();
+        let config = create_test_config();
+
+        let ingestion = MemoryIngestion::new(db.clone(), model.clone(), config.clone());
+        let retrieval = MemoryRetrieval::new(db.clone(), model.clone(), config.clone());
+
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
+
+        // Store memories with different content
+        ingestion
+            .store_memory(context.clone(), "apple banana", "fruit")
+            .await
+            .unwrap();
+
+        ingestion
+            .store_memory(context.clone(), "car truck", "vehicle")
+            .await
+            .unwrap();
+
+        ingestion
+            .store_memory(context.clone(), "apple orange", "citrus")
+            .await
+            .unwrap();
+
+        // Retrieve with query similar to first and third
+        let memories = retrieval
+            .retrieve_memories(&context, "apple fruit")
+            .await
+            .unwrap();
+
+        // Should return memories ordered by similarity
+        assert!(!memories.is_empty());
+        // First result should have higher similarity score
+        if memories.len() > 1 {
+            assert!(memories[0].similarity_score.unwrap_or(0.0)
+                >= memories[1].similarity_score.unwrap_or(0.0));
+        }
     }
 }

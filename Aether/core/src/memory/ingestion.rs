@@ -12,6 +12,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 /// Memory ingestion service for storing new interactions
+#[derive(Clone)]
 pub struct MemoryIngestion {
     database: Arc<VectorDatabase>,
     embedding_model: Arc<EmbeddingModel>,
