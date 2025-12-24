@@ -54,7 +54,6 @@
 /// # Ok(())
 /// # }
 /// ```
-
 use crate::config::ProviderConfig;
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;

@@ -2,7 +2,6 @@
 ///
 /// This module provides a mock implementation of `AiProvider` for testing
 /// without requiring actual API calls or network connectivity.
-
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
 use async_trait::async_trait;

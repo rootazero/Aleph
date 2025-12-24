@@ -1,3 +1,5 @@
+use aethecore::providers::mock::MockProvider;
+use aethecore::providers::AiProvider;
 /// Performance benchmarks for AI pipeline
 ///
 /// Benchmarks:
@@ -6,13 +8,8 @@
 /// - Full pipeline with mock provider
 ///
 /// Run with: cargo bench --bench ai_benchmarks
-
-use aethecore::{
-    Config, ProviderConfig, Router, RoutingRuleConfig,
-};
-use aethecore::providers::mock::MockProvider;
-use aethecore::providers::AiProvider;
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use aethecore::{Config, ProviderConfig, Router, RoutingRuleConfig};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::time::Duration;
 
 /// Create a config with multiple routing rules for testing
@@ -64,23 +61,17 @@ fn bench_routing_performance(c: &mut Criterion) {
 
     // Benchmark first rule match (best case)
     group.bench_function("first_rule_match", |b| {
-        b.iter(|| {
-            router.route(black_box("/rule0 test input")).unwrap()
-        });
+        b.iter(|| router.route(black_box("/rule0 test input")).unwrap());
     });
 
     // Benchmark middle rule match
     group.bench_function("middle_rule_match", |b| {
-        b.iter(|| {
-            router.route(black_box("/rule5 test input")).unwrap()
-        });
+        b.iter(|| router.route(black_box("/rule5 test input")).unwrap());
     });
 
     // Benchmark last rule match (catch-all, worst case)
     group.bench_function("catch_all_match", |b| {
-        b.iter(|| {
-            router.route(black_box("no match, use catch-all")).unwrap()
-        });
+        b.iter(|| router.route(black_box("no match, use catch-all")).unwrap());
     });
 
     // Benchmark 100 diverse inputs
@@ -109,16 +100,19 @@ fn bench_mock_provider(c: &mut Criterion) {
 
     group.bench_function("basic_processing", |b| {
         b.to_async(&runtime).iter(|| async {
-            provider.process(black_box("Test input"), None).await.unwrap()
+            provider
+                .process(black_box("Test input"), None)
+                .await
+                .unwrap()
         });
     });
 
     group.bench_function("with_system_prompt", |b| {
         b.to_async(&runtime).iter(|| async {
-            provider.process(
-                black_box("Test input"),
-                Some("You are a helpful assistant")
-            ).await.unwrap()
+            provider
+                .process(black_box("Test input"), Some("You are a helpful assistant"))
+                .await
+                .unwrap()
         });
     });
 
@@ -142,7 +136,10 @@ fn bench_mock_provider_with_delay(c: &mut Criterion) {
             delay_ms,
             |b, _| {
                 b.to_async(&runtime).iter(|| async {
-                    provider.process(black_box("Test input"), None).await.unwrap()
+                    provider
+                        .process(black_box("Test input"), None)
+                        .await
+                        .unwrap()
                 });
             },
         );
@@ -158,15 +155,11 @@ fn bench_config_validation(c: &mut Criterion) {
     let mut group = c.benchmark_group("config");
 
     group.bench_function("validate", |b| {
-        b.iter(|| {
-            black_box(config.validate().unwrap())
-        });
+        b.iter(|| black_box(config.validate().unwrap()));
     });
 
     group.bench_function("create_router", |b| {
-        b.iter(|| {
-            black_box(Router::new(&config).unwrap())
-        });
+        b.iter(|| black_box(Router::new(&config).unwrap()));
     });
 
     group.finish();
@@ -183,7 +176,10 @@ fn bench_full_pipeline(c: &mut Criterion) {
     group.bench_function("route_and_process", |b| {
         b.to_async(&runtime).iter(|| async {
             let (provider, system_prompt) = router.route(black_box("Test input")).unwrap();
-            provider.process(black_box("Test input"), system_prompt).await.unwrap()
+            provider
+                .process(black_box("Test input"), system_prompt)
+                .await
+                .unwrap()
         });
     });
 
@@ -215,9 +211,7 @@ fn bench_regex_matching(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{}chars", length)),
             length,
             |b, _| {
-                b.iter(|| {
-                    router.route(black_box(&input)).unwrap()
-                });
+                b.iter(|| router.route(black_box(&input)).unwrap());
             },
         );
     }

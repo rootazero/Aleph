@@ -2,7 +2,6 @@
 ///
 /// This module handles retrieval of semantically similar past interactions
 /// filtered by current context (app + window).
-
 use crate::config::MemoryConfig;
 use crate::error::AetherError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
@@ -58,11 +57,9 @@ impl MemoryRetrieval {
         }
 
         // 2. Generate query embedding
-        let query_embedding = self
-            .embedding_model
-            .embed_text(query)
-            .await
-            .map_err(|e| AetherError::config(format!("Failed to generate query embedding: {}", e)))?;
+        let query_embedding = self.embedding_model.embed_text(query).await.map_err(|e| {
+            AetherError::config(format!("Failed to generate query embedding: {}", e))
+        })?;
 
         // 3. Search database with context filter
         let mut memories = self
@@ -76,9 +73,7 @@ impl MemoryRetrieval {
             .await?;
 
         // 4. Filter by similarity threshold
-        memories.retain(|m| {
-            m.similarity_score.unwrap_or(0.0) >= self.config.similarity_threshold
-        });
+        memories.retain(|m| m.similarity_score.unwrap_or(0.0) >= self.config.similarity_threshold);
 
         // 5. Results are already sorted by similarity (descending) from database
         Ok(memories)
@@ -304,9 +299,7 @@ mod tests {
 
         // Retrieve with empty query - should work without error
         // Result depends on embedding similarity with empty string
-        let result = retrieval
-            .retrieve_memories(&context, "")
-            .await;
+        let result = retrieval.retrieve_memories(&context, "").await;
 
         // Should not error
         assert!(result.is_ok());
@@ -356,7 +349,7 @@ mod tests {
             .store_memory(
                 context.clone(),
                 "Input with 'quotes' and \"double quotes\"",
-                "Output with <tags> & ampersands"
+                "Output with <tags> & ampersands",
             )
             .await
             .unwrap();
@@ -390,7 +383,7 @@ mod tests {
                 .store_memory(
                     context.clone(),
                     &format!("input {}", i),
-                    &format!("output {}", i)
+                    &format!("output {}", i),
                 )
                 .await
                 .unwrap();
@@ -475,8 +468,10 @@ mod tests {
         assert!(!memories.is_empty());
         // First result should have higher similarity score
         if memories.len() > 1 {
-            assert!(memories[0].similarity_score.unwrap_or(0.0)
-                >= memories[1].similarity_score.unwrap_or(0.0));
+            assert!(
+                memories[0].similarity_score.unwrap_or(0.0)
+                    >= memories[1].similarity_score.unwrap_or(0.0)
+            );
         }
     }
 }

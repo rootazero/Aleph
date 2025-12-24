@@ -2,7 +2,6 @@
 ///
 /// This module formats retrieved memories and injects them into the system prompt
 /// to provide the LLM with relevant historical context.
-
 use crate::memory::context::MemoryEntry;
 use chrono::{DateTime, Utc};
 
@@ -99,16 +98,13 @@ impl PromptAugmenter {
 
             // Format timestamp
             let timestamp = DateTime::<Utc>::from_timestamp(memory.context.timestamp, 0)
-                .unwrap_or_else(|| Utc::now());
+                .unwrap_or_else(Utc::now);
             let time_str = timestamp.format("%Y-%m-%d %H:%M:%S UTC");
 
             // Header with timestamp (and optional similarity score)
             if self.show_scores {
                 if let Some(score) = memory.similarity_score {
-                    formatted.push_str(&format!(
-                        "### [{}] (Similarity: {:.2})\n",
-                        time_str, score
-                    ));
+                    formatted.push_str(&format!("### [{}] (Similarity: {:.2})\n", time_str, score));
                 } else {
                     formatted.push_str(&format!("### [{}]\n", time_str));
                 }
@@ -193,11 +189,7 @@ mod tests {
     #[test]
     fn test_augment_prompt_no_memories() {
         let augmenter = PromptAugmenter::new();
-        let result = augmenter.augment_prompt(
-            "You are an AI assistant",
-            &[],
-            "Hello",
-        );
+        let result = augmenter.augment_prompt("You are an AI assistant", &[], "Hello");
         assert!(result.contains("You are an AI assistant"));
         assert!(result.contains("User: Hello"));
         assert!(!result.contains("Context History"));
@@ -269,11 +261,7 @@ mod tests {
             create_test_memory("Q4", "A4", 1703420115, Some(0.75)),
         ];
 
-        let result = augmenter.augment_prompt(
-            "System prompt",
-            &memories,
-            "Current query",
-        );
+        let result = augmenter.augment_prompt("System prompt", &memories, "Current query");
 
         // Should only include first 2 memories
         assert!(result.contains("Q1"));
@@ -285,18 +273,9 @@ mod tests {
     #[test]
     fn test_augment_prompt_with_scores() {
         let augmenter = PromptAugmenter::with_config(5, true);
-        let memory = create_test_memory(
-            "Test question",
-            "Test answer",
-            1703419815,
-            Some(0.92),
-        );
+        let memory = create_test_memory("Test question", "Test answer", 1703419815, Some(0.92));
 
-        let result = augmenter.augment_prompt(
-            "System prompt",
-            &[memory],
-            "New question",
-        );
+        let result = augmenter.augment_prompt("System prompt", &[memory], "New question");
 
         // Should show similarity score
         assert!(result.contains("Similarity: 0.92"));
@@ -409,11 +388,7 @@ mod tests {
         let augmenter = PromptAugmenter::new();
         let memory = create_test_memory("Old Q", "Old A", 1703419815, Some(0.8));
 
-        let result = augmenter.augment_prompt(
-            "System: Be helpful",
-            &[memory],
-            "New question",
-        );
+        let result = augmenter.augment_prompt("System: Be helpful", &[memory], "New question");
 
         // Check structure: system prompt -> context -> separator -> user input
         let parts: Vec<&str> = result.split("\n\n").collect();

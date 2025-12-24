@@ -48,7 +48,6 @@
 /// # Ok(())
 /// # }
 /// ```
-
 use crate::config::ProviderConfig;
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
@@ -418,7 +417,10 @@ mod tests {
         config.base_url = Some("https://custom.anthropic.com/".to_string());
 
         let provider = ClaudeProvider::new(config).unwrap();
-        assert_eq!(provider.endpoint, "https://custom.anthropic.com/v1/messages");
+        assert_eq!(
+            provider.endpoint,
+            "https://custom.anthropic.com/v1/messages"
+        );
     }
 
     #[test]

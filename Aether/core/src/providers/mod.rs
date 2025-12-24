@@ -26,16 +26,16 @@
 ///     println!("Response: {}", response);
 /// }
 /// ```
-
 use crate::error::Result;
 use async_trait::async_trait;
 
 // Sub-modules
-pub mod mock;
-pub mod registry;
-pub mod openai;
 pub mod claude;
+pub mod mock;
 pub mod ollama;
+pub mod openai;
+pub mod registry;
+pub mod retry;
 
 // Re-exports
 pub use claude::ClaudeProvider;
@@ -43,6 +43,7 @@ pub use mock::{MockError, MockProvider};
 pub use ollama::OllamaProvider;
 pub use openai::OpenAiProvider;
 pub use registry::ProviderRegistry;
+pub use retry::retry_with_backoff;
 
 use crate::config::ProviderConfig;
 use crate::error::AetherError;

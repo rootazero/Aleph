@@ -29,6 +29,9 @@ serde_json = "1.0"
 toml = "0.8"
 dirs = "5.0"
 log = "0.4"
+# For structured logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 
 [build-dependencies]
 uniffi = { version = "0.25", features = ["build"] }

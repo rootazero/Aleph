@@ -34,17 +34,21 @@
 /// # Ok(())
 /// # }
 /// ```
-
 use crate::config::Config;
 use crate::error::{AetherError, Result};
 use crate::providers::{create_provider, AiProvider};
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tracing::{debug, info, warn};
 
 // Import for tests
 #[cfg(test)]
 use crate::config::{ProviderConfig, RoutingRuleConfig};
+
+// Type aliases for complex return types
+/// Primary provider with system prompt, and optional fallback provider
+pub type ProviderWithFallback<'a> = ((&'a dyn AiProvider, Option<&'a str>), Option<&'a dyn AiProvider>);
 
 /// A routing rule that matches input patterns to AI providers
 ///
@@ -109,11 +113,7 @@ impl RoutingRule {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(
-        pattern: &str,
-        provider_name: &str,
-        system_prompt: Option<&str>,
-    ) -> Result<Self> {
+    pub fn new(pattern: &str, provider_name: &str, system_prompt: Option<&str>) -> Result<Self> {
         let regex = Regex::new(pattern).map_err(|e| {
             AetherError::InvalidConfig(format!("Invalid regex pattern '{}': {}", pattern, e))
         })?;
@@ -332,26 +332,47 @@ impl Router {
     /// # }
     /// ```
     pub fn route(&self, input: &str) -> Option<(&dyn AiProvider, Option<&str>)> {
+        debug!(input_length = input.len(), "Starting route decision");
+
         // Find first matching rule
-        for rule in &self.rules {
+        for (index, rule) in self.rules.iter().enumerate() {
             if rule.matches(input) {
                 // Get provider by name
                 if let Some(provider) = self.providers.get(rule.provider_name()) {
+                    info!(
+                        rule_index = index,
+                        provider = %rule.provider_name(),
+                        has_system_prompt = rule.system_prompt().is_some(),
+                        "Rule matched, routing to provider"
+                    );
                     return Some((provider.as_ref(), rule.system_prompt()));
                 }
                 // Rule matched but provider not found (should not happen due to validation)
-                eprintln!(
-                    "Warning: Rule matched but provider '{}' not found",
-                    rule.provider_name()
+                warn!(
+                    provider = %rule.provider_name(),
+                    "Rule matched but provider not found in registry"
                 );
             }
         }
 
         // No rule matched, fall back to default provider
-        self.default_provider
+        debug!("No rule matched, attempting default provider fallback");
+        let result = self
+            .default_provider
             .as_ref()
             .and_then(|name| self.providers.get(name))
-            .map(|provider| (provider.as_ref(), None))
+            .map(|provider| (provider.as_ref(), None));
+
+        if let Some((provider, _)) = &result {
+            info!(
+                provider = %provider.name(),
+                "Using default provider (no rule match)"
+            );
+        } else {
+            warn!("No provider available: no rule match and no default provider");
+        }
+
+        result
     }
 
     /// Get the number of configured routing rules
@@ -372,6 +393,87 @@ impl Router {
     /// Get the default provider name (if configured)
     pub fn default_provider_name(&self) -> Option<&str> {
         self.default_provider.as_deref()
+    }
+
+    /// Route input and provide fallback provider if requested provider fails
+    ///
+    /// This method returns both the primary provider and a fallback provider
+    /// (if different from primary). The fallback is the default provider.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The user input text to route
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing:
+    /// * Primary provider and system prompt
+    /// * Optional fallback provider (None if same as primary or no default configured)
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use aethecore::router::Router;
+    /// # use aethecore::config::Config;
+    /// # fn example() -> aethecore::error::Result<()> {
+    /// # let config = Config::default();
+    /// let router = Router::new(&config)?;
+    ///
+    /// if let Some(((provider, sys_prompt), fallback)) = router.route_with_fallback("/code test") {
+    ///     // Try primary provider
+    ///     match try_process(provider, "input", sys_prompt) {
+    ///         Ok(response) => println!("Success: {}", response),
+    ///         Err(_) => {
+    ///             // Try fallback if available
+    ///             if let Some(fallback_provider) = fallback {
+    ///                 let response = try_process(fallback_provider, "input", None);
+    ///                 println!("Fallback success: {:?}", response);
+    ///             }
+    ///         }
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// # fn try_process(p: &dyn aethecore::providers::AiProvider, i: &str, s: Option<&str>) -> Result<String, ()> { Ok("".into()) }
+    /// ```
+    pub fn route_with_fallback(
+        &self,
+        input: &str,
+    ) -> Option<ProviderWithFallback<'_>> {
+        // Get primary routing result
+        let (primary_provider, system_prompt) = self.route(input)?;
+        let primary_name = primary_provider.name();
+
+        // Determine fallback provider
+        let fallback = self.default_provider.as_ref().and_then(|default_name| {
+            // Only use fallback if it's different from primary
+            if default_name != primary_name {
+                self.providers
+                    .get(default_name)
+                    .map(|p| p.as_ref() as &dyn AiProvider)
+            } else {
+                None
+            }
+        });
+
+        Some(((primary_provider, system_prompt), fallback))
+    }
+
+    /// Get a provider by name for explicit fallback scenarios
+    ///
+    /// This is useful when you want to manually specify a fallback provider
+    /// rather than using the automatic default fallback.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Provider name to retrieve
+    ///
+    /// # Returns
+    ///
+    /// * `Some(&dyn AiProvider)` - Provider reference if found
+    /// * `None` - Provider not found
+    pub fn get_provider(&self, name: &str) -> Option<&dyn AiProvider> {
+        self.providers.get(name).map(|p| p.as_ref())
     }
 }
 

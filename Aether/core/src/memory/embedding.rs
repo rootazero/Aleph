@@ -6,7 +6,6 @@
 /// The full ONNX Runtime implementation requires ort crate v1.15 or stable API.
 /// For production use, integrate with sentence-transformers via Python binding
 /// or wait for stable ort 2.0 release.
-
 use crate::error::AetherError;
 use once_cell::sync::OnceCell;
 use std::collections::hash_map::DefaultHasher;
@@ -147,7 +146,7 @@ impl EmbeddingModel {
             let word_hash = hasher.finish();
 
             // Distribute word influence across embedding dimensions
-            for dim in 0..DIM {
+            for (dim, emb_val) in embedding.iter_mut().enumerate() {
                 let mut hasher = DefaultHasher::new();
                 (word_hash, dim).hash(&mut hasher);
                 let value = hasher.finish();
@@ -158,7 +157,7 @@ impl EmbeddingModel {
                 // Weight by word position (earlier words have more influence)
                 let weight = 1.0 / (word_idx as f32 + 1.0).sqrt();
 
-                embedding[dim] += normalized_value * weight;
+                *emb_val += normalized_value * weight;
             }
         }
 
@@ -218,7 +217,11 @@ mod tests {
 
         // Check that embedding is normalized (roughly unit length)
         let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-        assert!((norm - 1.0).abs() < 0.01, "Embedding should be normalized, got norm: {}", norm);
+        assert!(
+            (norm - 1.0).abs() < 0.01,
+            "Embedding should be normalized, got norm: {}",
+            norm
+        );
     }
 
     #[tokio::test]
@@ -257,7 +260,10 @@ mod tests {
         println!("Similarity (cat/weather): {}", sim_1_3);
 
         // At minimum, embeddings should be different
-        assert_ne!(emb1, emb3, "Different texts should have different embeddings");
+        assert_ne!(
+            emb1, emb3,
+            "Different texts should have different embeddings"
+        );
     }
 
     #[tokio::test]
@@ -293,8 +299,11 @@ mod tests {
         println!("Embedding inference time: {:?}", duration);
 
         // Should be very fast for hash-based implementation
-        assert!(duration.as_millis() < 10,
-            "Hash-based embedding should be instant, took: {:?}", duration);
+        assert!(
+            duration.as_millis() < 10,
+            "Hash-based embedding should be instant, took: {:?}",
+            duration
+        );
     }
 
     #[test]

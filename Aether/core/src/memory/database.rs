@@ -2,7 +2,6 @@
 ///
 /// This module provides storage and retrieval functionality for memory embeddings
 /// using SQLite as the backend with vector similarity search capabilities.
-
 use crate::error::AetherError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -20,8 +19,9 @@ impl VectorDatabase {
     pub fn new(db_path: PathBuf) -> Result<Self, AetherError> {
         // Ensure parent directory exists
         if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| AetherError::config(format!("Failed to create database directory: {}", e)))?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                AetherError::config(format!("Failed to create database directory: {}", e))
+            })?;
         }
 
         let conn = Connection::open(&db_path)
@@ -58,7 +58,8 @@ impl VectorDatabase {
 
     /// Insert memory entry into database
     pub async fn insert_memory(&self, memory: MemoryEntry) -> Result<(), AetherError> {
-        let embedding = memory.embedding
+        let embedding = memory
+            .embedding
             .ok_or_else(|| AetherError::config("Cannot insert memory without embedding"))?;
 
         // Serialize embedding to bytes
@@ -96,15 +97,16 @@ impl VectorDatabase {
         let conn = self.conn.lock().unwrap();
 
         // Query memories matching the context
-        let mut stmt = conn.prepare(
-            r#"
+        let mut stmt = conn
+            .prepare(
+                r#"
             SELECT id, app_bundle_id, window_title, user_input, ai_output, embedding, timestamp
             FROM memories
             WHERE app_bundle_id = ?1 AND window_title = ?2
             ORDER BY timestamp DESC
             "#,
-        )
-        .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+            )
+            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
 
         let memories = stmt
             .query_map(params![app_bundle_id, window_title], |row| {
@@ -272,10 +274,7 @@ impl VectorDatabase {
 
     /// Serialize embedding vector to bytes (f32 array -> bytes)
     fn serialize_embedding(embedding: &[f32]) -> Vec<u8> {
-        embedding
-            .iter()
-            .flat_map(|f| f.to_le_bytes())
-            .collect()
+        embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
     }
 
     /// Deserialize embedding from bytes
@@ -345,7 +344,8 @@ mod tests {
     async fn test_insert_and_retrieve() {
         let db = create_test_db();
         let embedding = vec![0.1, 0.2, 0.3, 0.4];
-        let memory = create_test_memory("test-id", "com.apple.Notes", "Test.txt", embedding.clone());
+        let memory =
+            create_test_memory("test-id", "com.apple.Notes", "Test.txt", embedding.clone());
 
         db.insert_memory(memory).await.unwrap();
 
@@ -385,7 +385,8 @@ mod tests {
 
         let memory1 = create_test_memory("id1", "com.apple.Notes", "Doc1.txt", embedding.clone());
         let memory2 = create_test_memory("id2", "com.apple.Notes", "Doc2.txt", embedding.clone());
-        let memory3 = create_test_memory("id3", "com.apple.TextEdit", "Doc1.txt", embedding.clone());
+        let memory3 =
+            create_test_memory("id3", "com.apple.TextEdit", "Doc1.txt", embedding.clone());
 
         db.insert_memory(memory1).await.unwrap();
         db.insert_memory(memory2).await.unwrap();
@@ -442,12 +443,16 @@ mod tests {
         let embedding = vec![1.0, 0.0, 0.0, 0.0];
 
         let memory1 = create_test_memory("id1", "com.apple.Notes", "Test.txt", embedding.clone());
-        let memory2 = create_test_memory("id2", "com.apple.TextEdit", "Test.txt", embedding.clone());
+        let memory2 =
+            create_test_memory("id2", "com.apple.TextEdit", "Test.txt", embedding.clone());
 
         db.insert_memory(memory1).await.unwrap();
         db.insert_memory(memory2).await.unwrap();
 
-        let deleted = db.clear_memories(Some("com.apple.Notes"), None).await.unwrap();
+        let deleted = db
+            .clear_memories(Some("com.apple.Notes"), None)
+            .await
+            .unwrap();
         assert_eq!(deleted, 1);
         assert_eq!(db.get_stats().await.unwrap().total_memories, 1);
     }
@@ -525,7 +530,10 @@ mod tests {
         let db = create_test_db();
 
         // Search with empty embedding should return empty results
-        let results = db.search_memories("com.apple.Notes", "Test.txt", &Vec::new(), 5).await.unwrap();
+        let results = db
+            .search_memories("com.apple.Notes", "Test.txt", &Vec::new(), 5)
+            .await
+            .unwrap();
         assert!(results.is_empty());
     }
 
@@ -537,7 +545,10 @@ mod tests {
 
         db.insert_memory(memory).await.unwrap();
 
-        let results = db.search_memories("com.apple.Notes", "Test.txt", &embedding, 0).await.unwrap();
+        let results = db
+            .search_memories("com.apple.Notes", "Test.txt", &embedding, 0)
+            .await
+            .unwrap();
 
         // Zero limit should return no results
         assert!(results.is_empty());
@@ -585,10 +596,10 @@ mod tests {
         db.insert_memory(memory2).await.unwrap();
 
         // Clear only Doc1.txt memories
-        let deleted = db.clear_memories(
-            Some("com.apple.Notes"),
-            Some("Doc1.txt")
-        ).await.unwrap();
+        let deleted = db
+            .clear_memories(Some("com.apple.Notes"), Some("Doc1.txt"))
+            .await
+            .unwrap();
 
         assert_eq!(deleted, 1);
         assert_eq!(db.get_stats().await.unwrap().total_memories, 1);
@@ -622,7 +633,10 @@ mod tests {
 
         let memory = MemoryEntry::with_embedding(
             "special-id".to_string(),
-            ContextAnchor::now("com.app.test".to_string(), "File's Name \"quoted\".txt".to_string()),
+            ContextAnchor::now(
+                "com.app.test".to_string(),
+                "File's Name \"quoted\".txt".to_string(),
+            ),
             "Input with 'quotes' and \"double quotes\"".to_string(),
             "Output with <tags> & ampersands".to_string(),
             embedding,
@@ -643,7 +657,10 @@ mod tests {
         db.insert_memory(memory).await.unwrap();
 
         // Search with exact same embedding should return the memory
-        let results = db.search_memories("com.apple.Notes", "Test.txt", &embedding, 5).await.unwrap();
+        let results = db
+            .search_memories("com.apple.Notes", "Test.txt", &embedding, 5)
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "id1");
     }
@@ -665,11 +682,13 @@ mod tests {
     async fn test_database_file_creation() {
         use std::fs;
 
-        let temp_dir = std::env::temp_dir().join(format!("aether_test_perms_{}",
+        let temp_dir = std::env::temp_dir().join(format!(
+            "aether_test_perms_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()));
+                .as_nanos()
+        ));
 
         let _db = VectorDatabase::new(temp_dir.clone()).unwrap();
 

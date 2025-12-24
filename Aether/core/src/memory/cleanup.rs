@@ -2,7 +2,6 @@
 ///
 /// This module provides functionality to automatically delete old memories
 /// based on the configured retention policy.
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,16 +42,17 @@ impl CleanupService {
     pub fn cleanup_old_memories(&self) -> Result<u64, Box<dyn std::error::Error>> {
         // If retention_days is 0, never delete anything
         if self.retention_days == 0 {
-            println!("[Memory Cleanup] Retention policy set to infinite (0 days), skipping cleanup");
+            log::debug!(
+                "[Memory Cleanup] Retention policy set to infinite (0 days), skipping cleanup"
+            );
             return Ok(0);
         }
 
         // Calculate cutoff timestamp (current time - retention_days)
-        let cutoff_timestamp = chrono::Utc::now()
-            .timestamp()
-            - (self.retention_days as i64 * 86400); // 86400 seconds per day
+        let cutoff_timestamp =
+            chrono::Utc::now().timestamp() - (self.retention_days as i64 * 86400); // 86400 seconds per day
 
-        println!(
+        log::info!(
             "[Memory Cleanup] Starting cleanup: deleting memories older than {} days (cutoff timestamp: {})",
             self.retention_days,
             cutoff_timestamp
@@ -60,12 +60,14 @@ impl CleanupService {
 
         // Delete old memories
         let deleted_count = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(
-                self.database.delete_older_than(cutoff_timestamp)
-            )
+            tokio::runtime::Handle::current()
+                .block_on(self.database.delete_older_than(cutoff_timestamp))
         })?;
 
-        println!("[Memory Cleanup] Cleanup complete: deleted {} old memories", deleted_count);
+        log::info!(
+            "[Memory Cleanup] Cleanup complete: deleted {} old memories",
+            deleted_count
+        );
         Ok(deleted_count)
     }
 
@@ -85,10 +87,13 @@ impl CleanupService {
 
                 match self.cleanup_old_memories() {
                     Ok(count) => {
-                        println!("[Memory Cleanup] Background cleanup completed: {} memories deleted", count);
+                        log::info!(
+                            "[Memory Cleanup] Background cleanup completed: {} memories deleted",
+                            count
+                        );
                     }
                     Err(e) => {
-                        eprintln!("[Memory Cleanup] Background cleanup failed: {}", e);
+                        log::error!("[Memory Cleanup] Background cleanup failed: {}", e);
                     }
                 }
             }
@@ -100,7 +105,7 @@ impl CleanupService {
     /// # Arguments
     /// * `retention_days` - New retention period in days (0 = never delete)
     pub fn update_retention_days(&mut self, retention_days: u32) {
-        println!(
+        log::info!(
             "[Memory Cleanup] Updating retention policy from {} to {} days",
             self.retention_days,
             retention_days

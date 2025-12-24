@@ -1,3 +1,4 @@
+use aethecore::providers::mock::MockProvider;
 /// Integration tests for AI pipeline
 ///
 /// Tests end-to-end AI processing with MockProvider to avoid real API calls.
@@ -6,12 +7,10 @@
 /// - Memory augmentation
 /// - Error recovery and fallback
 /// - Timeout handling
-
 use aethecore::{
-    AetherError, AetherEventHandler, AiProvider, Config,
-    ProcessingState, ProviderConfig, Router, RoutingRuleConfig,
+    AetherError, AetherEventHandler, AiProvider, Config, ProcessingState, ProviderConfig, Router,
+    RoutingRuleConfig,
 };
-use aethecore::providers::mock::MockProvider;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tempfile::TempDir;
@@ -239,8 +238,7 @@ async fn test_mock_provider_processing() {
 
 #[tokio::test]
 async fn test_mock_provider_with_delay() {
-    let provider = MockProvider::new("Response".to_string())
-        .with_delay(Duration::from_millis(100));
+    let provider = MockProvider::new("Response".to_string()).with_delay(Duration::from_millis(100));
 
     let start = std::time::Instant::now();
     let result = provider.process("Input", None).await.unwrap();
@@ -266,8 +264,7 @@ async fn test_mock_provider_with_error() {
 async fn test_timeout_handling() {
     use aethecore::providers::mock::MockError;
 
-    let provider = MockProvider::new("".to_string())
-        .with_error(MockError::Timeout);
+    let provider = MockProvider::new("".to_string()).with_error(MockError::Timeout);
 
     let result = provider.process("Input", None).await;
     assert!(result.is_err());

@@ -106,6 +106,83 @@ impl AetherError {
     pub fn other<S: Into<String>>(msg: S) -> Self {
         AetherError::Other(msg.into())
     }
+
+    /// Get a user-friendly error message suitable for display in the UI
+    ///
+    /// This method converts technical error messages into friendly,
+    /// actionable messages that users can understand and act upon.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use aethecore::error::AetherError;
+    ///
+    /// let err = AetherError::AuthenticationError("401 Unauthorized".into());
+    /// assert_eq!(
+    ///     err.user_friendly_message(),
+    ///     "Authentication failed. Please check your API key in settings."
+    /// );
+    /// ```
+    pub fn user_friendly_message(&self) -> String {
+        match self {
+            AetherError::AuthenticationError(_) => {
+                "Authentication failed. Please check your API key in settings.".to_string()
+            }
+            AetherError::RateLimitError(_) => {
+                "Rate limit exceeded. Please try again in a few moments.".to_string()
+            }
+            AetherError::NetworkError(_) => {
+                "Network connection failed. Please check your internet connection.".to_string()
+            }
+            AetherError::Timeout => {
+                "Request timed out. The AI service is taking too long to respond. Please try again."
+                    .to_string()
+            }
+            AetherError::NoProviderAvailable => {
+                "No AI provider is configured. Please configure at least one provider in settings."
+                    .to_string()
+            }
+            AetherError::InvalidConfig(msg) => {
+                format!("Configuration error: {}. Please check your settings.", msg)
+            }
+            AetherError::ProviderError(msg) => {
+                // Check if it's a server error (5xx)
+                if msg.contains("500")
+                    || msg.contains("502")
+                    || msg.contains("503")
+                    || msg.contains("504")
+                {
+                    "The AI service is temporarily unavailable. Please try again later.".to_string()
+                } else {
+                    format!("AI service error: {}. Please try again.", msg)
+                }
+            }
+            AetherError::HotkeyError(msg) => {
+                format!(
+                    "Hotkey error: {}. Please check your system permissions.",
+                    msg
+                )
+            }
+            AetherError::ClipboardError(msg) => {
+                format!(
+                    "Clipboard error: {}. Please check your system permissions.",
+                    msg
+                )
+            }
+            AetherError::ConfigError(msg) => {
+                format!(
+                    "Configuration error: {}. Please check your settings file.",
+                    msg
+                )
+            }
+            AetherError::CallbackError(msg) => {
+                format!("Internal error: {}. Please restart the application.", msg)
+            }
+            AetherError::Other(msg) => {
+                format!("An error occurred: {}. Please try again.", msg)
+            }
+        }
+    }
 }
 
 /// Type alias for Results using AetherError

@@ -2,7 +2,6 @@
 ///
 /// This module handles storage of new interactions after successful AI responses.
 /// Process: PII scrubbing → embedding generation → database storage
-
 use crate::config::MemoryConfig;
 use crate::error::AetherError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
@@ -118,12 +117,14 @@ impl MemoryIngestion {
         let mut scrubbed = text.to_string();
 
         // Email addresses (RFC 5322 simplified)
-        let email_regex = Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap();
+        let email_regex =
+            Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap();
         scrubbed = email_regex.replace_all(&scrubbed, "[EMAIL]").to_string();
 
         // Phone numbers (various formats)
         // Matches: (123) 456-7890, 123-456-7890, 123.456.7890, 1234567890
-        let phone_regex = Regex::new(r"\b(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b").unwrap();
+        let phone_regex =
+            Regex::new(r"\b(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b").unwrap();
         scrubbed = phone_regex.replace_all(&scrubbed, "[PHONE]").to_string();
 
         // SSN (Social Security Number)
@@ -175,10 +176,7 @@ mod tests {
         let config = create_test_config();
         let ingestion = MemoryIngestion::new(db.clone(), model, config);
 
-        let context = ContextAnchor::now(
-            "com.apple.Notes".to_string(),
-            "Test.txt".to_string(),
-        );
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
         let user_input = "What is the capital of France?";
         let ai_output = "The capital of France is Paris.";
 
@@ -201,10 +199,7 @@ mod tests {
         let config = create_test_config();
         let ingestion = MemoryIngestion::new(db.clone(), model, config);
 
-        let context = ContextAnchor::now(
-            "com.apple.Notes".to_string(),
-            "Test.txt".to_string(),
-        );
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
         let user_input = "My email is john@example.com and phone is 123-456-7890";
         let ai_output = "I understand, john@example.com.";
 
@@ -241,10 +236,7 @@ mod tests {
         let config = Arc::new(config);
         let ingestion = MemoryIngestion::new(db.clone(), model, config);
 
-        let context = ContextAnchor::now(
-            "com.apple.Notes".to_string(),
-            "Test.txt".to_string(),
-        );
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
 
         let result = ingestion
             .store_memory(context, "test input", "test output")
@@ -266,9 +258,7 @@ mod tests {
             "Keychain.txt".to_string(),
         );
 
-        let result = ingestion
-            .store_memory(context, "password", "secret")
-            .await;
+        let result = ingestion.store_memory(context, "password", "secret").await;
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("excluded"));
@@ -329,10 +319,7 @@ mod tests {
         let config = create_test_config();
         let ingestion = MemoryIngestion::new(db.clone(), model, config);
 
-        let context = ContextAnchor::now(
-            "com.apple.Notes".to_string(),
-            "Test.txt".to_string(),
-        );
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
 
         let memory_id = ingestion
             .store_memory(context.clone(), "test input", "test output")
@@ -364,10 +351,7 @@ mod tests {
         let config = create_test_config();
         let ingestion = MemoryIngestion::new(db.clone(), model, config);
 
-        let context = ContextAnchor::now(
-            "com.apple.Notes".to_string(),
-            "Test.txt".to_string(),
-        );
+        let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
 
         // Store multiple memories
         for i in 0..5 {

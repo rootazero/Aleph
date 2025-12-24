@@ -66,6 +66,9 @@ pub trait AetherEventHandler: Send + Sync {
 
     /// Called when AI response is received with response preview (Phase 7 - Task 7.4)
     fn on_ai_response_received(&self, response_preview: String);
+
+    /// Called when primary provider fails and fallback is attempted (Phase 10 - Task 10.2)
+    fn on_provider_fallback(&self, from_provider: String, to_provider: String);
 }
 
 /// Mock event handler for testing
@@ -81,6 +84,7 @@ pub struct MockEventHandler {
     pub progress_updates: std::sync::Arc<std::sync::Mutex<Vec<f32>>>,
     pub ai_processing_started: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
     pub ai_responses: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    pub provider_fallbacks: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
 }
 
 #[cfg(test)]
@@ -95,6 +99,7 @@ impl MockEventHandler {
             progress_updates: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             ai_processing_started: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             ai_responses: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            provider_fallbacks: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -129,6 +134,10 @@ impl MockEventHandler {
     pub fn get_ai_responses(&self) -> Vec<String> {
         self.ai_responses.lock().unwrap().clone()
     }
+
+    pub fn get_provider_fallbacks(&self) -> Vec<(String, String)> {
+        self.provider_fallbacks.lock().unwrap().clone()
+    }
 }
 
 #[cfg(test)]
@@ -150,7 +159,10 @@ impl AetherEventHandler for MockEventHandler {
     }
 
     fn on_error_typed(&self, error_type: ErrorType, message: String) {
-        self.typed_errors.lock().unwrap().push((error_type, message));
+        self.typed_errors
+            .lock()
+            .unwrap()
+            .push((error_type, message));
     }
 
     fn on_progress(&self, percent: f32) {
@@ -158,11 +170,21 @@ impl AetherEventHandler for MockEventHandler {
     }
 
     fn on_ai_processing_started(&self, provider_name: String, provider_color: String) {
-        self.ai_processing_started.lock().unwrap().push((provider_name, provider_color));
+        self.ai_processing_started
+            .lock()
+            .unwrap()
+            .push((provider_name, provider_color));
     }
 
     fn on_ai_response_received(&self, response_preview: String) {
         self.ai_responses.lock().unwrap().push(response_preview);
+    }
+
+    fn on_provider_fallback(&self, from_provider: String, to_provider: String) {
+        self.provider_fallbacks
+            .lock()
+            .unwrap()
+            .push((from_provider, to_provider));
     }
 }
 

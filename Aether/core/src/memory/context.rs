@@ -57,12 +57,7 @@ pub struct MemoryEntry {
 
 impl MemoryEntry {
     /// Create new memory entry without embedding
-    pub fn new(
-        id: String,
-        context: ContextAnchor,
-        user_input: String,
-        ai_output: String,
-    ) -> Self {
+    pub fn new(id: String, context: ContextAnchor, user_input: String, ai_output: String) -> Self {
         Self {
             id,
             context,
@@ -104,10 +99,7 @@ mod tests {
 
     #[test]
     fn test_context_anchor_now() {
-        let anchor = ContextAnchor::now(
-            "com.apple.Notes".to_string(),
-            "Test.txt".to_string(),
-        );
+        let anchor = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
         assert_eq!(anchor.app_bundle_id, "com.apple.Notes");
         assert_eq!(anchor.window_title, "Test.txt");
         assert!(anchor.timestamp > 0);
@@ -155,8 +147,13 @@ mod tests {
     #[test]
     fn test_memory_entry_with_score() {
         let context = ContextAnchor::now("app".to_string(), "window".to_string());
-        let entry = MemoryEntry::new("id".to_string(), context, "in".to_string(), "out".to_string())
-            .with_score(0.85);
+        let entry = MemoryEntry::new(
+            "id".to_string(),
+            context,
+            "in".to_string(),
+            "out".to_string(),
+        )
+        .with_score(0.85);
         assert_eq!(entry.similarity_score, Some(0.85));
     }
 

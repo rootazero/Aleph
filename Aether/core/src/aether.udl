@@ -155,6 +155,10 @@ callback interface AetherEventHandler {
 
   // Called when AI response is received with response preview
   void on_ai_response_received(string response_preview);
+
+  // FALLBACK CALLBACK (Phase 10 - Task 10.2)
+  // Called when primary provider fails and fallback is attempted
+  void on_provider_fallback(string from_provider, string to_provider);
 };
 
 // Configuration dictionaries

@@ -96,6 +96,37 @@ pub use crate::router::{Router, RoutingRule};
 #[cfg(test)]
 pub use crate::event_handler::MockEventHandler;
 
+/// Initialize the tracing subscriber for logging
+///
+/// This function should be called once at application startup.
+/// It configures structured logging with environment-based filtering.
+///
+/// # Environment Variables
+///
+/// - `RUST_LOG`: Controls log level (e.g., "debug", "info", "aether=debug")
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use aethecore::init_logging;
+///
+/// init_logging();
+/// ```
+pub fn init_logging() {
+    use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+    // Only initialize once
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(fmt::layer().with_target(true))
+            .init();
+    });
+}
+
 // Include UniFFI scaffolding
 // This generates all the FFI glue code at compile time
 uniffi::include_scaffolding!("aether");

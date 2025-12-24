@@ -1,3 +1,4 @@
+use crate::error::{AetherError, Result};
 /// Configuration structure for Aether
 ///
 /// Phase 1: Stub implementation with basic fields.
@@ -8,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use crate::error::{AetherError, Result};
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,7 +31,7 @@ pub struct Config {
 }
 
 /// General configuration settings
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GeneralConfig {
     /// Default provider to use when no routing rule matches
     #[serde(default)]
@@ -181,7 +181,7 @@ fn default_vector_db() -> String {
 }
 
 fn default_similarity_threshold() -> f32 {
-    0.7  // Minimum similarity score for real embedding models
+    0.7 // Minimum similarity score for real embedding models
 }
 
 impl Default for MemoryConfig {
@@ -199,14 +199,6 @@ impl Default for MemoryConfig {
                 "com.lastpass.LastPass".to_string(),
                 "com.bitwarden.desktop".to_string(),
             ],
-        }
-    }
-}
-
-impl Default for GeneralConfig {
-    fn default() -> Self {
-        Self {
-            default_provider: None,
         }
     }
 }
@@ -342,7 +334,8 @@ impl Config {
 
             // Check API key for cloud providers
             if (provider_type == "openai" || provider_type == "claude")
-                && provider.api_key.is_none() {
+                && provider.api_key.is_none()
+            {
                 return Err(AetherError::InvalidConfig(format!(
                     "Provider '{}' requires an API key",
                     name
@@ -393,7 +386,7 @@ impl Config {
         // Validate memory config
         if self.memory.max_context_items == 0 {
             return Err(AetherError::InvalidConfig(
-                "memory.max_context_items must be greater than 0".to_string()
+                "memory.max_context_items must be greater than 0".to_string(),
             ));
         }
 
@@ -519,8 +512,12 @@ mod tests {
     #[test]
     fn test_default_excluded_apps() {
         let mem_config = MemoryConfig::default();
-        assert!(mem_config.excluded_apps.contains(&"com.apple.keychainaccess".to_string()));
-        assert!(mem_config.excluded_apps.contains(&"com.agilebits.onepassword7".to_string()));
+        assert!(mem_config
+            .excluded_apps
+            .contains(&"com.apple.keychainaccess".to_string()));
+        assert!(mem_config
+            .excluded_apps
+            .contains(&"com.agilebits.onepassword7".to_string()));
     }
 
     #[test]
@@ -704,7 +701,10 @@ max_context_items = 5
         // Load back
         let loaded = Config::load_from_file(path).unwrap();
         assert_eq!(loaded.default_hotkey, config.default_hotkey);
-        assert_eq!(loaded.general.default_provider, config.general.default_provider);
+        assert_eq!(
+            loaded.general.default_provider,
+            config.general.default_provider
+        );
         assert!(loaded.providers.contains_key("openai"));
     }
 

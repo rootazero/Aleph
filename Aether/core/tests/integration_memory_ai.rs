@@ -7,7 +7,6 @@
 /// 4. Router selection
 /// 5. Provider execution
 /// 6. Memory storage
-
 use aethecore::{
     AetherCore, AetherEventHandler, CapturedContext, Config, GeneralConfig, MemoryConfig,
     ProcessingState, ProviderConfig, RoutingRuleConfig,
@@ -147,10 +146,8 @@ fn test_context_capture_and_retrieval() {
     core.set_current_context(context2.clone());
 
     // Test 3: Try to use context for memory operations
-    let result = core.retrieve_and_augment_prompt(
-        "System prompt".to_string(),
-        "User query".to_string(),
-    );
+    let result =
+        core.retrieve_and_augment_prompt("System prompt".to_string(), "User query".to_string());
 
     // Should succeed even if memory is disabled
     assert!(result.is_ok());
@@ -167,7 +164,10 @@ fn test_memory_enable_disable() {
     // Check default state (may be enabled or disabled depending on config)
     let config = core.get_memory_config();
     let initial_state = config.enabled;
-    println!("Initial memory state: {}", if initial_state { "enabled" } else { "disabled" });
+    println!(
+        "Initial memory state: {}",
+        if initial_state { "enabled" } else { "disabled" }
+    );
 
     // Toggle memory state
     let mut new_config = config.clone();
@@ -177,7 +177,10 @@ fn test_memory_enable_disable() {
 
     // Verify toggled
     let toggled_config = core.get_memory_config();
-    assert_eq!(toggled_config.enabled, !initial_state, "Memory should be toggled");
+    assert_eq!(
+        toggled_config.enabled, !initial_state,
+        "Memory should be toggled"
+    );
 
     // Toggle back
     let mut restore_config = toggled_config.clone();
@@ -187,7 +190,10 @@ fn test_memory_enable_disable() {
 
     // Verify restored
     let final_config = core.get_memory_config();
-    assert_eq!(final_config.enabled, initial_state, "Memory should be restored to initial state");
+    assert_eq!(
+        final_config.enabled, initial_state,
+        "Memory should be restored to initial state"
+    );
 
     println!("✓ Memory enable/disable test passed");
 }
@@ -211,10 +217,7 @@ fn test_ai_pipeline_error_handling() {
     // Test 2: Memory augmentation with missing context
     let core2 = AetherCore::new(Box::new(TestEventHandler)).unwrap();
     // Don't set context
-    let result2 = core2.retrieve_and_augment_prompt(
-        "System".to_string(),
-        "User".to_string(),
-    );
+    let result2 = core2.retrieve_and_augment_prompt("System".to_string(), "User".to_string());
     // Should fallback to base prompt when memory disabled
     assert!(result2.is_ok());
 
@@ -266,7 +269,8 @@ fn test_concurrent_context_updates() {
     use std::thread;
 
     let handler = Box::new(TestEventHandler);
-    let core: Arc<AetherCore> = Arc::new(AetherCore::new(handler).expect("Failed to create AetherCore"));
+    let core: Arc<AetherCore> =
+        Arc::new(AetherCore::new(handler).expect("Failed to create AetherCore"));
 
     let mut handles = vec![];
 

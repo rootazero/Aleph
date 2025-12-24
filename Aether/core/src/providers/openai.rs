@@ -39,7 +39,6 @@
 /// # Ok(())
 /// # }
 /// ```
-
 use crate::config::ProviderConfig;
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
@@ -47,6 +46,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tracing::{debug, error, info};
 
 /// OpenAI API provider
 pub struct OpenAiProvider {
@@ -102,6 +102,7 @@ struct ErrorResponse {
 struct ErrorDetails {
     message: String,
     #[serde(rename = "type")]
+    #[allow(dead_code)]
     error_type: String,
 }
 
@@ -227,9 +228,7 @@ impl OpenAiProvider {
         match status.as_u16() {
             401 => AetherError::AuthenticationError("Invalid OpenAI API key".to_string()),
             429 => AetherError::RateLimitError("OpenAI rate limit exceeded".to_string()),
-            500..=599 => {
-                AetherError::ProviderError(format!("OpenAI server error: {}", status))
-            }
+            500..=599 => AetherError::ProviderError(format!("OpenAI server error: {}", status)),
             _ => AetherError::ProviderError(format!("OpenAI API error: {}", status)),
         }
     }
@@ -238,6 +237,13 @@ impl OpenAiProvider {
 #[async_trait]
 impl AiProvider for OpenAiProvider {
     async fn process(&self, input: &str, system_prompt: Option<&str>) -> Result<String> {
+        debug!(
+            model = %self.config.model,
+            input_length = input.len(),
+            has_system_prompt = system_prompt.is_some(),
+            "Sending request to OpenAI"
+        );
+
         // Build request body
         let request_body = self.build_request(input, system_prompt);
 
@@ -258,21 +264,27 @@ impl AiProvider for OpenAiProvider {
             .await
             .map_err(|e| {
                 if e.is_timeout() {
+                    error!("OpenAI request timed out");
                     AetherError::Timeout
                 } else if e.is_connect() {
+                    error!(error = %e, "Failed to connect to OpenAI");
                     AetherError::NetworkError(format!("Failed to connect to OpenAI: {}", e))
                 } else {
+                    error!(error = %e, "OpenAI network error");
                     AetherError::NetworkError(format!("Network error: {}", e))
                 }
             })?;
 
         // Check status code
         if !response.status().is_success() {
+            let status = response.status();
+            debug!(status = %status, "OpenAI request failed");
             return Err(self.handle_error(response).await);
         }
 
         // Parse response
         let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
+            error!(error = %e, "Failed to parse OpenAI response");
             AetherError::ProviderError(format!("Failed to parse OpenAI response: {}", e))
         })?;
 
@@ -280,10 +292,18 @@ impl AiProvider for OpenAiProvider {
         let content = completion
             .choices
             .first()
-            .ok_or_else(|| AetherError::ProviderError("No response from OpenAI".to_string()))?
+            .ok_or_else(|| {
+                error!("OpenAI returned no choices");
+                AetherError::ProviderError("No response from OpenAI".to_string())
+            })?
             .message
             .content
             .clone();
+
+        info!(
+            response_length = content.len(),
+            "OpenAI request completed successfully"
+        );
 
         Ok(content)
     }

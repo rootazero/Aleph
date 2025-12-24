@@ -6,12 +6,13 @@ use crate::config::{Config, MemoryConfig};
 use crate::error::{AetherError, Result};
 use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 use crate::hotkey::{HotkeyListener, RdevListener};
-use crate::memory::database::{MemoryStats, VectorDatabase};
 use crate::memory::cleanup::CleanupService;
+use crate::memory::database::{MemoryStats, VectorDatabase};
 use crate::router::Router;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
+use tracing::{debug, error, info, warn};
 
 /// Context for last request (used for retry)
 #[derive(Debug, Clone)]
@@ -79,7 +80,8 @@ impl AetherCore {
                     handler_clone.on_hotkey_detected(content);
                 }
                 Err(e) => {
-                    handler_clone.on_error(format!("Failed to read clipboard: {}", e));
+                    let friendly_message = e.user_friendly_message();
+                    handler_clone.on_error(friendly_message);
                 }
             }
         }));
@@ -94,7 +96,7 @@ impl AetherCore {
                 match Router::new(&cfg) {
                     Ok(r) => Some(Arc::new(r)),
                     Err(e) => {
-                        eprintln!("Warning: Failed to initialize router: {}", e);
+                        log::warn!("Failed to initialize router: {}", e);
                         None
                     }
                 }
@@ -122,7 +124,9 @@ impl AetherCore {
                                 let task_handle = {
                                     // Check if we're in a tokio runtime context
                                     match tokio::runtime::Handle::try_current() {
-                                        Ok(_) => Some(Arc::clone(&cleanup_arc).start_background_task()),
+                                        Ok(_) => {
+                                            Some(Arc::clone(&cleanup_arc).start_background_task())
+                                        }
                                         Err(_) => {
                                             eprintln!("[Memory] Warning: No tokio runtime, skipping background cleanup task");
                                             None
@@ -270,8 +274,7 @@ impl AetherCore {
     /// Test method: Simulate typed error (for development/testing only)
     #[cfg(debug_assertions)]
     pub fn test_typed_error(&self, error_type: ErrorType, message: String) {
-        self.event_handler
-            .on_error_typed(error_type, message);
+        self.event_handler.on_error_typed(error_type, message);
     }
 
     /// Test method: No-op in release mode
@@ -372,7 +375,9 @@ impl AetherCore {
 
     /// Get memory database statistics
     pub fn get_memory_stats(&self) -> Result<MemoryStats> {
-        let db = self.memory_db.as_ref()
+        let db = self
+            .memory_db
+            .as_ref()
             .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
 
         self.runtime.block_on(db.get_stats())
@@ -385,7 +390,9 @@ impl AetherCore {
         window_title: Option<String>,
         limit: u32,
     ) -> Result<Vec<MemoryEntryFFI>> {
-        let db = self.memory_db.as_ref()
+        let db = self
+            .memory_db
+            .as_ref()
             .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
 
         // Use empty window title if not provided
@@ -393,25 +400,30 @@ impl AetherCore {
 
         // For search without embedding, we'll return recent memories only
         // TODO: In Phase 4B, implement actual embedding-based search
-        let memories = self.runtime.block_on(
-            db.search_memories(&app_bundle_id, window, &[], limit)
-        )?;
+        let memories =
+            self.runtime
+                .block_on(db.search_memories(&app_bundle_id, window, &[], limit))?;
 
         // Convert to FFI type
-        Ok(memories.into_iter().map(|m| MemoryEntryFFI {
-            id: m.id,
-            app_bundle_id: m.context.app_bundle_id,
-            window_title: m.context.window_title,
-            user_input: m.user_input,
-            ai_output: m.ai_output,
-            timestamp: m.context.timestamp,
-            similarity_score: m.similarity_score,
-        }).collect())
+        Ok(memories
+            .into_iter()
+            .map(|m| MemoryEntryFFI {
+                id: m.id,
+                app_bundle_id: m.context.app_bundle_id,
+                window_title: m.context.window_title,
+                user_input: m.user_input,
+                ai_output: m.ai_output,
+                timestamp: m.context.timestamp,
+                similarity_score: m.similarity_score,
+            })
+            .collect())
     }
 
     /// Delete specific memory by ID
     pub fn delete_memory(&self, id: String) -> Result<()> {
-        let db = self.memory_db.as_ref()
+        let db = self
+            .memory_db
+            .as_ref()
             .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
 
         self.runtime.block_on(db.delete_memory(&id))
@@ -423,15 +435,13 @@ impl AetherCore {
         app_bundle_id: Option<String>,
         window_title: Option<String>,
     ) -> Result<u64> {
-        let db = self.memory_db.as_ref()
+        let db = self
+            .memory_db
+            .as_ref()
             .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
 
-        self.runtime.block_on(
-            db.clear_memories(
-                app_bundle_id.as_deref(),
-                window_title.as_deref(),
-            )
-        )
+        self.runtime
+            .block_on(db.clear_memories(app_bundle_id.as_deref(), window_title.as_deref()))
     }
 
     /// Get memory configuration
@@ -452,8 +462,7 @@ impl AetherCore {
             if let Some(_cleanup) = &self.cleanup_service {
                 println!(
                     "[Memory] Retention policy updated: {} -> {} days",
-                    old_retention_days,
-                    new_config.retention_days
+                    old_retention_days, new_config.retention_days
                 );
                 // Note: We cannot update the cleanup service directly due to Arc
                 // The service will be recreated when AetherCore is reinitialized
@@ -478,10 +487,13 @@ impl AetherCore {
     /// # Returns
     /// * `Result<u64>` - Number of deleted memories, or error
     pub fn cleanup_old_memories(&self) -> Result<u64> {
-        let cleanup = self.cleanup_service.as_ref()
+        let cleanup = self
+            .cleanup_service
+            .as_ref()
             .ok_or_else(|| AetherError::config("Cleanup service not initialized"))?;
 
-        cleanup.cleanup_old_memories()
+        cleanup
+            .cleanup_old_memories()
             .map_err(|e| AetherError::config(format!("Cleanup failed: {}", e)))
     }
 
@@ -513,7 +525,8 @@ impl AetherCore {
 
         // Get current context
         let current_context = self.current_context.lock().unwrap();
-        let captured_context = current_context.as_ref()
+        let captured_context = current_context
+            .as_ref()
             .ok_or_else(|| AetherError::config("No context captured"))?;
 
         // Create context anchor
@@ -524,18 +537,20 @@ impl AetherCore {
         };
 
         // Get memory database
-        let db = self.memory_db.as_ref()
+        let db = self
+            .memory_db
+            .as_ref()
             .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
 
         // Get embedding model directory
-        let model_dir = Self::get_embedding_model_dir()
-            .map_err(|e| AetherError::config(format!("Failed to get embedding model directory: {}", e)))?;
+        let model_dir = Self::get_embedding_model_dir().map_err(|e| {
+            AetherError::config(format!("Failed to get embedding model directory: {}", e))
+        })?;
 
         // Create embedding model (lazy load)
-        let embedding_model = Arc::new(
-            EmbeddingModel::new(model_dir)
-                .map_err(|e| AetherError::config(format!("Failed to initialize embedding model: {}", e)))?
-        );
+        let embedding_model = Arc::new(EmbeddingModel::new(model_dir).map_err(|e| {
+            AetherError::config(format!("Failed to initialize embedding model: {}", e))
+        })?);
 
         // Create ingestion service
         let ingestion = MemoryIngestion::new(
@@ -545,9 +560,9 @@ impl AetherCore {
         );
 
         // Store memory asynchronously
-        let result = self.runtime.block_on(
-            ingestion.store_memory(context_anchor, &user_input, &ai_output)
-        );
+        let result =
+            self.runtime
+                .block_on(ingestion.store_memory(context_anchor, &user_input, &ai_output));
 
         result
     }
@@ -620,10 +635,9 @@ impl AetherCore {
 
         // Get embedding model
         let model_dir = Self::get_embedding_model_dir()?;
-        let embedding_model = Arc::new(
-            EmbeddingModel::new(model_dir)
-                .map_err(|e| AetherError::config(format!("Failed to initialize embedding model: {}", e)))?
-        );
+        let embedding_model = Arc::new(EmbeddingModel::new(model_dir).map_err(|e| {
+            AetherError::config(format!("Failed to initialize embedding model: {}", e))
+        })?);
 
         let init_time = start_time.elapsed();
         println!("[Memory] Initialization time: {:?}", init_time);
@@ -637,9 +651,9 @@ impl AetherCore {
 
         // Retrieve memories
         let retrieval_start = Instant::now();
-        let memories = self.runtime.block_on(
-            retrieval.retrieve_memories(&context_anchor, &user_input)
-        )?;
+        let memories = self
+            .runtime
+            .block_on(retrieval.retrieve_memories(&context_anchor, &user_input))?;
         let retrieval_time = retrieval_start.elapsed();
 
         println!(
@@ -707,11 +721,37 @@ impl AetherCore {
         use std::time::Instant;
 
         let start_time = Instant::now();
-        println!("[AI Pipeline] Starting processing for input: {} chars", input.len());
+        info!(
+            input_length = input.len(),
+            "Starting AI pipeline processing"
+        );
 
+        // Wrapper to handle errors with user-friendly messages
+        let result = self.process_with_ai_internal(input, _context, start_time);
+
+        // If error occurred, send user-friendly message to UI
+        if let Err(ref e) = result {
+            let friendly_message = e.user_friendly_message();
+            error!(error = ?e, user_message = %friendly_message, "AI processing failed");
+            self.event_handler.on_error(friendly_message);
+            self.event_handler.on_state_changed(ProcessingState::Error);
+        }
+
+        result
+    }
+
+    /// Internal implementation of AI processing pipeline
+    fn process_with_ai_internal(
+        &self,
+        input: String,
+        _context: CapturedContext,
+        start_time: std::time::Instant,
+    ) -> Result<String> {
         // Step 1: Check if router is available
-        let router = self.router.as_ref()
-            .ok_or_else(|| AetherError::NoProviderAvailable)?;
+        let router = self
+            .router
+            .as_ref()
+            .ok_or(AetherError::NoProviderAvailable)?;
 
         // Step 2: Retrieve memories and augment prompt (if enabled)
         let config = self.config.lock().unwrap();
@@ -720,15 +760,16 @@ impl AetherCore {
 
         let augmented_input = if self.memory_db.is_some() {
             // Notify UI that we're retrieving memory
-            self.event_handler.on_state_changed(ProcessingState::RetrievingMemory);
+            self.event_handler
+                .on_state_changed(ProcessingState::RetrievingMemory);
 
             match self.retrieve_and_augment_prompt(base_system_prompt.clone(), input.clone()) {
                 Ok(augmented) => {
-                    println!("[AI Pipeline] Memory augmentation succeeded");
+                    debug!("Memory augmentation succeeded");
                     augmented
                 }
                 Err(e) => {
-                    println!("[AI Pipeline] Warning: Memory augmentation failed: {}", e);
+                    warn!(error = %e, "Memory augmentation failed, using original input");
                     // Fallback to original input
                     format!("{}\n\nUser: {}", base_system_prompt, input)
                 }
@@ -738,37 +779,95 @@ impl AetherCore {
         };
 
         let memory_time = start_time.elapsed();
-        println!("[AI Pipeline] Memory retrieval time: {:?}", memory_time);
+        debug!(
+            duration_ms = memory_time.as_millis(),
+            "Memory retrieval completed"
+        );
 
-        // Step 3: Route to appropriate provider
-        let (provider, system_prompt_override) = router.route(&input)
-            .ok_or_else(|| AetherError::NoProviderAvailable)?;
+        // Step 3: Route to appropriate provider with fallback support
+        let ((provider, system_prompt_override), fallback_provider) = router
+            .route_with_fallback(&input)
+            .ok_or(AetherError::NoProviderAvailable)?;
 
         let provider_name = provider.name().to_string();
         let provider_color = provider.color().to_string();
 
-        println!(
-            "[AI Pipeline] Routed to provider: {} (color: {})",
-            provider_name, provider_color
+        info!(
+            provider = %provider_name,
+            color = %provider_color,
+            has_fallback = fallback_provider.is_some(),
+            "Routed to AI provider"
         );
 
         // Notify UI about AI processing start (Task 7.4)
-        self.event_handler.on_ai_processing_started(provider_name.clone(), provider_color.clone());
-        self.event_handler.on_state_changed(ProcessingState::ProcessingWithAI);
+        self.event_handler
+            .on_ai_processing_started(provider_name.clone(), provider_color.clone());
+        self.event_handler
+            .on_state_changed(ProcessingState::ProcessingWithAI);
 
-        // Step 4: Call AI provider
+        // Step 4: Call AI provider with retry and fallback logic (Task 10.1 & 10.2)
         let routing_time = start_time.elapsed();
         let system_prompt = system_prompt_override.unwrap_or(&base_system_prompt);
 
+        // Try primary provider with retry
         let response = self.runtime.block_on(async {
-            provider.process(&augmented_input, Some(system_prompt)).await
+            use crate::providers::retry_with_backoff;
+
+            // Attempt with primary provider (with retry)
+            let primary_result = retry_with_backoff(
+                || provider.process(&augmented_input, Some(system_prompt)),
+                Some(3),
+            )
+            .await;
+
+            match primary_result {
+                Ok(response) => {
+                    info!(provider = %provider_name, "Primary provider succeeded");
+                    Ok(response)
+                }
+                Err(primary_error) => {
+                    warn!(
+                        provider = %provider_name,
+                        error = ?primary_error,
+                        "Primary provider failed"
+                    );
+
+                    // Try fallback provider if available
+                    if let Some(fallback) = fallback_provider {
+                        let fallback_name = fallback.name().to_string();
+                        warn!(
+                            from_provider = %provider_name,
+                            to_provider = %fallback_name,
+                            "Attempting fallback to alternative provider"
+                        );
+
+                        // Notify UI about fallback (Task 10.2)
+                        self.event_handler
+                            .on_provider_fallback(provider_name.clone(), fallback_name.clone());
+
+                        // Try fallback provider (with retry)
+                        retry_with_backoff(
+                            || fallback.process(&augmented_input, Some(system_prompt)),
+                            Some(3),
+                        )
+                        .await
+                    } else {
+                        error!(
+                            provider = %provider_name,
+                            "No fallback provider available"
+                        );
+                        Err(primary_error)
+                    }
+                }
+            }
         })?;
 
         let ai_time = start_time.elapsed();
-        println!(
-            "[AI Pipeline] AI response received in {:?} (total: {:?})",
-            ai_time - routing_time,
-            ai_time
+        info!(
+            ai_duration_ms = (ai_time - routing_time).as_millis(),
+            total_duration_ms = ai_time.as_millis(),
+            response_length = response.len(),
+            "AI response received"
         );
 
         // Notify UI about AI response (Task 7.4)
@@ -789,17 +888,17 @@ impl AetherCore {
             self.runtime.spawn(async move {
                 match core_clone.store_interaction_memory(user_input, ai_output) {
                     Ok(memory_id) => {
-                        println!("[AI Pipeline] Memory stored: {}", memory_id);
+                        log::debug!("[AI Pipeline] Memory stored: {}", memory_id);
                     }
                     Err(e) => {
-                        eprintln!("[AI Pipeline] Warning: Failed to store memory: {}", e);
+                        log::error!("[AI Pipeline] Failed to store memory: {}", e);
                     }
                 }
             });
         }
 
         let total_time = start_time.elapsed();
-        println!("[AI Pipeline] Total processing time: {:?}", total_time);
+        log::info!("[AI Pipeline] Total processing time: {:?}", total_time);
 
         Ok(response)
     }
@@ -844,7 +943,8 @@ impl StorageHelper {
 
         // Get current context
         let current_context = self.current_context.lock().unwrap();
-        let captured_context = current_context.as_ref()
+        let captured_context = current_context
+            .as_ref()
             .ok_or_else(|| AetherError::config("No context captured"))?;
 
         // Create context anchor
@@ -855,18 +955,20 @@ impl StorageHelper {
         };
 
         // Get memory database
-        let db = self.memory_db.as_ref()
+        let db = self
+            .memory_db
+            .as_ref()
             .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
 
         // Get embedding model directory
-        let model_dir = AetherCore::get_embedding_model_dir()
-            .map_err(|e| AetherError::config(format!("Failed to get embedding model directory: {}", e)))?;
+        let model_dir = AetherCore::get_embedding_model_dir().map_err(|e| {
+            AetherError::config(format!("Failed to get embedding model directory: {}", e))
+        })?;
 
         // Create embedding model (lazy load)
-        let embedding_model = Arc::new(
-            EmbeddingModel::new(model_dir)
-                .map_err(|e| AetherError::config(format!("Failed to initialize embedding model: {}", e)))?
-        );
+        let embedding_model = Arc::new(EmbeddingModel::new(model_dir).map_err(|e| {
+            AetherError::config(format!("Failed to initialize embedding model: {}", e))
+        })?);
 
         // Create ingestion service
         let ingestion = MemoryIngestion::new(
@@ -876,9 +978,9 @@ impl StorageHelper {
         );
 
         // Store memory
-        let result = self.runtime.block_on(
-            ingestion.store_memory(context_anchor, &user_input, &ai_output)
-        );
+        let result =
+            self.runtime
+                .block_on(ingestion.store_memory(context_anchor, &user_input, &ai_output));
 
         result
     }
@@ -954,10 +1056,7 @@ mod tests {
         let core = AetherCore::new(handler).unwrap();
 
         // Store request context
-        core.store_request_context(
-            "Test clipboard content".to_string(),
-            "openai".to_string(),
-        );
+        core.store_request_context("Test clipboard content".to_string(), "openai".to_string());
 
         // Verify context is stored by attempting retry
         let result = core.retry_last_request();
@@ -980,10 +1079,7 @@ mod tests {
         let core = AetherCore::new(handler).unwrap();
 
         // Store request context
-        core.store_request_context(
-            "Test content".to_string(),
-            "openai".to_string(),
-        );
+        core.store_request_context("Test content".to_string(), "openai".to_string());
 
         // First retry should succeed
         assert!(core.retry_last_request().is_ok());
@@ -1002,10 +1098,7 @@ mod tests {
         let core = AetherCore::new(handler).unwrap();
 
         // Store and then clear context
-        core.store_request_context(
-            "Test content".to_string(),
-            "openai".to_string(),
-        );
+        core.store_request_context("Test content".to_string(), "openai".to_string());
         core.clear_request_context();
 
         // Retry should fail after clearing
@@ -1034,10 +1127,16 @@ mod tests {
         // Result may fail if memory is disabled, which is OK
         match result {
             Ok(memory_id) => {
-                println!("✓ Context capture test passed - memory stored with ID: {}", memory_id);
+                println!(
+                    "✓ Context capture test passed - memory stored with ID: {}",
+                    memory_id
+                );
             }
             Err(e) => {
-                println!("Note: Memory storage failed (expected if memory disabled): {}", e);
+                println!(
+                    "Note: Memory storage failed (expected if memory disabled): {}",
+                    e
+                );
             }
         }
     }
@@ -1048,16 +1147,11 @@ mod tests {
         let core = AetherCore::new(handler).unwrap();
 
         // Try to store memory without setting context first
-        let result = core.store_interaction_memory(
-            "Test input".to_string(),
-            "Test output".to_string(),
-        );
+        let result =
+            core.store_interaction_memory("Test input".to_string(), "Test output".to_string());
 
         // Should fail because no context was captured
-        assert!(
-            result.is_err(),
-            "Should fail when no context is captured"
-        );
+        assert!(result.is_err(), "Should fail when no context is captured");
     }
 
     #[test]
@@ -1167,7 +1261,10 @@ mod tests {
                         }
                     }
                     Err(e) => {
-                        println!("Note: Memory retrieval skipped (expected in test env): {}", e);
+                        println!(
+                            "Note: Memory retrieval skipped (expected in test env): {}",
+                            e
+                        );
                     }
                 }
             } else {

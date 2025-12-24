@@ -55,10 +55,7 @@ mod integration_tests {
 
         // Retrieve the memory
         let query = "Tell me about France";
-        let memories = retrieval
-            .retrieve_memories(&context, query)
-            .await
-            .unwrap();
+        let memories = retrieval.retrieve_memories(&context, query).await.unwrap();
 
         assert_eq!(memories.len(), 1);
         assert_eq!(memories[0].id, memory_id);
@@ -99,10 +96,7 @@ mod integration_tests {
 
         // Retrieve with a query about European capitals
         let query = "Tell me about European capitals";
-        let memories = retrieval
-            .retrieve_memories(&context, query)
-            .await
-            .unwrap();
+        let memories = retrieval.retrieve_memories(&context, query).await.unwrap();
 
         // Should return at most 3 (max_context_items)
         assert!(memories.len() <= 3);
@@ -190,10 +184,7 @@ mod integration_tests {
 
         // Query about completely unrelated topic (should not match high threshold)
         let query = "What is the weather like today?";
-        let memories = retrieval
-            .retrieve_memories(&context, query)
-            .await
-            .unwrap();
+        let memories = retrieval.retrieve_memories(&context, query).await.unwrap();
 
         // With high threshold, unrelated query should return no results
         // Note: This depends on the embedding model's behavior
@@ -248,10 +239,7 @@ mod integration_tests {
         assert!(result.is_err());
 
         // Try to retrieve - should return empty
-        let memories = retrieval
-            .retrieve_memories(&context, "test")
-            .await
-            .unwrap();
+        let memories = retrieval.retrieve_memories(&context, "test").await.unwrap();
         assert!(memories.is_empty());
     }
 
@@ -302,10 +290,7 @@ mod integration_tests {
 
         // Simulate a conversation about a project
         let conversation = vec![
-            (
-                "What should we name the project?",
-                "Let's call it Aether.",
-            ),
+            ("What should we name the project?", "Let's call it Aether."),
             ("When is the deadline?", "The deadline is December 31st."),
             (
                 "Who is on the team?",
@@ -323,10 +308,7 @@ mod integration_tests {
 
         // Query about the project
         let query = "Tell me about the project details";
-        let memories = retrieval
-            .retrieve_memories(&context, query)
-            .await
-            .unwrap();
+        let memories = retrieval.retrieve_memories(&context, query).await.unwrap();
 
         // Should retrieve relevant memories
         assert!(!memories.is_empty());
@@ -335,8 +317,7 @@ mod integration_tests {
         // Verify memories are sorted by similarity
         for i in 1..memories.len() {
             assert!(
-                memories[i - 1].similarity_score.unwrap()
-                    >= memories[i].similarity_score.unwrap()
+                memories[i - 1].similarity_score.unwrap() >= memories[i].similarity_score.unwrap()
             );
         }
     }
@@ -393,7 +374,11 @@ mod integration_tests {
 
         // Verify we got some relevant memories
         assert!(!memories.is_empty());
-        println!("Retrieved {} memories for query: {}", memories.len(), new_query);
+        println!(
+            "Retrieved {} memories for query: {}",
+            memories.len(),
+            new_query
+        );
 
         for memory in &memories {
             println!(
@@ -405,11 +390,7 @@ mod integration_tests {
 
         // Phase 3: Augment prompt with retrieved memories
         let base_prompt = "You are a helpful Rust programming assistant.";
-        let augmented_prompt = augmenter.augment_prompt(
-            base_prompt,
-            &memories,
-            new_query,
-        );
+        let augmented_prompt = augmenter.augment_prompt(base_prompt, &memories, new_query);
 
         // Verify the augmented prompt structure
         assert!(augmented_prompt.contains(base_prompt));
@@ -420,7 +401,10 @@ mod integration_tests {
         let found_relevant = memories.iter().any(|m| {
             augmented_prompt.contains(&m.user_input) && augmented_prompt.contains(&m.ai_output)
         });
-        assert!(found_relevant, "Augmented prompt should contain retrieved memories");
+        assert!(
+            found_relevant,
+            "Augmented prompt should contain retrieved memories"
+        );
 
         // Print the final augmented prompt for manual inspection
         println!("\n=== Augmented Prompt ===");
@@ -481,11 +465,7 @@ mod integration_tests {
             .unwrap();
 
         // Augment with all memories, but augmenter should limit to 2
-        let result = augmenter.augment_prompt(
-            "System prompt",
-            &memories,
-            "New question",
-        );
+        let result = augmenter.augment_prompt("System prompt", &memories, "New question");
 
         // Count how many memories are in the augmented prompt
         let memory_count = result.matches("Question").count();
@@ -507,11 +487,7 @@ mod integration_tests {
         // Store 3 memories
         for i in 0..3 {
             ingestion
-                .store_memory(
-                    context.clone(),
-                    &format!("Q{}", i),
-                    &format!("A{}", i),
-                )
+                .store_memory(context.clone(), &format!("Q{}", i), &format!("A{}", i))
                 .await
                 .unwrap();
         }
@@ -550,7 +526,7 @@ mod integration_tests {
                     .store_memory(
                         context_clone,
                         &format!("concurrent input {}", i),
-                        &format!("concurrent output {}", i)
+                        &format!("concurrent output {}", i),
                     )
                     .await
                     .unwrap();
@@ -583,7 +559,7 @@ mod integration_tests {
                 .store_memory(
                     context.clone(),
                     &format!("query test {}", i),
-                    &format!("response {}", i)
+                    &format!("response {}", i),
                 )
                 .await
                 .unwrap();
@@ -643,7 +619,7 @@ mod integration_tests {
                         .store_memory(
                             context_clone,
                             &format!("mixed input {}", i),
-                            &format!("mixed output {}", i)
+                            &format!("mixed output {}", i),
                         )
                         .await
                         .unwrap();
@@ -695,7 +671,7 @@ mod integration_tests {
                 context.clone(),
                 format!("input {}", i),
                 format!("output {}", i),
-                embedding
+                embedding,
             );
             db.insert_memory(memory).await.unwrap();
         }
@@ -707,9 +683,7 @@ mod integration_tests {
             let db_clone = db.clone();
             let id_clone = id.clone();
 
-            join_set.spawn(async move {
-                db_clone.delete_memory(&id_clone).await
-            });
+            join_set.spawn(async move { db_clone.delete_memory(&id_clone).await });
         }
 
         // Wait for all deletes
@@ -740,7 +714,7 @@ mod integration_tests {
                 .store_memory(
                     context.clone(),
                     &format!("input {}", i),
-                    &format!("output {}", i)
+                    &format!("output {}", i),
                 )
                 .await
                 .unwrap();
@@ -751,9 +725,7 @@ mod integration_tests {
 
         for _ in 0..20 {
             let db_clone = db.clone();
-            join_set.spawn(async move {
-                db_clone.get_stats().await.unwrap()
-            });
+            join_set.spawn(async move { db_clone.get_stats().await.unwrap() });
         }
 
         // Collect all stats

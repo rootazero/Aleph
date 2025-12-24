@@ -2,7 +2,6 @@
 ///
 /// This module provides a registry to store and retrieve AI providers by name.
 /// It ensures providers are uniquely registered and provides convenient lookup methods.
-
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
 use std::collections::HashMap;

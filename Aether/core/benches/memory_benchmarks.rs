@@ -4,7 +4,6 @@
 /// - Embedding inference time
 /// - Vector search performance
 /// - End-to-end memory retrieval latency
-
 use aethecore::config::MemoryConfig;
 use aethecore::memory::{
     ContextAnchor, EmbeddingModel, MemoryIngestion, MemoryRetrieval, VectorDatabase,
@@ -201,9 +200,8 @@ fn benchmark_database_stats(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{}_memories", db_size)),
             db_size,
             |b, _| {
-                b.to_async(&rt).iter(|| async {
-                    black_box(db.get_stats().await.unwrap())
-                })
+                b.to_async(&rt)
+                    .iter(|| async { black_box(db.get_stats().await.unwrap()) })
             },
         );
     }
