@@ -11,6 +11,7 @@ pub mod embedding;
 pub mod ingestion;
 pub mod retrieval;
 pub mod augmentation;
+pub mod cleanup;
 
 // Integration tests (compiled only in test mode)
 #[cfg(test)]
@@ -23,3 +24,4 @@ pub use embedding::EmbeddingModel;
 pub use ingestion::MemoryIngestion;
 pub use retrieval::MemoryRetrieval;
 pub use augmentation::PromptAugmenter;
+pub use cleanup::CleanupService;

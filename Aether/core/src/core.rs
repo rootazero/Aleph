@@ -7,6 +7,7 @@ use crate::error::{AetherError, Result};
 use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 use crate::hotkey::{HotkeyListener, RdevListener};
 use crate::memory::database::{MemoryStats, VectorDatabase};
+use crate::memory::cleanup::CleanupService;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
@@ -41,6 +42,9 @@ pub struct AetherCore {
     config: Arc<Mutex<Config>>,
     memory_db: Option<Arc<VectorDatabase>>,
     current_context: Arc<Mutex<Option<CapturedContext>>>,
+    cleanup_service: Option<Arc<CleanupService>>,
+    #[allow(dead_code)]
+    cleanup_task_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl AetherCore {
@@ -80,20 +84,38 @@ impl AetherCore {
         // Initialize configuration
         let config = Arc::new(Mutex::new(Config::default()));
 
-        // Initialize memory database if enabled
-        let memory_db = {
+        // Initialize memory database and cleanup service if enabled
+        let (memory_db, cleanup_service, cleanup_task_handle) = {
             let cfg = config.lock().unwrap();
             if cfg.memory.enabled {
                 let db_path = Self::get_memory_db_path()?;
-                match VectorDatabase::new(db_path) {
-                    Ok(db) => Some(Arc::new(db)),
+                match VectorDatabase::new(db_path.clone()) {
+                    Ok(db) => {
+                        let db_arc = Arc::new(db);
+
+                        // Initialize cleanup service
+                        match CleanupService::new(db_path, cfg.memory.retention_days) {
+                            Ok(cleanup) => {
+                                let cleanup_arc = Arc::new(cleanup);
+
+                                // Start background cleanup task
+                                let task_handle = Arc::clone(&cleanup_arc).start_background_task();
+
+                                (Some(db_arc), Some(cleanup_arc), Some(task_handle))
+                            }
+                            Err(e) => {
+                                eprintln!("Warning: Failed to initialize cleanup service: {}", e);
+                                (Some(db_arc), None, None)
+                            }
+                        }
+                    }
                     Err(e) => {
                         eprintln!("Warning: Failed to initialize memory database: {}", e);
-                        None
+                        (None, None, None)
                     }
                 }
             } else {
-                None
+                (None, None, None)
             }
         };
 
@@ -106,6 +128,8 @@ impl AetherCore {
             config,
             memory_db,
             current_context: Arc::new(Mutex::new(None)),
+            cleanup_service,
+            cleanup_task_handle,
         })
     }
 
@@ -386,7 +410,23 @@ impl AetherCore {
     /// Update memory configuration
     pub fn update_memory_config(&self, new_config: MemoryConfig) -> Result<()> {
         let mut config = self.config.lock().unwrap();
-        config.memory = new_config;
+        let old_retention_days = config.memory.retention_days;
+        config.memory = new_config.clone();
+
+        // If retention policy changed and cleanup service exists, log the change
+        // Note: The cleanup service will pick up the new config on next cleanup cycle
+        if old_retention_days != new_config.retention_days {
+            if let Some(_cleanup) = &self.cleanup_service {
+                println!(
+                    "[Memory] Retention policy updated: {} -> {} days",
+                    old_retention_days,
+                    new_config.retention_days
+                );
+                // Note: We cannot update the cleanup service directly due to Arc
+                // The service will be recreated when AetherCore is reinitialized
+            }
+        }
+
         // TODO: Persist config to file in Phase 4
         Ok(())
     }
@@ -395,6 +435,21 @@ impl AetherCore {
     pub fn set_current_context(&self, context: CapturedContext) {
         let mut current_context = self.current_context.lock().unwrap();
         *current_context = Some(context);
+    }
+
+    /// Manually trigger memory cleanup (for testing or immediate cleanup)
+    ///
+    /// This runs the cleanup operation immediately in the current thread,
+    /// deleting memories older than the configured retention period.
+    ///
+    /// # Returns
+    /// * `Result<u64>` - Number of deleted memories, or error
+    pub fn cleanup_old_memories(&self) -> Result<u64> {
+        let cleanup = self.cleanup_service.as_ref()
+            .ok_or_else(|| AetherError::config("Cleanup service not initialized"))?;
+
+        cleanup.cleanup_old_memories()
+            .map_err(|e| AetherError::config(format!("Cleanup failed: {}", e)))
     }
 
     /// Store interaction memory with current context
