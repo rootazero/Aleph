@@ -97,6 +97,23 @@ class EventHandler: AetherEventHandler {
         // This can be implemented in future phases
     }
 
+    // AI Processing Callbacks (Phase 9)
+    func onAiProcessingStarted(providerName: String, providerColor: String) {
+        print("[EventHandler] AI processing started: provider=\(providerName), color=\(providerColor)")
+
+        DispatchQueue.main.async { [weak self] in
+            self?.handleAiProcessingStarted(providerName: providerName, providerColor: providerColor)
+        }
+    }
+
+    func onAiResponseReceived(responsePreview: String) {
+        print("[EventHandler] AI response received: \(responsePreview.prefix(100))...")
+
+        DispatchQueue.main.async { [weak self] in
+            self?.handleAiResponseReceived(responsePreview: responsePreview)
+        }
+    }
+
     // MARK: - State Change Handling
 
     private func handleStateChange(_ state: ProcessingState) {
@@ -110,6 +127,13 @@ class EventHandler: AetherEventHandler {
             haloWindow?.updateState(.listening)
             // Reset accumulated text when starting new interaction
             accumulatedText = ""
+
+        case .retrievingMemory:
+            haloWindow?.updateState(.retrievingMemory)
+
+        case .processingWithAi:
+            // This state will be updated with provider details via onAiProcessingStarted callback
+            haloWindow?.updateState(.processing(providerColor: .blue, streamingText: nil))
 
         case .processing:
             haloWindow?.updateState(.processing(providerColor: .green, streamingText: nil))
@@ -147,6 +171,41 @@ class EventHandler: AetherEventHandler {
 
         // Update timestamp
         lastUpdateTime = Date()
+    }
+
+    // MARK: - AI Processing Handling
+
+    private func handleAiProcessingStarted(providerName: String, providerColor: String) {
+        // Parse provider color from hex string (e.g., "#10a37f")
+        let color = parseHexColor(providerColor) ?? .green
+
+        // Update Halo to show AI processing with provider info
+        haloWindow?.updateState(.processingWithAI(providerColor: color, providerName: providerName))
+    }
+
+    private func handleAiResponseReceived(responsePreview: String) {
+        // Store the response preview
+        accumulatedText = responsePreview
+
+        // Update Halo with the response preview
+        haloWindow?.updateState(.processing(providerColor: .green, streamingText: responsePreview))
+    }
+
+    /// Parse hex color string to NSColor
+    private func parseHexColor(_ hex: String) -> NSColor? {
+        var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        hexSanitized = hexSanitized.replacingOccurrences(of: "#", with: "")
+
+        var rgb: UInt64 = 0
+        guard Scanner(string: hexSanitized).scanHexInt64(&rgb) else {
+            return nil
+        }
+
+        let r = CGFloat((rgb & 0xFF0000) >> 16) / 255.0
+        let g = CGFloat((rgb & 0x00FF00) >> 8) / 255.0
+        let b = CGFloat(rgb & 0x0000FF) / 255.0
+
+        return NSColor(red: r, green: g, blue: b, alpha: 1.0)
     }
 
     // MARK: - Typed Error Handling

@@ -423,6 +423,7 @@ fileprivate struct FfiConverterString: FfiConverter {
 
 
 public protocol AetherCoreProtocol {
+    func cleanupOldMemories()  throws -> UInt64
     func clearMemories(appBundleId: String?, windowTitle: String?)  throws -> UInt64
     func clearRequestContext()  
     func deleteMemory(id: String)  throws
@@ -430,6 +431,7 @@ public protocol AetherCoreProtocol {
     func getMemoryConfig()   -> MemoryConfig
     func getMemoryStats()  throws -> MemoryStats
     func isListening()   -> Bool
+    func processWithAi(input: String, context: CapturedContext)  throws -> String
     func retrieveAndAugmentPrompt(basePrompt: String, userInput: String)  throws -> String
     func retryLastRequest()  throws
     func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32)  throws -> [MemoryEntry]
@@ -468,6 +470,16 @@ public class AetherCore: AetherCoreProtocol {
 
     
     
+
+    public func cleanupOldMemories() throws -> UInt64 {
+        return try  FfiConverterUInt64.lift(
+            try 
+    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    uniffi_aethecore_fn_method_aethercore_cleanup_old_memories(self.pointer, $0
+    )
+}
+        )
+    }
 
     public func clearMemories(appBundleId: String?, windowTitle: String?) throws -> UInt64 {
         return try  FfiConverterUInt64.lift(
@@ -536,6 +548,18 @@ public class AetherCore: AetherCoreProtocol {
     rustCall() {
     
     uniffi_aethecore_fn_method_aethercore_is_listening(self.pointer, $0
+    )
+}
+        )
+    }
+
+    public func processWithAi(input: String, context: CapturedContext) throws -> String {
+        return try  FfiConverterString.lift(
+            try 
+    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    uniffi_aethecore_fn_method_aethercore_process_with_ai(self.pointer, 
+        FfiConverterString.lower(input),
+        FfiConverterTypeCapturedContext.lower(context),$0
     )
 }
         )
@@ -748,58 +772,50 @@ public func FfiConverterTypeCapturedContext_lower(_ value: CapturedContext) -> R
 }
 
 
-public struct Config {
-    public var defaultHotkey: String
-    public var memory: MemoryConfig
+public struct GeneralConfig {
+    public var defaultProvider: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultHotkey: String, memory: MemoryConfig) {
-        self.defaultHotkey = defaultHotkey
-        self.memory = memory
+    public init(defaultProvider: String?) {
+        self.defaultProvider = defaultProvider
     }
 }
 
 
-extension Config: Equatable, Hashable {
-    public static func ==(lhs: Config, rhs: Config) -> Bool {
-        if lhs.defaultHotkey != rhs.defaultHotkey {
-            return false
-        }
-        if lhs.memory != rhs.memory {
+extension GeneralConfig: Equatable, Hashable {
+    public static func ==(lhs: GeneralConfig, rhs: GeneralConfig) -> Bool {
+        if lhs.defaultProvider != rhs.defaultProvider {
             return false
         }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
-        hasher.combine(defaultHotkey)
-        hasher.combine(memory)
+        hasher.combine(defaultProvider)
     }
 }
 
 
-public struct FfiConverterTypeConfig: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Config {
-        return try Config(
-            defaultHotkey: FfiConverterString.read(from: &buf), 
-            memory: FfiConverterTypeMemoryConfig.read(from: &buf)
+public struct FfiConverterTypeGeneralConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GeneralConfig {
+        return try GeneralConfig(
+            defaultProvider: FfiConverterOptionString.read(from: &buf)
         )
     }
 
-    public static func write(_ value: Config, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.defaultHotkey, into: &buf)
-        FfiConverterTypeMemoryConfig.write(value.memory, into: &buf)
+    public static func write(_ value: GeneralConfig, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.defaultProvider, into: &buf)
     }
 }
 
 
-public func FfiConverterTypeConfig_lift(_ buf: RustBuffer) throws -> Config {
-    return try FfiConverterTypeConfig.lift(buf)
+public func FfiConverterTypeGeneralConfig_lift(_ buf: RustBuffer) throws -> GeneralConfig {
+    return try FfiConverterTypeGeneralConfig.lift(buf)
 }
 
-public func FfiConverterTypeConfig_lower(_ value: Config) -> RustBuffer {
-    return FfiConverterTypeConfig.lower(value)
+public func FfiConverterTypeGeneralConfig_lower(_ value: GeneralConfig) -> RustBuffer {
+    return FfiConverterTypeGeneralConfig.lower(value)
 }
 
 
@@ -1088,6 +1104,27 @@ public enum AetherError {
     case ConfigError(message: String)
     
     // Simple error enums only carry a message
+    case NetworkError(message: String)
+    
+    // Simple error enums only carry a message
+    case AuthenticationError(message: String)
+    
+    // Simple error enums only carry a message
+    case RateLimitError(message: String)
+    
+    // Simple error enums only carry a message
+    case ProviderError(message: String)
+    
+    // Simple error enums only carry a message
+    case Timeout(message: String)
+    
+    // Simple error enums only carry a message
+    case NoProviderAvailable(message: String)
+    
+    // Simple error enums only carry a message
+    case InvalidConfig(message: String)
+    
+    // Simple error enums only carry a message
     case Other(message: String)
     
 
@@ -1123,7 +1160,35 @@ public struct FfiConverterTypeAetherError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 5: return .Other(
+        case 5: return .NetworkError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 6: return .AuthenticationError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 7: return .RateLimitError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 8: return .ProviderError(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 9: return .Timeout(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 10: return .NoProviderAvailable(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 11: return .InvalidConfig(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 12: return .Other(
             message: try FfiConverterString.read(from: &buf)
         )
         
@@ -1146,8 +1211,22 @@ public struct FfiConverterTypeAetherError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(3))
         case .ConfigError(_ /* message is ignored*/):
             writeInt(&buf, Int32(4))
-        case .Other(_ /* message is ignored*/):
+        case .NetworkError(_ /* message is ignored*/):
             writeInt(&buf, Int32(5))
+        case .AuthenticationError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(6))
+        case .RateLimitError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(7))
+        case .ProviderError(_ /* message is ignored*/):
+            writeInt(&buf, Int32(8))
+        case .Timeout(_ /* message is ignored*/):
+            writeInt(&buf, Int32(9))
+        case .NoProviderAvailable(_ /* message is ignored*/):
+            writeInt(&buf, Int32(10))
+        case .InvalidConfig(_ /* message is ignored*/):
+            writeInt(&buf, Int32(11))
+        case .Other(_ /* message is ignored*/):
+            writeInt(&buf, Int32(12))
 
         
         }
@@ -1238,6 +1317,8 @@ public enum ProcessingState {
     
     case idle
     case listening
+    case retrievingMemory
+    case processingWithAi
     case processing
     case success
     case error
@@ -1254,11 +1335,15 @@ public struct FfiConverterTypeProcessingState: FfiConverterRustBuffer {
         
         case 2: return .listening
         
-        case 3: return .processing
+        case 3: return .retrievingMemory
         
-        case 4: return .success
+        case 4: return .processingWithAi
         
-        case 5: return .error
+        case 5: return .processing
+        
+        case 6: return .success
+        
+        case 7: return .error
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -1276,16 +1361,24 @@ public struct FfiConverterTypeProcessingState: FfiConverterRustBuffer {
             writeInt(&buf, Int32(2))
         
         
-        case .processing:
+        case .retrievingMemory:
             writeInt(&buf, Int32(3))
         
         
-        case .success:
+        case .processingWithAi:
             writeInt(&buf, Int32(4))
         
         
-        case .error:
+        case .processing:
             writeInt(&buf, Int32(5))
+        
+        
+        case .success:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .error:
+            writeInt(&buf, Int32(7))
         
         }
     }
@@ -1379,6 +1472,8 @@ public protocol AetherEventHandler : AnyObject {
     func onResponseChunk(text: String) 
     func onErrorTyped(errorType: ErrorType, message: String) 
     func onProgress(percent: Float) 
+    func onAiProcessingStarted(providerName: String, providerColor: String) 
+    func onAiResponseReceived(responsePreview: String) 
     
 }
 
@@ -1448,6 +1543,29 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
         func makeCall() throws -> Int32 {
             try swiftCallbackInterface.onProgress(
                     percent:  try FfiConverterFloat.read(from: &reader)
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        return try makeCall()
+    }
+
+    func invokeOnAiProcessingStarted(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.onAiProcessingStarted(
+                    providerName:  try FfiConverterString.read(from: &reader), 
+                    providerColor:  try FfiConverterString.read(from: &reader)
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        return try makeCall()
+    }
+
+    func invokeOnAiResponseReceived(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.onAiResponseReceived(
+                    responsePreview:  try FfiConverterString.read(from: &reader)
                     )
             return UNIFFI_CALLBACK_SUCCESS
         }
@@ -1541,6 +1659,34 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
             }
             do {
                 return try invokeOnProgress(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        case 7:
+            let cb: AetherEventHandler
+            do {
+                cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("AetherEventHandler: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeOnAiProcessingStarted(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        case 8:
+            let cb: AetherEventHandler
+            do {
+                cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("AetherEventHandler: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeOnAiResponseReceived(cb, argsData, argsLen, out_buf)
             } catch let error {
                 out_buf.pointee = FfiConverterString.lower(String(describing: error))
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
@@ -1707,6 +1853,9 @@ private var initializationResult: InitializationResult {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_cleanup_old_memories() != 21217) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_clear_memories() != 29393) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1726,6 +1875,9 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_is_listening() != 51411) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_process_with_ai() != 64291) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_retrieve_and_augment_prompt() != 38143) {
@@ -1780,6 +1932,12 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_progress() != 44714) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_ai_processing_started() != 38165) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_ai_response_received() != 33940) {
         return InitializationResult.apiChecksumMismatch
     }
 

@@ -26,6 +26,14 @@ struct HaloView: View {
                 theme.listeningView()
                     .transition(.scale.combined(with: .opacity))
 
+            case .retrievingMemory:
+                theme.retrievingMemoryView()
+                    .transition(.scale.combined(with: .opacity))
+
+            case .processingWithAI(let providerColor, let providerName):
+                theme.processingWithAIView(providerColor: providerColor, providerName: providerName)
+                    .transition(.scale.combined(with: .opacity))
+
             case .processing(let providerColor, let streamingText):
                 theme.processingView(providerColor: providerColor, streamingText: streamingText)
                     .transition(.scale.combined(with: .opacity))
@@ -53,6 +61,8 @@ struct HaloView: View {
     // Dynamic sizing based on state
     private var dynamicWidth: CGFloat {
         switch state {
+        case .retrievingMemory, .processingWithAI:
+            return 120
         case .processing(_, let text), .success(let text):
             return text != nil ? 300 : 120
         case .error:
@@ -64,6 +74,8 @@ struct HaloView: View {
 
     private var dynamicHeight: CGFloat {
         switch state {
+        case .retrievingMemory, .processingWithAI:
+            return 120
         case .processing(_, let text):
             return text != nil ? 200 : 120
         case .success(let text):

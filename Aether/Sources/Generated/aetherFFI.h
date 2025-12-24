@@ -67,6 +67,8 @@ void uniffi_aethecore_fn_free_aethercore(void*_Nonnull ptr, RustCallStatus *_Non
 );
 void*_Nonnull uniffi_aethecore_fn_constructor_aethercore_new(uint64_t handler, RustCallStatus *_Nonnull out_status
 );
+uint64_t uniffi_aethecore_fn_method_aethercore_cleanup_old_memories(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
 uint64_t uniffi_aethecore_fn_method_aethercore_clear_memories(void*_Nonnull ptr, RustBuffer app_bundle_id, RustBuffer window_title, RustCallStatus *_Nonnull out_status
 );
 void uniffi_aethecore_fn_method_aethercore_clear_request_context(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -80,6 +82,8 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_config(void*_Nonnull
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_stats(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 int8_t uniffi_aethecore_fn_method_aethercore_is_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_aethecore_fn_method_aethercore_process_with_ai(void*_Nonnull ptr, RustBuffer input, RustBuffer context, RustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_aethecore_fn_method_aethercore_retrieve_and_augment_prompt(void*_Nonnull ptr, RustBuffer base_prompt, RustBuffer user_input, RustCallStatus *_Nonnull out_status
 );
@@ -219,6 +223,9 @@ void ffi_aethecore_rust_future_free_void(void* _Nonnull handle
 );
 void ffi_aethecore_rust_future_complete_void(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
 );
+uint16_t uniffi_aethecore_checksum_method_aethercore_cleanup_old_memories(void
+    
+);
 uint16_t uniffi_aethecore_checksum_method_aethercore_clear_memories(void
     
 );
@@ -238,6 +245,9 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_get_memory_stats(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_is_listening(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethercore_process_with_ai(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_retrieve_and_augment_prompt(void
@@ -292,6 +302,12 @@ uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_error_typed(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_progress(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_ai_processing_started(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_ai_response_received(void
     
 );
 uint32_t ffi_aethecore_uniffi_contract_version(void

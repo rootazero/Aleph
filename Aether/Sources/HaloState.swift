@@ -10,7 +10,9 @@ import SwiftUI
 enum HaloState: Equatable {
     case idle
     case listening
-    case processing(providerColor: Color, streamingText: String? = nil)
+    case retrievingMemory  // Phase 9: Retrieving memories from database
+    case processingWithAI(providerColor: Color, providerName: String?)  // Phase 9: AI provider is processing
+    case processing(providerColor: Color, streamingText: String? = nil)  // Generic processing (backward compatibility)
     case success(finalText: String? = nil)
     case error(type: ErrorType, message: String)
 
@@ -21,6 +23,10 @@ enum HaloState: Equatable {
             return true
         case (.listening, .listening):
             return true
+        case (.retrievingMemory, .retrievingMemory):
+            return true
+        case (.processingWithAI(let color1, let name1), .processingWithAI(let color2, let name2)):
+            return color1 == color2 && name1 == name2
         case (.processing(let color1, let text1), .processing(let color2, let text2)):
             return color1 == color2 && text1 == text2
         case (.success(let text1), .success(let text2)):

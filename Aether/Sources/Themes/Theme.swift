@@ -65,6 +65,15 @@ protocol HaloTheme {
     /// View rendered during listening state
     @ViewBuilder func listeningView() -> AnyView
 
+    /// View rendered during memory retrieval state (Phase 9)
+    @ViewBuilder func retrievingMemoryView() -> AnyView
+
+    /// View rendered during AI processing state with provider info (Phase 9)
+    /// - Parameters:
+    ///   - providerColor: Provider-specific color
+    ///   - providerName: Optional provider name to display
+    @ViewBuilder func processingWithAIView(providerColor: Color, providerName: String?) -> AnyView
+
     /// View rendered during processing state
     /// - Parameters:
     ///   - providerColor: Optional provider-specific color override
@@ -120,6 +129,40 @@ extension HaloTheme {
         case .low:
             return .linear(duration: 2.0).repeatForever(autoreverses: true)
         }
+    }
+
+    // Default implementations for new Phase 9 views
+    func retrievingMemoryView() -> AnyView {
+        AnyView(
+            ZStack {
+                Circle()
+                    .stroke(lineWidth: 4)
+                    .foregroundColor(.purple)
+                    .frame(width: 60, height: 60)
+
+                Image(systemName: "brain.head.profile")
+                    .font(.system(size: 24))
+                    .foregroundColor(.purple)
+            }
+        )
+    }
+
+    func processingWithAIView(providerColor: Color, providerName: String?) -> AnyView {
+        AnyView(
+            VStack(spacing: 8) {
+                Circle()
+                    .trim(from: 0, to: 0.7)
+                    .stroke(providerColor, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                    .frame(width: 60, height: 60)
+                    .rotationEffect(.degrees(0))
+
+                if let name = providerName {
+                    Text(name)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(textColor)
+                }
+            }
+        )
     }
 }
 
