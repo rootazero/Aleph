@@ -34,6 +34,10 @@ pub struct GeneralConfig {
 /// AI Provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
+    /// Provider type: "openai", "claude", "ollama", or custom name
+    /// If not specified, inferred from provider name in config
+    #[serde(default)]
+    pub provider_type: Option<String>,
     /// API key for cloud providers (required for OpenAI, Claude)
     #[serde(default)]
     pub api_key: Option<String>,
@@ -62,6 +66,34 @@ fn default_provider_color() -> String {
 
 fn default_timeout_seconds() -> u64 {
     30 // 30 seconds default timeout
+}
+
+impl ProviderConfig {
+    /// Infer provider type from config
+    ///
+    /// If `provider_type` is explicitly set, use it.
+    /// Otherwise, infer from provider name:
+    /// - "openai" -> "openai"
+    /// - "claude" -> "claude"
+    /// - "ollama" -> "ollama"
+    /// - anything with base_url -> "openai" (OpenAI-compatible)
+    /// - default -> "openai"
+    pub fn infer_provider_type(&self, provider_name: &str) -> String {
+        if let Some(ref provider_type) = self.provider_type {
+            return provider_type.clone();
+        }
+
+        // Infer from provider name
+        let name_lower = provider_name.to_lowercase();
+        if name_lower.contains("claude") {
+            "claude".to_string()
+        } else if name_lower.contains("ollama") {
+            "ollama".to_string()
+        } else {
+            // Default to OpenAI-compatible (covers OpenAI, DeepSeek, Moonshot, etc.)
+            "openai".to_string()
+        }
+    }
 }
 
 /// Memory module configuration
