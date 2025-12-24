@@ -2,16 +2,66 @@
 ///
 /// Phase 1: Stub implementation with basic fields.
 /// Phase 4: Added memory configuration support.
+/// Phase 5: Added AI provider configuration support.
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Default hotkey (hardcoded to "Command+Grave" in Phase 1)
     pub default_hotkey: String,
+    /// General settings
+    #[serde(default)]
+    pub general: GeneralConfig,
     /// Memory module configuration
     #[serde(default)]
     pub memory: MemoryConfig,
+    /// AI provider configurations (Phase 5)
+    /// Note: Not exposed through UniFFI dictionary, managed via separate methods
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub providers: HashMap<String, ProviderConfig>,
+}
+
+/// General configuration settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeneralConfig {
+    /// Default provider to use when no routing rule matches
+    #[serde(default)]
+    pub default_provider: Option<String>,
+}
+
+/// AI Provider configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderConfig {
+    /// API key for cloud providers (required for OpenAI, Claude)
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Model name (e.g., "gpt-4o", "claude-3-5-sonnet-20241022", "llama3.2")
+    pub model: String,
+    /// Base URL for API endpoint (optional, defaults to official API)
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Provider brand color for UI (hex string, e.g., "#10a37f")
+    #[serde(default = "default_provider_color")]
+    pub color: String,
+    /// Request timeout in seconds
+    #[serde(default = "default_timeout_seconds")]
+    pub timeout_seconds: u64,
+    /// Maximum tokens in response (optional)
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    /// Temperature for response randomness (0.0-2.0, optional)
+    #[serde(default)]
+    pub temperature: Option<f32>,
+}
+
+fn default_provider_color() -> String {
+    "#808080".to_string() // Gray as default
+}
+
+fn default_timeout_seconds() -> u64 {
+    30 // 30 seconds default timeout
 }
 
 /// Memory module configuration
@@ -84,11 +134,21 @@ impl Default for MemoryConfig {
     }
 }
 
+impl Default for GeneralConfig {
+    fn default() -> Self {
+        Self {
+            default_provider: None,
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             default_hotkey: "Command+Grave".to_string(),
+            general: GeneralConfig::default(),
             memory: MemoryConfig::default(),
+            providers: HashMap::new(),
         }
     }
 }

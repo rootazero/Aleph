@@ -30,6 +30,13 @@ enum AetherError {
   "ClipboardError",
   "CallbackError",
   "ConfigError",
+  "NetworkError",
+  "AuthenticationError",
+  "RateLimitError",
+  "ProviderError",
+  "Timeout",
+  "NoProviderAvailable",
+  "InvalidConfig",
   "Other"
 };
 
@@ -132,9 +139,11 @@ callback interface AetherEventHandler {
 };
 
 // Configuration dictionaries
-dictionary Config {
-  string default_hotkey;
-  MemoryConfig memory;
+// Note: Config is not exposed as dictionary due to HashMap field
+// Use AetherCore methods to access config instead
+
+dictionary GeneralConfig {
+  string? default_provider;
 };
 
 dictionary MemoryConfig {

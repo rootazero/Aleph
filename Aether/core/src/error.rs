@@ -23,6 +23,34 @@ pub enum AetherError {
     #[error("Configuration/Database error: {0}")]
     ConfigError(String),
 
+    /// Network error during API calls
+    #[error("Network error: {0}")]
+    NetworkError(String),
+
+    /// Authentication error (invalid API key)
+    #[error("Authentication error: {0}")]
+    AuthenticationError(String),
+
+    /// Rate limit error (too many requests)
+    #[error("Rate limit error: {0}")]
+    RateLimitError(String),
+
+    /// Provider-specific error (API returned error)
+    #[error("Provider error: {0}")]
+    ProviderError(String),
+
+    /// Request timeout
+    #[error("Request timed out")]
+    Timeout,
+
+    /// No provider available for routing
+    #[error("No provider available")]
+    NoProviderAvailable,
+
+    /// Invalid configuration
+    #[error("Invalid configuration: {0}")]
+    InvalidConfig(String),
+
     /// Generic error for other cases
     #[error("Aether error: {0}")]
     Other(String),
@@ -47,6 +75,31 @@ impl AetherError {
     /// Create a config/database error with a message
     pub fn config<S: Into<String>>(msg: S) -> Self {
         AetherError::ConfigError(msg.into())
+    }
+
+    /// Create a network error with a message
+    pub fn network<S: Into<String>>(msg: S) -> Self {
+        AetherError::NetworkError(msg.into())
+    }
+
+    /// Create an authentication error with a message
+    pub fn authentication<S: Into<String>>(msg: S) -> Self {
+        AetherError::AuthenticationError(msg.into())
+    }
+
+    /// Create a rate limit error with a message
+    pub fn rate_limit<S: Into<String>>(msg: S) -> Self {
+        AetherError::RateLimitError(msg.into())
+    }
+
+    /// Create a provider error with a message
+    pub fn provider<S: Into<String>>(msg: S) -> Self {
+        AetherError::ProviderError(msg.into())
+    }
+
+    /// Create an invalid config error with a message
+    pub fn invalid_config<S: Into<String>>(msg: S) -> Self {
+        AetherError::InvalidConfig(msg.into())
     }
 
     /// Create a generic error with a message
@@ -95,5 +148,52 @@ mod tests {
         let err = AetherError::hotkey("test");
         let debug = format!("{:?}", err);
         assert!(debug.contains("HotkeyError"));
+    }
+
+    #[test]
+    fn test_network_error() {
+        let err = AetherError::network("connection failed");
+        assert!(matches!(err, AetherError::NetworkError(_)));
+        assert_eq!(err.to_string(), "Network error: connection failed");
+    }
+
+    #[test]
+    fn test_authentication_error() {
+        let err = AetherError::authentication("invalid API key");
+        assert!(matches!(err, AetherError::AuthenticationError(_)));
+        assert_eq!(err.to_string(), "Authentication error: invalid API key");
+    }
+
+    #[test]
+    fn test_rate_limit_error() {
+        let err = AetherError::rate_limit("too many requests");
+        assert!(matches!(err, AetherError::RateLimitError(_)));
+        assert_eq!(err.to_string(), "Rate limit error: too many requests");
+    }
+
+    #[test]
+    fn test_provider_error() {
+        let err = AetherError::provider("API returned 500");
+        assert!(matches!(err, AetherError::ProviderError(_)));
+        assert_eq!(err.to_string(), "Provider error: API returned 500");
+    }
+
+    #[test]
+    fn test_timeout_error() {
+        let err = AetherError::Timeout;
+        assert_eq!(err.to_string(), "Request timed out");
+    }
+
+    #[test]
+    fn test_no_provider_available() {
+        let err = AetherError::NoProviderAvailable;
+        assert_eq!(err.to_string(), "No provider available");
+    }
+
+    #[test]
+    fn test_invalid_config_error() {
+        let err = AetherError::invalid_config("missing API key");
+        assert!(matches!(err, AetherError::InvalidConfig(_)));
+        assert_eq!(err.to_string(), "Invalid configuration: missing API key");
     }
 }

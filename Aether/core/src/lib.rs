@@ -77,16 +77,18 @@ mod event_handler;
 mod hotkey;
 mod input;
 pub mod memory;
+pub mod providers;
 
 // Re-export public types
 pub use crate::clipboard::{ArboardManager, ClipboardManager};
-pub use crate::config::{Config, MemoryConfig};
+pub use crate::config::{Config, GeneralConfig, MemoryConfig, ProviderConfig};
 pub use crate::core::{AetherCore, CapturedContext, MemoryEntryFFI as MemoryEntry};
 pub use crate::error::{AetherError, Result};
 pub use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 pub use crate::hotkey::{HotkeyListener, RdevListener};
 pub use crate::input::InputSimulator;
 pub use crate::memory::database::MemoryStats;
+pub use crate::providers::AiProvider;
 
 // Include UniFFI scaffolding
 // This generates all the FFI glue code at compile time
