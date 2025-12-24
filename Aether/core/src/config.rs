@@ -3,8 +3,12 @@
 /// Phase 1: Stub implementation with basic fields.
 /// Phase 4: Added memory configuration support.
 /// Phase 5: Added AI provider configuration support.
+/// Phase 8: Added config file loading from ~/.config/aether/config.toml
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use crate::error::{AetherError, Result};
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,6 +228,217 @@ impl Config {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Get the default config path: ~/.config/aether/config.toml
+    pub fn default_path() -> PathBuf {
+        if let Some(home) = dirs::home_dir() {
+            home.join(".config").join("aether").join("config.toml")
+        } else {
+            // Fallback to current directory if home dir not found
+            PathBuf::from("config.toml")
+        }
+    }
+
+    /// Load configuration from a TOML file
+    ///
+    /// # Arguments
+    /// * `path` - Path to the config file
+    ///
+    /// # Returns
+    /// * `Ok(Config)` - Successfully loaded config
+    /// * `Err(AetherError::ConfigNotFound)` - File doesn't exist
+    /// * `Err(AetherError::InvalidConfig)` - File exists but parsing failed
+    ///
+    /// # Example
+    /// ```no_run
+    /// use aethecore::config::Config;
+    ///
+    /// let config = Config::load_from_file("config.toml").unwrap();
+    /// ```
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let path = path.as_ref();
+
+        // Check if file exists
+        if !path.exists() {
+            return Err(AetherError::InvalidConfig(format!(
+                "Config file not found: {}",
+                path.display()
+            )));
+        }
+
+        // Read file contents
+        let contents = fs::read_to_string(path).map_err(|e| {
+            AetherError::InvalidConfig(format!(
+                "Failed to read config file {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+        // Parse TOML
+        let config: Config = toml::from_str(&contents).map_err(|e| {
+            AetherError::InvalidConfig(format!(
+                "Failed to parse config file {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+        // Validate config
+        config.validate()?;
+
+        Ok(config)
+    }
+
+    /// Load configuration from default path (~/.config/aether/config.toml)
+    /// Falls back to default config if file doesn't exist
+    ///
+    /// # Returns
+    /// * `Ok(Config)` - Successfully loaded config or default config
+    /// * `Err(AetherError::InvalidConfig)` - File exists but parsing failed
+    ///
+    /// # Example
+    /// ```no_run
+    /// use aethecore::config::Config;
+    ///
+    /// let config = Config::load().unwrap();
+    /// ```
+    pub fn load() -> Result<Self> {
+        let path = Self::default_path();
+
+        if path.exists() {
+            log::info!("Loading config from {}", path.display());
+            Self::load_from_file(&path)
+        } else {
+            log::info!(
+                "Config file not found at {}, using default config",
+                path.display()
+            );
+            Ok(Self::default())
+        }
+    }
+
+    /// Validate configuration
+    ///
+    /// Checks:
+    /// - Provider references in rules exist in providers map
+    /// - Default provider exists (if specified)
+    /// - API keys are present for cloud providers
+    /// - Regex patterns are valid
+    pub fn validate(&self) -> Result<()> {
+        // Validate default provider exists
+        if let Some(ref default_provider) = self.general.default_provider {
+            if !self.providers.contains_key(default_provider) {
+                return Err(AetherError::InvalidConfig(format!(
+                    "Default provider '{}' not found in providers",
+                    default_provider
+                )));
+            }
+        }
+
+        // Validate provider configurations
+        for (name, provider) in &self.providers {
+            let provider_type = provider.infer_provider_type(name);
+
+            // Check API key for cloud providers
+            if (provider_type == "openai" || provider_type == "claude")
+                && provider.api_key.is_none() {
+                return Err(AetherError::InvalidConfig(format!(
+                    "Provider '{}' requires an API key",
+                    name
+                )));
+            }
+
+            // Validate timeout
+            if provider.timeout_seconds == 0 {
+                return Err(AetherError::InvalidConfig(format!(
+                    "Provider '{}' timeout must be greater than 0",
+                    name
+                )));
+            }
+
+            // Validate temperature if specified
+            if let Some(temp) = provider.temperature {
+                if !(0.0..=2.0).contains(&temp) {
+                    return Err(AetherError::InvalidConfig(format!(
+                        "Provider '{}' temperature must be between 0.0 and 2.0, got {}",
+                        name, temp
+                    )));
+                }
+            }
+        }
+
+        // Validate routing rules
+        for (idx, rule) in self.rules.iter().enumerate() {
+            // Check provider exists
+            if !self.providers.contains_key(&rule.provider) {
+                return Err(AetherError::InvalidConfig(format!(
+                    "Rule #{} references unknown provider '{}'",
+                    idx + 1,
+                    rule.provider
+                )));
+            }
+
+            // Validate regex pattern
+            if let Err(e) = regex::Regex::new(&rule.regex) {
+                return Err(AetherError::InvalidConfig(format!(
+                    "Rule #{} has invalid regex '{}': {}",
+                    idx + 1,
+                    rule.regex,
+                    e
+                )));
+            }
+        }
+
+        // Validate memory config
+        if self.memory.max_context_items == 0 {
+            return Err(AetherError::InvalidConfig(
+                "memory.max_context_items must be greater than 0".to_string()
+            ));
+        }
+
+        if !(0.0..=1.0).contains(&self.memory.similarity_threshold) {
+            return Err(AetherError::InvalidConfig(format!(
+                "memory.similarity_threshold must be between 0.0 and 1.0, got {}",
+                self.memory.similarity_threshold
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Save configuration to a TOML file
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let path = path.as_ref();
+
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                AetherError::InvalidConfig(format!(
+                    "Failed to create config directory {}: {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+        }
+
+        // Serialize to TOML
+        let contents = toml::to_string_pretty(self).map_err(|e| {
+            AetherError::InvalidConfig(format!("Failed to serialize config: {}", e))
+        })?;
+
+        // Write to file
+        fs::write(path, contents).map_err(|e| {
+            AetherError::InvalidConfig(format!(
+                "Failed to write config file {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+        log::info!("Config saved to {}", path.display());
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -306,5 +521,211 @@ mod tests {
         let mem_config = MemoryConfig::default();
         assert!(mem_config.excluded_apps.contains(&"com.apple.keychainaccess".to_string()));
         assert!(mem_config.excluded_apps.contains(&"com.agilebits.onepassword7".to_string()));
+    }
+
+    #[test]
+    fn test_config_validation_valid() {
+        let mut config = Config::default();
+
+        // Add a provider
+        let provider = ProviderConfig {
+            provider_type: Some("openai".to_string()),
+            api_key: Some("sk-test".to_string()),
+            model: "gpt-4o".to_string(),
+            base_url: None,
+            color: "#10a37f".to_string(),
+            timeout_seconds: 30,
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+        };
+        config.providers.insert("openai".to_string(), provider);
+        config.general.default_provider = Some("openai".to_string());
+
+        // Should pass validation
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_config_validation_missing_default_provider() {
+        let mut config = Config::default();
+        config.general.default_provider = Some("nonexistent".to_string());
+
+        // Should fail validation
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_validation_missing_api_key() {
+        let mut config = Config::default();
+
+        // Add OpenAI provider without API key
+        let provider = ProviderConfig {
+            provider_type: Some("openai".to_string()),
+            api_key: None,
+            model: "gpt-4o".to_string(),
+            base_url: None,
+            color: "#10a37f".to_string(),
+            timeout_seconds: 30,
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+        };
+        config.providers.insert("openai".to_string(), provider);
+
+        // Should fail validation
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_validation_invalid_temperature() {
+        let mut config = Config::default();
+
+        // Add provider with invalid temperature
+        let provider = ProviderConfig {
+            provider_type: Some("openai".to_string()),
+            api_key: Some("sk-test".to_string()),
+            model: "gpt-4o".to_string(),
+            base_url: None,
+            color: "#10a37f".to_string(),
+            timeout_seconds: 30,
+            max_tokens: Some(4096),
+            temperature: Some(3.0), // Invalid: > 2.0
+        };
+        config.providers.insert("openai".to_string(), provider);
+
+        // Should fail validation
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_validation_invalid_regex() {
+        let mut config = Config::default();
+
+        // Add valid provider
+        let provider = ProviderConfig {
+            provider_type: Some("openai".to_string()),
+            api_key: Some("sk-test".to_string()),
+            model: "gpt-4o".to_string(),
+            base_url: None,
+            color: "#10a37f".to_string(),
+            timeout_seconds: 30,
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+        };
+        config.providers.insert("openai".to_string(), provider);
+
+        // Add rule with invalid regex
+        config.rules.push(RoutingRuleConfig {
+            regex: "[invalid(".to_string(),
+            provider: "openai".to_string(),
+            system_prompt: None,
+        });
+
+        // Should fail validation
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_validation_rule_unknown_provider() {
+        let mut config = Config::default();
+
+        // Add rule referencing unknown provider
+        config.rules.push(RoutingRuleConfig {
+            regex: ".*".to_string(),
+            provider: "nonexistent".to_string(),
+            system_prompt: None,
+        });
+
+        // Should fail validation
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_load_from_toml() {
+        let toml_str = r##"
+default_hotkey = "Command+Grave"
+
+[general]
+default_provider = "openai"
+
+[providers.openai]
+api_key = "sk-test"
+model = "gpt-4o"
+color = "#10a37f"
+timeout_seconds = 30
+max_tokens = 4096
+temperature = 0.7
+
+[[rules]]
+regex = "^/code"
+provider = "openai"
+system_prompt = "You are a coding assistant."
+
+[memory]
+enabled = true
+max_context_items = 5
+"##;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.default_hotkey, "Command+Grave");
+        assert_eq!(config.general.default_provider, Some("openai".to_string()));
+        assert!(config.providers.contains_key("openai"));
+        assert_eq!(config.rules.len(), 1);
+        assert!(config.memory.enabled);
+
+        // Validation should pass
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_config_save_and_load() {
+        use tempfile::NamedTempFile;
+
+        let mut config = Config::default();
+
+        // Add a provider
+        let provider = ProviderConfig {
+            provider_type: Some("openai".to_string()),
+            api_key: Some("sk-test".to_string()),
+            model: "gpt-4o".to_string(),
+            base_url: None,
+            color: "#10a37f".to_string(),
+            timeout_seconds: 30,
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+        };
+        config.providers.insert("openai".to_string(), provider);
+        config.general.default_provider = Some("openai".to_string());
+
+        // Save to temp file
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+        config.save_to_file(path).unwrap();
+
+        // Load back
+        let loaded = Config::load_from_file(path).unwrap();
+        assert_eq!(loaded.default_hotkey, config.default_hotkey);
+        assert_eq!(loaded.general.default_provider, config.general.default_provider);
+        assert!(loaded.providers.contains_key("openai"));
+    }
+
+    #[test]
+    fn test_config_ollama_no_api_key() {
+        let mut config = Config::default();
+
+        // Ollama provider doesn't need API key
+        let provider = ProviderConfig {
+            provider_type: Some("ollama".to_string()),
+            api_key: None,
+            model: "llama3.2".to_string(),
+            base_url: None,
+            color: "#0000ff".to_string(),
+            timeout_seconds: 60,
+            max_tokens: None,
+            temperature: None,
+        };
+        config.providers.insert("ollama".to_string(), provider);
+
+        // Should pass validation (no API key needed for Ollama)
+        assert!(config.validate().is_ok());
     }
 }

@@ -1,0 +1,262 @@
+# Aether Configuration Example
+# Copy this file to ~/.config/aether/config.toml and customize
+
+# Default hotkey to summon Aether
+default_hotkey = "Command+Grave"  # macOS: Cmd+~, Windows: Ctrl+~
+
+# ============================================================================
+# General Settings
+# ============================================================================
+[general]
+# Default provider to use when no routing rule matches
+# Must match one of the provider names defined below
+default_provider = "openai"
+
+# ============================================================================
+# AI Providers Configuration
+# ============================================================================
+# You can define multiple providers with different configurations.
+# Each provider needs a unique name (the key in square brackets).
+#
+# Supported provider types:
+# - "openai"  : OpenAI and OpenAI-compatible APIs (DeepSeek, Moonshot, etc.)
+# - "claude"  : Anthropic Claude API
+# - "ollama"  : Local Ollama models
+#
+# Provider type inference:
+# - If not specified, automatically inferred from provider name
+# - Names containing "claude" → claude provider
+# - Names containing "ollama" → ollama provider
+# - Everything else → openai provider (including custom APIs)
+
+# ----------------------------------------------------------------------------
+# OpenAI Official
+# ----------------------------------------------------------------------------
+[providers.openai]
+provider_type = "openai"  # Optional, inferred from name
+api_key = "sk-..."        # Get from https://platform.openai.com
+model = "gpt-4o"          # Options: gpt-4o, gpt-4o-mini, gpt-3.5-turbo
+color = "#10a37f"         # Brand color for UI
+timeout_seconds = 30
+max_tokens = 4096
+temperature = 0.7
+
+# ----------------------------------------------------------------------------
+# Anthropic Claude
+# ----------------------------------------------------------------------------
+[providers.claude]
+provider_type = "claude"  # Optional, inferred from name
+api_key = "sk-ant-..."    # Get from https://console.anthropic.com
+model = "claude-3-5-sonnet-20241022"  # Options: claude-3-5-sonnet, claude-3-opus, etc.
+color = "#d97757"
+timeout_seconds = 30
+max_tokens = 4096
+temperature = 0.7
+
+# ----------------------------------------------------------------------------
+# Local Ollama
+# ----------------------------------------------------------------------------
+[providers.ollama]
+provider_type = "ollama"  # Optional, inferred from name
+# No API key needed for local Ollama
+model = "llama3.2"        # Options: llama3.2, codellama, mistral, etc.
+color = "#0000ff"
+timeout_seconds = 60      # Longer timeout for local models
+
+# Note: Ollama must be installed and running
+# Install: https://ollama.ai/download
+# Pull model: ollama pull llama3.2
+
+# ----------------------------------------------------------------------------
+# Custom Provider: DeepSeek (OpenAI-compatible)
+# ----------------------------------------------------------------------------
+[providers.deepseek]
+provider_type = "openai"           # Use OpenAI-compatible interface
+api_key = "sk-..."                 # Get from https://platform.deepseek.com
+model = "deepseek-chat"
+base_url = "https://api.deepseek.com"  # Custom API endpoint
+color = "#0066cc"
+timeout_seconds = 30
+max_tokens = 4096
+temperature = 0.7
+
+# ----------------------------------------------------------------------------
+# Custom Provider: Moonshot (OpenAI-compatible)
+# ----------------------------------------------------------------------------
+[providers.moonshot]
+provider_type = "openai"           # Use OpenAI-compatible interface
+api_key = "sk-..."                 # Get from https://platform.moonshot.cn
+model = "moonshot-v1-8k"          # Options: moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k
+base_url = "https://api.moonshot.cn/v1"
+color = "#ff6b6b"
+timeout_seconds = 30
+max_tokens = 8192
+temperature = 0.7
+
+# ----------------------------------------------------------------------------
+# Custom Provider: Azure OpenAI
+# ----------------------------------------------------------------------------
+[providers.azure]
+provider_type = "openai"
+api_key = "your-azure-key"
+model = "gpt-4o"                   # Your deployment name
+base_url = "https://your-resource.openai.azure.com"
+color = "#0078d4"
+timeout_seconds = 30
+max_tokens = 4096
+temperature = 0.7
+
+# ============================================================================
+# Routing Rules
+# ============================================================================
+# Define rules to automatically route requests to different providers
+# based on the input content (using regex patterns).
+#
+# Rules are matched in order from top to bottom.
+# First matching rule wins.
+
+[[rules]]
+regex = "^/code|rust|python|javascript"  # Code-related requests
+provider = "claude"                       # Use Claude for coding
+system_prompt = "You are a senior software engineer. Output clean, production-ready code with minimal comments."
+
+[[rules]]
+regex = "^/draw|image|picture"           # Image generation requests
+provider = "openai"
+system_prompt = "You are DALL-E. Generate detailed image descriptions."
+
+[[rules]]
+regex = "^/local"                        # Explicitly use local model
+provider = "ollama"
+system_prompt = "You are a helpful AI assistant running locally."
+
+[[rules]]
+regex = "^/deep"                         # Explicitly use DeepSeek
+provider = "deepseek"
+system_prompt = "You are a helpful AI assistant."
+
+[[rules]]
+regex = "^/moon"                         # Explicitly use Moonshot
+provider = "moonshot"
+system_prompt = "You are a helpful AI assistant."
+
+[[rules]]
+regex = ".*"                             # Catch-all: matches everything
+provider = "openai"                      # Default to OpenAI
+# No system_prompt = use model's default behavior
+
+# ============================================================================
+# Memory Module Configuration
+# ============================================================================
+[memory]
+enabled = true                           # Enable/disable memory system
+embedding_model = "all-MiniLM-L6-v2"    # Local embedding model
+max_context_items = 5                    # Max past interactions to retrieve
+retention_days = 90                      # Auto-delete old memories (0 = never)
+vector_db = "sqlite-vec"                 # Options: sqlite-vec, lancedb
+similarity_threshold = 0.7               # Minimum similarity score (0.0-1.0)
+
+# App bundle IDs to exclude from memory storage
+# (e.g., password managers, banking apps)
+excluded_apps = [
+    "com.apple.keychainaccess",
+    "com.agilebits.onepassword7",
+    "com.lastpass.LastPass",
+    "com.bitwarden.desktop",
+]
+
+# ============================================================================
+# Usage Examples
+# ============================================================================
+#
+# Example 1: Use OpenAI by default
+# - Select text in any app
+# - Press Cmd+~ (or Ctrl+~ on Windows)
+# - Text is sent to OpenAI GPT-4o
+# - Response is pasted back
+#
+# Example 2: Use Claude for code
+# - Select: "/code write a function to check if a number is prime"
+# - Press Cmd+~
+# - Routed to Claude 3.5 Sonnet (matches /code rule)
+#
+# Example 3: Use local Ollama
+# - Select: "/local explain quantum computing"
+# - Press Cmd+~
+# - Routed to local Llama 3.2 (no API costs)
+#
+# Example 4: Use custom provider
+# - Select: "/deep write a poem about AI"
+# - Press Cmd+~
+# - Routed to DeepSeek (custom OpenAI-compatible provider)
+#
+# ============================================================================
+# Tips
+# ============================================================================
+#
+# 1. Multiple Custom Providers:
+#    - You can add as many custom providers as you want
+#    - Each must have a unique name
+#    - Use `provider_type = "openai"` for OpenAI-compatible APIs
+#
+# 2. Provider Colors:
+#    - Colors are shown in the Halo UI during processing
+#    - Use hex colors like "#10a37f" (OpenAI green)
+#
+# 3. Timeouts:
+#    - Cloud APIs: 30 seconds is usually sufficient
+#    - Local models: 60-120 seconds for larger models
+#
+# 4. Max Tokens:
+#    - Controls response length
+#    - Larger = longer responses but higher cost
+#    - OpenAI: 4096 tokens ≈ 3000 words
+#
+# 5. Temperature:
+#    - 0.0 = Deterministic, focused
+#    - 1.0 = Creative, diverse
+#    - 0.7 is a good default
+#
+# 6. Base URL:
+#    - Required for custom providers
+#    - Must be OpenAI-compatible API
+#    - Include version if needed (e.g., /v1)
+#
+# 7. Routing Rules:
+#    - Use regex for flexible matching
+#    - Prefix commands like /code for convenience
+#    - Catch-all rule (.*) should be last
+#
+# 8. Memory System:
+#    - Automatically remembers past interactions
+#    - Context is filtered by app and window
+#    - Excluded apps are never stored
+#
+# ============================================================================
+# Troubleshooting
+# ============================================================================
+#
+# "Invalid API key" error:
+# - Check that api_key is correct
+# - Ensure no extra spaces or quotes
+# - Verify key is active on provider website
+#
+# "Rate limit exceeded" error:
+# - Wait a few minutes and try again
+# - Consider upgrading your API plan
+# - Use local Ollama to avoid rate limits
+#
+# "Timeout" error:
+# - Increase timeout_seconds
+# - Check network connection
+# - Try a different provider
+#
+# "Model not found" error (Ollama):
+# - Run: ollama pull <model-name>
+# - Verify Ollama is running: ollama list
+#
+# "Unknown provider" error:
+# - Check provider name in routing rules matches [providers.xxx]
+# - Ensure provider is properly configured
+#
+# For more help, see: https://github.com/your-repo/aether/docs

@@ -26,6 +26,9 @@ async-trait = "0.1"
 # For HTTP client
 reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
 serde_json = "1.0"
+toml = "0.8"
+dirs = "5.0"
+log = "0.4"
 
 [build-dependencies]
 uniffi = { version = "0.25", features = ["build"] }
@@ -40,4 +43,8 @@ tempfile = "3.8"
 
 [[bench]]
 name = "memory_benchmarks_simple"
+harness = false
+
+[[bench]]
+name = "ai_benchmarks"
 harness = false
