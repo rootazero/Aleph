@@ -21,6 +21,9 @@ pub struct Config {
     /// Note: Not exposed through UniFFI dictionary, managed via separate methods
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub providers: HashMap<String, ProviderConfig>,
+    /// Routing rules for smart AI provider selection (Phase 5)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<RoutingRuleConfig>,
 }
 
 /// General configuration settings
@@ -29,6 +32,36 @@ pub struct GeneralConfig {
     /// Default provider to use when no routing rule matches
     #[serde(default)]
     pub default_provider: Option<String>,
+}
+
+/// Routing rule configuration for TOML parsing
+///
+/// Each rule specifies:
+/// - A regex pattern to match against user input
+/// - The provider to use when matched
+/// - An optional system prompt override
+///
+/// # Example TOML
+///
+/// ```toml
+/// [[rules]]
+/// regex = "^/code"
+/// provider = "claude"
+/// system_prompt = "You are a senior software engineer."
+///
+/// [[rules]]
+/// regex = ".*"
+/// provider = "openai"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoutingRuleConfig {
+    /// Regex pattern to match against user input
+    pub regex: String,
+    /// Provider name to use when this rule matches
+    pub provider: String,
+    /// Optional system prompt to guide AI behavior
+    #[serde(default)]
+    pub system_prompt: Option<String>,
 }
 
 /// AI Provider configuration
@@ -181,6 +214,7 @@ impl Default for Config {
             general: GeneralConfig::default(),
             memory: MemoryConfig::default(),
             providers: HashMap::new(),
+            rules: Vec::new(),
         }
     }
 }
