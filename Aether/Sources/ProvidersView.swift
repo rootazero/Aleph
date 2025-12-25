@@ -2,71 +2,297 @@
 //  ProvidersView.swift
 //  Aether
 //
-//  AI Providers configuration tab (read-only for Phase 2).
+//  AI Providers configuration tab with full CRUD functionality (Phase 6).
 //
 
 import SwiftUI
 
-struct Provider: Identifiable {
-    let id = UUID()
-    let name: String
-    let color: Color
-    let apiKeyStatus: String
-}
-
 struct ProvidersView: View {
-    // Hardcoded providers for Phase 2
-    private let providers = [
-        Provider(name: "OpenAI", color: Color(hex: "#10a37f") ?? .green, apiKeyStatus: "Not Configured"),
-        Provider(name: "Claude", color: Color(hex: "#d97757") ?? .orange, apiKeyStatus: "Not Configured"),
-        Provider(name: "Gemini", color: Color(hex: "#4285F4") ?? .blue, apiKeyStatus: "Not Configured"),
-        Provider(name: "Ollama (Local)", color: .black, apiKeyStatus: "Not Configured")
-    ]
+    // Core and Keychain manager references
+    let core: AetherCore
+    let keychainManager: KeychainManagerImpl
+
+    // Provider list state (loaded from config)
+    @State private var providers: [ProviderConfigEntry] = []
+    @State private var isLoading: Bool = true
+    @State private var errorMessage: String?
+
+    // Modal state
+    @State private var showingConfigModal: Bool = false
+    @State private var editingProvider: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("AI Providers")
-                .font(.title2)
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("AI Providers")
+                        .font(.title2)
 
-            Text("Configure your AI provider API keys. These will be used for routing requests.")
-                .foregroundColor(.secondary)
-                .font(.callout)
+                    Text("Configure your AI provider API keys. These will be used for routing requests.")
+                        .foregroundColor(.secondary)
+                        .font(.callout)
+                }
 
-            List(providers) { provider in
+                Spacer()
+
+                // Add Provider button
+                Button(action: addProvider) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus.circle.fill")
+                        Text("Add Provider")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+            // Loading state
+            if isLoading {
                 HStack {
-                    Circle()
-                        .fill(provider.color)
-                        .frame(width: 12, height: 12)
-
-                    VStack(alignment: .leading) {
-                        Text(provider.name)
+                    Spacer()
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("Loading providers...")
+                            .foregroundColor(.secondary)
+                            .font(.callout)
+                    }
+                    Spacer()
+                }
+                .frame(maxHeight: .infinity)
+            }
+            // Error state
+            else if let error = errorMessage {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.largeTitle)
+                            .foregroundColor(.orange)
+                        Text("Failed to load providers")
                             .font(.headline)
-                        Text("API Key: \(provider.apiKeyStatus)")
+                        Text(error)
+                            .font(.callout)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                        Button("Retry") {
+                            loadProviders()
+                        }
+                    }
+                    .padding(40)
+                    Spacer()
+                }
+                .frame(maxHeight: .infinity)
+            }
+            // Empty state
+            else if providers.isEmpty {
+                HStack {
+                    Spacer()
+                    VStack(spacing: 16) {
+                        Image(systemName: "cloud.fill")
+                            .font(.system(size: 60))
+                            .foregroundColor(.secondary)
+                        Text("No Providers Configured")
+                            .font(.headline)
+                        Text("Add your first AI provider to get started")
+                            .foregroundColor(.secondary)
+                            .font(.callout)
+                        Button(action: addProvider) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "plus.circle.fill")
+                                Text("Add Provider")
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(40)
+                    Spacer()
+                }
+                .frame(maxHeight: .infinity)
+            }
+            // Provider list
+            else {
+                List {
+                    ForEach(providers, id: \.name) { provider in
+                        ProviderRow(
+                            provider: provider,
+                            keychainManager: keychainManager,
+                            onEdit: { editProvider(provider.name) },
+                            onDelete: { deleteProvider(provider.name) }
+                        )
+                    }
+                }
+                .listStyle(.inset)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(20)
+        .onAppear {
+            loadProviders()
+        }
+        .sheet(isPresented: $showingConfigModal) {
+            if let editing = editingProvider {
+                ProviderConfigView(
+                    providers: $providers,
+                    core: core,
+                    keychainManager: keychainManager,
+                    editing: editing
+                )
+            } else {
+                ProviderConfigView(
+                    providers: $providers,
+                    core: core,
+                    keychainManager: keychainManager
+                )
+            }
+        }
+    }
+
+    // MARK: - Actions
+
+    private func loadProviders() {
+        isLoading = true
+        errorMessage = nil
+
+        Task {
+            do {
+                let config = try core.loadConfig()
+                await MainActor.run {
+                    providers = config.providers
+                    isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    isLoading = false
+                }
+            }
+        }
+    }
+
+    private func addProvider() {
+        editingProvider = nil
+        showingConfigModal = true
+    }
+
+    private func editProvider(_ name: String) {
+        editingProvider = name
+        showingConfigModal = true
+    }
+
+    private func deleteProvider(_ name: String) {
+        // Show confirmation dialog
+        let alert = NSAlert()
+        alert.messageText = "Delete Provider"
+        alert.informativeText = "Are you sure you want to delete \"\(name)\"? This will also remove the API key from Keychain."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        // Delete provider
+        Task {
+            do {
+                try core.deleteProvider(name: name)
+
+                // Also delete from Keychain
+                try? keychainManager.deleteApiKey(provider: name)
+
+                // Reload config
+                let config = try core.loadConfig()
+                await MainActor.run {
+                    providers = config.providers
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Failed to delete provider: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Provider Row
+
+struct ProviderRow: View {
+    let provider: ProviderConfigEntry
+    let keychainManager: KeychainManagerImpl
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    @State private var hasApiKey: Bool = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Color indicator
+            Circle()
+                .fill(Color(hex: provider.config.color) ?? .gray)
+                .frame(width: 14, height: 14)
+
+            // Provider info
+            VStack(alignment: .leading, spacing: 4) {
+                Text(provider.name)
+                    .font(.headline)
+
+                HStack(spacing: 8) {
+                    // API key status
+                    HStack(spacing: 4) {
+                        Image(systemName: hasApiKey ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundColor(hasApiKey ? .green : .red)
+                            .font(.caption)
+                        Text(hasApiKey ? "Configured" : "Not Configured")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
 
-                    Spacer()
+                    Text("•")
+                        .foregroundColor(.secondary)
+                        .font(.caption)
 
-                    Button("Configure") {
-                        showComingSoonAlert(provider: provider.name)
-                    }
+                    // Model
+                    Text(provider.config.model)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-                .padding(.vertical, 4)
             }
-            .listStyle(.inset)
+
+            Spacer()
+
+            // Action buttons
+            HStack(spacing: 8) {
+                Button(action: onEdit) {
+                    Image(systemName: "pencil.circle.fill")
+                        .foregroundColor(.blue)
+                }
+                .buttonStyle(.plain)
+                .help("Edit provider configuration")
+
+                Button(action: onDelete) {
+                    Image(systemName: "trash.circle.fill")
+                        .foregroundColor(.red)
+                }
+                .buttonStyle(.plain)
+                .help("Delete provider")
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(20)
+        .padding(.vertical, 8)
+        .onAppear {
+            checkApiKeyStatus()
+        }
     }
 
-    private func showComingSoonAlert(provider: String) {
-        let alert = NSAlert()
-        alert.messageText = "Coming Soon"
-        alert.informativeText = "\(provider) configuration will be available in Phase 4."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+    private func checkApiKeyStatus() {
+        // Check if API key exists in Keychain
+        if let apiKey = provider.config.apiKey, apiKey.starts(with: "keychain:") {
+            do {
+                hasApiKey = try keychainManager.hasApiKey(provider: provider.name)
+            } catch {
+                hasApiKey = false
+            }
+        } else {
+            // Ollama or other providers without API key
+            hasApiKey = provider.config.apiKey != nil || provider.config.providerType == "ollama"
+        }
     }
 }
 

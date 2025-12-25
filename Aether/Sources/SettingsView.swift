@@ -19,10 +19,12 @@ struct SettingsView: View {
     @State private var selectedTab: SettingsTab = .general
     @ObservedObject var themeEngine: ThemeEngine
     let core: AetherCore?
+    let keychainManager: KeychainManagerImpl
 
-    init(themeEngine: ThemeEngine, core: AetherCore? = nil) {
+    init(themeEngine: ThemeEngine, core: AetherCore? = nil, keychainManager: KeychainManagerImpl? = nil) {
         self.themeEngine = themeEngine
         self.core = core
+        self.keychainManager = keychainManager ?? KeychainManagerImpl()
     }
 
     var body: some View {
@@ -53,7 +55,13 @@ struct SettingsView: View {
                 case .general:
                     GeneralSettingsView(themeEngine: themeEngine)
                 case .providers:
-                    ProvidersView()
+                    if let core = core {
+                        ProvidersView(core: core, keychainManager: keychainManager)
+                    } else {
+                        Text("Provider management requires AetherCore initialization")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 case .routing:
                     RoutingView()
                 case .shortcuts:

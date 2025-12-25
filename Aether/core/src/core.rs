@@ -974,18 +974,45 @@ impl AetherCore {
     }
 
     /// Test provider connection
+    ///
+    /// Sends a test request to the provider to verify configuration.
+    /// Returns a success message if the provider responds correctly.
     pub fn test_provider_connection(&self, provider_name: String) -> Result<String> {
-        // TODO: Implement actual provider connection test
-        // For now, just check if provider exists
+        use crate::providers::{create_provider, AiProvider};
+
+        // Get provider config
         let config = self.config.lock().unwrap();
-        if config.providers.contains_key(&provider_name) {
-            Ok(format!("Provider '{}' is configured", provider_name))
-        } else {
-            Err(AetherError::invalid_config(format!(
-                "Provider '{}' not found",
-                provider_name
-            )))
-        }
+        let provider_config = config
+            .providers
+            .get(&provider_name)
+            .ok_or_else(|| {
+                AetherError::invalid_config(format!("Provider '{}' not found", provider_name))
+            })?
+            .clone();
+
+        drop(config); // Release lock before async operations
+
+        // Create provider instance
+        let provider = create_provider(&provider_name, provider_config)?;
+
+        // Send test request (block on async operation)
+        let test_prompt = "Say 'OK' if you can read this.";
+        let runtime = Runtime::new().map_err(|e| {
+            AetherError::provider(format!("Failed to create runtime for test: {}", e))
+        })?;
+
+        let result: String = runtime.block_on(async {
+            let response = provider
+                .process(test_prompt, None)
+                .await
+                .map_err(|e| AetherError::provider(format!("Connection test failed: {}", e)))?;
+            Ok::<String, AetherError>(response)
+        })?;
+
+        Ok(format!(
+            "✓ Connection successful! Provider responded: {}",
+            result.chars().take(50).collect::<String>()
+        ))
     }
 }
 
