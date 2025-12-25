@@ -35,6 +35,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 # For config file watching
 notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
 notify-debouncer-full = "0.3"
+# For image dimension parsing
+image = { version = "0.24", default-features = false, features = ["png", "jpeg", "gif"] }
+# For Base64 encoding of images
+base64 = "0.21"
 
 [build-dependencies]
 uniffi = { version = "0.25", features = ["build"] }

@@ -914,4 +914,358 @@ max_context_items = 5
         // Should pass validation (no API key needed for Ollama)
         assert!(config.validate().is_ok());
     }
+
+    // Additional comprehensive tests for Phase 6 - Task 8.1
+
+    #[test]
+    fn test_regex_validation_valid_patterns() {
+        let mut config = Config::default();
+
+        // Add valid provider
+        let provider = ProviderConfig {
+            provider_type: Some("openai".to_string()),
+            api_key: Some("sk-test".to_string()),
+            model: "gpt-4o".to_string(),
+            base_url: None,
+            color: "#10a37f".to_string(),
+            timeout_seconds: 30,
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+        };
+        config.providers.insert("openai".to_string(), provider);
+
+        // Test various valid regex patterns
+        let valid_patterns = vec![
+            ".*",                    // Match all
+            "^/code",                // Start with /code
+            "\\d+",                  // One or more digits
+            "hello|world",           // Alternatives
+            "[a-zA-Z]+",             // Character class
+            "^test$",                // Exact match
+            "(foo|bar)\\s+\\w+",     // Groups and word characters
+        ];
+
+        for pattern in valid_patterns {
+            config.rules = vec![RoutingRuleConfig {
+                regex: pattern.to_string(),
+                provider: "openai".to_string(),
+                system_prompt: None,
+            }];
+            assert!(
+                config.validate().is_ok(),
+                "Pattern '{}' should be valid",
+                pattern
+            );
+        }
+    }
+
+    #[test]
+    fn test_regex_validation_invalid_patterns() {
+        let mut config = Config::default();
+
+        // Add valid provider
+        let provider = ProviderConfig {
+            provider_type: Some("openai".to_string()),
+            api_key: Some("sk-test".to_string()),
+            model: "gpt-4o".to_string(),
+            base_url: None,
+            color: "#10a37f".to_string(),
+            timeout_seconds: 30,
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+        };
+        config.providers.insert("openai".to_string(), provider);
+
+        // Test various invalid regex patterns
+        let invalid_patterns = vec![
+            "[invalid(",          // Unclosed bracket
+            "(unclosed",          // Unclosed parenthesis
+            "**",                 // Invalid quantifier
+            "(?P<invalid",        // Unclosed named group
+            "[z-a]",              // Invalid range
+        ];
+
+        for pattern in invalid_patterns {
+            config.rules = vec![RoutingRuleConfig {
+                regex: pattern.to_string(),
+                provider: "openai".to_string(),
+                system_prompt: None,
+            }];
+            assert!(
+                config.validate().is_err(),
+                "Pattern '{}' should be invalid",
+                pattern
+            );
+        }
+    }
+
+    #[test]
+    fn test_shortcuts_config_defaults() {
+        let shortcuts = ShortcutsConfig::default();
+        assert_eq!(shortcuts.summon, "Command+Grave");
+        assert_eq!(shortcuts.cancel, Some("Escape".to_string()));
+    }
+
+    #[test]
+    fn test_shortcuts_config_serialization() {
+        let shortcuts = ShortcutsConfig {
+            summon: "Command+Shift+A".to_string(),
+            cancel: Some("Escape".to_string()),
+        };
+        let json = serde_json::to_string(&shortcuts).unwrap();
+        assert!(json.contains("Command+Shift+A"));
+        assert!(json.contains("Escape"));
+    }
+
+    #[test]
+    fn test_behavior_config_defaults() {
+        let behavior = BehaviorConfig::default();
+        assert_eq!(behavior.input_mode, "cut");
+        assert_eq!(behavior.output_mode, "typewriter");
+        assert_eq!(behavior.typing_speed, 50);
+        assert!(!behavior.pii_scrubbing_enabled);
+    }
+
+    #[test]
+    fn test_behavior_config_serialization() {
+        let behavior = BehaviorConfig {
+            input_mode: "copy".to_string(),
+            output_mode: "instant".to_string(),
+            typing_speed: 100,
+            pii_scrubbing_enabled: true,
+        };
+        let json = serde_json::to_string(&behavior).unwrap();
+        assert!(json.contains("copy"));
+        assert!(json.contains("instant"));
+        assert!(json.contains("100"));
+        assert!(json.contains("true"));
+    }
+
+    #[test]
+    fn test_atomic_write_creates_parent_directory() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let nested_path = temp_dir.path().join("nested").join("config.toml");
+
+        let config = Config::default();
+        config.save_to_file(&nested_path).unwrap();
+
+        assert!(nested_path.exists());
+    }
+
+    #[test]
+    fn test_atomic_write_overwrites_existing_file() {
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+
+        // Write first config
+        let mut config1 = Config::default();
+        config1.default_hotkey = "Command+A".to_string();
+        config1.save_to_file(path).unwrap();
+
+        // Overwrite with second config
+        let mut config2 = Config::default();
+        config2.default_hotkey = "Command+B".to_string();
+        config2.save_to_file(path).unwrap();
+
+        // Load and verify
+        let loaded = Config::load_from_file(path).unwrap();
+        assert_eq!(loaded.default_hotkey, "Command+B");
+    }
+
+    #[test]
+    fn test_config_validation_zero_timeout() {
+        let mut config = Config::default();
+
+        // Add provider with zero timeout
+        let provider = ProviderConfig {
+            provider_type: Some("openai".to_string()),
+            api_key: Some("sk-test".to_string()),
+            model: "gpt-4o".to_string(),
+            base_url: None,
+            color: "#10a37f".to_string(),
+            timeout_seconds: 0,
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+        };
+        config.providers.insert("openai".to_string(), provider);
+
+        // Should fail validation
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("timeout must be greater than 0"));
+    }
+
+    #[test]
+    fn test_config_validation_memory_zero_max_context() {
+        let mut config = Config::default();
+        config.memory.max_context_items = 0;
+
+        // Should fail validation
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("max_context_items must be greater than 0"));
+    }
+
+    #[test]
+    fn test_config_validation_memory_invalid_similarity() {
+        let mut config = Config::default();
+        config.memory.similarity_threshold = 1.5; // > 1.0
+
+        // Should fail validation
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("similarity_threshold must be between 0.0 and 1.0"));
+    }
+
+    #[test]
+    fn test_provider_type_inference() {
+        let provider = ProviderConfig {
+            provider_type: None,
+            api_key: Some("test".to_string()),
+            model: "test-model".to_string(),
+            base_url: None,
+            color: "#000000".to_string(),
+            timeout_seconds: 30,
+            max_tokens: None,
+            temperature: None,
+        };
+
+        // Test inference from provider name
+        assert_eq!(provider.infer_provider_type("openai"), "openai");
+        assert_eq!(provider.infer_provider_type("claude"), "claude");
+        assert_eq!(provider.infer_provider_type("ollama"), "ollama");
+        assert_eq!(provider.infer_provider_type("deepseek"), "openai"); // OpenAI-compatible
+        assert_eq!(provider.infer_provider_type("custom"), "openai"); // Default
+    }
+
+    #[test]
+    fn test_provider_type_explicit_override() {
+        let provider = ProviderConfig {
+            provider_type: Some("custom".to_string()),
+            api_key: Some("test".to_string()),
+            model: "test-model".to_string(),
+            base_url: None,
+            color: "#000000".to_string(),
+            timeout_seconds: 30,
+            max_tokens: None,
+            temperature: None,
+        };
+
+        // Explicit type should override inference
+        assert_eq!(provider.infer_provider_type("openai"), "custom");
+    }
+
+    #[test]
+    fn test_full_config_conversion() {
+        let mut config = Config::default();
+
+        // Add providers
+        let provider1 = ProviderConfig {
+            provider_type: Some("openai".to_string()),
+            api_key: Some("sk-test".to_string()),
+            model: "gpt-4o".to_string(),
+            base_url: None,
+            color: "#10a37f".to_string(),
+            timeout_seconds: 30,
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+        };
+        config.providers.insert("openai".to_string(), provider1);
+
+        let provider2 = ProviderConfig {
+            provider_type: Some("claude".to_string()),
+            api_key: Some("sk-ant-test".to_string()),
+            model: "claude-3-5-sonnet-20241022".to_string(),
+            base_url: None,
+            color: "#d97757".to_string(),
+            timeout_seconds: 30,
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+        };
+        config.providers.insert("claude".to_string(), provider2);
+
+        // Convert to FullConfig
+        let full_config: FullConfig = config.into();
+
+        // Verify conversion
+        assert_eq!(full_config.providers.len(), 2);
+        assert!(full_config
+            .providers
+            .iter()
+            .any(|p| p.name == "openai"));
+        assert!(full_config
+            .providers
+            .iter()
+            .any(|p| p.name == "claude"));
+    }
+
+    #[test]
+    fn test_config_toml_round_trip() {
+        let mut config = Config::default();
+
+        // Add comprehensive configuration
+        config.shortcuts = Some(ShortcutsConfig {
+            summon: "Command+Shift+A".to_string(),
+            cancel: Some("Escape".to_string()),
+        });
+
+        config.behavior = Some(BehaviorConfig {
+            input_mode: "copy".to_string(),
+            output_mode: "instant".to_string(),
+            typing_speed: 100,
+            pii_scrubbing_enabled: true,
+        });
+
+        let provider = ProviderConfig {
+            provider_type: Some("openai".to_string()),
+            api_key: Some("sk-test".to_string()),
+            model: "gpt-4o".to_string(),
+            base_url: None,
+            color: "#10a37f".to_string(),
+            timeout_seconds: 30,
+            max_tokens: Some(4096),
+            temperature: Some(0.7),
+        };
+        config.providers.insert("openai".to_string(), provider);
+        config.general.default_provider = Some("openai".to_string());
+
+        config.rules.push(RoutingRuleConfig {
+            regex: "^/code".to_string(),
+            provider: "openai".to_string(),
+            system_prompt: Some("You are a coding assistant.".to_string()),
+        });
+
+        // Serialize to TOML
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+
+        // Deserialize back
+        let deserialized: Config = toml::from_str(&toml_str).unwrap();
+
+        // Verify all fields
+        assert_eq!(deserialized.default_hotkey, config.default_hotkey);
+        assert_eq!(
+            deserialized.shortcuts.as_ref().unwrap().summon,
+            "Command+Shift+A"
+        );
+        assert_eq!(
+            deserialized.behavior.as_ref().unwrap().input_mode,
+            "copy"
+        );
+        assert_eq!(deserialized.providers.len(), 1);
+        assert_eq!(deserialized.rules.len(), 1);
+        assert!(deserialized.validate().is_ok());
+    }
 }

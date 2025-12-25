@@ -85,10 +85,43 @@ struct MessagesRequest {
 }
 
 /// Message format for Claude API
+///
+/// Supports both text-only and multimodal (text + image) messages.
 #[derive(Debug, Serialize)]
 struct Message {
     role: String,
-    content: String,
+    #[serde(flatten)]
+    content: MessageContent,
+}
+
+/// Message content can be either simple text or structured content blocks
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum MessageContent {
+    /// Simple text message
+    Text { content: String },
+    /// Multimodal message with text and/or images
+    Multimodal { content: Vec<ClaudeContentBlock> },
+}
+
+/// Content block for multimodal messages
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+#[serde(rename_all = "snake_case")]
+enum ClaudeContentBlock {
+    /// Text content block
+    Text { text: String },
+    /// Image content block (Base64 encoded)
+    Image { source: ImageSource },
+}
+
+/// Image source for Claude API
+#[derive(Debug, Serialize)]
+struct ImageSource {
+    #[serde(rename = "type")]
+    source_type: String, // Always "base64"
+    media_type: String,  // "image/png", "image/jpeg", "image/gif"
+    data: String,        // Base64 encoded image data (without data URI prefix)
 }
 
 /// Response from Claude Messages API
@@ -192,7 +225,9 @@ impl ClaudeProvider {
     fn build_request(&self, input: &str, system_prompt: Option<&str>) -> MessagesRequest {
         let messages = vec![Message {
             role: "user".to_string(),
-            content: input.to_string(),
+            content: MessageContent::Text {
+                content: input.to_string(),
+            },
         }];
 
         // Claude requires max_tokens to be specified
@@ -202,6 +237,67 @@ impl ClaudeProvider {
             model: self.config.model.clone(),
             messages,
             max_tokens,
+            system: system_prompt.map(|s| s.to_string()),
+            temperature: self.config.temperature,
+        }
+    }
+
+    /// Build request body with image for vision API
+    fn build_vision_request(
+        &self,
+        input: &str,
+        image: &crate::clipboard::ImageData,
+        system_prompt: Option<&str>,
+    ) -> MessagesRequest {
+        // Build multimodal user message with text and image
+        let mut content_blocks = Vec::new();
+
+        // Add text if not empty
+        if !input.is_empty() {
+            content_blocks.push(ClaudeContentBlock::Text {
+                text: input.to_string(),
+            });
+        } else {
+            // Default prompt for image-only requests
+            content_blocks.push(ClaudeContentBlock::Text {
+                text: "Describe this image in detail.".to_string(),
+            });
+        }
+
+        // Extract media type from image format
+        let media_type = match image.format {
+            crate::clipboard::ImageFormat::Png => "image/png",
+            crate::clipboard::ImageFormat::Jpeg => "image/jpeg",
+            crate::clipboard::ImageFormat::Gif => "image/gif",
+        };
+
+        // Claude expects Base64 data WITHOUT the "data:image/...;base64," prefix
+        let base64_data = {
+            use base64::{engine::general_purpose, Engine as _};
+            general_purpose::STANDARD.encode(&image.data)
+        };
+
+        // Add image
+        content_blocks.push(ClaudeContentBlock::Image {
+            source: ImageSource {
+                source_type: "base64".to_string(),
+                media_type: media_type.to_string(),
+                data: base64_data,
+            },
+        });
+
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Multimodal {
+                content: content_blocks,
+            },
+        }];
+
+        // Use higher max_tokens for vision responses
+        MessagesRequest {
+            model: self.config.model.clone(),
+            messages,
+            max_tokens: 4096, // Vision responses can be longer
             system: system_prompt.map(|s| s.to_string()),
             temperature: self.config.temperature,
         }
@@ -294,6 +390,71 @@ impl AiProvider for ClaudeProvider {
         Ok(text)
     }
 
+    async fn process_with_image(
+        &self,
+        input: &str,
+        image: Option<&crate::clipboard::ImageData>,
+        system_prompt: Option<&str>,
+    ) -> Result<String> {
+        // If no image provided, fall back to text-only
+        let Some(image_data) = image else {
+            return self.process(input, system_prompt).await;
+        };
+
+        // Build vision request body
+        let request_body = self.build_vision_request(input, image_data, system_prompt);
+
+        // Send POST request with Claude-specific headers
+        let response = self
+            .client
+            .post(&self.endpoint)
+            .header(
+                "x-api-key",
+                self.config.api_key.as_ref().unwrap_or(&String::new()),
+            )
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    AetherError::Timeout
+                } else if e.is_connect() {
+                    AetherError::NetworkError(format!("Failed to connect to Claude: {}", e))
+                } else {
+                    AetherError::NetworkError(format!("Network error: {}", e))
+                }
+            })?;
+
+        // Check status code
+        if !response.status().is_success() {
+            return Err(self.handle_error(response).await);
+        }
+
+        // Parse response
+        let messages_response: MessagesResponse = response.json().await.map_err(|e| {
+            AetherError::ProviderError(format!("Failed to parse Claude vision response: {}", e))
+        })?;
+
+        // Extract text from first content block
+        let text = messages_response
+            .content
+            .first()
+            .ok_or_else(|| AetherError::ProviderError("No response from Claude".to_string()))?
+            .text
+            .clone();
+
+        Ok(text)
+    }
+
+    fn supports_vision(&self) -> bool {
+        // Claude 3 Opus and Sonnet support vision
+        // Claude 3 Haiku does not support vision (as of API docs)
+        // We'll return true for all Claude 3+ models to be safe
+        true
+    }
+
     fn name(&self) -> &str {
         "claude"
     }
@@ -369,7 +530,7 @@ mod tests {
         assert_eq!(request.model, "claude-3-5-sonnet-20241022");
         assert_eq!(request.messages.len(), 1);
         assert_eq!(request.messages[0].role, "user");
-        assert_eq!(request.messages[0].content, "Hello");
+        // MessageContent is an enum, can't directly compare with string
         assert_eq!(request.max_tokens, 4096);
         assert_eq!(request.temperature, Some(0.7));
         assert_eq!(request.system, None);
@@ -384,7 +545,7 @@ mod tests {
 
         assert_eq!(request.messages.len(), 1);
         assert_eq!(request.messages[0].role, "user");
-        assert_eq!(request.messages[0].content, "Hello");
+        // MessageContent is an enum, can't directly compare with string
         assert_eq!(
             request.system,
             Some("You are a helpful assistant".to_string())

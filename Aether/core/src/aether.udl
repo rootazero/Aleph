@@ -16,6 +16,13 @@ enum ProcessingState {
   "Error"
 };
 
+// Image format enumeration (Phase 7.1 - Image Clipboard Support)
+enum ImageFormat {
+  "Png",
+  "Jpeg",
+  "Gif"
+};
+
 // Error types for typed error handling
 enum ErrorType {
   "Network",
@@ -151,6 +158,19 @@ interface AetherCore {
   // Test provider connection
   [Throws=AetherException]
   string test_provider_connection(string provider_name);
+
+  // IMAGE CLIPBOARD METHODS (Phase 7.1 - Image Clipboard Support)
+
+  // Check if clipboard contains image data
+  boolean has_clipboard_image();
+
+  // Read image from clipboard
+  [Throws=AetherException]
+  ImageData? read_clipboard_image();
+
+  // Write image to clipboard
+  [Throws=AetherException]
+  void write_clipboard_image(ImageData image);
 };
 
 // Callback interface for events from Rust to client
@@ -301,4 +321,10 @@ dictionary MemoryStats {
 dictionary CapturedContext {
   string app_bundle_id;
   string? window_title;
+};
+
+// Image data for clipboard operations (Phase 7.1 - Image Clipboard Support)
+dictionary ImageData {
+  sequence<u8> data;
+  ImageFormat format;
 };

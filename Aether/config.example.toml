@@ -1,7 +1,7 @@
 # Aether Configuration Example
 # Copy this file to ~/.config/aether/config.toml and customize
 
-# Default hotkey to summon Aether
+# Default hotkey to summon Aether (deprecated - use [shortcuts] section below)
 default_hotkey = "Command+Grave"  # macOS: Cmd+~, Windows: Ctrl+~
 
 # ============================================================================
@@ -11,6 +11,60 @@ default_hotkey = "Command+Grave"  # macOS: Cmd+~, Windows: Ctrl+~
 # Default provider to use when no routing rule matches
 # Must match one of the provider names defined below
 default_provider = "openai"
+
+# ============================================================================
+# Shortcuts Configuration (Phase 6)
+# ============================================================================
+[shortcuts]
+# Global summon hotkey - triggers Aether to process selected text
+summon = "Command+Grave"         # macOS: Cmd+~, Windows: Ctrl+~
+                                  # Other examples: "Command+Shift+A", "Control+Space"
+
+# Cancel operation hotkey - stops processing and restores original text
+cancel = "Escape"                # Other examples: "Command+Period"
+
+# Hotkey format:
+# - macOS modifiers: Command, Option, Control, Shift
+# - Windows modifiers: Control, Alt, Shift
+# - Special keys: Escape, Space, Tab, Return, Delete, Grave (~)
+# - Regular keys: A-Z, 0-9, etc.
+# - Combine with "+": "Command+Shift+A"
+
+# ============================================================================
+# Behavior Configuration (Phase 6)
+# ============================================================================
+[behavior]
+# Input mode: How Aether captures text
+# - "cut"  : Text is removed from source (Cmd+X) - default
+# - "copy" : Text remains in source (Cmd+C)
+input_mode = "cut"
+
+# Output mode: How Aether pastes AI response
+# - "typewriter" : Types character-by-character with animation (default)
+# - "instant"    : Pastes entire response immediately
+output_mode = "typewriter"
+
+# Typing speed (only applies when output_mode = "typewriter")
+# Range: 10-200 characters per second
+# - 10  : Very slow (dramatic effect)
+# - 50  : Default (balanced, readable)
+# - 100 : Fast (quick results)
+# - 200 : Very fast (minimal delay)
+typing_speed = 50
+
+# PII (Personally Identifiable Information) scrubbing
+# When enabled, Aether automatically removes sensitive information
+# before sending to AI providers
+pii_scrubbing_enabled = false
+
+# PII types to scrub (when pii_scrubbing_enabled = true):
+# - Email addresses: john@example.com → [EMAIL_REDACTED]
+# - Phone numbers: (555) 123-4567 → [PHONE_REDACTED]
+# - SSN: 123-45-6789 → [SSN_REDACTED]
+# - Credit cards: 4111-1111-1111-1111 → [CARD_REDACTED]
+#
+# Note: PII scrubbing is implemented in Rust core
+# Custom patterns can be configured in the UI
 
 # ============================================================================
 # AI Providers Configuration
@@ -190,6 +244,22 @@ excluded_apps = [
 # - Press Cmd+~
 # - Routed to DeepSeek (custom OpenAI-compatible provider)
 #
+# Example 5: Custom hotkey (Phase 6)
+# - Set summon = "Command+Shift+A" in [shortcuts]
+# - Press Cmd+Shift+A to trigger Aether
+# - Useful to avoid conflicts with other apps
+#
+# Example 6: Typewriter effect (Phase 6)
+# - Set output_mode = "typewriter" and typing_speed = 100
+# - Response types out at 100 chars/sec (faster than default)
+# - Creates smooth, readable animation
+#
+# Example 7: PII scrubbing (Phase 6)
+# - Set pii_scrubbing_enabled = true
+# - Select: "Contact me at john@example.com or (555) 123-4567"
+# - AI receives: "Contact me at [EMAIL_REDACTED] or [PHONE_REDACTED]"
+# - Protects sensitive information from cloud providers
+#
 # ============================================================================
 # Tips
 # ============================================================================
@@ -232,6 +302,30 @@ excluded_apps = [
 #    - Context is filtered by app and window
 #    - Excluded apps are never stored
 #
+# 9. Hotkey Customization (Phase 6):
+#    - Avoid conflicts with system shortcuts
+#    - Aether warns about common conflicts in UI
+#    - Use Cmd+Shift combinations for safety
+#    - Cancel hotkey must be different from summon
+#
+# 10. Input/Output Modes (Phase 6):
+#     - Cut mode (default): Original text disappears (dramatic effect)
+#     - Copy mode: Original text stays (safer, less intrusive)
+#     - Typewriter mode: Character-by-character (cinematic feel)
+#     - Instant mode: Immediate paste (fastest, no animation)
+#
+# 11. API Key Security (Phase 6):
+#     - API keys are stored in macOS Keychain, NOT in this file
+#     - Never commit config.toml with API keys to version control
+#     - Keychain entries: "Aether:<provider-name>"
+#     - Keys are encrypted and protected by macOS security
+#
+# 12. Config Hot-Reload (Phase 6):
+#     - Changes to this file take effect within 1 second
+#     - No need to restart Aether
+#     - Invalid changes are ignored (app continues with old config)
+#     - UI shows notification when config reloads
+#
 # ============================================================================
 # Troubleshooting
 # ============================================================================
@@ -258,5 +352,20 @@ excluded_apps = [
 # "Unknown provider" error:
 # - Check provider name in routing rules matches [providers.xxx]
 # - Ensure provider is properly configured
+#
+# "Hotkey not working" (Phase 6):
+# - Check Accessibility permissions in System Settings
+# - Try a different hotkey (may conflict with another app)
+# - Use Settings UI to test and detect conflicts
+#
+# "Config not saving" (Phase 6):
+# - Check file permissions: chmod 644 ~/.config/aether/config.toml
+# - Verify config directory exists: mkdir -p ~/.config/aether
+# - Check for TOML syntax errors (use Settings UI validation)
+#
+# "Hot-reload not working" (Phase 6):
+# - File watcher requires macOS FSEvents support
+# - Edit config with text editor (not vim in-place mode)
+# - Save changes fully before expecting reload
 #
 # For more help, see: https://github.com/your-repo/aether/docs

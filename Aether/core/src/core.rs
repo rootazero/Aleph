@@ -266,6 +266,37 @@ impl AetherCore {
         self.clipboard_manager.read_text()
     }
 
+    /// Check if clipboard contains image data
+    ///
+    /// # Returns
+    /// * `true` if clipboard contains an image
+    /// * `false` if clipboard does not contain an image
+    pub fn has_clipboard_image(&self) -> bool {
+        self.clipboard_manager.has_image()
+    }
+
+    /// Read image from clipboard
+    ///
+    /// # Returns
+    /// * `Ok(Some(ImageData))` if image is successfully read
+    /// * `Ok(None)` if clipboard contains no image
+    /// * `Err(AetherError)` if an error occurs
+    pub fn read_clipboard_image(&self) -> Result<Option<crate::clipboard::ImageData>> {
+        self.clipboard_manager.read_image()
+    }
+
+    /// Write image to clipboard
+    ///
+    /// # Arguments
+    /// * `image` - The image data to write
+    ///
+    /// # Returns
+    /// * `Ok(())` if image is successfully written
+    /// * `Err(AetherError)` if an error occurs
+    pub fn write_clipboard_image(&self, image: crate::clipboard::ImageData) -> Result<()> {
+        self.clipboard_manager.write_image(image)
+    }
+
     /// Check if currently listening for hotkeys
     pub fn is_listening(&self) -> bool {
         self.hotkey_listener.is_listening()

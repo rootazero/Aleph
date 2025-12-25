@@ -179,6 +179,47 @@ pub trait AiProvider: Send + Sync {
     /// ```
     async fn process(&self, input: &str, system_prompt: Option<&str>) -> Result<String>;
 
+    /// Process input with optional image and return AI-generated response
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The user input text to process
+    /// * `image` - Optional image data
+    /// * `system_prompt` - Optional system prompt to guide AI behavior
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(String)` - The AI-generated response text
+    /// * `Err(AetherError)` - Various errors (same as `process()`)
+    ///
+    /// # Default Implementation
+    ///
+    /// Default implementation calls `process()` and ignores the image.
+    /// Vision-capable providers should override this method.
+    async fn process_with_image(
+        &self,
+        input: &str,
+        _image: Option<&crate::clipboard::ImageData>,
+        system_prompt: Option<&str>,
+    ) -> Result<String> {
+        // Default: ignore image and call text-only process
+        self.process(input, system_prompt).await
+    }
+
+    /// Check if provider supports vision/image input
+    ///
+    /// # Returns
+    ///
+    /// * `true` if provider can process images (e.g., GPT-4V, Claude 3 Opus)
+    /// * `false` if provider only supports text
+    ///
+    /// # Default Implementation
+    ///
+    /// Default returns `false`. Vision-capable providers should override.
+    fn supports_vision(&self) -> bool {
+        false
+    }
+
     /// Get provider name for logging and routing
     ///
     /// # Returns

@@ -81,7 +81,7 @@ pub mod providers;
 pub mod router;
 
 // Re-export public types
-pub use crate::clipboard::{ArboardManager, ClipboardManager};
+pub use crate::clipboard::{ArboardManager, ClipboardManager, ImageData, ImageFormat};
 pub use crate::config::{
     BehaviorConfig, Config, FullConfig, GeneralConfig, KeychainManager, MemoryConfig,
     ProviderConfig, ProviderConfigEntry, RoutingRuleConfig, ShortcutsConfig,
