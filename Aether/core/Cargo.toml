@@ -34,6 +34,7 @@ log = "0.4"
 # For structured logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-appender = "0.2"
 # For config file watching
 notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
 notify-debouncer-full = "0.3"
@@ -52,6 +53,7 @@ path = "src/bin/uniffi_bindgen.rs"
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 tempfile = "3.8"
+filetime = "0.2"
 
 [[bench]]
 name = "memory_benchmarks_simple"

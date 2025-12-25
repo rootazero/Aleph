@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tracing::{debug, error, info};
 
 // Submodules
 pub mod keychain;
@@ -50,6 +51,13 @@ pub struct GeneralConfig {
     /// Default provider to use when no routing rule matches
     #[serde(default)]
     pub default_provider: Option<String>,
+    /// Log retention in days (1-30, default: 7)
+    #[serde(default = "default_log_retention_days")]
+    pub log_retention_days: u32,
+}
+
+fn default_log_retention_days() -> u32 {
+    7 // Keep logs for 7 days by default
 }
 
 /// Shortcuts configuration (Phase 6 - Task 4.2)
@@ -368,8 +376,11 @@ impl Config {
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
 
+        debug!(path = %path.display(), "Attempting to load config from file");
+
         // Check if file exists
         if !path.exists() {
+            error!(path = %path.display(), "Config file not found");
             return Err(AetherError::InvalidConfig(format!(
                 "Config file not found: {}",
                 path.display()
@@ -378,6 +389,7 @@ impl Config {
 
         // Read file contents
         let contents = fs::read_to_string(path).map_err(|e| {
+            error!(path = %path.display(), error = %e, "Failed to read config file");
             AetherError::InvalidConfig(format!(
                 "Failed to read config file {}: {}",
                 path.display(),
@@ -385,8 +397,15 @@ impl Config {
             ))
         })?;
 
+        debug!(
+            path = %path.display(),
+            size_bytes = contents.len(),
+            "Config file read successfully, parsing TOML"
+        );
+
         // Parse TOML
         let config: Config = toml::from_str(&contents).map_err(|e| {
+            error!(path = %path.display(), error = %e, "Failed to parse config TOML");
             AetherError::InvalidConfig(format!(
                 "Failed to parse config file {}: {}",
                 path.display(),
@@ -394,8 +413,23 @@ impl Config {
             ))
         })?;
 
+        debug!(
+            path = %path.display(),
+            providers_count = config.providers.len(),
+            rules_count = config.rules.len(),
+            "Config parsed successfully, validating"
+        );
+
         // Validate config
         config.validate()?;
+
+        info!(
+            path = %path.display(),
+            providers_count = config.providers.len(),
+            rules_count = config.rules.len(),
+            memory_enabled = config.memory.enabled,
+            "Config loaded and validated successfully"
+        );
 
         Ok(config)
     }
@@ -416,13 +450,15 @@ impl Config {
     pub fn load() -> Result<Self> {
         let path = Self::default_path();
 
+        debug!(path = %path.display(), "Loading config from default path");
+
         if path.exists() {
-            log::info!("Loading config from {}", path.display());
+            info!(path = %path.display(), "Found config file, loading");
             Self::load_from_file(&path)
         } else {
-            log::info!(
-                "Config file not found at {}, using default config",
-                path.display()
+            info!(
+                path = %path.display(),
+                "Config file not found, using default configuration"
             );
             Ok(Self::default())
         }
@@ -436,14 +472,22 @@ impl Config {
     /// - API keys are present for cloud providers
     /// - Regex patterns are valid
     pub fn validate(&self) -> Result<()> {
+        debug!(
+            providers_count = self.providers.len(),
+            rules_count = self.rules.len(),
+            "Starting config validation"
+        );
+
         // Validate default provider exists
         if let Some(ref default_provider) = self.general.default_provider {
             if !self.providers.contains_key(default_provider) {
+                error!(default_provider = %default_provider, "Default provider not found");
                 return Err(AetherError::InvalidConfig(format!(
                     "Default provider '{}' not found in providers",
                     default_provider
                 )));
             }
+            debug!(default_provider = %default_provider, "Default provider validated");
         }
 
         // Validate provider configurations
@@ -454,6 +498,7 @@ impl Config {
             if (provider_type == "openai" || provider_type == "claude")
                 && provider.api_key.is_none()
             {
+                error!(provider = %name, provider_type = %provider_type, "Provider missing API key");
                 return Err(AetherError::InvalidConfig(format!(
                     "Provider '{}' requires an API key",
                     name
@@ -462,6 +507,7 @@ impl Config {
 
             // Validate timeout
             if provider.timeout_seconds == 0 {
+                error!(provider = %name, "Provider timeout is zero");
                 return Err(AetherError::InvalidConfig(format!(
                     "Provider '{}' timeout must be greater than 0",
                     name
@@ -471,18 +517,31 @@ impl Config {
             // Validate temperature if specified
             if let Some(temp) = provider.temperature {
                 if !(0.0..=2.0).contains(&temp) {
+                    error!(provider = %name, temperature = temp, "Invalid temperature");
                     return Err(AetherError::InvalidConfig(format!(
                         "Provider '{}' temperature must be between 0.0 and 2.0, got {}",
                         name, temp
                     )));
                 }
             }
+
+            debug!(
+                provider = %name,
+                provider_type = %provider_type,
+                timeout_seconds = provider.timeout_seconds,
+                "Provider validated"
+            );
         }
 
         // Validate routing rules
         for (idx, rule) in self.rules.iter().enumerate() {
             // Check provider exists
             if !self.providers.contains_key(&rule.provider) {
+                error!(
+                    rule_index = idx + 1,
+                    provider = %rule.provider,
+                    "Rule references unknown provider"
+                );
                 return Err(AetherError::InvalidConfig(format!(
                     "Rule #{} references unknown provider '{}'",
                     idx + 1,
@@ -492,6 +551,12 @@ impl Config {
 
             // Validate regex pattern
             if let Err(e) = regex::Regex::new(&rule.regex) {
+                error!(
+                    rule_index = idx + 1,
+                    regex = %rule.regex,
+                    error = %e,
+                    "Invalid regex pattern"
+                );
                 return Err(AetherError::InvalidConfig(format!(
                     "Rule #{} has invalid regex '{}': {}",
                     idx + 1,
@@ -499,21 +564,43 @@ impl Config {
                     e
                 )));
             }
+
+            debug!(
+                rule_index = idx + 1,
+                provider = %rule.provider,
+                regex = %rule.regex,
+                "Routing rule validated"
+            );
         }
 
         // Validate memory config
         if self.memory.max_context_items == 0 {
+            error!("Memory max_context_items is zero");
             return Err(AetherError::InvalidConfig(
                 "memory.max_context_items must be greater than 0".to_string(),
             ));
         }
 
         if !(0.0..=1.0).contains(&self.memory.similarity_threshold) {
+            error!(threshold = self.memory.similarity_threshold, "Invalid similarity threshold");
             return Err(AetherError::InvalidConfig(format!(
                 "memory.similarity_threshold must be between 0.0 and 1.0, got {}",
                 self.memory.similarity_threshold
             )));
         }
+
+        debug!(
+            memory_enabled = self.memory.enabled,
+            max_context_items = self.memory.max_context_items,
+            similarity_threshold = self.memory.similarity_threshold,
+            "Memory config validated"
+        );
+
+        info!(
+            providers_count = self.providers.len(),
+            rules_count = self.rules.len(),
+            "Config validation completed successfully"
+        );
 
         Ok(())
     }
@@ -542,33 +629,52 @@ impl Config {
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let path = path.as_ref();
 
+        debug!(
+            path = %path.display(),
+            providers_count = self.providers.len(),
+            rules_count = self.rules.len(),
+            "Attempting to save config"
+        );
+
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
+                error!(directory = %parent.display(), error = %e, "Failed to create config directory");
                 AetherError::InvalidConfig(format!(
                     "Failed to create config directory {}: {}",
                     parent.display(),
                     e
                 ))
             })?;
+            debug!(directory = %parent.display(), "Config directory ensured");
         }
 
         // Serialize to TOML
         let contents = toml::to_string_pretty(self).map_err(|e| {
+            error!(error = %e, "Failed to serialize config to TOML");
             AetherError::InvalidConfig(format!("Failed to serialize config: {}", e))
         })?;
+
+        debug!(
+            size_bytes = contents.len(),
+            lines = contents.lines().count(),
+            "Config serialized to TOML"
+        );
 
         // Create temporary file in the same directory (atomic rename requirement)
         let temp_path = path.with_extension("tmp");
 
         // Write to temp file
         fs::write(&temp_path, &contents).map_err(|e| {
+            error!(temp_path = %temp_path.display(), error = %e, "Failed to write temp file");
             AetherError::InvalidConfig(format!(
                 "Failed to write temp config file {}: {}",
                 temp_path.display(),
                 e
             ))
         })?;
+
+        debug!(temp_path = %temp_path.display(), "Wrote config to temp file");
 
         // fsync the temp file to ensure data is on disk
         #[cfg(unix)]
@@ -577,6 +683,7 @@ impl Config {
                 .write(true)
                 .open(&temp_path)
                 .map_err(|e| {
+                    error!(temp_path = %temp_path.display(), error = %e, "Failed to open temp file for fsync");
                     AetherError::InvalidConfig(format!(
                         "Failed to open temp file for fsync: {}",
                         e
@@ -585,12 +692,21 @@ impl Config {
 
             // Sync file data and metadata
             file.sync_all().map_err(|e| {
+                error!(temp_path = %temp_path.display(), error = %e, "Failed to fsync temp file");
                 AetherError::InvalidConfig(format!("Failed to fsync temp file: {}", e))
             })?;
+
+            debug!(temp_path = %temp_path.display(), "Fsynced temp file to disk");
         }
 
         // Atomic rename (overwrites target if exists)
         fs::rename(&temp_path, path).map_err(|e| {
+            error!(
+                temp_path = %temp_path.display(),
+                target_path = %path.display(),
+                error = %e,
+                "Failed to atomically rename temp file"
+            );
             // Clean up temp file on error
             let _ = fs::remove_file(&temp_path);
             AetherError::InvalidConfig(format!(
@@ -600,7 +716,12 @@ impl Config {
             ))
         })?;
 
-        log::info!("Config atomically saved to {}", path.display());
+        info!(
+            path = %path.display(),
+            size_bytes = contents.len(),
+            "Config saved successfully with atomic write"
+        );
+
         Ok(())
     }
 

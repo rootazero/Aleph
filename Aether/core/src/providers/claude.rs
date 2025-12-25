@@ -55,6 +55,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tracing::{debug, error, info};
 
 /// Anthropic Claude API version
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -214,6 +215,13 @@ impl ClaudeProvider {
             .unwrap_or_else(|| "https://api.anthropic.com".to_string());
         let endpoint = format!("{}/v1/messages", base_url);
 
+        info!(
+            model = %config.model,
+            endpoint = %endpoint,
+            timeout_seconds = config.timeout_seconds,
+            "Claude provider initialized successfully"
+        );
+
         Ok(Self {
             client,
             config,
@@ -311,25 +319,43 @@ impl ClaudeProvider {
         if let Ok(error_response) = response.json::<ErrorResponse>().await {
             let error_msg = error_response.error.message;
 
-            return match status.as_u16() {
-                401 => AetherError::AuthenticationError(format!(
-                    "Invalid Claude API key: {}",
-                    error_msg
-                )),
-                429 => AetherError::RateLimitError(format!("Claude rate limit: {}", error_msg)),
-                529 => AetherError::ProviderError(format!("Claude overloaded: {}", error_msg)),
-                500..=599 => AetherError::ProviderError(format!(
-                    "Claude server error ({}): {}",
-                    status, error_msg
-                )),
-                _ => AetherError::ProviderError(format!(
-                    "Claude API error ({}): {}",
-                    status, error_msg
-                )),
+            let aether_error = match status.as_u16() {
+                401 => {
+                    error!(status = 401, error = %error_msg, "Claude authentication failed");
+                    AetherError::AuthenticationError(format!(
+                        "Invalid Claude API key: {}",
+                        error_msg
+                    ))
+                }
+                429 => {
+                    error!(status = 429, error = %error_msg, "Claude rate limit exceeded");
+                    AetherError::RateLimitError(format!("Claude rate limit: {}", error_msg))
+                }
+                529 => {
+                    error!(status = 529, error = %error_msg, "Claude service overloaded");
+                    AetherError::ProviderError(format!("Claude overloaded: {}", error_msg))
+                }
+                500..=599 => {
+                    error!(status = status.as_u16(), error = %error_msg, "Claude server error");
+                    AetherError::ProviderError(format!(
+                        "Claude server error ({}): {}",
+                        status, error_msg
+                    ))
+                }
+                _ => {
+                    error!(status = status.as_u16(), error = %error_msg, "Claude API error");
+                    AetherError::ProviderError(format!(
+                        "Claude API error ({}): {}",
+                        status, error_msg
+                    ))
+                }
             };
+
+            return aether_error;
         }
 
         // Fallback if we can't parse the error response
+        error!(status = status.as_u16(), "Claude request failed (unable to parse error response)");
         match status.as_u16() {
             401 => AetherError::AuthenticationError("Invalid Claude API key".to_string()),
             429 => AetherError::RateLimitError("Claude rate limit exceeded".to_string()),
@@ -343,6 +369,13 @@ impl ClaudeProvider {
 #[async_trait]
 impl AiProvider for ClaudeProvider {
     async fn process(&self, input: &str, system_prompt: Option<&str>) -> Result<String> {
+        debug!(
+            model = %self.config.model,
+            input_length = input.len(),
+            has_system_prompt = system_prompt.is_some(),
+            "Sending request to Claude"
+        );
+
         // Build request body
         let request_body = self.build_request(input, system_prompt);
 
@@ -361,21 +394,27 @@ impl AiProvider for ClaudeProvider {
             .await
             .map_err(|e| {
                 if e.is_timeout() {
+                    error!("Claude request timed out");
                     AetherError::Timeout
                 } else if e.is_connect() {
+                    error!(error = %e, "Failed to connect to Claude");
                     AetherError::NetworkError(format!("Failed to connect to Claude: {}", e))
                 } else {
+                    error!(error = %e, "Claude network error");
                     AetherError::NetworkError(format!("Network error: {}", e))
                 }
             })?;
 
         // Check status code
         if !response.status().is_success() {
+            let status = response.status();
+            debug!(status = %status, "Claude request failed");
             return Err(self.handle_error(response).await);
         }
 
         // Parse response
         let messages_response: MessagesResponse = response.json().await.map_err(|e| {
+            error!(error = %e, "Failed to parse Claude response");
             AetherError::ProviderError(format!("Failed to parse Claude response: {}", e))
         })?;
 
@@ -383,9 +422,17 @@ impl AiProvider for ClaudeProvider {
         let text = messages_response
             .content
             .first()
-            .ok_or_else(|| AetherError::ProviderError("No response from Claude".to_string()))?
+            .ok_or_else(|| {
+                error!("Claude returned no content");
+                AetherError::ProviderError("No response from Claude".to_string())
+            })?
             .text
             .clone();
+
+        info!(
+            response_length = text.len(),
+            "Claude request completed successfully"
+        );
 
         Ok(text)
     }
@@ -400,6 +447,15 @@ impl AiProvider for ClaudeProvider {
         let Some(image_data) = image else {
             return self.process(input, system_prompt).await;
         };
+
+        debug!(
+            model = %self.config.model,
+            input_length = input.len(),
+            image_size_mb = image_data.size_mb(),
+            image_format = ?image_data.format,
+            has_system_prompt = system_prompt.is_some(),
+            "Sending vision request to Claude"
+        );
 
         // Build vision request body
         let request_body = self.build_vision_request(input, image_data, system_prompt);
@@ -419,21 +475,27 @@ impl AiProvider for ClaudeProvider {
             .await
             .map_err(|e| {
                 if e.is_timeout() {
+                    error!("Claude vision request timed out");
                     AetherError::Timeout
                 } else if e.is_connect() {
+                    error!(error = %e, "Failed to connect to Claude");
                     AetherError::NetworkError(format!("Failed to connect to Claude: {}", e))
                 } else {
+                    error!(error = %e, "Claude network error");
                     AetherError::NetworkError(format!("Network error: {}", e))
                 }
             })?;
 
         // Check status code
         if !response.status().is_success() {
+            let status = response.status();
+            debug!(status = %status, "Claude vision request failed");
             return Err(self.handle_error(response).await);
         }
 
         // Parse response
         let messages_response: MessagesResponse = response.json().await.map_err(|e| {
+            error!(error = %e, "Failed to parse Claude vision response");
             AetherError::ProviderError(format!("Failed to parse Claude vision response: {}", e))
         })?;
 
@@ -441,9 +503,17 @@ impl AiProvider for ClaudeProvider {
         let text = messages_response
             .content
             .first()
-            .ok_or_else(|| AetherError::ProviderError("No response from Claude".to_string()))?
+            .ok_or_else(|| {
+                error!("Claude returned no content");
+                AetherError::ProviderError("No response from Claude".to_string())
+            })?
             .text
             .clone();
+
+        info!(
+            response_length = text.len(),
+            "Claude vision request completed successfully"
+        );
 
         Ok(text)
     }

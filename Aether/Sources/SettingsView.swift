@@ -59,7 +59,7 @@ struct SettingsView: View {
             Group {
                 switch selectedTab {
                 case .general:
-                    GeneralSettingsView(themeEngine: themeEngine)
+                    GeneralSettingsView(themeEngine: themeEngine, core: core)
                 case .providers:
                     if let core = core {
                         ProvidersView(core: core, keychainManager: keychainManager)
@@ -138,6 +138,8 @@ struct SettingsView: View {
 struct GeneralSettingsView: View {
     @ObservedObject var themeEngine: ThemeEngine
     @State private var soundEnabled = false
+    @State private var showingLogViewer = false
+    let core: AetherCore?
 
     // Dynamic version from Info.plist
     private var appVersion: String {
@@ -195,6 +197,14 @@ struct GeneralSettingsView: View {
                         .help("Check for Aether updates")
                     }
 
+                    Section(header: Text("Logs")) {
+                        Button("View Logs") {
+                            showingLogViewer = true
+                        }
+                        .help("View application logs")
+                        .disabled(core == nil)
+                    }
+
                     Section(header: Text("About")) {
                         HStack {
                             Text("Version:")
@@ -210,6 +220,11 @@ struct GeneralSettingsView: View {
             .padding(20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $showingLogViewer) {
+            if let core = core {
+                LogViewerView(core: core)
+            }
+        }
     }
 
     private func showComingSoonAlert(feature: String) {

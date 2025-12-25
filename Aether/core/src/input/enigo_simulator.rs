@@ -8,6 +8,7 @@ use crate::input::InputSimulator;
 use enigo::{Enigo, Key, Keyboard, Settings};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 
 /// Real input simulator using enigo
 ///
@@ -36,22 +37,26 @@ impl Default for EnigoSimulator {
 
 impl InputSimulator for EnigoSimulator {
     fn simulate_cut(&self) -> Result<()> {
+        debug!("Simulating cut operation (Cmd/Ctrl+X)");
         let mut enigo = Self::create_enigo()?;
 
         // Simulate Cmd+X (macOS) or Ctrl+X (Windows/Linux)
         #[cfg(target_os = "macos")]
         {
             enigo.key(Key::Meta, enigo::Direction::Press).map_err(|e| {
+                error!(error = ?e, "Failed to press Meta key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to press Meta key: {:?}", e),
                 }
             })?;
             enigo.key(Key::Unicode('x'), enigo::Direction::Click).map_err(|e| {
+                error!(error = ?e, "Failed to click x key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to click x key: {:?}", e),
                 }
             })?;
             enigo.key(Key::Meta, enigo::Direction::Release).map_err(|e| {
+                error!(error = ?e, "Failed to release Meta key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to release Meta key: {:?}", e),
                 }
@@ -61,42 +66,50 @@ impl InputSimulator for EnigoSimulator {
         #[cfg(not(target_os = "macos"))]
         {
             enigo.key(Key::Control, enigo::Direction::Press).map_err(|e| {
+                error!(error = ?e, "Failed to press Control key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to press Control key: {:?}", e),
                 }
             })?;
             enigo.key(Key::Unicode('x'), enigo::Direction::Click).map_err(|e| {
+                error!(error = ?e, "Failed to click x key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to click x key: {:?}", e),
                 }
             })?;
             enigo.key(Key::Control, enigo::Direction::Release).map_err(|e| {
+                error!(error = ?e, "Failed to release Control key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to release Control key: {:?}", e),
                 }
             })?;
         }
 
+        debug!("Cut operation completed successfully");
         Ok(())
     }
 
     fn simulate_paste(&self) -> Result<()> {
+        debug!("Simulating paste operation (Cmd/Ctrl+V)");
         let mut enigo = Self::create_enigo()?;
 
         // Simulate Cmd+V (macOS) or Ctrl+V (Windows/Linux)
         #[cfg(target_os = "macos")]
         {
             enigo.key(Key::Meta, enigo::Direction::Press).map_err(|e| {
+                error!(error = ?e, "Failed to press Meta key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to press Meta key: {:?}", e),
                 }
             })?;
             enigo.key(Key::Unicode('v'), enigo::Direction::Click).map_err(|e| {
+                error!(error = ?e, "Failed to click v key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to click v key: {:?}", e),
                 }
             })?;
             enigo.key(Key::Meta, enigo::Direction::Release).map_err(|e| {
+                error!(error = ?e, "Failed to release Meta key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to release Meta key: {:?}", e),
                 }
@@ -106,42 +119,50 @@ impl InputSimulator for EnigoSimulator {
         #[cfg(not(target_os = "macos"))]
         {
             enigo.key(Key::Control, enigo::Direction::Press).map_err(|e| {
+                error!(error = ?e, "Failed to press Control key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to press Control key: {:?}", e),
                 }
             })?;
             enigo.key(Key::Unicode('v'), enigo::Direction::Click).map_err(|e| {
+                error!(error = ?e, "Failed to click v key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to click v key: {:?}", e),
                 }
             })?;
             enigo.key(Key::Control, enigo::Direction::Release).map_err(|e| {
+                error!(error = ?e, "Failed to release Control key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to release Control key: {:?}", e),
                 }
             })?;
         }
 
+        debug!("Paste operation completed successfully");
         Ok(())
     }
 
     fn simulate_select_all(&self) -> Result<()> {
+        debug!("Simulating select all operation (Cmd/Ctrl+A)");
         let mut enigo = Self::create_enigo()?;
 
         // Simulate Cmd+A (macOS) or Ctrl+A (Windows/Linux)
         #[cfg(target_os = "macos")]
         {
             enigo.key(Key::Meta, enigo::Direction::Press).map_err(|e| {
+                error!(error = ?e, "Failed to press Meta key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to press Meta key: {:?}", e),
                 }
             })?;
             enigo.key(Key::Unicode('a'), enigo::Direction::Click).map_err(|e| {
+                error!(error = ?e, "Failed to click a key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to click a key: {:?}", e),
                 }
             })?;
             enigo.key(Key::Meta, enigo::Direction::Release).map_err(|e| {
+                error!(error = ?e, "Failed to release Meta key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to release Meta key: {:?}", e),
                 }
@@ -151,22 +172,26 @@ impl InputSimulator for EnigoSimulator {
         #[cfg(not(target_os = "macos"))]
         {
             enigo.key(Key::Control, enigo::Direction::Press).map_err(|e| {
+                error!(error = ?e, "Failed to press Control key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to press Control key: {:?}", e),
                 }
             })?;
             enigo.key(Key::Unicode('a'), enigo::Direction::Click).map_err(|e| {
+                error!(error = ?e, "Failed to click a key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to click a key: {:?}", e),
                 }
             })?;
             enigo.key(Key::Control, enigo::Direction::Release).map_err(|e| {
+                error!(error = ?e, "Failed to release Control key");
                 AetherError::InputSimulationError {
                     message: format!("Failed to release Control key: {:?}", e),
                 }
             })?;
         }
 
+        debug!("Select all operation completed successfully");
         Ok(())
     }
 
@@ -177,15 +202,38 @@ impl InputSimulator for EnigoSimulator {
         cancellation_token: CancellationToken,
     ) -> Result<()> {
         // Validate typing speed (10-200 cps recommended)
+        let original_speed = chars_per_second;
         let chars_per_second = chars_per_second.clamp(10, 200);
+
+        if original_speed != chars_per_second {
+            warn!(
+                original_speed = original_speed,
+                clamped_speed = chars_per_second,
+                "Typing speed clamped to valid range (10-200)"
+            );
+        }
+
+        let total_chars = text.chars().count();
+        info!(
+            chars_per_second = chars_per_second,
+            total_chars = total_chars,
+            estimated_duration_ms = (total_chars * 1000) / chars_per_second as usize,
+            "Starting typewriter animation"
+        );
 
         // Calculate delay between characters
         let delay_per_char = Duration::from_millis(1000 / chars_per_second as u64);
 
         // Type each character with delay
-        for ch in text.chars() {
+        for (index, ch) in text.chars().enumerate() {
             // Check cancellation before each character
             if cancellation_token.is_cancelled() {
+                warn!(
+                    typed_chars = index,
+                    total_chars = total_chars,
+                    progress_pct = (index * 100) / total_chars,
+                    "Typewriter animation cancelled by user"
+                );
                 return Ok(()); // Exit early on cancellation
             }
 
@@ -199,6 +247,7 @@ impl InputSimulator for EnigoSimulator {
                     '\n' => {
                         // Newline → Enter key
                         enigo.key(Key::Return, enigo::Direction::Click).map_err(|e| {
+                            error!(error = ?e, "Failed to click Return key");
                             AetherError::InputSimulationError {
                                 message: format!("Failed to click Return key: {:?}", e),
                             }
@@ -207,6 +256,7 @@ impl InputSimulator for EnigoSimulator {
                     '\t' => {
                         // Tab → Tab key
                         enigo.key(Key::Tab, enigo::Direction::Click).map_err(|e| {
+                            error!(error = ?e, "Failed to click Tab key");
                             AetherError::InputSimulationError {
                                 message: format!("Failed to click Tab key: {:?}", e),
                             }
@@ -215,6 +265,7 @@ impl InputSimulator for EnigoSimulator {
                     _ => {
                         // Regular character → Type using text method
                         enigo.text(&ch.to_string()).map_err(|e| {
+                            error!(error = ?e, char = %ch, "Failed to type character");
                             AetherError::InputSimulationError {
                                 message: format!("Failed to type character '{}': {:?}", ch, e),
                             }
@@ -228,6 +279,11 @@ impl InputSimulator for EnigoSimulator {
             tokio::time::sleep(delay_per_char).await;
         }
 
+        info!(
+            total_chars = total_chars,
+            chars_per_second = chars_per_second,
+            "Typewriter animation completed successfully"
+        );
         Ok(())
     }
 }

@@ -7,8 +7,10 @@ use crate::error::AetherError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::database::VectorDatabase;
 use crate::memory::embedding::EmbeddingModel;
+use crate::utils::pii::scrub_pii;
 use std::sync::Arc;
 use uuid::Uuid;
+use tracing::{debug, info};
 
 /// Memory ingestion service for storing new interactions
 #[derive(Clone)]
@@ -54,36 +56,59 @@ impl MemoryIngestion {
         user_input: &str,
         ai_output: &str,
     ) -> Result<String, AetherError> {
+        debug!(
+            app = %context.app_bundle_id,
+            window = %context.window_title,
+            input_len = user_input.len(),
+            output_len = ai_output.len(),
+            "Starting memory ingestion"
+        );
+
         // 1. Check if memory is enabled
         if !self.config.enabled {
+            debug!("Memory ingestion skipped: memory disabled");
             return Err(AetherError::config("Memory is disabled"));
         }
 
         // 2. Check if app is excluded
         if self.config.excluded_apps.contains(&context.app_bundle_id) {
+            debug!(app = %context.app_bundle_id, "Memory ingestion skipped: app excluded");
             return Err(AetherError::config(format!(
                 "App is excluded from memory: {}",
                 context.app_bundle_id
             )));
         }
 
-        // 3. Scrub PII from input and output
-        let scrubbed_input = Self::scrub_pii(user_input);
-        let scrubbed_output = Self::scrub_pii(ai_output);
+        // 3. Scrub PII from input and output (using shared utility)
+        let scrubbed_input = scrub_pii(user_input);
+        let scrubbed_output = scrub_pii(ai_output);
+
+        let pii_scrubbed = scrubbed_input != user_input || scrubbed_output != ai_output;
+        if pii_scrubbed {
+            debug!(
+                input_changed = scrubbed_input != user_input,
+                output_changed = scrubbed_output != ai_output,
+                "PII scrubbing applied to memory content"
+            );
+        }
 
         // 4. Generate embedding for concatenated text
         let combined_text = format!("{}\n\n{}", scrubbed_input, scrubbed_output);
+        debug!(combined_len = combined_text.len(), "Generating embedding for memory");
+
         let embedding = self
             .embedding_model
             .embed_text(&combined_text)
             .await
             .map_err(|e| AetherError::config(format!("Failed to generate embedding: {}", e)))?;
 
+        debug!(embedding_dim = embedding.len(), "Embedding generated successfully");
+
         // 5. Create memory entry
         let memory_id = Uuid::new_v4().to_string();
         let memory = MemoryEntry::with_embedding(
             memory_id.clone(),
-            context,
+            context.clone(),
             scrubbed_input,
             scrubbed_output,
             embedding,
@@ -95,47 +120,15 @@ impl MemoryIngestion {
             .await
             .map_err(|e| AetherError::config(format!("Failed to store memory: {}", e)))?;
 
+        info!(
+            memory_id = %memory_id,
+            app = %context.app_bundle_id,
+            window = %context.window_title,
+            pii_scrubbed = pii_scrubbed,
+            "Memory stored successfully"
+        );
+
         Ok(memory_id)
-    }
-
-    /// Scrub personally identifiable information from text
-    ///
-    /// Replaces PII patterns with placeholder tokens:
-    /// - Email addresses → [EMAIL]
-    /// - Phone numbers → [PHONE]
-    /// - SSN/Tax IDs → [SSN]
-    /// - Credit card numbers → [CREDIT_CARD]
-    ///
-    /// # Arguments
-    /// * `text` - Input text to scrub
-    ///
-    /// # Returns
-    /// * `String` - Scrubbed text with PII replaced
-    fn scrub_pii(text: &str) -> String {
-        use regex::Regex;
-
-        let mut scrubbed = text.to_string();
-
-        // Email addresses (RFC 5322 simplified)
-        let email_regex =
-            Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap();
-        scrubbed = email_regex.replace_all(&scrubbed, "[EMAIL]").to_string();
-
-        // Phone numbers (various formats)
-        // Matches: (123) 456-7890, 123-456-7890, 123.456.7890, 1234567890
-        let phone_regex =
-            Regex::new(r"\b(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b").unwrap();
-        scrubbed = phone_regex.replace_all(&scrubbed, "[PHONE]").to_string();
-
-        // SSN (Social Security Number)
-        let ssn_regex = Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap();
-        scrubbed = ssn_regex.replace_all(&scrubbed, "[SSN]").to_string();
-
-        // Credit card numbers (simple pattern: 4 groups of 4 digits)
-        let cc_regex = Regex::new(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b").unwrap();
-        scrubbed = cc_regex.replace_all(&scrubbed, "[CREDIT_CARD]").to_string();
-
-        scrubbed
     }
 }
 
@@ -262,54 +255,6 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("excluded"));
-    }
-
-    #[test]
-    fn test_scrub_pii_email() {
-        let text = "Contact me at john.doe@example.com or jane@test.org";
-        let scrubbed = MemoryIngestion::scrub_pii(text);
-        assert_eq!(scrubbed, "Contact me at [EMAIL] or [EMAIL]");
-    }
-
-    #[test]
-    fn test_scrub_pii_phone() {
-        let text = "Call me at 123-456-7890 or (987) 654-3210";
-        let scrubbed = MemoryIngestion::scrub_pii(text);
-        assert!(scrubbed.contains("[PHONE]"));
-        assert!(!scrubbed.contains("123-456-7890"));
-    }
-
-    #[test]
-    fn test_scrub_pii_ssn() {
-        let text = "My SSN is 123-45-6789";
-        let scrubbed = MemoryIngestion::scrub_pii(text);
-        assert_eq!(scrubbed, "My SSN is [SSN]");
-    }
-
-    #[test]
-    fn test_scrub_pii_credit_card() {
-        let text = "Card number: 1234-5678-9012-3456";
-        let scrubbed = MemoryIngestion::scrub_pii(text);
-        assert_eq!(scrubbed, "Card number: [CREDIT_CARD]");
-    }
-
-    #[test]
-    fn test_scrub_pii_multiple() {
-        let text = "Email: john@example.com, Phone: 123-456-7890, SSN: 123-45-6789";
-        let scrubbed = MemoryIngestion::scrub_pii(text);
-        assert!(scrubbed.contains("[EMAIL]"));
-        assert!(scrubbed.contains("[PHONE]"));
-        assert!(scrubbed.contains("[SSN]"));
-        assert!(!scrubbed.contains("john@example.com"));
-        assert!(!scrubbed.contains("123-456-7890"));
-        assert!(!scrubbed.contains("123-45-6789"));
-    }
-
-    #[test]
-    fn test_scrub_pii_no_pii() {
-        let text = "This text has no PII in it.";
-        let scrubbed = MemoryIngestion::scrub_pii(text);
-        assert_eq!(scrubbed, text);
     }
 
     #[tokio::test]

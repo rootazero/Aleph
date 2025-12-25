@@ -3,6 +3,7 @@ use super::{ClipboardManager, ImageData, ImageFormat};
 use crate::error::{AetherError, Result};
 use arboard::Clipboard;
 use std::borrow::Cow;
+use tracing::{debug, error, warn};
 
 /// Clipboard manager using the arboard crate
 ///
@@ -50,79 +51,126 @@ impl Default for ArboardManager {
 
 impl ClipboardManager for ArboardManager {
     fn read_text(&self) -> Result<String> {
-        let mut clipboard = Clipboard::new()
-            .map_err(|e| AetherError::clipboard(format!("Failed to access clipboard: {}", e)))?;
+        debug!("Attempting to read text from clipboard");
+        let mut clipboard = Clipboard::new().map_err(|e| {
+            error!(error = %e, "Failed to access clipboard");
+            AetherError::clipboard(format!("Failed to access clipboard: {}", e))
+        })?;
 
-        clipboard
-            .get_text()
-            .map_err(|e| AetherError::clipboard(format!("Failed to read clipboard text: {}", e)))
+        let text = clipboard.get_text().map_err(|e| {
+            error!(error = %e, "Failed to read clipboard text");
+            AetherError::clipboard(format!("Failed to read clipboard text: {}", e))
+        })?;
+
+        debug!(text_length = text.len(), "Successfully read text from clipboard");
+        Ok(text)
     }
 
     fn write_text(&self, content: &str) -> Result<()> {
-        let mut clipboard = Clipboard::new()
-            .map_err(|e| AetherError::clipboard(format!("Failed to access clipboard: {}", e)))?;
+        debug!(text_length = content.len(), "Attempting to write text to clipboard");
+        let mut clipboard = Clipboard::new().map_err(|e| {
+            error!(error = %e, "Failed to access clipboard");
+            AetherError::clipboard(format!("Failed to access clipboard: {}", e))
+        })?;
 
-        clipboard
-            .set_text(content)
-            .map_err(|e| AetherError::clipboard(format!("Failed to write clipboard text: {}", e)))
+        clipboard.set_text(content).map_err(|e| {
+            error!(error = %e, text_length = content.len(), "Failed to write clipboard text");
+            AetherError::clipboard(format!("Failed to write clipboard text: {}", e))
+        })?;
+
+        debug!(text_length = content.len(), "Successfully wrote text to clipboard");
+        Ok(())
     }
 
     fn has_image(&self) -> bool {
+        debug!("Checking if clipboard contains image");
         let mut clipboard = match Clipboard::new() {
             Ok(cb) => cb,
-            Err(_) => return false,
+            Err(e) => {
+                warn!(error = %e, "Failed to access clipboard for image check");
+                return false;
+            }
         };
 
         // Try to get image - if successful, there's an image
-        clipboard.get_image().is_ok()
+        let has_img = clipboard.get_image().is_ok();
+        debug!(has_image = has_img, "Clipboard image check complete");
+        has_img
     }
 
     fn read_image(&self) -> Result<Option<ImageData>> {
-        let mut clipboard = Clipboard::new()
-            .map_err(|e| AetherError::clipboard(format!("Failed to access clipboard: {}", e)))?;
+        debug!("Attempting to read image from clipboard");
+        let mut clipboard = Clipboard::new().map_err(|e| {
+            error!(error = %e, "Failed to access clipboard");
+            AetherError::clipboard(format!("Failed to access clipboard: {}", e))
+        })?;
 
         match clipboard.get_image() {
             Ok(img) => {
                 // Get raw bytes from arboard ImageData
                 let bytes = img.bytes.into_owned();
+                let bytes_len = bytes.len();
 
                 // Detect format from magic bytes
                 let format = Self::detect_format(&bytes).ok_or_else(|| {
+                    warn!(bytes_len = bytes_len, "Unsupported image format detected");
                     AetherError::clipboard(
                         "Unsupported image format. Please use PNG, JPEG, or GIF.".to_string(),
                     )
                 })?;
 
+                debug!(
+                    format = ?format,
+                    size_bytes = bytes_len,
+                    size_mb = bytes_len as f64 / (1024.0 * 1024.0),
+                    "Successfully read image from clipboard"
+                );
                 Ok(Some(ImageData::new(bytes, format)))
             }
             Err(arboard::Error::ContentNotAvailable) => {
+                debug!("No image content available in clipboard");
                 // No image in clipboard
                 Ok(None)
             }
-            Err(e) => Err(AetherError::clipboard(format!(
-                "Failed to read clipboard image: {}",
-                e
-            ))),
+            Err(e) => {
+                error!(error = %e, "Failed to read clipboard image");
+                Err(AetherError::clipboard(format!(
+                    "Failed to read clipboard image: {}",
+                    e
+                )))
+            }
         }
     }
 
     fn write_image(&self, image: ImageData) -> Result<()> {
-        let mut clipboard = Clipboard::new()
-            .map_err(|e| AetherError::clipboard(format!("Failed to access clipboard: {}", e)))?;
+        debug!(
+            format = ?image.format,
+            size_bytes = image.size_bytes(),
+            size_mb = image.size_mb(),
+            "Attempting to write image to clipboard"
+        );
+        let mut clipboard = Clipboard::new().map_err(|e| {
+            error!(error = %e, "Failed to access clipboard");
+            AetherError::clipboard(format!("Failed to access clipboard: {}", e))
+        })?;
 
         // Parse image to get dimensions
         let img_reader = image::io::Reader::new(std::io::Cursor::new(&image.data))
             .with_guessed_format()
             .map_err(|e| {
+                error!(error = %e, "Failed to detect image format");
                 AetherError::clipboard(format!("Failed to detect image format: {}", e))
             })?;
 
         let decoded = img_reader.decode().map_err(|e| {
+            error!(error = %e, "Failed to decode image");
             AetherError::clipboard(format!("Failed to decode image: {}", e))
         })?;
 
         let width = decoded.width() as usize;
         let height = decoded.height() as usize;
+
+        debug!(width = width, height = height, "Image decoded successfully");
 
         // Convert to RGBA for arboard (arboard expects RGBA format)
         let rgba_image = decoded.to_rgba8();
@@ -135,9 +183,18 @@ impl ClipboardManager for ArboardManager {
             bytes: Cow::Owned(rgba_bytes),
         };
 
-        clipboard
-            .set_image(arboard_img)
-            .map_err(|e| AetherError::clipboard(format!("Failed to write clipboard image: {}", e)))
+        clipboard.set_image(arboard_img).map_err(|e| {
+            error!(error = %e, width = width, height = height, "Failed to write clipboard image");
+            AetherError::clipboard(format!("Failed to write clipboard image: {}", e))
+        })?;
+
+        debug!(
+            width = width,
+            height = height,
+            format = ?image.format,
+            "Successfully wrote image to clipboard"
+        );
+        Ok(())
     }
 }
 

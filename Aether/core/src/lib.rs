@@ -76,9 +76,11 @@ mod error;
 mod event_handler;
 mod hotkey;
 pub mod input; // Make input module public for integration tests
+pub mod logging;
 pub mod memory;
 pub mod providers;
 pub mod router;
+pub mod utils;
 
 // Re-export public types
 pub use crate::clipboard::{ArboardManager, ClipboardManager, ImageData, ImageFormat};
@@ -91,9 +93,11 @@ pub use crate::error::{AetherError, AetherException, Result};
 pub use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 pub use crate::hotkey::{HotkeyListener, RdevListener};
 pub use crate::input::InputSimulator;
+pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer};
 pub use crate::memory::database::MemoryStats;
 pub use crate::providers::AiProvider;
 pub use crate::router::{Router, RoutingRule};
+pub use crate::utils::pii;
 
 // Test-only exports
 #[cfg(test)]
@@ -102,7 +106,15 @@ pub use crate::event_handler::MockEventHandler;
 /// Initialize the tracing subscriber for logging
 ///
 /// This function should be called once at application startup.
-/// It configures structured logging with environment-based filtering.
+/// It configures structured logging with environment-based filtering,
+/// daily log file rotation, and automatic PII scrubbing.
+///
+/// # Log Files
+///
+/// - Location: `~/.config/aether/logs/`
+/// - Format: `aether-YYYY-MM-DD.log`
+/// - Rotation: Daily
+/// - Privacy: All PII automatically scrubbed
 ///
 /// # Environment Variables
 ///
@@ -116,18 +128,25 @@ pub use crate::event_handler::MockEventHandler;
 /// init_logging();
 /// ```
 pub fn init_logging() {
-    use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+    // Use file-based logging with PII scrubbing
+    if let Err(e) = crate::logging::init_file_logging() {
+        eprintln!("Warning: Failed to initialize file logging: {}", e);
+        eprintln!("Falling back to console-only logging");
 
-    // Only initialize once
-    static INIT: std::sync::Once = std::sync::Once::new();
-    INIT.call_once(|| {
-        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        // Fallback to console-only logging
+        use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(fmt::layer().with_target(true))
-            .init();
-    });
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(|| {
+            let filter = EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info"));
+
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(fmt::layer().with_target(true))
+                .init();
+        });
+    }
 }
 
 // Include UniFFI scaffolding

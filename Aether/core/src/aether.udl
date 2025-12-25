@@ -17,6 +17,15 @@ enum ProcessingState {
   "Error"
 };
 
+// Log level enumeration (Phase 7.3 - Logging System)
+enum LogLevel {
+  "Error",     // Only errors
+  "Warn",      // Warnings and errors
+  "Info",      // Info, warnings, and errors (default)
+  "Debug",     // Debug and above (verbose)
+  "Trace"      // All logs (very verbose)
+};
+
 // Image format enumeration (Phase 7.1 - Image Clipboard Support)
 enum ImageFormat {
   "Png",
@@ -172,6 +181,19 @@ interface AetherCore {
   // Write image to clipboard
   [Throws=AetherException]
   void write_clipboard_image(ImageData image);
+
+  // LOGGING CONTROL METHODS (Phase 7.3 - Logging System)
+
+  // Get current log level
+  LogLevel get_log_level();
+
+  // Set log level dynamically
+  [Throws=AetherException]
+  void set_log_level(LogLevel level);
+
+  // Get log directory path
+  [Throws=AetherException]
+  string get_log_directory();
 };
 
 // Callback interface for events from Rust to client
@@ -243,6 +265,7 @@ callback interface KeychainManager {
 
 dictionary GeneralConfig {
   string? default_provider;
+  u32 log_retention_days;
 };
 
 dictionary MemoryConfig {

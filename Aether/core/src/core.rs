@@ -311,6 +311,49 @@ impl AetherCore {
         self.clipboard_manager.write_image(image)
     }
 
+    // ========================================
+    // LOGGING CONTROL METHODS (Phase 7.3)
+    // ========================================
+
+    /// Get the current log level
+    ///
+    /// Returns the currently configured log level for the application.
+    pub fn get_log_level(&self) -> crate::logging::LogLevel {
+        crate::logging::get_log_level()
+    }
+
+    /// Set the log level dynamically
+    ///
+    /// Changes the global log level at runtime. This affects all new log messages
+    /// but does not retroactively filter existing logs.
+    ///
+    /// # Arguments
+    /// * `level` - The new log level to set
+    ///
+    /// # Example
+    /// ```no_run
+    /// core.set_log_level(LogLevel::Debug)?;
+    /// ```
+    pub fn set_log_level(&self, level: crate::logging::LogLevel) -> Result<()> {
+        crate::logging::set_log_level(level);
+        Ok(())
+    }
+
+    /// Get the log directory path
+    ///
+    /// Returns the absolute path to the directory where log files are stored.
+    /// On macOS/Linux, this is typically `~/.config/aether/logs/`
+    ///
+    /// # Returns
+    /// * `Ok(String)` - Absolute path to log directory
+    /// * `Err(AetherError)` - Failed to determine log directory
+    pub fn get_log_directory(&self) -> Result<String> {
+        let log_dir = crate::logging::get_log_directory()
+            .map_err(|e| AetherError::config(format!("Failed to get log directory: {}", e)))?;
+
+        Ok(log_dir.to_string_lossy().to_string())
+    }
+
     /// Check if currently listening for hotkeys
     pub fn is_listening(&self) -> bool {
         self.hotkey_listener.is_listening()

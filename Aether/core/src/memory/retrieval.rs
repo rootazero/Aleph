@@ -8,6 +8,7 @@ use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::database::VectorDatabase;
 use crate::memory::embedding::EmbeddingModel;
 use std::sync::Arc;
+use tracing::{debug, info, warn};
 
 /// Memory retrieval service for searching past interactions
 #[derive(Clone)]
@@ -51,15 +52,28 @@ impl MemoryRetrieval {
         context: &ContextAnchor,
         query: &str,
     ) -> Result<Vec<MemoryEntry>, AetherError> {
+        debug!(
+            app = %context.app_bundle_id,
+            window = %context.window_title,
+            query_len = query.len(),
+            max_items = self.config.max_context_items,
+            "Starting memory retrieval"
+        );
+
         // 1. Check if memory is enabled
         if !self.config.enabled {
+            debug!("Memory retrieval skipped: memory disabled");
             return Ok(Vec::new());
         }
 
         // 2. Generate query embedding
+        debug!("Generating query embedding");
         let query_embedding = self.embedding_model.embed_text(query).await.map_err(|e| {
+            warn!(error = %e, "Failed to generate query embedding");
             AetherError::config(format!("Failed to generate query embedding: {}", e))
         })?;
+
+        debug!(embedding_dim = query_embedding.len(), "Query embedding generated");
 
         // 3. Search database with context filter
         let mut memories = self
@@ -72,8 +86,32 @@ impl MemoryRetrieval {
             )
             .await?;
 
+        debug!(
+            memories_found = memories.len(),
+            "Database search completed"
+        );
+
         // 4. Filter by similarity threshold
+        let original_count = memories.len();
         memories.retain(|m| m.similarity_score.unwrap_or(0.0) >= self.config.similarity_threshold);
+
+        let filtered_count = memories.len();
+        if filtered_count < original_count {
+            debug!(
+                original_count = original_count,
+                filtered_count = filtered_count,
+                threshold = self.config.similarity_threshold,
+                "Filtered memories by similarity threshold"
+            );
+        }
+
+        info!(
+            app = %context.app_bundle_id,
+            window = %context.window_title,
+            memories_count = filtered_count,
+            threshold = self.config.similarity_threshold,
+            "Memory retrieval completed"
+        );
 
         // 5. Results are already sorted by similarity (descending) from database
         Ok(memories)
