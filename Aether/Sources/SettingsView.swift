@@ -12,6 +12,7 @@ enum SettingsTab {
     case providers
     case routing
     case shortcuts
+    case behavior
     case memory
 }
 
@@ -44,6 +45,9 @@ struct SettingsView: View {
                 Label("Shortcuts", systemImage: "command")
                     .tag(SettingsTab.shortcuts)
 
+                Label("Behavior", systemImage: "slider.horizontal.3")
+                    .tag(SettingsTab.behavior)
+
                 Label("Memory", systemImage: "brain")
                     .tag(SettingsTab.memory)
             }
@@ -73,6 +77,8 @@ struct SettingsView: View {
                     }
                 case .shortcuts:
                     ShortcutsView()
+                case .behavior:
+                    BehaviorSettingsView(core: core)
                 case .memory:
                     if let core = core {
                         MemoryView(core: core)
