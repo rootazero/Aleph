@@ -12,6 +12,7 @@ enum ProcessingState {
   "RetrievingMemory",    // Phase 7 - Task 7.5: Retrieving memories from database
   "ProcessingWithAI",    // Phase 7 - Task 7.5: AI provider is processing the request
   "Processing",          // Generic processing (kept for backward compatibility)
+  "Typewriting",         // Phase 7.2: Typewriter animation in progress
   "Success",
   "Error"
 };
@@ -207,6 +208,13 @@ callback interface AetherEventHandler {
   // CONFIG HOT-RELOAD CALLBACK (Phase 6 - Task 6.1)
   // Called when config file changes externally
   void on_config_changed();
+
+  // TYPEWRITER CALLBACKS (Phase 7.2 - Typewriter Output)
+  // Called during typewriter animation with progress percentage (0.0-1.0)
+  void on_typewriter_progress(f32 percent);
+
+  // Called when typewriter animation is cancelled (Escape key or new hotkey)
+  void on_typewriter_cancelled();
 };
 
 // Keychain manager for secure API key storage (Phase 6 - Task 1.2)

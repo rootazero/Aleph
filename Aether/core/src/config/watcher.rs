@@ -85,11 +85,12 @@ impl ConfigWatcher {
         }
     }
 
-    /// Create a new config watcher for a custom path
+    /// Create a new config watcher for a custom path (test only)
     ///
     /// # Arguments
     /// * `config_path` - Path to config file to watch
     /// * `callback` - Function to call when config changes
+    #[cfg(test)]
     pub fn new_with_path<F>(config_path: PathBuf, callback: F) -> Self
     where
         F: Fn(Result<Config>) + Send + Sync + 'static,
@@ -206,7 +207,8 @@ impl ConfigWatcher {
         Ok(())
     }
 
-    /// Check if the watcher is currently running
+    /// Check if the watcher is currently running (test only)
+    #[cfg(test)]
     pub fn is_running(&self) -> bool {
         self.debouncer.lock().unwrap().is_some()
     }
@@ -262,8 +264,6 @@ mod tests {
 
     #[test]
     fn test_watcher_file_change_detection() {
-        use std::fs;
-
         // Create temporary config file
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path().to_path_buf();

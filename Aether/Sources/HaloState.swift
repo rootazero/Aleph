@@ -13,6 +13,7 @@ enum HaloState: Equatable {
     case retrievingMemory  // Phase 9: Retrieving memories from database
     case processingWithAI(providerColor: Color, providerName: String?)  // Phase 9: AI provider is processing
     case processing(providerColor: Color, streamingText: String? = nil)  // Generic processing (backward compatibility)
+    case typewriting(progress: Float)  // Phase 7.2: Typewriter animation in progress
     case success(finalText: String? = nil)
     case error(type: ErrorType, message: String)
 
@@ -29,6 +30,8 @@ enum HaloState: Equatable {
             return color1 == color2 && name1 == name2
         case (.processing(let color1, let text1), .processing(let color2, let text2)):
             return color1 == color2 && text1 == text2
+        case (.typewriting(let progress1), .typewriting(let progress2)):
+            return progress1 == progress2
         case (.success(let text1), .success(let text2)):
             return text1 == text2
         case (.error(let type1, let msg1), .error(let type2, let msg2)):

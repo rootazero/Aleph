@@ -80,6 +80,10 @@ protocol HaloTheme {
     ///   - streamingText: Optional text to display during processing
     @ViewBuilder func processingView(providerColor: Color?, streamingText: String?) -> AnyView
 
+    /// View rendered during typewriter animation (Phase 7.2)
+    /// - Parameter progress: Progress value from 0.0 to 1.0
+    @ViewBuilder func typewritingView(progress: Float) -> AnyView
+
     /// View rendered during success state
     /// - Parameter finalText: Optional final text to display
     @ViewBuilder func successView(finalText: String?) -> AnyView
@@ -162,6 +166,64 @@ extension HaloTheme {
                         .foregroundColor(textColor)
                 }
             }
+        )
+    }
+
+    // Default implementation for typewriter view (Phase 7.2)
+    func typewritingView(progress: Float) -> AnyView {
+        AnyView(
+            VStack(spacing: 12) {
+                // Keyboard icon
+                Image(systemName: "keyboard")
+                    .font(.system(size: 28))
+                    .foregroundColor(.blue)
+                    .accessibilityHidden(true) // Icon is decorative
+
+                // Progress bar
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        // Background track
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.gray.opacity(0.2))
+                            .frame(height: 6)
+
+                        // Progress fill
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(
+                                LinearGradient(
+                                    colors: [.blue, .purple],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: geometry.size.width * CGFloat(progress), height: 6)
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Typewriter progress")
+                    .accessibilityValue("\(Int(progress * 100)) percent")
+                    .accessibilityAddTraits(.updatesFrequently)
+                }
+                .frame(height: 6)
+                .padding(.horizontal, 20)
+
+                // Progress percentage
+                Text("\(Int(progress * 100))%")
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundColor(textColor)
+                    .accessibilityHidden(true) // Redundant with progress bar value
+
+                // Hint text
+                Text("Press ESC to skip")
+                    .font(.system(size: 10))
+                    .foregroundColor(.gray)
+                    .accessibilityLabel("Press Escape key to skip typewriter animation")
+                    .accessibilityAddTraits(.isStaticText)
+            }
+            .padding()
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Typewriter animation")
+            .accessibilityValue("\(Int(progress * 100)) percent complete")
+            .accessibilityHint("AI response is being typed character by character. Press Escape to paste remaining text instantly.")
         )
     }
 }

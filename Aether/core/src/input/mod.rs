@@ -3,6 +3,10 @@
 /// This module will contain keyboard/mouse simulation using enigo.
 /// Phase 1: Trait definition only, no implementation.
 use crate::error::Result;
+use tokio_util::sync::CancellationToken;
+
+mod enigo_simulator;
+pub use enigo_simulator::EnigoSimulator;
 
 /// Trait for simulating keyboard input
 ///
@@ -23,6 +27,27 @@ pub trait InputSimulator: Send + Sync {
     ///
     /// TODO: Implement in Phase 2 using enigo
     fn simulate_select_all(&self) -> Result<()>;
+
+    /// Type a string character-by-character with animation effect
+    ///
+    /// This method simulates typing by sending individual character keypresses
+    /// at a controlled rate. It supports cancellation to allow users to skip
+    /// the animation.
+    ///
+    /// # Arguments
+    /// * `text` - The text to type
+    /// * `chars_per_second` - Typing speed (10-200 recommended)
+    /// * `cancellation_token` - Token to cancel the animation early
+    ///
+    /// # Returns
+    /// * `Ok(())` if typing completed or was cancelled
+    /// * `Err` if keyboard simulation fails
+    fn type_string_animated(
+        &self,
+        text: &str,
+        chars_per_second: u32,
+        cancellation_token: CancellationToken,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
 
 /// Placeholder input simulator for Phase 1
@@ -59,6 +84,16 @@ impl InputSimulator for PlaceholderSimulator {
 
     fn simulate_select_all(&self) -> Result<()> {
         // TODO: Phase 2 - implement with enigo
+        Ok(())
+    }
+
+    async fn type_string_animated(
+        &self,
+        _text: &str,
+        _chars_per_second: u32,
+        _cancellation_token: CancellationToken,
+    ) -> Result<()> {
+        // TODO: Phase 7.2 - implement with enigo
         Ok(())
     }
 }

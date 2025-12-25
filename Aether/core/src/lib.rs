@@ -75,7 +75,7 @@ mod core;
 mod error;
 mod event_handler;
 mod hotkey;
-mod input;
+pub mod input; // Make input module public for integration tests
 pub mod memory;
 pub mod providers;
 pub mod router;

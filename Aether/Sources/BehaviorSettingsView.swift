@@ -280,18 +280,37 @@ struct BehaviorSettingsView: View {
             return
         }
 
-        // TODO: Implement behavior config update via Rust core
-        // For now, just show confirmation
-        print("Saving behavior settings:")
-        print("  Input Mode: \(inputMode.rawValue)")
-        print("  Output Mode: \(outputMode.rawValue)")
-        print("  Typing Speed: \(Int(typingSpeed))")
-        print("  PII Scrubbing: \(piiScrubbingEnabled)")
-        print("  PII Types: \(piiTypes.map { $0.rawValue })")
+        Task {
+            do {
+                // Create BehaviorConfig from current settings
+                let behaviorConfig = BehaviorConfig(
+                    inputMode: inputMode.rawValue,
+                    outputMode: outputMode.rawValue,
+                    typingSpeed: UInt32(typingSpeed),
+                    piiScrubbingEnabled: piiScrubbingEnabled
+                )
 
-        showingSaveConfirmation = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            showingSaveConfirmation = false
+                // Update via Rust core
+                try core.updateBehavior(behavior: behaviorConfig)
+
+                print("Behavior settings saved successfully:")
+                print("  Input Mode: \(inputMode.rawValue)")
+                print("  Output Mode: \(outputMode.rawValue)")
+                print("  Typing Speed: \(Int(typingSpeed))")
+                print("  PII Scrubbing: \(piiScrubbingEnabled)")
+
+                await MainActor.run {
+                    showingSaveConfirmation = true
+                }
+
+                try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+
+                await MainActor.run {
+                    showingSaveConfirmation = false
+                }
+            } catch {
+                print("Failed to save behavior settings: \(error)")
+            }
         }
     }
 }

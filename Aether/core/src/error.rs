@@ -15,6 +15,10 @@ pub enum AetherError {
     #[error("Clipboard error: {0}")]
     ClipboardError(String),
 
+    /// Error occurred during input simulation (keyboard/mouse)
+    #[error("Input simulation error: {message}")]
+    InputSimulationError { message: String },
+
     /// Error occurred when invoking FFI callbacks
     #[error("FFI callback error: {0}")]
     CallbackError(String),
@@ -69,6 +73,13 @@ impl AetherError {
     /// Create a clipboard error with a message
     pub fn clipboard<S: Into<String>>(msg: S) -> Self {
         AetherError::ClipboardError(msg.into())
+    }
+
+    /// Create an input simulation error with a message
+    pub fn input_simulation<S: Into<String>>(msg: S) -> Self {
+        AetherError::InputSimulationError {
+            message: msg.into(),
+        }
     }
 
     /// Create a callback error with a message
@@ -176,6 +187,12 @@ impl AetherError {
                 format!(
                     "Clipboard error: {}. Please check your system permissions.",
                     msg
+                )
+            }
+            AetherError::InputSimulationError { message } => {
+                format!(
+                    "Input simulation error: {}. Please check accessibility permissions.",
+                    message
                 )
             }
             AetherError::ConfigError(msg) => {

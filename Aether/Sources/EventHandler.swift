@@ -22,8 +22,16 @@ class EventHandler: AetherEventHandler {
     // Last update time for debouncing
     private var lastUpdateTime: Date = Date()
 
+    // Escape key monitor for cancelling typewriter
+    private var escapeKeyMonitor: Any?
+
     init(haloWindow: HaloWindow?) {
         self.haloWindow = haloWindow
+        setupEscapeKeyMonitor()
+    }
+
+    deinit {
+        removeEscapeKeyMonitor()
     }
 
     // Set AetherCore reference after initialization
@@ -130,6 +138,51 @@ class EventHandler: AetherEventHandler {
         }
     }
 
+    // Provider Fallback Callback
+    func onProviderFallback(fromProvider: String, toProvider: String) {
+        print("[EventHandler] Provider fallback: \(fromProvider) -> \(toProvider)")
+
+        DispatchQueue.main.async {
+            // Show subtle notification about fallback
+            let notification = NSUserNotification()
+            notification.title = "Aether"
+            notification.informativeText = "Switched from \(fromProvider) to \(toProvider)"
+            notification.soundName = nil
+            NSUserNotificationCenter.default.deliver(notification)
+        }
+    }
+
+    // Typewriter Progress Callback
+    func onTypewriterProgress(percent: Float) {
+        print("[EventHandler] Typewriter progress: \(Int(percent * 100))%")
+
+        DispatchQueue.main.async { [weak self] in
+            // Update Halo with typewriter progress
+            self?.haloWindow?.updateTypewriterProgress(percent)
+
+            // Announce progress milestones to VoiceOver (every 25%)
+            let progress = Int(percent * 100)
+            if progress % 25 == 0 && progress > 0 {
+                self?.announceToVoiceOver("Typewriter \(progress) percent complete")
+            }
+        }
+    }
+
+    // Typewriter Cancelled Callback
+    func onTypewriterCancelled() {
+        print("[EventHandler] Typewriter cancelled by user")
+
+        DispatchQueue.main.async { [weak self] in
+            // Show brief notification or just hide progress
+            self?.haloWindow?.updateState(.success(finalText: nil))
+
+            // Auto-hide after 1 second
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self?.haloWindow?.hide()
+            }
+        }
+    }
+
     // MARK: - State Change Handling
 
     private func handleStateChange(_ state: ProcessingState) {
@@ -143,23 +196,29 @@ class EventHandler: AetherEventHandler {
             haloWindow?.updateState(.listening)
             // Reset accumulated text when starting new interaction
             accumulatedText = ""
+            announceToVoiceOver("Listening for input")
 
         case .retrievingMemory:
             haloWindow?.updateState(.retrievingMemory)
+            announceToVoiceOver("Retrieving memories")
 
         case .processingWithAi:
             // This state will be updated with provider details via onAiProcessingStarted callback
             haloWindow?.updateState(.processing(providerColor: .blue, streamingText: nil))
+            announceToVoiceOver("Processing with AI")
 
         case .processing:
             haloWindow?.updateState(.processing(providerColor: .green, streamingText: nil))
+            announceToVoiceOver("Processing request")
 
         case .success:
             // Show final accumulated text
             if !accumulatedText.isEmpty {
                 haloWindow?.updateState(.success(finalText: accumulatedText))
+                announceToVoiceOver("Request completed successfully")
             } else {
                 haloWindow?.updateState(.success(finalText: nil))
+                announceToVoiceOver("Success")
             }
             // Auto-hide after 2 seconds
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
@@ -169,10 +228,16 @@ class EventHandler: AetherEventHandler {
         case .error:
             // Use typed error if available, otherwise show generic error
             haloWindow?.updateState(.error(type: .unknown, message: "An error occurred"))
+            announceToVoiceOver("Error occurred")
             // Auto-hide after 2 seconds
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                 self?.haloWindow?.hide()
             }
+
+        case .typewriting:
+            // Show typewriter state with progress
+            haloWindow?.updateState(.typewriting(progress: 0.0))
+            announceToVoiceOver("Typewriter animation started. Press Escape to skip.")
         }
     }
 
@@ -316,5 +381,67 @@ class EventHandler: AetherEventHandler {
         notification.soundName = nil // Silent notification
 
         NSUserNotificationCenter.default.deliver(notification)
+    }
+
+    // MARK: - Escape Key Monitoring
+
+    /// Setup global Escape key monitor to cancel typewriter
+    private func setupEscapeKeyMonitor() {
+        escapeKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            // Check if Escape key was pressed (keyCode 53)
+            if event.keyCode == 53 {
+                self?.handleEscapeKey()
+                // Return nil to consume the event (prevent default behavior)
+                // Return event to allow it to propagate
+                return event
+            }
+            return event
+        }
+        print("[EventHandler] Escape key monitor installed")
+    }
+
+    /// Remove Escape key monitor
+    private func removeEscapeKeyMonitor() {
+        if let monitor = escapeKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            escapeKeyMonitor = nil
+            print("[EventHandler] Escape key monitor removed")
+        }
+    }
+
+    /// Handle Escape key press
+    private func handleEscapeKey() {
+        guard let core = core else {
+            print("[EventHandler] Cannot cancel typewriter: core not available")
+            return
+        }
+
+        // Check if typewriter is currently running
+        if core.isTypewriting() {
+            print("[EventHandler] Escape pressed, cancelling typewriter...")
+            let cancelled = core.cancelTypewriter()
+            if cancelled {
+                print("[EventHandler] Typewriter cancelled successfully")
+                announceToVoiceOver("Typewriter animation cancelled")
+            }
+        } else {
+            print("[EventHandler] Escape pressed but no typewriter animation is running")
+        }
+    }
+
+    // MARK: - VoiceOver Support
+
+    /// Announce message to VoiceOver users
+    /// - Parameter message: The message to announce
+    private func announceToVoiceOver(_ message: String) {
+        #if os(macOS)
+        // Use NSAccessibility to post announcement
+        NSAccessibility.post(
+            element: NSApp.mainWindow ?? NSApp,
+            notification: .announcementRequested,
+            userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.high.rawValue]
+        )
+        #endif
+        print("[EventHandler] VoiceOver announcement: \(message)")
     }
 }

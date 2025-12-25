@@ -38,6 +38,10 @@ struct HaloView: View {
                 theme.processingView(providerColor: providerColor, streamingText: streamingText)
                     .transition(.scale.combined(with: .opacity))
 
+            case .typewriting(let progress):
+                theme.typewritingView(progress: progress)
+                    .transition(.scale.combined(with: .opacity))
+
             case .success(let finalText):
                 theme.successView(finalText: finalText)
                     .transition(.scale.combined(with: .opacity))
@@ -56,6 +60,65 @@ struct HaloView: View {
         .frame(width: dynamicWidth, height: dynamicHeight)
         .animation(.spring(response: 0.4), value: state)
         .animation(.easeInOut(duration: 0.5), value: themeEngine.currentTheme)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(accessibilityLabelForState)
+        .accessibilityValue(accessibilityValueForState)
+        .accessibilityAddTraits(accessibilityTraitsForState)
+    }
+
+    // MARK: - Accessibility Support
+
+    /// Accessibility label describing current state
+    private var accessibilityLabelForState: String {
+        switch state {
+        case .idle:
+            return "Aether is idle"
+        case .listening:
+            return "Listening for input"
+        case .retrievingMemory:
+            return "Retrieving memories"
+        case .processingWithAI(_, let providerName):
+            if let name = providerName {
+                return "Processing with \(name)"
+            }
+            return "Processing with AI"
+        case .processing:
+            return "Processing request"
+        case .typewriting(let progress):
+            return "Typewriter animation in progress"
+        case .success:
+            return "Request completed successfully"
+        case .error(let type, _):
+            return "\(type.rawValue) error occurred"
+        }
+    }
+
+    /// Accessibility value for dynamic states
+    private var accessibilityValueForState: String? {
+        switch state {
+        case .typewriting(let progress):
+            return "\(Int(progress * 100)) percent complete"
+        case .processing(_, let text):
+            return text
+        case .success(let text):
+            return text
+        default:
+            return nil
+        }
+    }
+
+    /// Accessibility traits for state
+    private var accessibilityTraitsForState: AccessibilityTraits {
+        switch state {
+        case .typewriting:
+            return [.updatesFrequently]
+        case .processing, .retrievingMemory, .processingWithAI:
+            return [.updatesFrequently]
+        case .error:
+            return [.isStaticText]
+        default:
+            return []
+        }
     }
 
     // Dynamic sizing based on state
@@ -65,6 +128,8 @@ struct HaloView: View {
             return 120
         case .processing(_, let text), .success(let text):
             return text != nil ? 300 : 120
+        case .typewriting:
+            return 200
         case .error:
             return 300
         default:
@@ -78,6 +143,8 @@ struct HaloView: View {
             return 120
         case .processing(_, let text):
             return text != nil ? 200 : 120
+        case .typewriting:
+            return 120
         case .success(let text):
             return text != nil ? 150 : 120
         case .error:

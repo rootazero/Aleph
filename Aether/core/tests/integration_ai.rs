@@ -66,6 +66,14 @@ impl AetherEventHandler for TestEventHandler {
     fn on_ai_processing_started(&self, _provider_name: String, _provider_color: String) {}
 
     fn on_ai_response_received(&self, _response_preview: String) {}
+
+    fn on_provider_fallback(&self, _from_provider: String, _to_provider: String) {}
+
+    fn on_config_changed(&self) {}
+
+    fn on_typewriter_progress(&self, _percent: f32) {}
+
+    fn on_typewriter_cancelled(&self) {}
 }
 
 /// Create a test config with mock providers

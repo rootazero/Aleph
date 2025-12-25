@@ -6,12 +6,14 @@ use crate::config::{Config, ConfigWatcher, MemoryConfig};
 use crate::error::{AetherError, Result};
 use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 use crate::hotkey::{HotkeyListener, RdevListener};
+use crate::input::{EnigoSimulator, InputSimulator};
 use crate::memory::cleanup::CleanupService;
 use crate::memory::database::{MemoryStats, VectorDatabase};
 use crate::router::Router;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 /// Context for last request (used for retry)
@@ -37,6 +39,7 @@ pub struct AetherCore {
     event_handler: Arc<dyn AetherEventHandler>,
     hotkey_listener: Arc<dyn HotkeyListener>,
     clipboard_manager: Arc<dyn ClipboardManager>,
+    input_simulator: Arc<EnigoSimulator>,
     #[allow(dead_code)]
     runtime: Arc<Runtime>,
     last_request: Arc<Mutex<Option<RequestContext>>>,
@@ -49,8 +52,13 @@ pub struct AetherCore {
     cleanup_task_handle: Option<tokio::task::JoinHandle<()>>,
     // AI routing
     router: Option<Arc<Router>>,
-    // Config hot-reload
+    // Config hot-reload (must be kept alive for file watching)
+    #[allow(dead_code)]
     config_watcher: Option<ConfigWatcher>,
+    // Typewriter cancellation
+    cancellation_token: CancellationToken,
+    // Track if typewriter is currently active
+    is_typewriting: Arc<Mutex<bool>>,
 }
 
 impl AetherCore {
@@ -195,10 +203,14 @@ impl AetherCore {
             }
         };
 
+        // Create input simulator
+        let input_simulator: Arc<EnigoSimulator> = Arc::new(EnigoSimulator::new());
+
         Ok(Self {
             event_handler,
             hotkey_listener,
             clipboard_manager,
+            input_simulator,
             runtime: Arc::new(runtime),
             last_request: Arc::new(Mutex::new(None)),
             config,
@@ -208,6 +220,8 @@ impl AetherCore {
             cleanup_task_handle,
             router,
             config_watcher,
+            cancellation_token: CancellationToken::new(),
+            is_typewriting: Arc::new(Mutex::new(false)),
         })
     }
 
@@ -359,6 +373,31 @@ impl AetherCore {
     #[cfg(not(debug_assertions))]
     pub fn test_typed_error(&self, _error_type: ErrorType, _message: String) {
         // No-op in release mode
+    }
+
+    /// Cancel typewriter animation if currently running
+    ///
+    /// If typewriter animation is in progress, this will cancel it and paste
+    /// the remaining text instantly via clipboard.
+    ///
+    /// # Returns
+    /// * `true` if typewriter was cancelled
+    /// * `false` if no typewriter animation was running
+    pub fn cancel_typewriter(&self) -> bool {
+        let is_typing = *self.is_typewriting.lock().unwrap();
+
+        if is_typing {
+            info!("Cancelling typewriter animation");
+            self.cancellation_token.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Check if typewriter animation is currently running
+    pub fn is_typewriting(&self) -> bool {
+        *self.is_typewriting.lock().unwrap()
     }
 
     /// Retry the last failed request
@@ -950,7 +989,203 @@ impl AetherCore {
         };
         self.event_handler.on_ai_response_received(response_preview);
 
-        // Step 5: Store interaction asynchronously (non-blocking)
+        // Step 5: Output the response using configured mode (instant or typewriter)
+        let output_mode = {
+            let config = self.config.lock().unwrap();
+            config.behavior.as_ref().map(|b| b.output_mode.clone())
+        };
+
+        match output_mode.as_deref() {
+            Some("typewriter") => {
+                // Typewriter mode: character-by-character typing
+                let typing_speed = {
+                    let config = self.config.lock().unwrap();
+                    config.behavior.as_ref().map(|b| b.typing_speed).unwrap_or(50)
+                };
+
+                info!(
+                    typing_speed = typing_speed,
+                    response_length = response.len(),
+                    "Starting typewriter output"
+                );
+
+                // Notify UI that we're typing
+                self.event_handler.on_state_changed(ProcessingState::Typewriting);
+
+                // Mark typewriter as active
+                *self.is_typewriting.lock().unwrap() = true;
+
+                // Create a new cancellation token for this typing operation
+                // (reset from previous uses)
+                let typing_token = if self.cancellation_token.is_cancelled() {
+                    // Create new token if previous one was cancelled
+                    
+                    // Note: Can't replace self.cancellation_token directly due to ownership
+                    // Instead, we'll use a local token and check both
+                    CancellationToken::new()
+                } else {
+                    self.cancellation_token.clone()
+                };
+
+                // Type the response character by character with progress tracking
+                let response_clone = response.clone();
+                let handler = Arc::clone(&self.event_handler);
+                let total_chars = response.chars().count();
+                let clipboard_mgr = Arc::clone(&self.clipboard_manager);
+
+                let typing_result = self.runtime.block_on(async move {
+                    use std::time::Duration;
+                    use tokio::time::sleep;
+
+                    // Calculate delay per character
+                    let delay_per_char = Duration::from_millis(1000 / typing_speed as u64);
+                    let mut typed_chars = 0;
+
+                    // Type character by character with progress callbacks
+                    for (idx, ch) in response_clone.chars().enumerate() {
+                        // Check cancellation
+                        if typing_token.is_cancelled() {
+                            warn!("Typewriter cancelled at {} of {} chars", typed_chars, total_chars);
+
+                            // Paste remaining text instantly using spawn_blocking
+                            let remaining = response_clone.chars().skip(idx).collect::<String>();
+                            if !remaining.is_empty() {
+                                info!("Pasting remaining {} chars instantly", remaining.len());
+                                clipboard_mgr.write_text(&remaining)?;
+
+                                // Use spawn_blocking for paste operation
+                                // This runs in a dedicated blocking thread pool
+                                tokio::task::spawn_blocking(move || {
+                                    use enigo::Keyboard;
+                                    let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
+                                        .map_err(|e| AetherError::InputSimulationError {
+                                            message: format!("Failed to create Enigo: {:?}", e),
+                                        })?;
+
+                                    // Simulate Cmd+V (macOS) or Ctrl+V (Windows/Linux)
+                                    #[cfg(target_os = "macos")]
+                                    {
+                                        enigo.key(enigo::Key::Meta, enigo::Direction::Press)
+                                            .map_err(|e| AetherError::InputSimulationError {
+                                                message: format!("Failed to press Meta: {:?}", e),
+                                            })?;
+                                        enigo.key(enigo::Key::Unicode('v'), enigo::Direction::Click)
+                                            .map_err(|e| AetherError::InputSimulationError {
+                                                message: format!("Failed to click v: {:?}", e),
+                                            })?;
+                                        enigo.key(enigo::Key::Meta, enigo::Direction::Release)
+                                            .map_err(|e| AetherError::InputSimulationError {
+                                                message: format!("Failed to release Meta: {:?}", e),
+                                            })?;
+                                    }
+
+                                    #[cfg(not(target_os = "macos"))]
+                                    {
+                                        enigo.key(enigo::Key::Control, enigo::Direction::Press)
+                                            .map_err(|e| AetherError::InputSimulationError {
+                                                message: format!("Failed to press Ctrl: {:?}", e),
+                                            })?;
+                                        enigo.key(enigo::Key::Unicode('v'), enigo::Direction::Click)
+                                            .map_err(|e| AetherError::InputSimulationError {
+                                                message: format!("Failed to click v: {:?}", e),
+                                            })?;
+                                        enigo.key(enigo::Key::Control, enigo::Direction::Release)
+                                            .map_err(|e| AetherError::InputSimulationError {
+                                                message: format!("Failed to release Ctrl: {:?}", e),
+                                            })?;
+                                    }
+
+                                    Ok::<(), AetherError>(())
+                                })
+                                .await
+                                .map_err(|e| AetherError::InputSimulationError {
+                                    message: format!("Spawn blocking failed: {:?}", e),
+                                })??;
+                            }
+
+                            handler.on_typewriter_cancelled();
+                            return Ok::<(), AetherError>(());
+                        }
+
+                        // Type single character using spawn_blocking
+                        // This runs Enigo in a dedicated blocking thread pool, avoiding Send issues
+                        // Performance: spawn_blocking reuses threads, much faster than creating new threads
+                        tokio::task::spawn_blocking(move || {
+                            use enigo::Keyboard;
+                            let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
+                                .map_err(|e| AetherError::InputSimulationError {
+                                    message: format!("Failed to create Enigo: {:?}", e),
+                                })?;
+
+                            match ch {
+                                '\n' => {
+                                    enigo.key(enigo::Key::Return, enigo::Direction::Click)
+                                        .map_err(|e| AetherError::InputSimulationError {
+                                            message: format!("Failed to type newline: {:?}", e),
+                                        })?;
+                                }
+                                '\t' => {
+                                    enigo.key(enigo::Key::Tab, enigo::Direction::Click)
+                                        .map_err(|e| AetherError::InputSimulationError {
+                                            message: format!("Failed to type tab: {:?}", e),
+                                        })?;
+                                }
+                                _ => {
+                                    enigo.text(&ch.to_string())
+                                        .map_err(|e| AetherError::InputSimulationError {
+                                            message: format!("Failed to type char: {:?}", e),
+                                        })?;
+                                }
+                            }
+
+                            Ok::<(), AetherError>(())
+                        })
+                        .await
+                        .map_err(|e| AetherError::InputSimulationError {
+                            message: format!("Spawn blocking join failed: {:?}", e),
+                        })??;
+
+                        typed_chars += 1;
+
+                        // Send progress update every 10 chars or at completion
+                        if typed_chars % 10 == 0 || typed_chars == total_chars {
+                            let progress = typed_chars as f32 / total_chars as f32;
+                            handler.on_typewriter_progress(progress);
+                        }
+
+                        // Delay before next character
+                        sleep(delay_per_char).await;
+                    }
+
+                    // Send final 100% progress
+                    handler.on_typewriter_progress(1.0);
+                    Ok(())
+                });
+
+                // Mark typewriter as inactive
+                *self.is_typewriting.lock().unwrap() = false;
+
+                match typing_result {
+                    Ok(_) => {
+                        info!("Typewriter output completed successfully");
+                    }
+                    Err(e) => {
+                        warn!(error = ?e, "Typewriter output failed, falling back to instant paste");
+                        // Fallback to instant paste on error
+                        self.clipboard_manager.write_text(&response)?;
+                        self.input_simulator.simulate_paste()?;
+                    }
+                }
+            }
+            _ => {
+                // Instant mode (default): paste immediately
+                info!("Using instant paste mode");
+                self.clipboard_manager.write_text(&response)?;
+                self.input_simulator.simulate_paste()?;
+            }
+        }
+
+        // Step 6: Store interaction asynchronously (non-blocking)
         if self.memory_db.is_some() {
             let user_input = input.clone();
             let ai_output = response.clone();
@@ -1052,7 +1287,7 @@ impl AetherCore {
     /// Sends a test request to the provider to verify configuration.
     /// Returns a success message if the provider responds correctly.
     pub fn test_provider_connection(&self, provider_name: String) -> Result<String> {
-        use crate::providers::{create_provider, AiProvider};
+        use crate::providers::create_provider;
 
         // Get provider config
         let config = self.config.lock().unwrap();

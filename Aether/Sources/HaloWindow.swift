@@ -140,6 +140,12 @@ class HaloWindow: NSWindow {
         })
     }
 
+    /// Update typewriter progress (0.0-1.0)
+    func updateTypewriterProgress(_ progress: Float) {
+        // Update state with new progress value
+        haloView.state = .typewriting(progress: progress)
+    }
+
     // MARK: - Private Helpers
 
     private func getWindowSize() -> NSSize {
@@ -153,6 +159,10 @@ class HaloWindow: NSWindow {
                 height = text != nil ? 150 : 120
             }
             return NSSize(width: width, height: height)
+
+        case .typewriting:
+            // Typewriter state with progress bar
+            return NSSize(width: 200, height: 120)
 
         case .error:
             return NSSize(width: 300, height: 180)

@@ -17,6 +17,8 @@ pub enum ProcessingState {
     ProcessingWithAI,
     /// Processing AI request (kept for backward compatibility)
     Processing,
+    /// Typewriter animation in progress (Phase 7.2)
+    Typewriting,
     /// Operation completed successfully
     Success,
     /// Operation failed with error
@@ -72,6 +74,12 @@ pub trait AetherEventHandler: Send + Sync {
 
     /// Called when config file changes externally (Phase 6 - Task 6.1)
     fn on_config_changed(&self);
+
+    /// Called during typewriter animation with progress percentage (0.0-1.0) (Phase 7.2)
+    fn on_typewriter_progress(&self, percent: f32);
+
+    /// Called when typewriter animation is cancelled (Escape key or new hotkey) (Phase 7.2)
+    fn on_typewriter_cancelled(&self);
 }
 
 /// Mock event handler for testing
@@ -89,6 +97,8 @@ pub struct MockEventHandler {
     pub ai_responses: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     pub provider_fallbacks: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
     pub config_changes: std::sync::Arc<std::sync::Mutex<u32>>, // Count of config change events
+    pub typewriter_progress: std::sync::Arc<std::sync::Mutex<Vec<f32>>>, // Typewriter progress updates
+    pub typewriter_cancelled: std::sync::Arc<std::sync::Mutex<u32>>,     // Count of cancellations
 }
 
 #[cfg(test)]
@@ -105,6 +115,8 @@ impl MockEventHandler {
             ai_responses: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             provider_fallbacks: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             config_changes: std::sync::Arc::new(std::sync::Mutex::new(0)),
+            typewriter_progress: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            typewriter_cancelled: std::sync::Arc::new(std::sync::Mutex::new(0)),
         }
     }
 
@@ -146,6 +158,14 @@ impl MockEventHandler {
 
     pub fn get_config_change_count(&self) -> u32 {
         *self.config_changes.lock().unwrap()
+    }
+
+    pub fn get_typewriter_progress(&self) -> Vec<f32> {
+        self.typewriter_progress.lock().unwrap().clone()
+    }
+
+    pub fn get_typewriter_cancelled_count(&self) -> u32 {
+        *self.typewriter_cancelled.lock().unwrap()
     }
 }
 
@@ -198,6 +218,15 @@ impl AetherEventHandler for MockEventHandler {
 
     fn on_config_changed(&self) {
         let mut count = self.config_changes.lock().unwrap();
+        *count += 1;
+    }
+
+    fn on_typewriter_progress(&self, percent: f32) {
+        self.typewriter_progress.lock().unwrap().push(percent);
+    }
+
+    fn on_typewriter_cancelled(&self) {
+        let mut count = self.typewriter_cancelled.lock().unwrap();
         *count += 1;
     }
 }
