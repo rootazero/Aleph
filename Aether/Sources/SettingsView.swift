@@ -20,6 +20,7 @@ struct SettingsView: View {
     @ObservedObject var themeEngine: ThemeEngine
     let core: AetherCore?
     let keychainManager: KeychainManagerImpl
+    @State private var providers: [ProviderConfigEntry] = []
 
     init(themeEngine: ThemeEngine, core: AetherCore? = nil, keychainManager: KeychainManagerImpl? = nil) {
         self.themeEngine = themeEngine
@@ -63,7 +64,13 @@ struct SettingsView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 case .routing:
-                    RoutingView()
+                    if let core = core {
+                        RoutingView(core: core, providers: providers)
+                    } else {
+                        Text("Routing management requires AetherCore initialization")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 case .shortcuts:
                     ShortcutsView()
                 case .memory:
@@ -79,6 +86,24 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            loadProviders()
+        }
+    }
+
+    private func loadProviders() {
+        guard let core = core else { return }
+
+        Task {
+            do {
+                let config = try core.loadConfig()
+                await MainActor.run {
+                    providers = config.providers
+                }
+            } catch {
+                print("Failed to load providers: \(error)")
+            }
+        }
     }
 }
 
