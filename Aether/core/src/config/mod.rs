@@ -36,6 +36,12 @@ pub struct Config {
     /// Routing rules for smart AI provider selection (Phase 5)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<RoutingRuleConfig>,
+    /// Shortcuts configuration (Phase 6)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shortcuts: Option<ShortcutsConfig>,
+    /// Behavior configuration (Phase 6)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior: Option<BehaviorConfig>,
 }
 
 /// General configuration settings
@@ -142,8 +148,8 @@ impl From<Config> for FullConfig {
             memory: config.memory,
             providers,
             rules: config.rules,
-            shortcuts: None, // TODO: Add to Config
-            behavior: None,  // TODO: Add to Config
+            shortcuts: config.shortcuts,
+            behavior: config.behavior,
         }
     }
 }
@@ -321,6 +327,8 @@ impl Default for Config {
             memory: MemoryConfig::default(),
             providers: HashMap::new(),
             rules: Vec::new(),
+            shortcuts: Some(ShortcutsConfig::default()),
+            behavior: Some(BehaviorConfig::default()),
         }
     }
 }

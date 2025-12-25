@@ -2,7 +2,7 @@
 ///
 /// Orchestrates hotkey listening, clipboard management, and event callbacks.
 use crate::clipboard::{ArboardManager, ClipboardManager};
-use crate::config::{Config, MemoryConfig};
+use crate::config::{Config, ConfigWatcher, MemoryConfig};
 use crate::error::{AetherError, Result};
 use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 use crate::hotkey::{HotkeyListener, RdevListener};
@@ -49,6 +49,8 @@ pub struct AetherCore {
     cleanup_task_handle: Option<tokio::task::JoinHandle<()>>,
     // AI routing
     router: Option<Arc<Router>>,
+    // Config hot-reload
+    config_watcher: Option<ConfigWatcher>,
 }
 
 impl AetherCore {
@@ -155,6 +157,44 @@ impl AetherCore {
             }
         };
 
+        // Initialize config watcher for hot-reload
+        let config_watcher = {
+            let handler_clone = Arc::clone(&event_handler);
+            let config_clone = Arc::clone(&config);
+
+            let watcher = ConfigWatcher::new(move |config_result| {
+                match config_result {
+                    Ok(new_config) => {
+                        log::info!("Config file changed, reloading configuration");
+
+                        // Update config
+                        if let Ok(mut cfg) = config_clone.lock() {
+                            *cfg = new_config;
+                        }
+
+                        // Notify Swift via callback
+                        handler_clone.on_config_changed();
+                    }
+                    Err(e) => {
+                        log::error!("Failed to reload config: {}", e);
+                        handler_clone.on_error(format!("Config reload failed: {}", e));
+                    }
+                }
+            });
+
+            // Start watching config file
+            match watcher.start() {
+                Ok(_) => {
+                    log::info!("Config watcher started successfully");
+                    Some(watcher)
+                }
+                Err(e) => {
+                    log::warn!("Failed to start config watcher: {}", e);
+                    None
+                }
+            }
+        };
+
         Ok(Self {
             event_handler,
             hotkey_listener,
@@ -167,6 +207,7 @@ impl AetherCore {
             cleanup_service,
             cleanup_task_handle,
             router,
+            config_watcher,
         })
     }
 
@@ -951,17 +992,19 @@ impl AetherCore {
 
     /// Update shortcuts configuration
     pub fn update_shortcuts(&self, shortcuts: crate::config::ShortcutsConfig) -> Result<()> {
-        // TODO: Add shortcuts field to Config struct
-        // For now, just validate the input
-        log::info!("Shortcuts configuration update: {:?}", shortcuts);
+        let mut config = self.config.lock().unwrap();
+        config.shortcuts = Some(shortcuts);
+        config.save()?;
+        log::info!("Shortcuts configuration updated");
         Ok(())
     }
 
     /// Update behavior configuration
     pub fn update_behavior(&self, behavior: crate::config::BehaviorConfig) -> Result<()> {
-        // TODO: Add behavior field to Config struct
-        // For now, just validate the input
-        log::info!("Behavior configuration update: {:?}", behavior);
+        let mut config = self.config.lock().unwrap();
+        config.behavior = Some(behavior);
+        config.save()?;
+        log::info!("Behavior configuration updated");
         Ok(())
     }
 

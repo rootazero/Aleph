@@ -114,6 +114,22 @@ class EventHandler: AetherEventHandler {
         }
     }
 
+    // Config Hot-Reload Callback (Phase 6 - Section 6.2)
+    func onConfigChanged() {
+        print("[EventHandler] Config file changed externally")
+
+        DispatchQueue.main.async {
+            // Post notification to notify all observers
+            NotificationCenter.default.post(
+                name: NSNotification.Name("AetherConfigDidChange"),
+                object: nil
+            )
+
+            // Optional: Show toast notification to user
+            self.showConfigReloadedToast()
+        }
+    }
+
     // MARK: - State Change Handling
 
     private func handleStateChange(_ state: ProcessingState) {
@@ -287,5 +303,18 @@ class EventHandler: AetherEventHandler {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    // MARK: - Config Reload Notification
+
+    /// Show a subtle toast notification when config is reloaded
+    private func showConfigReloadedToast() {
+        // Using NSUserNotificationCenter for a non-intrusive toast
+        let notification = NSUserNotification()
+        notification.title = "Aether"
+        notification.informativeText = "Settings updated from file"
+        notification.soundName = nil // Silent notification
+
+        NSUserNotificationCenter.default.deliver(notification)
     }
 }

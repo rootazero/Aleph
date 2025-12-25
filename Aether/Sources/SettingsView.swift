@@ -22,6 +22,7 @@ struct SettingsView: View {
     let core: AetherCore?
     let keychainManager: KeychainManagerImpl
     @State private var providers: [ProviderConfigEntry] = []
+    @State private var configReloadTrigger: Int = 0 // Trigger to force UI refresh
 
     init(themeEngine: ThemeEngine, core: AetherCore? = nil, keychainManager: KeychainManagerImpl? = nil) {
         self.themeEngine = themeEngine
@@ -62,6 +63,7 @@ struct SettingsView: View {
                 case .providers:
                     if let core = core {
                         ProvidersView(core: core, keychainManager: keychainManager)
+                            .id(configReloadTrigger) // Force re-render on config change
                     } else {
                         Text("Provider management requires AetherCore initialization")
                             .foregroundColor(.secondary)
@@ -70,6 +72,7 @@ struct SettingsView: View {
                 case .routing:
                     if let core = core {
                         RoutingView(core: core, providers: providers)
+                            .id(configReloadTrigger) // Force re-render on config change
                     } else {
                         Text("Routing management requires AetherCore initialization")
                             .foregroundColor(.secondary)
@@ -79,6 +82,7 @@ struct SettingsView: View {
                     ShortcutsView()
                 case .behavior:
                     BehaviorSettingsView(core: core)
+                        .id(configReloadTrigger) // Force re-render on config change
                 case .memory:
                     if let core = core {
                         MemoryView(core: core)
@@ -95,6 +99,11 @@ struct SettingsView: View {
         .onAppear {
             loadProviders()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("AetherConfigDidChange"))) { _ in
+            // Config file changed externally, reload configuration
+            print("[SettingsView] Config change notification received, reloading...")
+            handleConfigChange()
+        }
     }
 
     private func loadProviders() {
@@ -110,6 +119,17 @@ struct SettingsView: View {
                 print("Failed to load providers: \(error)")
             }
         }
+    }
+
+    private func handleConfigChange() {
+        // Reload providers
+        loadProviders()
+
+        // Increment trigger to force UI refresh
+        configReloadTrigger += 1
+
+        // Optional: Show visual feedback
+        print("[SettingsView] Configuration reloaded from file")
     }
 }
 
