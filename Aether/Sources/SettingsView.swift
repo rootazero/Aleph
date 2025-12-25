@@ -139,6 +139,13 @@ struct GeneralSettingsView: View {
     @ObservedObject var themeEngine: ThemeEngine
     @State private var soundEnabled = false
 
+    // Dynamic version from Info.plist
+    private var appVersion: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown"
+        return "\(version) (Build \(build))"
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -183,15 +190,16 @@ struct GeneralSettingsView: View {
 
                     Section(header: Text("Updates")) {
                         Button("Check for Updates") {
-                            showComingSoonAlert(feature: "Auto-update")
+                            checkForUpdates()
                         }
+                        .help("Check for Aether updates")
                     }
 
                     Section(header: Text("About")) {
                         HStack {
                             Text("Version:")
                             Spacer()
-                            Text("0.1.0 (Phase 3)")
+                            Text(appVersion)
                                 .foregroundColor(.secondary)
                         }
                     }
@@ -211,6 +219,42 @@ struct GeneralSettingsView: View {
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    private func checkForUpdates() {
+        // TODO: Integrate Sparkle auto-update framework
+        // This is a placeholder implementation for Phase 6.1
+        //
+        // Full Sparkle integration requires:
+        // 1. Add Sparkle dependency to project.yml (SPM or framework)
+        // 2. Initialize SPUUpdater in AppDelegate
+        // 3. Set up appcast.xml feed (update manifest)
+        // 4. Configure code signing for updates
+        // 5. Set up update server infrastructure
+        //
+        // For now, show a simple alert with manual update instructions
+
+        let alert = NSAlert()
+        alert.messageText = "Check for Updates"
+        alert.informativeText = """
+        Current Version: \(appVersion)
+
+        To check for updates, please visit:
+        https://github.com/yourusername/aether/releases
+
+        Automatic updates will be available in a future release.
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Visit GitHub")
+
+        let response = alert.runModal()
+        if response == .alertSecondButtonReturn {
+            // Open GitHub releases page
+            if let url = URL(string: "https://github.com/yourusername/aether/releases") {
+                NSWorkspace.shared.open(url)
+            }
+        }
     }
 }
 
