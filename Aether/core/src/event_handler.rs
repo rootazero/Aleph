@@ -51,8 +51,8 @@ pub trait AetherEventHandler: Send + Sync {
     /// Called when a hotkey is detected with clipboard content
     fn on_hotkey_detected(&self, clipboard_content: String);
 
-    /// Called when an error occurs (legacy, will be deprecated)
-    fn on_error(&self, message: String);
+    /// Called when an error occurs
+    fn on_error(&self, message: String, suggestion: Option<String>);
 
     /// Called when AI response chunk arrives (for streaming display)
     fn on_response_chunk(&self, text: String);
@@ -179,7 +179,7 @@ impl AetherEventHandler for MockEventHandler {
         self.hotkey_events.lock().unwrap().push(clipboard_content);
     }
 
-    fn on_error(&self, message: String) {
+    fn on_error(&self, message: String, _suggestion: Option<String>) {
         self.errors.lock().unwrap().push(message);
     }
 
@@ -262,8 +262,8 @@ mod tests {
     #[test]
     fn test_mock_handler_errors() {
         let handler = MockEventHandler::new();
-        handler.on_error("error 1".to_string());
-        handler.on_error("error 2".to_string());
+        handler.on_error("error 1".to_string(), None);
+        handler.on_error("error 2".to_string(), Some("Try again".to_string()));
 
         let errors = handler.get_errors();
         assert_eq!(errors.len(), 2);

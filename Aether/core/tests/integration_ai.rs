@@ -265,7 +265,7 @@ async fn test_mock_provider_with_error() {
 
     let result = provider.process("Input", None).await;
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), AetherError::NetworkError(_)));
+    assert!(matches!(result.unwrap_err(), AetherError::NetworkError { .. }));
 }
 
 #[tokio::test]
@@ -276,7 +276,7 @@ async fn test_timeout_handling() {
 
     let result = provider.process("Input", None).await;
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), AetherError::Timeout));
+    assert!(matches!(result.unwrap_err(), AetherError::Timeout { .. }));
 }
 
 #[test]

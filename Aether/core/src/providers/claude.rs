@@ -178,23 +178,23 @@ impl ClaudeProvider {
         let api_key = config
             .api_key
             .as_ref()
-            .ok_or_else(|| AetherError::InvalidConfig("Claude API key is required".to_string()))?;
+            .ok_or_else(|| AetherError::invalid_config("Claude API key is required"))?;
 
         if api_key.is_empty() {
-            return Err(AetherError::InvalidConfig(
-                "Claude API key cannot be empty".to_string(),
+            return Err(AetherError::invalid_config(
+                "Claude API key cannot be empty",
             ));
         }
 
         if config.model.is_empty() {
-            return Err(AetherError::InvalidConfig(
-                "Model name cannot be empty".to_string(),
+            return Err(AetherError::invalid_config(
+                "Model name cannot be empty",
             ));
         }
 
         if config.timeout_seconds == 0 {
-            return Err(AetherError::InvalidConfig(
-                "Timeout must be greater than zero".to_string(),
+            return Err(AetherError::invalid_config(
+                "Timeout must be greater than zero",
             ));
         }
 
@@ -204,7 +204,7 @@ impl ClaudeProvider {
             .use_rustls_tls()
             .build()
             .map_err(|e| {
-                AetherError::InvalidConfig(format!("Failed to build HTTP client: {}", e))
+                AetherError::invalid_config(format!("Failed to build HTTP client: {}", e))
             })?;
 
         // Build API endpoint
@@ -322,29 +322,29 @@ impl ClaudeProvider {
             let aether_error = match status.as_u16() {
                 401 => {
                     error!(status = 401, error = %error_msg, "Claude authentication failed");
-                    AetherError::AuthenticationError(format!(
+                    AetherError::authentication("Claude", &format!(
                         "Invalid Claude API key: {}",
                         error_msg
                     ))
                 }
                 429 => {
                     error!(status = 429, error = %error_msg, "Claude rate limit exceeded");
-                    AetherError::RateLimitError(format!("Claude rate limit: {}", error_msg))
+                    AetherError::rate_limit(format!("Claude rate limit: {}", error_msg))
                 }
                 529 => {
                     error!(status = 529, error = %error_msg, "Claude service overloaded");
-                    AetherError::ProviderError(format!("Claude overloaded: {}", error_msg))
+                    AetherError::provider(format!("Claude overloaded: {}", error_msg))
                 }
                 500..=599 => {
                     error!(status = status.as_u16(), error = %error_msg, "Claude server error");
-                    AetherError::ProviderError(format!(
+                    AetherError::provider(format!(
                         "Claude server error ({}): {}",
                         status, error_msg
                     ))
                 }
                 _ => {
                     error!(status = status.as_u16(), error = %error_msg, "Claude API error");
-                    AetherError::ProviderError(format!(
+                    AetherError::provider(format!(
                         "Claude API error ({}): {}",
                         status, error_msg
                     ))
@@ -357,11 +357,11 @@ impl ClaudeProvider {
         // Fallback if we can't parse the error response
         error!(status = status.as_u16(), "Claude request failed (unable to parse error response)");
         match status.as_u16() {
-            401 => AetherError::AuthenticationError("Invalid Claude API key".to_string()),
-            429 => AetherError::RateLimitError("Claude rate limit exceeded".to_string()),
-            529 => AetherError::ProviderError("Claude is overloaded".to_string()),
-            500..=599 => AetherError::ProviderError(format!("Claude server error: {}", status)),
-            _ => AetherError::ProviderError(format!("Claude API error: {}", status)),
+            401 => AetherError::authentication("Claude", "Invalid Claude API key"),
+            429 => AetherError::rate_limit("Claude rate limit exceeded"),
+            529 => AetherError::provider("Claude is overloaded"),
+            500..=599 => AetherError::provider(format!("Claude server error: {}", status)),
+            _ => AetherError::provider(format!("Claude API error: {}", status)),
         }
     }
 }
@@ -395,13 +395,13 @@ impl AiProvider for ClaudeProvider {
             .map_err(|e| {
                 if e.is_timeout() {
                     error!("Claude request timed out");
-                    AetherError::Timeout
+                    AetherError::Timeout { suggestion: Some("Try again in a few moments".to_string()) }
                 } else if e.is_connect() {
                     error!(error = %e, "Failed to connect to Claude");
-                    AetherError::NetworkError(format!("Failed to connect to Claude: {}", e))
+                    AetherError::network(format!("Failed to connect to Claude: {}", e))
                 } else {
                     error!(error = %e, "Claude network error");
-                    AetherError::NetworkError(format!("Network error: {}", e))
+                    AetherError::network(format!("Network error: {}", e))
                 }
             })?;
 
@@ -415,7 +415,7 @@ impl AiProvider for ClaudeProvider {
         // Parse response
         let messages_response: MessagesResponse = response.json().await.map_err(|e| {
             error!(error = %e, "Failed to parse Claude response");
-            AetherError::ProviderError(format!("Failed to parse Claude response: {}", e))
+            AetherError::provider(format!("Failed to parse Claude response: {}", e))
         })?;
 
         // Extract text from first content block
@@ -424,7 +424,7 @@ impl AiProvider for ClaudeProvider {
             .first()
             .ok_or_else(|| {
                 error!("Claude returned no content");
-                AetherError::ProviderError("No response from Claude".to_string())
+                AetherError::provider("No response from Claude")
             })?
             .text
             .clone();
@@ -476,13 +476,13 @@ impl AiProvider for ClaudeProvider {
             .map_err(|e| {
                 if e.is_timeout() {
                     error!("Claude vision request timed out");
-                    AetherError::Timeout
+                    AetherError::Timeout { suggestion: Some("Try again in a few moments".to_string()) }
                 } else if e.is_connect() {
                     error!(error = %e, "Failed to connect to Claude");
-                    AetherError::NetworkError(format!("Failed to connect to Claude: {}", e))
+                    AetherError::network(format!("Failed to connect to Claude: {}", e))
                 } else {
                     error!(error = %e, "Claude network error");
-                    AetherError::NetworkError(format!("Network error: {}", e))
+                    AetherError::network(format!("Network error: {}", e))
                 }
             })?;
 
@@ -496,7 +496,7 @@ impl AiProvider for ClaudeProvider {
         // Parse response
         let messages_response: MessagesResponse = response.json().await.map_err(|e| {
             error!(error = %e, "Failed to parse Claude vision response");
-            AetherError::ProviderError(format!("Failed to parse Claude vision response: {}", e))
+            AetherError::provider(format!("Failed to parse Claude vision response: {}", e))
         })?;
 
         // Extract text from first content block
@@ -505,7 +505,7 @@ impl AiProvider for ClaudeProvider {
             .first()
             .ok_or_else(|| {
                 error!("Claude returned no content");
-                AetherError::ProviderError("No response from Claude".to_string())
+                AetherError::provider("No response from Claude")
             })?
             .text
             .clone();

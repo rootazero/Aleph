@@ -23,9 +23,7 @@ impl EnigoSimulator {
 
     /// Create an Enigo instance with default settings
     fn create_enigo() -> Result<Enigo> {
-        Enigo::new(&Settings::default()).map_err(|e| AetherError::InputSimulationError {
-            message: format!("Failed to create Enigo instance: {:?}", e),
-        })
+        Enigo::new(&Settings::default()).map_err(|e| AetherError::input_simulation(format!("Failed to create Enigo instance: {:?}", e)))
     }
 }
 
@@ -45,21 +43,15 @@ impl InputSimulator for EnigoSimulator {
         {
             enigo.key(Key::Meta, enigo::Direction::Press).map_err(|e| {
                 error!(error = ?e, "Failed to press Meta key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to press Meta key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to press Meta key: {:?}", e))
             })?;
             enigo.key(Key::Unicode('x'), enigo::Direction::Click).map_err(|e| {
                 error!(error = ?e, "Failed to click x key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to click x key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to click x key: {:?}", e))
             })?;
             enigo.key(Key::Meta, enigo::Direction::Release).map_err(|e| {
                 error!(error = ?e, "Failed to release Meta key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to release Meta key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to release Meta key: {:?}", e))
             })?;
         }
 
@@ -67,21 +59,15 @@ impl InputSimulator for EnigoSimulator {
         {
             enigo.key(Key::Control, enigo::Direction::Press).map_err(|e| {
                 error!(error = ?e, "Failed to press Control key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to press Control key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to press Control key: {:?}", e))
             })?;
             enigo.key(Key::Unicode('x'), enigo::Direction::Click).map_err(|e| {
                 error!(error = ?e, "Failed to click x key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to click x key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to click x key: {:?}", e))
             })?;
             enigo.key(Key::Control, enigo::Direction::Release).map_err(|e| {
                 error!(error = ?e, "Failed to release Control key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to release Control key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to release Control key: {:?}", e))
             })?;
         }
 
@@ -98,21 +84,15 @@ impl InputSimulator for EnigoSimulator {
         {
             enigo.key(Key::Meta, enigo::Direction::Press).map_err(|e| {
                 error!(error = ?e, "Failed to press Meta key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to press Meta key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to press Meta key: {:?}", e))
             })?;
             enigo.key(Key::Unicode('v'), enigo::Direction::Click).map_err(|e| {
                 error!(error = ?e, "Failed to click v key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to click v key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to click v key: {:?}", e))
             })?;
             enigo.key(Key::Meta, enigo::Direction::Release).map_err(|e| {
                 error!(error = ?e, "Failed to release Meta key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to release Meta key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to release Meta key: {:?}", e))
             })?;
         }
 
@@ -120,21 +100,15 @@ impl InputSimulator for EnigoSimulator {
         {
             enigo.key(Key::Control, enigo::Direction::Press).map_err(|e| {
                 error!(error = ?e, "Failed to press Control key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to press Control key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to press Control key: {:?}", e))
             })?;
             enigo.key(Key::Unicode('v'), enigo::Direction::Click).map_err(|e| {
                 error!(error = ?e, "Failed to click v key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to click v key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to click v key: {:?}", e))
             })?;
             enigo.key(Key::Control, enigo::Direction::Release).map_err(|e| {
                 error!(error = ?e, "Failed to release Control key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to release Control key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to release Control key: {:?}", e))
             })?;
         }
 
@@ -151,21 +125,15 @@ impl InputSimulator for EnigoSimulator {
         {
             enigo.key(Key::Meta, enigo::Direction::Press).map_err(|e| {
                 error!(error = ?e, "Failed to press Meta key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to press Meta key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to press Meta key: {:?}", e))
             })?;
             enigo.key(Key::Unicode('a'), enigo::Direction::Click).map_err(|e| {
                 error!(error = ?e, "Failed to click a key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to click a key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to click a key: {:?}", e))
             })?;
             enigo.key(Key::Meta, enigo::Direction::Release).map_err(|e| {
                 error!(error = ?e, "Failed to release Meta key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to release Meta key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to release Meta key: {:?}", e))
             })?;
         }
 
@@ -173,21 +141,15 @@ impl InputSimulator for EnigoSimulator {
         {
             enigo.key(Key::Control, enigo::Direction::Press).map_err(|e| {
                 error!(error = ?e, "Failed to press Control key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to press Control key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to press Control key: {:?}", e))
             })?;
             enigo.key(Key::Unicode('a'), enigo::Direction::Click).map_err(|e| {
                 error!(error = ?e, "Failed to click a key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to click a key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to click a key: {:?}", e))
             })?;
             enigo.key(Key::Control, enigo::Direction::Release).map_err(|e| {
                 error!(error = ?e, "Failed to release Control key");
-                AetherError::InputSimulationError {
-                    message: format!("Failed to release Control key: {:?}", e),
-                }
+                AetherError::input_simulation(format!("Failed to release Control key: {:?}", e))
             })?;
         }
 
@@ -248,27 +210,21 @@ impl InputSimulator for EnigoSimulator {
                         // Newline → Enter key
                         enigo.key(Key::Return, enigo::Direction::Click).map_err(|e| {
                             error!(error = ?e, "Failed to click Return key");
-                            AetherError::InputSimulationError {
-                                message: format!("Failed to click Return key: {:?}", e),
-                            }
+                            AetherError::input_simulation(format!("Failed to click Return key: {:?}", e))
                         })?;
                     }
                     '\t' => {
                         // Tab → Tab key
                         enigo.key(Key::Tab, enigo::Direction::Click).map_err(|e| {
                             error!(error = ?e, "Failed to click Tab key");
-                            AetherError::InputSimulationError {
-                                message: format!("Failed to click Tab key: {:?}", e),
-                            }
+                            AetherError::input_simulation(format!("Failed to click Tab key: {:?}", e))
                         })?;
                     }
                     _ => {
                         // Regular character → Type using text method
                         enigo.text(&ch.to_string()).map_err(|e| {
                             error!(error = ?e, char = %ch, "Failed to type character");
-                            AetherError::InputSimulationError {
-                                message: format!("Failed to type character '{}': {:?}", ch, e),
-                            }
+                            AetherError::input_simulation(format!("Failed to type character '{}': {:?}", ch, e))
                         })?;
                     }
                 }

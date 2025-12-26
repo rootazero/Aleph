@@ -91,7 +91,8 @@ impl AetherCore {
                 }
                 Err(e) => {
                     let friendly_message = e.user_friendly_message();
-                    handler_clone.on_error(friendly_message);
+                    let suggestion = e.suggestion().map(|s| s.to_string());
+                    handler_clone.on_error(friendly_message, suggestion);
                 }
             }
         }));
@@ -185,7 +186,8 @@ impl AetherCore {
                     }
                     Err(e) => {
                         log::error!("Failed to reload config: {}", e);
-                        handler_clone.on_error(format!("Config reload failed: {}", e));
+                        let suggestion = e.suggestion().map(|s| s.to_string());
+                        handler_clone.on_error(format!("Config reload failed: {}", e), suggestion);
                     }
                 }
             });
@@ -886,8 +888,9 @@ impl AetherCore {
         // If error occurred, send user-friendly message to UI
         if let Err(ref e) = result {
             let friendly_message = e.user_friendly_message();
+            let suggestion = e.suggestion().map(|s| s.to_string());
             error!(error = ?e, user_message = %friendly_message, "AI processing failed");
-            self.event_handler.on_error(friendly_message);
+            self.event_handler.on_error(friendly_message, suggestion);
             self.event_handler.on_state_changed(ProcessingState::Error);
         }
 
@@ -905,7 +908,9 @@ impl AetherCore {
         let router = self
             .router
             .as_ref()
-            .ok_or(AetherError::NoProviderAvailable)?;
+            .ok_or(AetherError::NoProviderAvailable {
+                suggestion: Some("Configure at least one AI provider in Settings → Providers".to_string()),
+            })?;
 
         // Step 2: Retrieve memories and augment prompt (if enabled)
         let config = self.config.lock().unwrap();
@@ -941,7 +946,9 @@ impl AetherCore {
         // Step 3: Route to appropriate provider with fallback support
         let ((provider, system_prompt_override), fallback_provider) = router
             .route_with_fallback(&input)
-            .ok_or(AetherError::NoProviderAvailable)?;
+            .ok_or(AetherError::NoProviderAvailable {
+                suggestion: Some("No routing rules matched. Configure routing rules in Settings → Routing".to_string()),
+            })?;
 
         let provider_name = provider.name().to_string();
         let provider_color = provider.color().to_string();
@@ -1101,49 +1108,33 @@ impl AetherCore {
                                 tokio::task::spawn_blocking(move || {
                                     use enigo::Keyboard;
                                     let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
-                                        .map_err(|e| AetherError::InputSimulationError {
-                                            message: format!("Failed to create Enigo: {:?}", e),
-                                        })?;
+                                        .map_err(|e| AetherError::input_simulation(format!("Failed to create Enigo: {:?}", e)))?;
 
                                     // Simulate Cmd+V (macOS) or Ctrl+V (Windows/Linux)
                                     #[cfg(target_os = "macos")]
                                     {
                                         enigo.key(enigo::Key::Meta, enigo::Direction::Press)
-                                            .map_err(|e| AetherError::InputSimulationError {
-                                                message: format!("Failed to press Meta: {:?}", e),
-                                            })?;
+                                            .map_err(|e| AetherError::input_simulation(format!("Failed to press Meta: {:?}", e)))?;
                                         enigo.key(enigo::Key::Unicode('v'), enigo::Direction::Click)
-                                            .map_err(|e| AetherError::InputSimulationError {
-                                                message: format!("Failed to click v: {:?}", e),
-                                            })?;
+                                            .map_err(|e| AetherError::input_simulation(format!("Failed to click v: {:?}", e)))?;
                                         enigo.key(enigo::Key::Meta, enigo::Direction::Release)
-                                            .map_err(|e| AetherError::InputSimulationError {
-                                                message: format!("Failed to release Meta: {:?}", e),
-                                            })?;
+                                            .map_err(|e| AetherError::input_simulation(format!("Failed to release Meta: {:?}", e)))?;
                                     }
 
                                     #[cfg(not(target_os = "macos"))]
                                     {
                                         enigo.key(enigo::Key::Control, enigo::Direction::Press)
-                                            .map_err(|e| AetherError::InputSimulationError {
-                                                message: format!("Failed to press Ctrl: {:?}", e),
-                                            })?;
+                                            .map_err(|e| AetherError::input_simulation(format!("Failed to press Ctrl: {:?}", e)))?;
                                         enigo.key(enigo::Key::Unicode('v'), enigo::Direction::Click)
-                                            .map_err(|e| AetherError::InputSimulationError {
-                                                message: format!("Failed to click v: {:?}", e),
-                                            })?;
+                                            .map_err(|e| AetherError::input_simulation(format!("Failed to click v: {:?}", e)))?;
                                         enigo.key(enigo::Key::Control, enigo::Direction::Release)
-                                            .map_err(|e| AetherError::InputSimulationError {
-                                                message: format!("Failed to release Ctrl: {:?}", e),
-                                            })?;
+                                            .map_err(|e| AetherError::input_simulation(format!("Failed to release Ctrl: {:?}", e)))?;
                                     }
 
                                     Ok::<(), AetherError>(())
                                 })
                                 .await
-                                .map_err(|e| AetherError::InputSimulationError {
-                                    message: format!("Spawn blocking failed: {:?}", e),
-                                })??;
+                                .map_err(|e| AetherError::input_simulation(format!("Spawn blocking failed: {:?}", e)))??;
                             }
 
                             handler.on_typewriter_cancelled();
@@ -1156,37 +1147,27 @@ impl AetherCore {
                         tokio::task::spawn_blocking(move || {
                             use enigo::Keyboard;
                             let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
-                                .map_err(|e| AetherError::InputSimulationError {
-                                    message: format!("Failed to create Enigo: {:?}", e),
-                                })?;
+                                .map_err(|e| AetherError::input_simulation(format!("Failed to create Enigo: {:?}", e)))?;
 
                             match ch {
                                 '\n' => {
                                     enigo.key(enigo::Key::Return, enigo::Direction::Click)
-                                        .map_err(|e| AetherError::InputSimulationError {
-                                            message: format!("Failed to type newline: {:?}", e),
-                                        })?;
+                                        .map_err(|e| AetherError::input_simulation(format!("Failed to type newline: {:?}", e)))?;
                                 }
                                 '\t' => {
                                     enigo.key(enigo::Key::Tab, enigo::Direction::Click)
-                                        .map_err(|e| AetherError::InputSimulationError {
-                                            message: format!("Failed to type tab: {:?}", e),
-                                        })?;
+                                        .map_err(|e| AetherError::input_simulation(format!("Failed to type tab: {:?}", e)))?;
                                 }
                                 _ => {
                                     enigo.text(&ch.to_string())
-                                        .map_err(|e| AetherError::InputSimulationError {
-                                            message: format!("Failed to type char: {:?}", e),
-                                        })?;
+                                        .map_err(|e| AetherError::input_simulation(format!("Failed to type char: {:?}", e)))?;
                                 }
                             }
 
                             Ok::<(), AetherError>(())
                         })
                         .await
-                        .map_err(|e| AetherError::InputSimulationError {
-                            message: format!("Spawn blocking join failed: {:?}", e),
-                        })??;
+                        .map_err(|e| AetherError::input_simulation(format!("Spawn blocking join failed: {:?}", e)))??;
 
                         typed_chars += 1;
 

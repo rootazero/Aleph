@@ -27,16 +27,16 @@ const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 /// - Provider-specific errors
 fn is_retryable(error: &AetherError) -> bool {
     match error {
-        AetherError::NetworkError(_) => true,
-        AetherError::Timeout => true,
-        AetherError::ProviderError(msg) => {
+        AetherError::NetworkError { .. } => true,
+        AetherError::Timeout { .. } => true,
+        AetherError::ProviderError { message, .. } => {
             // Retry on server errors (5xx)
-            msg.contains("500") || msg.contains("502") || msg.contains("503") || msg.contains("504")
+            message.contains("500") || message.contains("502") || message.contains("503") || message.contains("504")
         }
         // Don't retry these errors
-        AetherError::AuthenticationError(_) => false,
-        AetherError::RateLimitError(_) => false,
-        AetherError::InvalidConfig(_) => false,
+        AetherError::AuthenticationError { .. } => false,
+        AetherError::RateLimitError { .. } => false,
+        AetherError::InvalidConfig { .. } => false,
         _ => false,
     }
 }
@@ -139,29 +139,29 @@ mod tests {
     #[test]
     fn test_is_retryable() {
         // Retryable errors
-        assert!(is_retryable(&AetherError::NetworkError(
-            "connection failed".into()
+        assert!(is_retryable(&AetherError::network(
+            "connection failed"
         )));
-        assert!(is_retryable(&AetherError::Timeout));
-        assert!(is_retryable(&AetherError::ProviderError(
-            "500 Internal Server Error".into()
+        assert!(is_retryable(&AetherError::Timeout { suggestion: None }));
+        assert!(is_retryable(&AetherError::provider(
+            "500 Internal Server Error"
         )));
-        assert!(is_retryable(&AetherError::ProviderError(
-            "503 Service Unavailable".into()
+        assert!(is_retryable(&AetherError::provider(
+            "503 Service Unavailable"
         )));
 
         // Non-retryable errors
-        assert!(!is_retryable(&AetherError::AuthenticationError(
-            "invalid key".into()
+        assert!(!is_retryable(&AetherError::authentication(
+            "Test", "invalid key"
         )));
-        assert!(!is_retryable(&AetherError::RateLimitError(
-            "quota exceeded".into()
+        assert!(!is_retryable(&AetherError::rate_limit(
+            "quota exceeded"
         )));
-        assert!(!is_retryable(&AetherError::InvalidConfig(
-            "bad config".into()
+        assert!(!is_retryable(&AetherError::invalid_config(
+            "bad config"
         )));
-        assert!(!is_retryable(&AetherError::ProviderError(
-            "400 Bad Request".into()
+        assert!(!is_retryable(&AetherError::provider(
+            "400 Bad Request"
         )));
     }
 

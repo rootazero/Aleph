@@ -23,11 +23,11 @@ impl From<MockError> for AetherError {
     fn from(err: MockError) -> Self {
         match err {
             MockError::Network(msg) => AetherError::network(msg),
-            MockError::Authentication(msg) => AetherError::authentication(msg),
+            MockError::Authentication(msg) => AetherError::authentication("Mock".to_string(), msg),
             MockError::RateLimit(msg) => AetherError::rate_limit(msg),
             MockError::Provider(msg) => AetherError::provider(msg),
-            MockError::Timeout => AetherError::Timeout,
-            MockError::NoProviderAvailable => AetherError::NoProviderAvailable,
+            MockError::Timeout => AetherError::Timeout { suggestion: Some("Try again in a few moments".to_string()) },
+            MockError::NoProviderAvailable => AetherError::NoProviderAvailable { suggestion: Some("Configure a provider".to_string()) },
             MockError::InvalidConfig(msg) => AetherError::invalid_config(msg),
         }
     }

@@ -92,12 +92,14 @@ protocol HaloTheme {
     /// - Parameters:
     ///   - type: Type of error (network, permission, etc.)
     ///   - message: Error message to display
+    ///   - suggestion: Optional suggestion text to help user resolve the error
     ///   - onRetry: Optional retry callback for network/timeout errors
     ///   - onOpenSettings: Optional settings callback for permission errors
     ///   - onDismiss: Optional dismiss callback
     @ViewBuilder func errorView(
         type: ErrorType,
         message: String,
+        suggestion: String?,
         onRetry: (() -> Void)?,
         onOpenSettings: (() -> Void)?,
         onDismiss: (() -> Void)?

@@ -126,7 +126,7 @@ pub fn create_provider(name: &str, config: ProviderConfig) -> Result<Arc<dyn AiP
             let provider = MockProvider::new("Mock response".to_string());
             Ok(Arc::new(provider))
         }
-        unknown => Err(AetherError::InvalidConfig(format!(
+        unknown => Err(AetherError::invalid_config(format!(
             "Unknown provider type: '{}'. Supported types: openai, claude, ollama, mock",
             unknown
         ))),

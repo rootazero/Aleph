@@ -42,6 +42,7 @@ struct ZenTheme: HaloTheme {
     func errorView(
         type: ErrorType,
         message: String,
+        suggestion: String?,
         onRetry: (() -> Void)?,
         onOpenSettings: (() -> Void)?,
         onDismiss: (() -> Void)?
@@ -50,6 +51,7 @@ struct ZenTheme: HaloTheme {
             ErrorActionView(
                 errorType: type,
                 message: message,
+                suggestion: suggestion,
                 onRetry: onRetry,
                 onOpenSettings: onOpenSettings,
                 onDismiss: onDismiss

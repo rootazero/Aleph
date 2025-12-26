@@ -11,6 +11,7 @@ import SwiftUI
 struct ErrorActionView: View {
     let errorType: ErrorType
     let message: String
+    let suggestion: String? // NEW: Optional suggestion text
     let onRetry: (() -> Void)?
     let onOpenSettings: (() -> Void)?
     let onDismiss: (() -> Void)?
@@ -18,6 +19,7 @@ struct ErrorActionView: View {
     // Styling
     private let iconSize: CGFloat = 40
     private let messageFont: Font = .system(.caption, design: .rounded)
+    private let suggestionFont: Font = .system(.caption2, design: .rounded)
     private let buttonFont: Font = .system(.caption, design: .rounded)
 
     var body: some View {
@@ -42,6 +44,27 @@ struct ErrorActionView: View {
                 .lineLimit(3)
                 .padding(.horizontal, 16)
                 .frame(maxWidth: 260)
+
+            // Suggestion text (if available)
+            if let suggestion = suggestion {
+                HStack(spacing: 6) {
+                    Image(systemName: "lightbulb.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(.yellow.opacity(0.8))
+                    Text(suggestion)
+                        .font(suggestionFont)
+                        .foregroundColor(.yellow.opacity(0.9))
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.yellow.opacity(0.15))
+                )
+                .frame(maxWidth: 260)
+            }
 
             // Action buttons based on error type
             actionButtons
@@ -173,11 +196,12 @@ struct ErrorActionView_Previews: PreviewProvider {
             ErrorActionView(
                 errorType: .network,
                 message: "Unable to connect to the server. Please check your internet connection.",
+                suggestion: "Try checking your Wi-Fi or cellular connection.",
                 onRetry: { print("Retry tapped") },
                 onOpenSettings: nil,
                 onDismiss: { print("Dismiss tapped") }
             )
-            .frame(width: 300, height: 200)
+            .frame(width: 300, height: 220)
             .background(Color.black.opacity(0.8))
             .previewDisplayName("Network Error")
 
@@ -185,11 +209,12 @@ struct ErrorActionView_Previews: PreviewProvider {
             ErrorActionView(
                 errorType: .permission,
                 message: "Accessibility permission is required to continue.",
+                suggestion: "Grant permission in System Settings > Privacy & Security > Accessibility.",
                 onRetry: nil,
                 onOpenSettings: { print("Settings tapped") },
                 onDismiss: { print("Dismiss tapped") }
             )
-            .frame(width: 300, height: 200)
+            .frame(width: 300, height: 220)
             .background(Color.black.opacity(0.8))
             .previewDisplayName("Permission Error")
 
@@ -197,6 +222,7 @@ struct ErrorActionView_Previews: PreviewProvider {
             ErrorActionView(
                 errorType: .timeout,
                 message: "The request timed out. Please try again.",
+                suggestion: nil,
                 onRetry: { print("Retry tapped") },
                 onOpenSettings: nil,
                 onDismiss: { print("Dismiss tapped") }
@@ -209,11 +235,12 @@ struct ErrorActionView_Previews: PreviewProvider {
             ErrorActionView(
                 errorType: .quota,
                 message: "API quota exceeded. Please try again later.",
+                suggestion: "Wait a few minutes or upgrade your API plan.",
                 onRetry: nil,
                 onOpenSettings: nil,
                 onDismiss: { print("Dismiss tapped") }
             )
-            .frame(width: 300, height: 200)
+            .frame(width: 300, height: 220)
             .background(Color.black.opacity(0.8))
             .previewDisplayName("Quota Error")
 
@@ -221,6 +248,7 @@ struct ErrorActionView_Previews: PreviewProvider {
             ErrorActionView(
                 errorType: .unknown,
                 message: "An unexpected error occurred.",
+                suggestion: nil,
                 onRetry: nil,
                 onOpenSettings: nil,
                 onDismiss: { print("Dismiss tapped") }

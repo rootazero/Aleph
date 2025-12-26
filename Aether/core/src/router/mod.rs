@@ -115,7 +115,7 @@ impl RoutingRule {
     /// ```
     pub fn new(pattern: &str, provider_name: &str, system_prompt: Option<&str>) -> Result<Self> {
         let regex = Regex::new(pattern).map_err(|e| {
-            AetherError::InvalidConfig(format!("Invalid regex pattern '{}': {}", pattern, e))
+            AetherError::invalid_config(format!("Invalid regex pattern '{}': {}", pattern, e))
         })?;
 
         Ok(Self {
@@ -248,15 +248,15 @@ impl Router {
 
         // Validate at least one provider exists
         if providers.is_empty() {
-            return Err(AetherError::InvalidConfig(
-                "No providers configured. At least one provider is required.".to_string(),
+            return Err(AetherError::invalid_config(
+                "No providers configured. At least one provider is required.",
             ));
         }
 
         // Validate default provider exists (if specified)
         if let Some(ref default_name) = config.general.default_provider {
             if !providers.contains_key(default_name) {
-                return Err(AetherError::InvalidConfig(format!(
+                return Err(AetherError::invalid_config(format!(
                     "Default provider '{}' not found in configured providers",
                     default_name
                 )));
@@ -275,7 +275,7 @@ impl Router {
 
             // Validate that provider exists
             if !providers.contains_key(&rule_config.provider) {
-                return Err(AetherError::InvalidConfig(format!(
+                return Err(AetherError::invalid_config(format!(
                     "Rule references unknown provider '{}'. Available providers: {}",
                     rule_config.provider,
                     providers.keys().cloned().collect::<Vec<_>>().join(", ")
@@ -595,7 +595,7 @@ mod tests {
 
         let router = Router::new(&config);
         assert!(router.is_err());
-        assert!(matches!(router, Err(AetherError::InvalidConfig(_))));
+        assert!(matches!(router, Err(AetherError::InvalidConfig { .. })));
     }
 
     #[test]
@@ -868,7 +868,7 @@ mod tests {
 
         let result = Router::new(&config);
         assert!(result.is_err());
-        assert!(matches!(result, Err(AetherError::InvalidConfig(_))));
+        assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
     }
 
     #[test]
@@ -899,7 +899,7 @@ mod tests {
 
         let result = Router::new(&config);
         assert!(result.is_err());
-        assert!(matches!(result, Err(AetherError::InvalidConfig(_))));
+        assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
     }
 
     #[test]

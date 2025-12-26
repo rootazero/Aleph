@@ -46,10 +46,11 @@ struct HaloView: View {
                 theme.successView(finalText: finalText)
                     .transition(.scale.combined(with: .opacity))
 
-            case .error(let type, let message):
+            case .error(let type, let message, let suggestion):
                 theme.errorView(
                     type: type,
                     message: message,
+                    suggestion: suggestion,
                     onRetry: eventHandler?.handleRetry,
                     onOpenSettings: eventHandler?.handleOpenSettings,
                     onDismiss: eventHandler?.handleDismiss

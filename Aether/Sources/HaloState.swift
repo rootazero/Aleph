@@ -15,7 +15,7 @@ enum HaloState: Equatable {
     case processing(providerColor: Color, streamingText: String? = nil)  // Generic processing (backward compatibility)
     case typewriting(progress: Float)  // Phase 7.2: Typewriter animation in progress
     case success(finalText: String? = nil)
-    case error(type: ErrorType, message: String)
+    case error(type: ErrorType, message: String, suggestion: String? = nil)  // Phase 7.4: Error with optional suggestion
 
     // Equatable conformance
     static func == (lhs: HaloState, rhs: HaloState) -> Bool {
@@ -34,8 +34,8 @@ enum HaloState: Equatable {
             return progress1 == progress2
         case (.success(let text1), .success(let text2)):
             return text1 == text2
-        case (.error(let type1, let msg1), .error(let type2, let msg2)):
-            return type1 == type2 && msg1 == msg2
+        case (.error(let type1, let msg1, let sug1), .error(let type2, let msg2, let sug2)):
+            return type1 == type2 && msg1 == msg2 && sug1 == sug2
         default:
             return false
         }

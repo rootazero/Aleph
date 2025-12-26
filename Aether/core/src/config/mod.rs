@@ -381,7 +381,7 @@ impl Config {
         // Check if file exists
         if !path.exists() {
             error!(path = %path.display(), "Config file not found");
-            return Err(AetherError::InvalidConfig(format!(
+            return Err(AetherError::invalid_config(format!(
                 "Config file not found: {}",
                 path.display()
             )));
@@ -390,7 +390,7 @@ impl Config {
         // Read file contents
         let contents = fs::read_to_string(path).map_err(|e| {
             error!(path = %path.display(), error = %e, "Failed to read config file");
-            AetherError::InvalidConfig(format!(
+            AetherError::invalid_config(format!(
                 "Failed to read config file {}: {}",
                 path.display(),
                 e
@@ -406,7 +406,7 @@ impl Config {
         // Parse TOML
         let config: Config = toml::from_str(&contents).map_err(|e| {
             error!(path = %path.display(), error = %e, "Failed to parse config TOML");
-            AetherError::InvalidConfig(format!(
+            AetherError::invalid_config(format!(
                 "Failed to parse config file {}: {}",
                 path.display(),
                 e
@@ -482,7 +482,7 @@ impl Config {
         if let Some(ref default_provider) = self.general.default_provider {
             if !self.providers.contains_key(default_provider) {
                 error!(default_provider = %default_provider, "Default provider not found");
-                return Err(AetherError::InvalidConfig(format!(
+                return Err(AetherError::invalid_config(format!(
                     "Default provider '{}' not found in providers",
                     default_provider
                 )));
@@ -499,7 +499,7 @@ impl Config {
                 && provider.api_key.is_none()
             {
                 error!(provider = %name, provider_type = %provider_type, "Provider missing API key");
-                return Err(AetherError::InvalidConfig(format!(
+                return Err(AetherError::invalid_config(format!(
                     "Provider '{}' requires an API key",
                     name
                 )));
@@ -508,7 +508,7 @@ impl Config {
             // Validate timeout
             if provider.timeout_seconds == 0 {
                 error!(provider = %name, "Provider timeout is zero");
-                return Err(AetherError::InvalidConfig(format!(
+                return Err(AetherError::invalid_config(format!(
                     "Provider '{}' timeout must be greater than 0",
                     name
                 )));
@@ -518,7 +518,7 @@ impl Config {
             if let Some(temp) = provider.temperature {
                 if !(0.0..=2.0).contains(&temp) {
                     error!(provider = %name, temperature = temp, "Invalid temperature");
-                    return Err(AetherError::InvalidConfig(format!(
+                    return Err(AetherError::invalid_config(format!(
                         "Provider '{}' temperature must be between 0.0 and 2.0, got {}",
                         name, temp
                     )));
@@ -542,7 +542,7 @@ impl Config {
                     provider = %rule.provider,
                     "Rule references unknown provider"
                 );
-                return Err(AetherError::InvalidConfig(format!(
+                return Err(AetherError::invalid_config(format!(
                     "Rule #{} references unknown provider '{}'",
                     idx + 1,
                     rule.provider
@@ -557,7 +557,7 @@ impl Config {
                     error = %e,
                     "Invalid regex pattern"
                 );
-                return Err(AetherError::InvalidConfig(format!(
+                return Err(AetherError::invalid_config(format!(
                     "Rule #{} has invalid regex '{}': {}",
                     idx + 1,
                     rule.regex,
@@ -576,14 +576,14 @@ impl Config {
         // Validate memory config
         if self.memory.max_context_items == 0 {
             error!("Memory max_context_items is zero");
-            return Err(AetherError::InvalidConfig(
-                "memory.max_context_items must be greater than 0".to_string(),
+            return Err(AetherError::invalid_config(
+                "memory.max_context_items must be greater than 0",
             ));
         }
 
         if !(0.0..=1.0).contains(&self.memory.similarity_threshold) {
             error!(threshold = self.memory.similarity_threshold, "Invalid similarity threshold");
-            return Err(AetherError::InvalidConfig(format!(
+            return Err(AetherError::invalid_config(format!(
                 "memory.similarity_threshold must be between 0.0 and 1.0, got {}",
                 self.memory.similarity_threshold
             )));
@@ -640,7 +640,7 @@ impl Config {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
                 error!(directory = %parent.display(), error = %e, "Failed to create config directory");
-                AetherError::InvalidConfig(format!(
+                AetherError::invalid_config(format!(
                     "Failed to create config directory {}: {}",
                     parent.display(),
                     e
@@ -652,7 +652,7 @@ impl Config {
         // Serialize to TOML
         let contents = toml::to_string_pretty(self).map_err(|e| {
             error!(error = %e, "Failed to serialize config to TOML");
-            AetherError::InvalidConfig(format!("Failed to serialize config: {}", e))
+            AetherError::invalid_config(format!("Failed to serialize config: {}", e))
         })?;
 
         debug!(
@@ -667,7 +667,7 @@ impl Config {
         // Write to temp file
         fs::write(&temp_path, &contents).map_err(|e| {
             error!(temp_path = %temp_path.display(), error = %e, "Failed to write temp file");
-            AetherError::InvalidConfig(format!(
+            AetherError::invalid_config(format!(
                 "Failed to write temp config file {}: {}",
                 temp_path.display(),
                 e
@@ -684,7 +684,7 @@ impl Config {
                 .open(&temp_path)
                 .map_err(|e| {
                     error!(temp_path = %temp_path.display(), error = %e, "Failed to open temp file for fsync");
-                    AetherError::InvalidConfig(format!(
+                    AetherError::invalid_config(format!(
                         "Failed to open temp file for fsync: {}",
                         e
                     ))
@@ -693,7 +693,7 @@ impl Config {
             // Sync file data and metadata
             file.sync_all().map_err(|e| {
                 error!(temp_path = %temp_path.display(), error = %e, "Failed to fsync temp file");
-                AetherError::InvalidConfig(format!("Failed to fsync temp file: {}", e))
+                AetherError::invalid_config(format!("Failed to fsync temp file: {}", e))
             })?;
 
             debug!(temp_path = %temp_path.display(), "Fsynced temp file to disk");
@@ -709,7 +709,7 @@ impl Config {
             );
             // Clean up temp file on error
             let _ = fs::remove_file(&temp_path);
-            AetherError::InvalidConfig(format!(
+            AetherError::invalid_config(format!(
                 "Failed to rename temp config to {}: {}",
                 path.display(),
                 e

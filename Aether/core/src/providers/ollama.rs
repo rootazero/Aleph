@@ -93,14 +93,14 @@ impl OllamaProvider {
     /// - Timeout is zero
     pub fn new(config: ProviderConfig) -> Result<Self> {
         if config.model.is_empty() {
-            return Err(AetherError::InvalidConfig(
-                "Model name cannot be empty".to_string(),
+            return Err(AetherError::invalid_config(
+                "Model name cannot be empty",
             ));
         }
 
         if config.timeout_seconds == 0 {
-            return Err(AetherError::InvalidConfig(
-                "Timeout must be greater than zero".to_string(),
+            return Err(AetherError::invalid_config(
+                "Timeout must be greater than zero",
             ));
         }
 
@@ -182,13 +182,12 @@ impl AiProvider for OllamaProvider {
             Ok(result) => result.map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
                     error!("Ollama command not found in PATH");
-                    AetherError::ProviderError(
+                    AetherError::provider(
                         "Ollama command not found. Please install Ollama from https://ollama.ai"
-                            .to_string(),
                     )
                 } else {
                     error!(error = %e, "Failed to execute Ollama command");
-                    AetherError::ProviderError(format!("Failed to execute Ollama: {}", e))
+                    AetherError::provider(format!("Failed to execute Ollama: {}", e))
                 }
             })?,
             Err(_) => {
@@ -197,7 +196,9 @@ impl AiProvider for OllamaProvider {
                     timeout_seconds = self.timeout.as_secs(),
                     "Ollama command timed out"
                 );
-                return Err(AetherError::Timeout);
+                return Err(AetherError::Timeout {
+                    suggestion: Some("The Ollama model is taking too long. Try a smaller model or increase the timeout.".to_string()),
+                });
             }
         };
 
@@ -214,7 +215,7 @@ impl AiProvider for OllamaProvider {
                     stderr = %stderr,
                     "Ollama model not found"
                 );
-                return Err(AetherError::ProviderError(format!(
+                return Err(AetherError::provider(format!(
                     "Ollama model '{}' not found. Run: ollama pull {}",
                     self.model, self.model
                 )));
@@ -226,7 +227,7 @@ impl AiProvider for OllamaProvider {
                 stderr = %stderr,
                 "Ollama command failed"
             );
-            return Err(AetherError::ProviderError(format!(
+            return Err(AetherError::provider(format!(
                 "Ollama command failed (exit {}): {}",
                 exit_code, stderr
             )));
@@ -235,7 +236,7 @@ impl AiProvider for OllamaProvider {
         // Parse stdout
         let raw_output = String::from_utf8(output.stdout).map_err(|e| {
             error!(error = %e, "Ollama output is not valid UTF-8");
-            AetherError::ProviderError(format!("Ollama output is not valid UTF-8: {}", e))
+            AetherError::provider(format!("Ollama output is not valid UTF-8: {}", e))
         })?;
 
         debug!(
@@ -252,8 +253,8 @@ impl AiProvider for OllamaProvider {
                 raw_output_length = raw_output.len(),
                 "Ollama returned empty response after cleaning"
             );
-            return Err(AetherError::ProviderError(
-                "Ollama returned empty response".to_string(),
+            return Err(AetherError::provider(
+                "Ollama returned empty response",
             ));
         }
 

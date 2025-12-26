@@ -71,11 +71,18 @@ class EventHandler: AetherEventHandler {
         }
     }
 
-    func onError(message: String) {
+    func onError(message: String, suggestion: String?) {
         print("[EventHandler] Error: \(message)")
+        if let sug = suggestion {
+            print("[EventHandler] Suggestion: \(sug)")
+        }
 
-        DispatchQueue.main.async {
-            self.showErrorNotification(message: message)
+        DispatchQueue.main.async { [weak self] in
+            // Update Halo window to show error with suggestion
+            self?.haloWindow?.updateState(.error(type: .unknown, message: message, suggestion: suggestion))
+
+            // Also show system notification
+            self?.showErrorNotification(message: message, suggestion: suggestion)
         }
     }
 
@@ -227,7 +234,7 @@ class EventHandler: AetherEventHandler {
 
         case .error:
             // Use typed error if available, otherwise show generic error
-            haloWindow?.updateState(.error(type: .unknown, message: "An error occurred"))
+            haloWindow?.updateState(.error(type: .unknown, message: "An error occurred", suggestion: nil))
             announceToVoiceOver("Error occurred")
             // Auto-hide after 2 seconds
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
@@ -293,7 +300,8 @@ class EventHandler: AetherEventHandler {
 
     private func handleTypedError(errorType: ErrorType, message: String) {
         // Update Halo with typed error (do NOT auto-hide, let user interact with error actions)
-        haloWindow?.updateState(.error(type: errorType, message: message))
+        // Note: onErrorTyped doesn't include suggestion, only onError callback does
+        haloWindow?.updateState(.error(type: errorType, message: message, suggestion: nil))
 
         // NOTE: We don't auto-hide the Halo for errors anymore because
         // ErrorActionView provides actionable buttons that the user might want to interact with.
@@ -361,10 +369,17 @@ class EventHandler: AetherEventHandler {
 
     // MARK: - Error Notification
 
-    private func showErrorNotification(message: String) {
+    private func showErrorNotification(message: String, suggestion: String?) {
         let alert = NSAlert()
         alert.messageText = "Aether Error"
-        alert.informativeText = message
+
+        // Combine message and suggestion
+        var fullMessage = message
+        if let sug = suggestion {
+            fullMessage += "\n\n💡 Suggestion: \(sug)"
+        }
+
+        alert.informativeText = fullMessage
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()

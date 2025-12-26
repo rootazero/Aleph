@@ -204,8 +204,8 @@ callback interface AetherEventHandler {
   // Called when hotkey is detected with clipboard content
   void on_hotkey_detected(string clipboard_content);
 
-  // Called when an error occurs (legacy, will be deprecated)
-  void on_error(string message);
+  // Called when an error occurs
+  void on_error(string message, string? suggestion);
 
   // NEW: Called when AI response chunk arrives (for streaming display)
   void on_response_chunk(string text);

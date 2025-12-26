@@ -297,6 +297,19 @@ private func uniffiCheckCallStatus(
 // Public interface members begin here.
 
 
+fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
+    typealias FfiType = UInt8
+    typealias SwiftType = UInt8
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt8 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: UInt8, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
@@ -427,22 +440,36 @@ public protocol AetherCoreProtocol {
     func clearMemories(appBundleId: String?, windowTitle: String?)  throws -> UInt64
     func clearRequestContext()  
     func deleteMemory(id: String)  throws
+    func deleteProvider(name: String)  throws
     func getClipboardText()  throws -> String
+    func getLogDirectory()  throws -> String
+    func getLogLevel()   -> LogLevel
     func getMemoryConfig()   -> MemoryConfig
     func getMemoryStats()  throws -> MemoryStats
+    func hasClipboardImage()   -> Bool
     func isListening()   -> Bool
+    func loadConfig()  throws -> FullConfig
     func processWithAi(input: String, context: CapturedContext)  throws -> String
+    func readClipboardImage()  throws -> ImageData?
     func retrieveAndAugmentPrompt(basePrompt: String, userInput: String)  throws -> String
     func retryLastRequest()  throws
     func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32)  throws -> [MemoryEntry]
     func setCurrentContext(context: CapturedContext)  
+    func setLogLevel(level: LogLevel)  throws
     func startListening()  throws
     func stopListening()  throws
     func storeInteractionMemory(userInput: String, aiOutput: String)  throws -> String
     func storeRequestContext(clipboardContent: String, provider: String)  
+    func testProviderConnection(providerName: String)  throws -> String
     func testStreamingResponse()  
     func testTypedError(errorType: ErrorType, message: String)  
+    func updateBehavior(behavior: BehaviorConfig)  throws
     func updateMemoryConfig(config: MemoryConfig)  throws
+    func updateProvider(name: String, provider: ProviderConfig)  throws
+    func updateRoutingRules(rules: [RoutingRuleConfig])  throws
+    func updateShortcuts(shortcuts: ShortcutsConfig)  throws
+    func validateRegex(pattern: String)  throws -> Bool
+    func writeClipboardImage(image: ImageData)  throws
     
 }
 
@@ -456,7 +483,7 @@ public class AetherCore: AetherCoreProtocol {
         self.pointer = pointer
     }
     public convenience init(handler: AetherEventHandler) throws {
-        self.init(unsafeFromRawPointer: try rustCallWithError(FfiConverterTypeAetherError.lift) {
+        self.init(unsafeFromRawPointer: try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_constructor_aethercore_new(
         FfiConverterCallbackInterfaceAetherEventHandler.lower(handler),$0)
 })
@@ -474,7 +501,7 @@ public class AetherCore: AetherCoreProtocol {
     public func cleanupOldMemories() throws -> UInt64 {
         return try  FfiConverterUInt64.lift(
             try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_cleanup_old_memories(self.pointer, $0
     )
 }
@@ -484,7 +511,7 @@ public class AetherCore: AetherCoreProtocol {
     public func clearMemories(appBundleId: String?, windowTitle: String?) throws -> UInt64 {
         return try  FfiConverterUInt64.lift(
             try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_clear_memories(self.pointer, 
         FfiConverterOptionString.lower(appBundleId),
         FfiConverterOptionString.lower(windowTitle),$0
@@ -504,9 +531,18 @@ public class AetherCore: AetherCoreProtocol {
 
     public func deleteMemory(id: String) throws {
         try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_delete_memory(self.pointer, 
         FfiConverterString.lower(id),$0
+    )
+}
+    }
+
+    public func deleteProvider(name: String) throws {
+        try 
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_delete_provider(self.pointer, 
+        FfiConverterString.lower(name),$0
     )
 }
     }
@@ -514,8 +550,29 @@ public class AetherCore: AetherCoreProtocol {
     public func getClipboardText() throws -> String {
         return try  FfiConverterString.lift(
             try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_get_clipboard_text(self.pointer, $0
+    )
+}
+        )
+    }
+
+    public func getLogDirectory() throws -> String {
+        return try  FfiConverterString.lift(
+            try 
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_get_log_directory(self.pointer, $0
+    )
+}
+        )
+    }
+
+    public func getLogLevel()  -> LogLevel {
+        return try!  FfiConverterTypeLogLevel.lift(
+            try! 
+    rustCall() {
+    
+    uniffi_aethecore_fn_method_aethercore_get_log_level(self.pointer, $0
     )
 }
         )
@@ -535,8 +592,19 @@ public class AetherCore: AetherCoreProtocol {
     public func getMemoryStats() throws -> MemoryStats {
         return try  FfiConverterTypeMemoryStats.lift(
             try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_get_memory_stats(self.pointer, $0
+    )
+}
+        )
+    }
+
+    public func hasClipboardImage()  -> Bool {
+        return try!  FfiConverterBool.lift(
+            try! 
+    rustCall() {
+    
+    uniffi_aethecore_fn_method_aethercore_has_clipboard_image(self.pointer, $0
     )
 }
         )
@@ -553,10 +621,20 @@ public class AetherCore: AetherCoreProtocol {
         )
     }
 
+    public func loadConfig() throws -> FullConfig {
+        return try  FfiConverterTypeFullConfig.lift(
+            try 
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_load_config(self.pointer, $0
+    )
+}
+        )
+    }
+
     public func processWithAi(input: String, context: CapturedContext) throws -> String {
         return try  FfiConverterString.lift(
             try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_process_with_ai(self.pointer, 
         FfiConverterString.lower(input),
         FfiConverterTypeCapturedContext.lower(context),$0
@@ -565,10 +643,20 @@ public class AetherCore: AetherCoreProtocol {
         )
     }
 
+    public func readClipboardImage() throws -> ImageData? {
+        return try  FfiConverterOptionTypeImageData.lift(
+            try 
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_read_clipboard_image(self.pointer, $0
+    )
+}
+        )
+    }
+
     public func retrieveAndAugmentPrompt(basePrompt: String, userInput: String) throws -> String {
         return try  FfiConverterString.lift(
             try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_retrieve_and_augment_prompt(self.pointer, 
         FfiConverterString.lower(basePrompt),
         FfiConverterString.lower(userInput),$0
@@ -579,7 +667,7 @@ public class AetherCore: AetherCoreProtocol {
 
     public func retryLastRequest() throws {
         try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_retry_last_request(self.pointer, $0
     )
 }
@@ -588,7 +676,7 @@ public class AetherCore: AetherCoreProtocol {
     public func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32) throws -> [MemoryEntry] {
         return try  FfiConverterSequenceTypeMemoryEntry.lift(
             try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_search_memories(self.pointer, 
         FfiConverterString.lower(appBundleId),
         FfiConverterOptionString.lower(windowTitle),
@@ -608,9 +696,18 @@ public class AetherCore: AetherCoreProtocol {
 }
     }
 
+    public func setLogLevel(level: LogLevel) throws {
+        try 
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_set_log_level(self.pointer, 
+        FfiConverterTypeLogLevel.lower(level),$0
+    )
+}
+    }
+
     public func startListening() throws {
         try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_start_listening(self.pointer, $0
     )
 }
@@ -618,7 +715,7 @@ public class AetherCore: AetherCoreProtocol {
 
     public func stopListening() throws {
         try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_stop_listening(self.pointer, $0
     )
 }
@@ -627,7 +724,7 @@ public class AetherCore: AetherCoreProtocol {
     public func storeInteractionMemory(userInput: String, aiOutput: String) throws -> String {
         return try  FfiConverterString.lift(
             try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_store_interaction_memory(self.pointer, 
         FfiConverterString.lower(userInput),
         FfiConverterString.lower(aiOutput),$0
@@ -645,6 +742,17 @@ public class AetherCore: AetherCoreProtocol {
         FfiConverterString.lower(provider),$0
     )
 }
+    }
+
+    public func testProviderConnection(providerName: String) throws -> String {
+        return try  FfiConverterString.lift(
+            try 
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_test_provider_connection(self.pointer, 
+        FfiConverterString.lower(providerName),$0
+    )
+}
+        )
     }
 
     public func testStreamingResponse()  {
@@ -667,11 +775,68 @@ public class AetherCore: AetherCoreProtocol {
 }
     }
 
+    public func updateBehavior(behavior: BehaviorConfig) throws {
+        try 
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_update_behavior(self.pointer, 
+        FfiConverterTypeBehaviorConfig.lower(behavior),$0
+    )
+}
+    }
+
     public func updateMemoryConfig(config: MemoryConfig) throws {
         try 
-    rustCallWithError(FfiConverterTypeAetherError.lift) {
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_update_memory_config(self.pointer, 
         FfiConverterTypeMemoryConfig.lower(config),$0
+    )
+}
+    }
+
+    public func updateProvider(name: String, provider: ProviderConfig) throws {
+        try 
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_update_provider(self.pointer, 
+        FfiConverterString.lower(name),
+        FfiConverterTypeProviderConfig.lower(provider),$0
+    )
+}
+    }
+
+    public func updateRoutingRules(rules: [RoutingRuleConfig]) throws {
+        try 
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_update_routing_rules(self.pointer, 
+        FfiConverterSequenceTypeRoutingRuleConfig.lower(rules),$0
+    )
+}
+    }
+
+    public func updateShortcuts(shortcuts: ShortcutsConfig) throws {
+        try 
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_update_shortcuts(self.pointer, 
+        FfiConverterTypeShortcutsConfig.lower(shortcuts),$0
+    )
+}
+    }
+
+    public func validateRegex(pattern: String) throws -> Bool {
+        return try  FfiConverterBool.lift(
+            try 
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_validate_regex(self.pointer, 
+        FfiConverterString.lower(pattern),$0
+    )
+}
+        )
+    }
+
+    public func writeClipboardImage(image: ImageData) throws {
+        try 
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_write_clipboard_image(self.pointer, 
+        FfiConverterTypeImageData.lower(image),$0
     )
 }
     }
@@ -714,6 +879,77 @@ public func FfiConverterTypeAetherCore_lift(_ pointer: UnsafeMutableRawPointer) 
 
 public func FfiConverterTypeAetherCore_lower(_ value: AetherCore) -> UnsafeMutableRawPointer {
     return FfiConverterTypeAetherCore.lower(value)
+}
+
+
+public struct BehaviorConfig {
+    public var inputMode: String
+    public var outputMode: String
+    public var typingSpeed: UInt32
+    public var piiScrubbingEnabled: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(inputMode: String, outputMode: String, typingSpeed: UInt32, piiScrubbingEnabled: Bool) {
+        self.inputMode = inputMode
+        self.outputMode = outputMode
+        self.typingSpeed = typingSpeed
+        self.piiScrubbingEnabled = piiScrubbingEnabled
+    }
+}
+
+
+extension BehaviorConfig: Equatable, Hashable {
+    public static func ==(lhs: BehaviorConfig, rhs: BehaviorConfig) -> Bool {
+        if lhs.inputMode != rhs.inputMode {
+            return false
+        }
+        if lhs.outputMode != rhs.outputMode {
+            return false
+        }
+        if lhs.typingSpeed != rhs.typingSpeed {
+            return false
+        }
+        if lhs.piiScrubbingEnabled != rhs.piiScrubbingEnabled {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(inputMode)
+        hasher.combine(outputMode)
+        hasher.combine(typingSpeed)
+        hasher.combine(piiScrubbingEnabled)
+    }
+}
+
+
+public struct FfiConverterTypeBehaviorConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BehaviorConfig {
+        return try BehaviorConfig(
+            inputMode: FfiConverterString.read(from: &buf), 
+            outputMode: FfiConverterString.read(from: &buf), 
+            typingSpeed: FfiConverterUInt32.read(from: &buf), 
+            piiScrubbingEnabled: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BehaviorConfig, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.inputMode, into: &buf)
+        FfiConverterString.write(value.outputMode, into: &buf)
+        FfiConverterUInt32.write(value.typingSpeed, into: &buf)
+        FfiConverterBool.write(value.piiScrubbingEnabled, into: &buf)
+    }
+}
+
+
+public func FfiConverterTypeBehaviorConfig_lift(_ buf: RustBuffer) throws -> BehaviorConfig {
+    return try FfiConverterTypeBehaviorConfig.lift(buf)
+}
+
+public func FfiConverterTypeBehaviorConfig_lower(_ value: BehaviorConfig) -> RustBuffer {
+    return FfiConverterTypeBehaviorConfig.lower(value)
 }
 
 
@@ -772,13 +1008,110 @@ public func FfiConverterTypeCapturedContext_lower(_ value: CapturedContext) -> R
 }
 
 
-public struct GeneralConfig {
-    public var defaultProvider: String?
+public struct FullConfig {
+    public var defaultHotkey: String
+    public var general: GeneralConfig
+    public var memory: MemoryConfig
+    public var providers: [ProviderConfigEntry]
+    public var rules: [RoutingRuleConfig]
+    public var shortcuts: ShortcutsConfig?
+    public var behavior: BehaviorConfig?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultProvider: String?) {
+    public init(defaultHotkey: String, general: GeneralConfig, memory: MemoryConfig, providers: [ProviderConfigEntry], rules: [RoutingRuleConfig], shortcuts: ShortcutsConfig?, behavior: BehaviorConfig?) {
+        self.defaultHotkey = defaultHotkey
+        self.general = general
+        self.memory = memory
+        self.providers = providers
+        self.rules = rules
+        self.shortcuts = shortcuts
+        self.behavior = behavior
+    }
+}
+
+
+extension FullConfig: Equatable, Hashable {
+    public static func ==(lhs: FullConfig, rhs: FullConfig) -> Bool {
+        if lhs.defaultHotkey != rhs.defaultHotkey {
+            return false
+        }
+        if lhs.general != rhs.general {
+            return false
+        }
+        if lhs.memory != rhs.memory {
+            return false
+        }
+        if lhs.providers != rhs.providers {
+            return false
+        }
+        if lhs.rules != rhs.rules {
+            return false
+        }
+        if lhs.shortcuts != rhs.shortcuts {
+            return false
+        }
+        if lhs.behavior != rhs.behavior {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(defaultHotkey)
+        hasher.combine(general)
+        hasher.combine(memory)
+        hasher.combine(providers)
+        hasher.combine(rules)
+        hasher.combine(shortcuts)
+        hasher.combine(behavior)
+    }
+}
+
+
+public struct FfiConverterTypeFullConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FullConfig {
+        return try FullConfig(
+            defaultHotkey: FfiConverterString.read(from: &buf), 
+            general: FfiConverterTypeGeneralConfig.read(from: &buf), 
+            memory: FfiConverterTypeMemoryConfig.read(from: &buf), 
+            providers: FfiConverterSequenceTypeProviderConfigEntry.read(from: &buf), 
+            rules: FfiConverterSequenceTypeRoutingRuleConfig.read(from: &buf), 
+            shortcuts: FfiConverterOptionTypeShortcutsConfig.read(from: &buf), 
+            behavior: FfiConverterOptionTypeBehaviorConfig.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FullConfig, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.defaultHotkey, into: &buf)
+        FfiConverterTypeGeneralConfig.write(value.general, into: &buf)
+        FfiConverterTypeMemoryConfig.write(value.memory, into: &buf)
+        FfiConverterSequenceTypeProviderConfigEntry.write(value.providers, into: &buf)
+        FfiConverterSequenceTypeRoutingRuleConfig.write(value.rules, into: &buf)
+        FfiConverterOptionTypeShortcutsConfig.write(value.shortcuts, into: &buf)
+        FfiConverterOptionTypeBehaviorConfig.write(value.behavior, into: &buf)
+    }
+}
+
+
+public func FfiConverterTypeFullConfig_lift(_ buf: RustBuffer) throws -> FullConfig {
+    return try FfiConverterTypeFullConfig.lift(buf)
+}
+
+public func FfiConverterTypeFullConfig_lower(_ value: FullConfig) -> RustBuffer {
+    return FfiConverterTypeFullConfig.lower(value)
+}
+
+
+public struct GeneralConfig {
+    public var defaultProvider: String?
+    public var logRetentionDays: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(defaultProvider: String?, logRetentionDays: UInt32) {
         self.defaultProvider = defaultProvider
+        self.logRetentionDays = logRetentionDays
     }
 }
 
@@ -788,11 +1121,15 @@ extension GeneralConfig: Equatable, Hashable {
         if lhs.defaultProvider != rhs.defaultProvider {
             return false
         }
+        if lhs.logRetentionDays != rhs.logRetentionDays {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(defaultProvider)
+        hasher.combine(logRetentionDays)
     }
 }
 
@@ -800,12 +1137,14 @@ extension GeneralConfig: Equatable, Hashable {
 public struct FfiConverterTypeGeneralConfig: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GeneralConfig {
         return try GeneralConfig(
-            defaultProvider: FfiConverterOptionString.read(from: &buf)
+            defaultProvider: FfiConverterOptionString.read(from: &buf), 
+            logRetentionDays: FfiConverterUInt32.read(from: &buf)
         )
     }
 
     public static func write(_ value: GeneralConfig, into buf: inout [UInt8]) {
         FfiConverterOptionString.write(value.defaultProvider, into: &buf)
+        FfiConverterUInt32.write(value.logRetentionDays, into: &buf)
     }
 }
 
@@ -816,6 +1155,61 @@ public func FfiConverterTypeGeneralConfig_lift(_ buf: RustBuffer) throws -> Gene
 
 public func FfiConverterTypeGeneralConfig_lower(_ value: GeneralConfig) -> RustBuffer {
     return FfiConverterTypeGeneralConfig.lower(value)
+}
+
+
+public struct ImageData {
+    public var data: [UInt8]
+    public var format: ImageFormat
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(data: [UInt8], format: ImageFormat) {
+        self.data = data
+        self.format = format
+    }
+}
+
+
+extension ImageData: Equatable, Hashable {
+    public static func ==(lhs: ImageData, rhs: ImageData) -> Bool {
+        if lhs.data != rhs.data {
+            return false
+        }
+        if lhs.format != rhs.format {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(data)
+        hasher.combine(format)
+    }
+}
+
+
+public struct FfiConverterTypeImageData: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ImageData {
+        return try ImageData(
+            data: FfiConverterSequenceUInt8.read(from: &buf), 
+            format: FfiConverterTypeImageFormat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ImageData, into buf: inout [UInt8]) {
+        FfiConverterSequenceUInt8.write(value.data, into: &buf)
+        FfiConverterTypeImageFormat.write(value.format, into: &buf)
+    }
+}
+
+
+public func FfiConverterTypeImageData_lift(_ buf: RustBuffer) throws -> ImageData {
+    return try FfiConverterTypeImageData.lift(buf)
+}
+
+public func FfiConverterTypeImageData_lower(_ value: ImageData) -> RustBuffer {
+    return FfiConverterTypeImageData.lower(value)
 }
 
 
@@ -1087,108 +1481,307 @@ public func FfiConverterTypeMemoryStats_lower(_ value: MemoryStats) -> RustBuffe
     return FfiConverterTypeMemoryStats.lower(value)
 }
 
-public enum AetherError {
 
-    
-    
-    // Simple error enums only carry a message
-    case HotkeyError(message: String)
-    
-    // Simple error enums only carry a message
-    case ClipboardError(message: String)
-    
-    // Simple error enums only carry a message
-    case CallbackError(message: String)
-    
-    // Simple error enums only carry a message
-    case ConfigError(message: String)
-    
-    // Simple error enums only carry a message
-    case NetworkError(message: String)
-    
-    // Simple error enums only carry a message
-    case AuthenticationError(message: String)
-    
-    // Simple error enums only carry a message
-    case RateLimitError(message: String)
-    
-    // Simple error enums only carry a message
-    case ProviderError(message: String)
-    
-    // Simple error enums only carry a message
-    case Timeout(message: String)
-    
-    // Simple error enums only carry a message
-    case NoProviderAvailable(message: String)
-    
-    // Simple error enums only carry a message
-    case InvalidConfig(message: String)
-    
-    // Simple error enums only carry a message
-    case Other(message: String)
-    
+public struct ProviderConfig {
+    public var providerType: String?
+    public var apiKey: String?
+    public var model: String
+    public var baseUrl: String?
+    public var color: String
+    public var timeoutSeconds: UInt64
+    public var maxTokens: UInt32?
+    public var temperature: Float?
 
-    fileprivate static func uniffiErrorHandler(_ error: RustBuffer) throws -> Error {
-        return try FfiConverterTypeAetherError.lift(error)
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(providerType: String?, apiKey: String?, model: String, baseUrl: String?, color: String, timeoutSeconds: UInt64, maxTokens: UInt32?, temperature: Float?) {
+        self.providerType = providerType
+        self.apiKey = apiKey
+        self.model = model
+        self.baseUrl = baseUrl
+        self.color = color
+        self.timeoutSeconds = timeoutSeconds
+        self.maxTokens = maxTokens
+        self.temperature = temperature
     }
 }
 
 
-public struct FfiConverterTypeAetherError: FfiConverterRustBuffer {
-    typealias SwiftType = AetherError
+extension ProviderConfig: Equatable, Hashable {
+    public static func ==(lhs: ProviderConfig, rhs: ProviderConfig) -> Bool {
+        if lhs.providerType != rhs.providerType {
+            return false
+        }
+        if lhs.apiKey != rhs.apiKey {
+            return false
+        }
+        if lhs.model != rhs.model {
+            return false
+        }
+        if lhs.baseUrl != rhs.baseUrl {
+            return false
+        }
+        if lhs.color != rhs.color {
+            return false
+        }
+        if lhs.timeoutSeconds != rhs.timeoutSeconds {
+            return false
+        }
+        if lhs.maxTokens != rhs.maxTokens {
+            return false
+        }
+        if lhs.temperature != rhs.temperature {
+            return false
+        }
+        return true
+    }
 
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AetherError {
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(providerType)
+        hasher.combine(apiKey)
+        hasher.combine(model)
+        hasher.combine(baseUrl)
+        hasher.combine(color)
+        hasher.combine(timeoutSeconds)
+        hasher.combine(maxTokens)
+        hasher.combine(temperature)
+    }
+}
+
+
+public struct FfiConverterTypeProviderConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProviderConfig {
+        return try ProviderConfig(
+            providerType: FfiConverterOptionString.read(from: &buf), 
+            apiKey: FfiConverterOptionString.read(from: &buf), 
+            model: FfiConverterString.read(from: &buf), 
+            baseUrl: FfiConverterOptionString.read(from: &buf), 
+            color: FfiConverterString.read(from: &buf), 
+            timeoutSeconds: FfiConverterUInt64.read(from: &buf), 
+            maxTokens: FfiConverterOptionUInt32.read(from: &buf), 
+            temperature: FfiConverterOptionFloat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ProviderConfig, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.providerType, into: &buf)
+        FfiConverterOptionString.write(value.apiKey, into: &buf)
+        FfiConverterString.write(value.model, into: &buf)
+        FfiConverterOptionString.write(value.baseUrl, into: &buf)
+        FfiConverterString.write(value.color, into: &buf)
+        FfiConverterUInt64.write(value.timeoutSeconds, into: &buf)
+        FfiConverterOptionUInt32.write(value.maxTokens, into: &buf)
+        FfiConverterOptionFloat.write(value.temperature, into: &buf)
+    }
+}
+
+
+public func FfiConverterTypeProviderConfig_lift(_ buf: RustBuffer) throws -> ProviderConfig {
+    return try FfiConverterTypeProviderConfig.lift(buf)
+}
+
+public func FfiConverterTypeProviderConfig_lower(_ value: ProviderConfig) -> RustBuffer {
+    return FfiConverterTypeProviderConfig.lower(value)
+}
+
+
+public struct ProviderConfigEntry {
+    public var name: String
+    public var config: ProviderConfig
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(name: String, config: ProviderConfig) {
+        self.name = name
+        self.config = config
+    }
+}
+
+
+extension ProviderConfigEntry: Equatable, Hashable {
+    public static func ==(lhs: ProviderConfigEntry, rhs: ProviderConfigEntry) -> Bool {
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.config != rhs.config {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+        hasher.combine(config)
+    }
+}
+
+
+public struct FfiConverterTypeProviderConfigEntry: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProviderConfigEntry {
+        return try ProviderConfigEntry(
+            name: FfiConverterString.read(from: &buf), 
+            config: FfiConverterTypeProviderConfig.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ProviderConfigEntry, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterTypeProviderConfig.write(value.config, into: &buf)
+    }
+}
+
+
+public func FfiConverterTypeProviderConfigEntry_lift(_ buf: RustBuffer) throws -> ProviderConfigEntry {
+    return try FfiConverterTypeProviderConfigEntry.lift(buf)
+}
+
+public func FfiConverterTypeProviderConfigEntry_lower(_ value: ProviderConfigEntry) -> RustBuffer {
+    return FfiConverterTypeProviderConfigEntry.lower(value)
+}
+
+
+public struct RoutingRuleConfig {
+    public var regex: String
+    public var provider: String
+    public var systemPrompt: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(regex: String, provider: String, systemPrompt: String?) {
+        self.regex = regex
+        self.provider = provider
+        self.systemPrompt = systemPrompt
+    }
+}
+
+
+extension RoutingRuleConfig: Equatable, Hashable {
+    public static func ==(lhs: RoutingRuleConfig, rhs: RoutingRuleConfig) -> Bool {
+        if lhs.regex != rhs.regex {
+            return false
+        }
+        if lhs.provider != rhs.provider {
+            return false
+        }
+        if lhs.systemPrompt != rhs.systemPrompt {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(regex)
+        hasher.combine(provider)
+        hasher.combine(systemPrompt)
+    }
+}
+
+
+public struct FfiConverterTypeRoutingRuleConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RoutingRuleConfig {
+        return try RoutingRuleConfig(
+            regex: FfiConverterString.read(from: &buf), 
+            provider: FfiConverterString.read(from: &buf), 
+            systemPrompt: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RoutingRuleConfig, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.regex, into: &buf)
+        FfiConverterString.write(value.provider, into: &buf)
+        FfiConverterOptionString.write(value.systemPrompt, into: &buf)
+    }
+}
+
+
+public func FfiConverterTypeRoutingRuleConfig_lift(_ buf: RustBuffer) throws -> RoutingRuleConfig {
+    return try FfiConverterTypeRoutingRuleConfig.lift(buf)
+}
+
+public func FfiConverterTypeRoutingRuleConfig_lower(_ value: RoutingRuleConfig) -> RustBuffer {
+    return FfiConverterTypeRoutingRuleConfig.lower(value)
+}
+
+
+public struct ShortcutsConfig {
+    public var summon: String
+    public var cancel: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(summon: String, cancel: String?) {
+        self.summon = summon
+        self.cancel = cancel
+    }
+}
+
+
+extension ShortcutsConfig: Equatable, Hashable {
+    public static func ==(lhs: ShortcutsConfig, rhs: ShortcutsConfig) -> Bool {
+        if lhs.summon != rhs.summon {
+            return false
+        }
+        if lhs.cancel != rhs.cancel {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(summon)
+        hasher.combine(cancel)
+    }
+}
+
+
+public struct FfiConverterTypeShortcutsConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ShortcutsConfig {
+        return try ShortcutsConfig(
+            summon: FfiConverterString.read(from: &buf), 
+            cancel: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ShortcutsConfig, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.summon, into: &buf)
+        FfiConverterOptionString.write(value.cancel, into: &buf)
+    }
+}
+
+
+public func FfiConverterTypeShortcutsConfig_lift(_ buf: RustBuffer) throws -> ShortcutsConfig {
+    return try FfiConverterTypeShortcutsConfig.lift(buf)
+}
+
+public func FfiConverterTypeShortcutsConfig_lower(_ value: ShortcutsConfig) -> RustBuffer {
+    return FfiConverterTypeShortcutsConfig.lower(value)
+}
+
+public enum AetherException {
+
+    
+    
+    // Simple error enums only carry a message
+    case Error(message: String)
+    
+
+    fileprivate static func uniffiErrorHandler(_ error: RustBuffer) throws -> Error {
+        return try FfiConverterTypeAetherException.lift(error)
+    }
+}
+
+
+public struct FfiConverterTypeAetherException: FfiConverterRustBuffer {
+    typealias SwiftType = AetherException
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AetherException {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
         
 
         
-        case 1: return .HotkeyError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 2: return .ClipboardError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 3: return .CallbackError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 4: return .ConfigError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 5: return .NetworkError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 6: return .AuthenticationError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 7: return .RateLimitError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 8: return .ProviderError(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 9: return .Timeout(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 10: return .NoProviderAvailable(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 11: return .InvalidConfig(
-            message: try FfiConverterString.read(from: &buf)
-        )
-        
-        case 12: return .Other(
+        case 1: return .Error(
             message: try FfiConverterString.read(from: &buf)
         )
         
@@ -1197,36 +1790,14 @@ public struct FfiConverterTypeAetherError: FfiConverterRustBuffer {
         }
     }
 
-    public static func write(_ value: AetherError, into buf: inout [UInt8]) {
+    public static func write(_ value: AetherException, into buf: inout [UInt8]) {
         switch value {
 
         
 
         
-        case .HotkeyError(_ /* message is ignored*/):
+        case .Error(_ /* message is ignored*/):
             writeInt(&buf, Int32(1))
-        case .ClipboardError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(2))
-        case .CallbackError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(3))
-        case .ConfigError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(4))
-        case .NetworkError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(5))
-        case .AuthenticationError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(6))
-        case .RateLimitError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(7))
-        case .ProviderError(_ /* message is ignored*/):
-            writeInt(&buf, Int32(8))
-        case .Timeout(_ /* message is ignored*/):
-            writeInt(&buf, Int32(9))
-        case .NoProviderAvailable(_ /* message is ignored*/):
-            writeInt(&buf, Int32(10))
-        case .InvalidConfig(_ /* message is ignored*/):
-            writeInt(&buf, Int32(11))
-        case .Other(_ /* message is ignored*/):
-            writeInt(&buf, Int32(12))
 
         
         }
@@ -1234,9 +1805,9 @@ public struct FfiConverterTypeAetherError: FfiConverterRustBuffer {
 }
 
 
-extension AetherError: Equatable, Hashable {}
+extension AetherException: Equatable, Hashable {}
 
-extension AetherError: Error { }
+extension AetherException: Error { }
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
@@ -1313,6 +1884,138 @@ extension ErrorType: Equatable, Hashable {}
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+public enum ImageFormat {
+    
+    case png
+    case jpeg
+    case gif
+}
+
+public struct FfiConverterTypeImageFormat: FfiConverterRustBuffer {
+    typealias SwiftType = ImageFormat
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ImageFormat {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .png
+        
+        case 2: return .jpeg
+        
+        case 3: return .gif
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ImageFormat, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .png:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .jpeg:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .gif:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+public func FfiConverterTypeImageFormat_lift(_ buf: RustBuffer) throws -> ImageFormat {
+    return try FfiConverterTypeImageFormat.lift(buf)
+}
+
+public func FfiConverterTypeImageFormat_lower(_ value: ImageFormat) -> RustBuffer {
+    return FfiConverterTypeImageFormat.lower(value)
+}
+
+
+extension ImageFormat: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+public enum LogLevel {
+    
+    case error
+    case warn
+    case info
+    case debug
+    case trace
+}
+
+public struct FfiConverterTypeLogLevel: FfiConverterRustBuffer {
+    typealias SwiftType = LogLevel
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LogLevel {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .error
+        
+        case 2: return .warn
+        
+        case 3: return .info
+        
+        case 4: return .debug
+        
+        case 5: return .trace
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: LogLevel, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .error:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .warn:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .info:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .debug:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .trace:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+public func FfiConverterTypeLogLevel_lift(_ buf: RustBuffer) throws -> LogLevel {
+    return try FfiConverterTypeLogLevel.lift(buf)
+}
+
+public func FfiConverterTypeLogLevel_lower(_ value: LogLevel) -> RustBuffer {
+    return FfiConverterTypeLogLevel.lower(value)
+}
+
+
+extension LogLevel: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 public enum ProcessingState {
     
     case idle
@@ -1320,6 +2023,7 @@ public enum ProcessingState {
     case retrievingMemory
     case processingWithAi
     case processing
+    case typewriting
     case success
     case error
 }
@@ -1341,9 +2045,11 @@ public struct FfiConverterTypeProcessingState: FfiConverterRustBuffer {
         
         case 5: return .processing
         
-        case 6: return .success
+        case 6: return .typewriting
         
-        case 7: return .error
+        case 7: return .success
+        
+        case 8: return .error
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -1373,12 +2079,16 @@ public struct FfiConverterTypeProcessingState: FfiConverterRustBuffer {
             writeInt(&buf, Int32(5))
         
         
-        case .success:
+        case .typewriting:
             writeInt(&buf, Int32(6))
         
         
-        case .error:
+        case .success:
             writeInt(&buf, Int32(7))
+        
+        
+        case .error:
+            writeInt(&buf, Int32(8))
         
         }
     }
@@ -1468,12 +2178,16 @@ private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 public protocol AetherEventHandler : AnyObject {
     func onStateChanged(state: ProcessingState) 
     func onHotkeyDetected(clipboardContent: String) 
-    func onError(message: String) 
+    func onError(message: String, suggestion: String?) 
     func onResponseChunk(text: String) 
     func onErrorTyped(errorType: ErrorType, message: String) 
     func onProgress(percent: Float) 
     func onAiProcessingStarted(providerName: String, providerColor: String) 
     func onAiResponseReceived(responsePreview: String) 
+    func onProviderFallback(fromProvider: String, toProvider: String) 
+    func onConfigChanged() 
+    func onTypewriterProgress(percent: Float) 
+    func onTypewriterCancelled() 
     
 }
 
@@ -1508,7 +2222,8 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
             try swiftCallbackInterface.onError(
-                    message:  try FfiConverterString.read(from: &reader)
+                    message:  try FfiConverterString.read(from: &reader), 
+                    suggestion:  try FfiConverterOptionString.read(from: &reader)
                     )
             return UNIFFI_CALLBACK_SUCCESS
         }
@@ -1566,6 +2281,47 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
         func makeCall() throws -> Int32 {
             try swiftCallbackInterface.onAiResponseReceived(
                     responsePreview:  try FfiConverterString.read(from: &reader)
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        return try makeCall()
+    }
+
+    func invokeOnProviderFallback(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.onProviderFallback(
+                    fromProvider:  try FfiConverterString.read(from: &reader), 
+                    toProvider:  try FfiConverterString.read(from: &reader)
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        return try makeCall()
+    }
+
+    func invokeOnConfigChanged(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.onConfigChanged(
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        return try makeCall()
+    }
+
+    func invokeOnTypewriterProgress(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.onTypewriterProgress(
+                    percent:  try FfiConverterFloat.read(from: &reader)
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        return try makeCall()
+    }
+
+    func invokeOnTypewriterCancelled(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.onTypewriterCancelled(
                     )
             return UNIFFI_CALLBACK_SUCCESS
         }
@@ -1691,6 +2447,62 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
                 out_buf.pointee = FfiConverterString.lower(String(describing: error))
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
+        case 9:
+            let cb: AetherEventHandler
+            do {
+                cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("AetherEventHandler: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeOnProviderFallback(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        case 10:
+            let cb: AetherEventHandler
+            do {
+                cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("AetherEventHandler: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeOnConfigChanged(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        case 11:
+            let cb: AetherEventHandler
+            do {
+                cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("AetherEventHandler: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeOnTypewriterProgress(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        case 12:
+            let cb: AetherEventHandler
+            do {
+                cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("AetherEventHandler: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeOnTypewriterCancelled(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
         
         // This should never happen, because an out of bounds method index won't
         // ever be used. Once we can catch errors, we should return an InternalError.
@@ -1752,6 +2564,239 @@ extension FfiConverterCallbackInterfaceAetherEventHandler : FfiConverter {
     }
 }
 
+
+
+// Declaration and FfiConverters for KeychainManager Callback Interface
+
+public protocol KeychainManager : AnyObject {
+    func setApiKey(provider: String, key: String) throws
+    func getApiKey(provider: String) throws -> String?
+    func deleteApiKey(provider: String) throws
+    func hasApiKey(provider: String) throws -> Bool
+    
+}
+
+// The ForeignCallback that is passed to Rust.
+fileprivate let foreignCallbackCallbackInterfaceKeychainManager : ForeignCallback =
+    { (handle: UniFFICallbackHandle, method: Int32, argsData: UnsafePointer<UInt8>, argsLen: Int32, out_buf: UnsafeMutablePointer<RustBuffer>) -> Int32 in
+    
+
+    func invokeSetApiKey(_ swiftCallbackInterface: KeychainManager, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.setApiKey(
+                    provider:  try FfiConverterString.read(from: &reader), 
+                    key:  try FfiConverterString.read(from: &reader)
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        do {
+            return try makeCall()
+        } catch let error as AetherException {
+            out_buf.pointee = FfiConverterTypeAetherException.lower(error)
+            return UNIFFI_CALLBACK_ERROR
+        }
+    }
+
+    func invokeGetApiKey(_ swiftCallbackInterface: KeychainManager, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
+        func makeCall() throws -> Int32 {
+            let result =  try swiftCallbackInterface.getApiKey(
+                    provider:  try FfiConverterString.read(from: &reader)
+                    )
+            var writer = [UInt8]()
+            FfiConverterOptionString.write(result, into: &writer)
+            out_buf.pointee = RustBuffer(bytes: writer)
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        do {
+            return try makeCall()
+        } catch let error as AetherException {
+            out_buf.pointee = FfiConverterTypeAetherException.lower(error)
+            return UNIFFI_CALLBACK_ERROR
+        }
+    }
+
+    func invokeDeleteApiKey(_ swiftCallbackInterface: KeychainManager, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.deleteApiKey(
+                    provider:  try FfiConverterString.read(from: &reader)
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        do {
+            return try makeCall()
+        } catch let error as AetherException {
+            out_buf.pointee = FfiConverterTypeAetherException.lower(error)
+            return UNIFFI_CALLBACK_ERROR
+        }
+    }
+
+    func invokeHasApiKey(_ swiftCallbackInterface: KeychainManager, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
+        func makeCall() throws -> Int32 {
+            let result =  try swiftCallbackInterface.hasApiKey(
+                    provider:  try FfiConverterString.read(from: &reader)
+                    )
+            var writer = [UInt8]()
+            FfiConverterBool.write(result, into: &writer)
+            out_buf.pointee = RustBuffer(bytes: writer)
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        do {
+            return try makeCall()
+        } catch let error as AetherException {
+            out_buf.pointee = FfiConverterTypeAetherException.lower(error)
+            return UNIFFI_CALLBACK_ERROR
+        }
+    }
+
+
+    switch method {
+        case IDX_CALLBACK_FREE:
+            FfiConverterCallbackInterfaceKeychainManager.drop(handle: handle)
+            // Sucessful return
+            // See docs of ForeignCallback in `uniffi_core/src/ffi/foreigncallbacks.rs`
+            return UNIFFI_CALLBACK_SUCCESS
+        case 1:
+            let cb: KeychainManager
+            do {
+                cb = try FfiConverterCallbackInterfaceKeychainManager.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("KeychainManager: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeSetApiKey(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        case 2:
+            let cb: KeychainManager
+            do {
+                cb = try FfiConverterCallbackInterfaceKeychainManager.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("KeychainManager: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeGetApiKey(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        case 3:
+            let cb: KeychainManager
+            do {
+                cb = try FfiConverterCallbackInterfaceKeychainManager.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("KeychainManager: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeDeleteApiKey(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        case 4:
+            let cb: KeychainManager
+            do {
+                cb = try FfiConverterCallbackInterfaceKeychainManager.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("KeychainManager: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeHasApiKey(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        
+        // This should never happen, because an out of bounds method index won't
+        // ever be used. Once we can catch errors, we should return an InternalError.
+        // https://github.com/mozilla/uniffi-rs/issues/351
+        default:
+            // An unexpected error happened.
+            // See docs of ForeignCallback in `uniffi_core/src/ffi/foreigncallbacks.rs`
+            return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+    }
+}
+
+// FfiConverter protocol for callback interfaces
+fileprivate struct FfiConverterCallbackInterfaceKeychainManager {
+    private static let initCallbackOnce: () = {
+        // Swift ensures this initializer code will once run once, even when accessed by multiple threads.
+        try! rustCall { (err: UnsafeMutablePointer<RustCallStatus>) in
+            uniffi_aethecore_fn_init_callback_keychainmanager(foreignCallbackCallbackInterfaceKeychainManager, err)
+        }
+    }()
+
+    private static func ensureCallbackinitialized() {
+        _ = initCallbackOnce
+    }
+
+    static func drop(handle: UniFFICallbackHandle) {
+        handleMap.remove(handle: handle)
+    }
+
+    private static var handleMap = UniFFICallbackHandleMap<KeychainManager>()
+}
+
+extension FfiConverterCallbackInterfaceKeychainManager : FfiConverter {
+    typealias SwiftType = KeychainManager
+    // We can use Handle as the FfiType because it's a typealias to UInt64
+    typealias FfiType = UniFFICallbackHandle
+
+    public static func lift(_ handle: UniFFICallbackHandle) throws -> SwiftType {
+        ensureCallbackinitialized();
+        guard let callback = handleMap.get(handle: handle) else {
+            throw UniffiInternalError.unexpectedStaleHandle
+        }
+        return callback
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        ensureCallbackinitialized();
+        let handle: UniFFICallbackHandle = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func lower(_ v: SwiftType) -> UniFFICallbackHandle {
+        ensureCallbackinitialized();
+        return handleMap.insert(obj: v)
+    }
+
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        ensureCallbackinitialized();
+        writeInt(&buf, lower(v))
+    }
+}
+
+fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
+    typealias SwiftType = UInt32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
 fileprivate struct FfiConverterOptionFloat: FfiConverterRustBuffer {
     typealias SwiftType = Float?
 
@@ -1791,6 +2836,91 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
         case 1: return try FfiConverterString.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
+    }
+}
+
+fileprivate struct FfiConverterOptionTypeBehaviorConfig: FfiConverterRustBuffer {
+    typealias SwiftType = BehaviorConfig?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeBehaviorConfig.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeBehaviorConfig.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+fileprivate struct FfiConverterOptionTypeImageData: FfiConverterRustBuffer {
+    typealias SwiftType = ImageData?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeImageData.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeImageData.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+fileprivate struct FfiConverterOptionTypeShortcutsConfig: FfiConverterRustBuffer {
+    typealias SwiftType = ShortcutsConfig?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeShortcutsConfig.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeShortcutsConfig.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+fileprivate struct FfiConverterSequenceUInt8: FfiConverterRustBuffer {
+    typealias SwiftType = [UInt8]
+
+    public static func write(_ value: [UInt8], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterUInt8.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UInt8] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [UInt8]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterUInt8.read(from: &buf))
+        }
+        return seq
     }
 }
 
@@ -1838,6 +2968,50 @@ fileprivate struct FfiConverterSequenceTypeMemoryEntry: FfiConverterRustBuffer {
     }
 }
 
+fileprivate struct FfiConverterSequenceTypeProviderConfigEntry: FfiConverterRustBuffer {
+    typealias SwiftType = [ProviderConfigEntry]
+
+    public static func write(_ value: [ProviderConfigEntry], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeProviderConfigEntry.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ProviderConfigEntry] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ProviderConfigEntry]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeProviderConfigEntry.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+fileprivate struct FfiConverterSequenceTypeRoutingRuleConfig: FfiConverterRustBuffer {
+    typealias SwiftType = [RoutingRuleConfig]
+
+    public static func write(_ value: [RoutingRuleConfig], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeRoutingRuleConfig.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [RoutingRuleConfig] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [RoutingRuleConfig]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeRoutingRuleConfig.read(from: &buf))
+        }
+        return seq
+    }
+}
+
 private enum InitializationResult {
     case ok
     case contractVersionMismatch
@@ -1853,55 +3027,79 @@ private var initializationResult: InitializationResult {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_cleanup_old_memories() != 21217) {
+    if (uniffi_aethecore_checksum_method_aethercore_cleanup_old_memories() != 49104) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_clear_memories() != 29393) {
+    if (uniffi_aethecore_checksum_method_aethercore_clear_memories() != 19219) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_clear_request_context() != 2809) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_delete_memory() != 41638) {
+    if (uniffi_aethecore_checksum_method_aethercore_delete_memory() != 11648) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_clipboard_text() != 59270) {
+    if (uniffi_aethecore_checksum_method_aethercore_delete_provider() != 54495) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_clipboard_text() != 62323) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_log_directory() != 19967) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_log_level() != 874) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_get_memory_config() != 37662) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_memory_stats() != 6087) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_memory_stats() != 27898) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_has_clipboard_image() != 63485) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_is_listening() != 51411) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_process_with_ai() != 64291) {
+    if (uniffi_aethecore_checksum_method_aethercore_load_config() != 47002) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_retrieve_and_augment_prompt() != 38143) {
+    if (uniffi_aethecore_checksum_method_aethercore_process_with_ai() != 16909) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_retry_last_request() != 41056) {
+    if (uniffi_aethecore_checksum_method_aethercore_read_clipboard_image() != 24584) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_search_memories() != 47510) {
+    if (uniffi_aethecore_checksum_method_aethercore_retrieve_and_augment_prompt() != 9356) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_retry_last_request() != 59136) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_search_memories() != 39523) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_set_current_context() != 13853) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_start_listening() != 43329) {
+    if (uniffi_aethecore_checksum_method_aethercore_set_log_level() != 50110) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_stop_listening() != 7743) {
+    if (uniffi_aethecore_checksum_method_aethercore_start_listening() != 63093) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_store_interaction_memory() != 42867) {
+    if (uniffi_aethecore_checksum_method_aethercore_stop_listening() != 31357) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_store_interaction_memory() != 61598) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_store_request_context() != 34566) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_test_provider_connection() != 49526) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_test_streaming_response() != 24597) {
@@ -1910,10 +3108,28 @@ private var initializationResult: InitializationResult {
     if (uniffi_aethecore_checksum_method_aethercore_test_typed_error() != 39352) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_update_memory_config() != 64538) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_behavior() != 23894) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_constructor_aethercore_new() != 63574) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_memory_config() != 52559) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_update_provider() != 29155) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_update_routing_rules() != 64926) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_update_shortcuts() != 26691) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_validate_regex() != 94) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_write_clipboard_image() != 45656) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_constructor_aethercore_new() != 12942) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_state_changed() != 21139) {
@@ -1922,7 +3138,7 @@ private var initializationResult: InitializationResult {
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_hotkey_detected() != 5637) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_error() != 24904) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_error() != 13669) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_response_chunk() != 1231) {
@@ -1938,6 +3154,30 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_ai_response_received() != 33940) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_provider_fallback() != 34077) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_config_changed() != 30065) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_typewriter_progress() != 43925) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_typewriter_cancelled() != 28606) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_keychainmanager_set_api_key() != 38168) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_keychainmanager_get_api_key() != 49433) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_keychainmanager_delete_api_key() != 35079) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_keychainmanager_has_api_key() != 9420) {
         return InitializationResult.apiChecksumMismatch
     }
 
