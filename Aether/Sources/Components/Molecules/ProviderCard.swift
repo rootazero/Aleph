@@ -108,7 +108,12 @@ struct ProviderCard: View {
                     lineWidth: isSelected ? 2 : 1
                 )
         )
-        .shadow(DesignTokens.Shadows.card)
+        .shadow(
+            color: Color.black.opacity(isHovered ? 0.15 : 0.1),
+            radius: isHovered ? 6 : 4,
+            x: 0,
+            y: isHovered ? 3 : 2
+        )
         .scaleEffect(isHovered ? 1.02 : 1.0)
         .animation(DesignTokens.Animation.quick, value: isHovered)
         .animation(DesignTokens.Animation.quick, value: isSelected)

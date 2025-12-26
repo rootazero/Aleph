@@ -24,6 +24,13 @@ struct SidebarItem: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: DesignTokens.Spacing.sm) {
+                // Selection indicator bar
+                Rectangle()
+                    .fill(DesignTokens.Colors.accentBlue)
+                    .frame(width: 3)
+                    .opacity(isSelected ? 1 : 0)
+                    .offset(x: isSelected ? 0 : -3)
+
                 // Icon
                 Image(systemName: iconName)
                     .font(.system(size: 16, weight: .medium))

@@ -30,6 +30,12 @@ struct ProvidersView: View {
     @State private var showingConfigModal: Bool = false
     @State private var editingProvider: String?
 
+    // Toast notification state
+    @State private var toastData: ToastData?
+
+    // Error shake animation state
+    @State private var shakeOffset: CGFloat = 0
+
     // MARK: - Computed Properties
 
     /// Filtered providers based on search text
@@ -80,6 +86,7 @@ struct ProvidersView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .toast($toastData)
         .onAppear {
             loadProviders()
         }
@@ -158,21 +165,20 @@ struct ProvidersView: View {
         )
     }
 
-    /// Loading state view
+    /// Loading state view with skeleton cards
     @ViewBuilder
     private var loadingStateView: some View {
-        VStack(spacing: DesignTokens.Spacing.md) {
-            ProgressView()
-                .scaleEffect(1.2)
-
-            Text("Loading providers...")
-                .font(DesignTokens.Typography.body)
-                .foregroundColor(DesignTokens.Colors.textSecondary)
+        ScrollView {
+            LazyVStack(spacing: DesignTokens.Spacing.md) {
+                ForEach(0..<3, id: \.self) { _ in
+                    SkeletonProviderCard()
+                }
+            }
+            .padding(.vertical, DesignTokens.Spacing.xs)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Error state view
+    /// Error state view with shake animation
     @ViewBuilder
     private func errorStateView(_ error: String) -> some View {
         VStack(spacing: DesignTokens.Spacing.md) {
@@ -197,7 +203,11 @@ struct ProvidersView: View {
                 action: loadProviders
             )
         }
+        .offset(x: shakeOffset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            triggerShakeAnimation()
+        }
     }
 
     /// Empty state view
@@ -243,7 +253,7 @@ struct ProvidersView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Provider cards view
+    /// Provider cards view with search filter animations
     @ViewBuilder
     private var providerCardsView: some View {
         ScrollView {
@@ -258,9 +268,14 @@ struct ProvidersView: View {
                         onDelete: { deleteProvider(provider.name) },
                         onTestConnection: nil // TODO: Implement test connection
                     )
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .move(edge: .top)),
+                        removal: .opacity.combined(with: .move(edge: .leading))
+                    ))
                 }
             }
             .padding(.vertical, DesignTokens.Spacing.xs)
+            .animation(DesignTokens.Animation.standard, value: filteredProviders.count)
         }
     }
 
@@ -333,10 +348,14 @@ struct ProvidersView: View {
                     if selectedProvider == name {
                         selectedProvider = providers.first?.name
                     }
+
+                    // Show success toast
+                    showSuccessToast("Provider \"\(name)\" deleted successfully")
                 }
             } catch {
                 await MainActor.run {
                     errorMessage = "Failed to delete provider: \(error.localizedDescription)"
+                    showErrorToast("Failed to delete provider")
                 }
             }
         }
@@ -361,6 +380,44 @@ struct ProvidersView: View {
             // Ollama or other providers without API key
             return provider.config.apiKey != nil || provider.config.providerType == "ollama"
         }
+    }
+
+    /// Trigger shake animation for error state
+    private func triggerShakeAnimation() {
+        let shakeDistance: CGFloat = 10
+        let shakeDuration: Double = 0.1
+
+        withAnimation(Animation.easeInOut(duration: shakeDuration)) {
+            shakeOffset = shakeDistance
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + shakeDuration) {
+            withAnimation(Animation.easeInOut(duration: shakeDuration)) {
+                shakeOffset = -shakeDistance
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + shakeDuration * 2) {
+            withAnimation(Animation.easeInOut(duration: shakeDuration)) {
+                shakeOffset = shakeDistance / 2
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + shakeDuration * 3) {
+            withAnimation(Animation.easeInOut(duration: shakeDuration)) {
+                shakeOffset = 0
+            }
+        }
+    }
+
+    /// Show success toast
+    private func showSuccessToast(_ message: String) {
+        toastData = ToastData(message: message, style: .success)
+    }
+
+    /// Show error toast
+    private func showErrorToast(_ message: String) {
+        toastData = ToastData(message: message, style: .error)
     }
 }
 
