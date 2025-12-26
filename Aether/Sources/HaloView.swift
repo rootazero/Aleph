@@ -62,7 +62,7 @@ struct HaloView: View {
         .animation(.spring(response: 0.4), value: state)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabelForState)
-        .accessibilityValue(accessibilityValueForState)
+        .accessibilityValue(accessibilityValueForState ?? "")
         .accessibilityAddTraits(accessibilityTraitsForState)
     }
 
@@ -84,12 +84,25 @@ struct HaloView: View {
             return "Processing with AI"
         case .processing:
             return "Processing request"
-        case .typewriting(let progress):
+        case .typewriting(_):
             return "Typewriter animation in progress"
         case .success:
             return "Request completed successfully"
-        case .error(let type, _):
-            return "\(type.rawValue) error occurred"
+        case .error(let type, _, _):
+            let errorTypeString: String
+            switch type {
+            case .network:
+                errorTypeString = "Network"
+            case .permission:
+                errorTypeString = "Permission"
+            case .quota:
+                errorTypeString = "Quota"
+            case .timeout:
+                errorTypeString = "Timeout"
+            case .unknown:
+                errorTypeString = "Unknown"
+            }
+            return "\(errorTypeString) error occurred"
         }
     }
 
@@ -254,23 +267,25 @@ struct ErrorView: View {
 
 struct HaloView_Previews: PreviewProvider {
     static var previews: some View {
+        let themeEngine = ThemeEngine()
+
         Group {
-            HaloView(state: .listening)
+            HaloView(state: .listening, themeEngine: themeEngine)
                 .previewDisplayName("Listening")
                 .frame(width: 120, height: 120)
                 .background(Color.black.opacity(0.3))
 
-            HaloView(state: .processing(providerColor: .green))
+            HaloView(state: .processing(providerColor: .green, streamingText: nil), themeEngine: themeEngine)
                 .previewDisplayName("Processing")
                 .frame(width: 120, height: 120)
                 .background(Color.black.opacity(0.3))
 
-            HaloView(state: .success)
+            HaloView(state: .success(finalText: nil), themeEngine: themeEngine)
                 .previewDisplayName("Success")
                 .frame(width: 120, height: 120)
                 .background(Color.black.opacity(0.3))
 
-            HaloView(state: .error)
+            HaloView(state: .error(type: .unknown, message: "Test error", suggestion: nil), themeEngine: themeEngine)
                 .previewDisplayName("Error")
                 .frame(width: 120, height: 120)
                 .background(Color.black.opacity(0.3))

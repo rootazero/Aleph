@@ -2207,7 +2207,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnStateChanged(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            try swiftCallbackInterface.onStateChanged(
+            swiftCallbackInterface.onStateChanged(
                     state:  try FfiConverterTypeProcessingState.read(from: &reader)
                     )
             return UNIFFI_CALLBACK_SUCCESS
@@ -2218,7 +2218,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnHotkeyDetected(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            try swiftCallbackInterface.onHotkeyDetected(
+            swiftCallbackInterface.onHotkeyDetected(
                     clipboardContent:  try FfiConverterString.read(from: &reader)
                     )
             return UNIFFI_CALLBACK_SUCCESS
@@ -2229,7 +2229,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnError(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            try swiftCallbackInterface.onError(
+            swiftCallbackInterface.onError(
                     message:  try FfiConverterString.read(from: &reader), 
                     suggestion:  try FfiConverterOptionString.read(from: &reader)
                     )
@@ -2241,7 +2241,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnResponseChunk(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            try swiftCallbackInterface.onResponseChunk(
+            swiftCallbackInterface.onResponseChunk(
                     text:  try FfiConverterString.read(from: &reader)
                     )
             return UNIFFI_CALLBACK_SUCCESS
@@ -2252,7 +2252,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnErrorTyped(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            try swiftCallbackInterface.onErrorTyped(
+            swiftCallbackInterface.onErrorTyped(
                     errorType:  try FfiConverterTypeErrorType.read(from: &reader), 
                     message:  try FfiConverterString.read(from: &reader)
                     )
@@ -2264,7 +2264,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnProgress(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            try swiftCallbackInterface.onProgress(
+            swiftCallbackInterface.onProgress(
                     percent:  try FfiConverterFloat.read(from: &reader)
                     )
             return UNIFFI_CALLBACK_SUCCESS
@@ -2275,7 +2275,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnAiProcessingStarted(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            try swiftCallbackInterface.onAiProcessingStarted(
+            swiftCallbackInterface.onAiProcessingStarted(
                     providerName:  try FfiConverterString.read(from: &reader), 
                     providerColor:  try FfiConverterString.read(from: &reader)
                     )
@@ -2287,7 +2287,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnAiResponseReceived(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            try swiftCallbackInterface.onAiResponseReceived(
+            swiftCallbackInterface.onAiResponseReceived(
                     responsePreview:  try FfiConverterString.read(from: &reader)
                     )
             return UNIFFI_CALLBACK_SUCCESS
@@ -2298,7 +2298,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnProviderFallback(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            try swiftCallbackInterface.onProviderFallback(
+            swiftCallbackInterface.onProviderFallback(
                     fromProvider:  try FfiConverterString.read(from: &reader), 
                     toProvider:  try FfiConverterString.read(from: &reader)
                     )
@@ -2309,7 +2309,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
 
     func invokeOnConfigChanged(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         func makeCall() throws -> Int32 {
-            try swiftCallbackInterface.onConfigChanged(
+            swiftCallbackInterface.onConfigChanged(
                     )
             return UNIFFI_CALLBACK_SUCCESS
         }
@@ -2319,7 +2319,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnTypewriterProgress(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            try swiftCallbackInterface.onTypewriterProgress(
+            swiftCallbackInterface.onTypewriterProgress(
                     percent:  try FfiConverterFloat.read(from: &reader)
                     )
             return UNIFFI_CALLBACK_SUCCESS
@@ -2329,7 +2329,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
 
     func invokeOnTypewriterCancelled(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         func makeCall() throws -> Int32 {
-            try swiftCallbackInterface.onTypewriterCancelled(
+            swiftCallbackInterface.onTypewriterCancelled(
                     )
             return UNIFFI_CALLBACK_SUCCESS
         }

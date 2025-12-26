@@ -8,6 +8,7 @@
 import Foundation
 import AppKit
 import SwiftUI
+import UserNotifications
 
 class EventHandler: AetherEventHandler {
     // Weak reference to Halo window to avoid retain cycle
@@ -151,11 +152,11 @@ class EventHandler: AetherEventHandler {
 
         DispatchQueue.main.async {
             // Show subtle notification about fallback
-            let notification = NSUserNotification()
-            notification.title = "Aether"
-            notification.informativeText = "Switched from \(fromProvider) to \(toProvider)"
-            notification.soundName = nil
-            NSUserNotificationCenter.default.deliver(notification)
+            let content = UNMutableNotificationContent()
+            content.title = "Aether"
+            content.body = "Switched from \(fromProvider) to \(toProvider)"
+            let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+            UNUserNotificationCenter.current().add(request)
         }
     }
 
@@ -279,8 +280,8 @@ class EventHandler: AetherEventHandler {
         haloWindow?.updateState(.processing(providerColor: .green, streamingText: responsePreview))
     }
 
-    /// Parse hex color string to NSColor
-    private func parseHexColor(_ hex: String) -> NSColor? {
+    /// Parse hex color string to Color
+    private func parseHexColor(_ hex: String) -> Color? {
         var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
         hexSanitized = hexSanitized.replacingOccurrences(of: "#", with: "")
 
@@ -289,11 +290,11 @@ class EventHandler: AetherEventHandler {
             return nil
         }
 
-        let r = CGFloat((rgb & 0xFF0000) >> 16) / 255.0
-        let g = CGFloat((rgb & 0x00FF00) >> 8) / 255.0
-        let b = CGFloat(rgb & 0x0000FF) / 255.0
+        let r = Double((rgb & 0xFF0000) >> 16) / 255.0
+        let g = Double((rgb & 0x00FF00) >> 8) / 255.0
+        let b = Double(rgb & 0x0000FF) / 255.0
 
-        return NSColor(red: r, green: g, blue: b, alpha: 1.0)
+        return Color(red: r, green: g, blue: b)
     }
 
     // MARK: - Typed Error Handling
@@ -363,7 +364,7 @@ class EventHandler: AetherEventHandler {
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            self?.haloWindow?.updateState(.success)
+            self?.haloWindow?.updateState(.success(finalText: nil))
         }
     }
 
@@ -389,13 +390,12 @@ class EventHandler: AetherEventHandler {
 
     /// Show a subtle toast notification when config is reloaded
     private func showConfigReloadedToast() {
-        // Using NSUserNotificationCenter for a non-intrusive toast
-        let notification = NSUserNotification()
-        notification.title = "Aether"
-        notification.informativeText = "Settings updated from file"
-        notification.soundName = nil // Silent notification
-
-        NSUserNotificationCenter.default.deliver(notification)
+        // Using UserNotifications for a non-intrusive toast
+        let content = UNMutableNotificationContent()
+        content.title = "Aether"
+        content.body = "Settings updated from file"
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
     }
 
     // MARK: - Escape Key Monitoring
@@ -426,21 +426,20 @@ class EventHandler: AetherEventHandler {
 
     /// Handle Escape key press
     private func handleEscapeKey() {
-        guard let core = core else {
+        guard core != nil else {
             print("[EventHandler] Cannot cancel typewriter: core not available")
             return
         }
 
-        // Check if typewriter is currently running
-        if core.isTypewriting() {
-            print("[EventHandler] Escape pressed, cancelling typewriter...")
-            let cancelled = core.cancelTypewriter()
-            if cancelled {
-                print("[EventHandler] Typewriter cancelled successfully")
-                announceToVoiceOver("Typewriter animation cancelled")
-            }
-        } else {
-            print("[EventHandler] Escape pressed but no typewriter animation is running")
+        // TODO: Implement typewriter cancellation support in Rust core
+        // These methods need to be added to aether.udl and implemented:
+        // - is_typewriting() -> boolean
+        // - cancel_typewriter() -> boolean
+        print("[EventHandler] Escape pressed (typewriter cancellation not yet implemented)")
+
+        // Temporary workaround: hide halo window
+        DispatchQueue.main.async { [weak self] in
+            self?.haloWindow?.hide()
         }
     }
 
@@ -452,7 +451,7 @@ class EventHandler: AetherEventHandler {
         #if os(macOS)
         // Use NSAccessibility to post announcement
         NSAccessibility.post(
-            element: NSApp.mainWindow ?? NSApp,
+            element: (NSApp.mainWindow ?? NSApp) as Any,
             notification: .announcementRequested,
             userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.high.rawValue]
         )

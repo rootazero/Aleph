@@ -108,27 +108,16 @@ targets:
         basedOnDependencyAnalysis: false
       - name: "Generate UniFFI Bindings"
         script: |
-          # Generate Swift bindings from Rust
+          # Generate Swift bindings from Rust using Cargo uniffi-bindgen
           cd "${PROJECT_DIR}/Aether/core"
 
-          # Ensure bindings directory exists
-          mkdir -p bindings
+          # Use Cargo to run uniffi-bindgen (more reliable than Python version)
+          cargo run --bin uniffi-bindgen -- generate \
+            --library target/debug/libaethecore.dylib \
+            --language swift \
+            --out-dir "${PROJECT_DIR}/Aether/Sources/Generated/"
 
-          # Use Python uniffi-bindgen to generate bindings
-          python3 "${PROJECT_DIR}/Aether/core/generate_bindings.py"
-
-          # Copy generated files to Xcode source directory
-          cp bindings/aether.swift "${PROJECT_DIR}/Aether/Sources/Generated/"
-          cp bindings/aetherFFI.h "${PROJECT_DIR}/Aether/Sources/Generated/"
-          cp bindings/aetherFFI.modulemap "${PROJECT_DIR}/Aether/Sources/Generated/"
-
-          # Fix unnecessary 'try' expressions in generated Swift code
-          # These callback methods don't throw, so 'try' causes warnings
-          sed -i '' 's/try swiftCallbackInterface\.onStateChanged(/swiftCallbackInterface.onStateChanged(/g' "${PROJECT_DIR}/Aether/Sources/Generated/aether.swift"
-          sed -i '' 's/try swiftCallbackInterface\.onHotkeyDetected(/swiftCallbackInterface.onHotkeyDetected(/g' "${PROJECT_DIR}/Aether/Sources/Generated/aether.swift"
-          sed -i '' 's/try swiftCallbackInterface\.onError(/swiftCallbackInterface.onError(/g' "${PROJECT_DIR}/Aether/Sources/Generated/aether.swift"
-
-          echo "UniFFI bindings generated, fixed, and copied successfully"
+          echo "UniFFI bindings generated successfully"
         basedOnDependencyAnalysis: false
 
   AetherTests:

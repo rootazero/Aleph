@@ -69,7 +69,7 @@ struct ToastView: View {
         )
         .opacity(opacity)
         .offset(y: offset)
-        .onChange(of: isShowing) { _, newValue in
+        .onChange(of: isShowing) { newValue in
             if newValue {
                 showToast()
             }

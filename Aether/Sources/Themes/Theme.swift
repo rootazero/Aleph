@@ -233,6 +233,22 @@ extension HaloTheme {
 /// Extension for ErrorType (defined in UniFFI generated code)
 /// Adds UI-related properties for error display
 extension ErrorType {
+    /// Human-readable error type label
+    var displayName: String {
+        switch self {
+        case .network:
+            return "Network Error"
+        case .permission:
+            return "Permission Error"
+        case .quota:
+            return "Quota Error"
+        case .timeout:
+            return "Timeout Error"
+        case .unknown:
+            return "Unknown Error"
+        }
+    }
+
     /// System icon name for error type
     var iconName: String {
         switch self {

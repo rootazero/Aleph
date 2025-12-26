@@ -237,7 +237,7 @@ private struct ZenErrorView: View {
                 .frame(maxWidth: 280)
 
             // Error type label
-            Text(errorType.rawValue)
+            Text(errorType.displayName)
                 .font(.system(.caption2, design: .rounded))
                 .foregroundColor(color.opacity(0.7))
         }

@@ -64,7 +64,7 @@ struct ProviderDetailPanel: View {
                 // Provider icon
                 ZStack {
                     Circle()
-                        .fill(Color(hex: provider.config.color) ?? DesignTokens.Colors.accentBlue)
+                        .fill(parseHexColor(provider.config.color) ?? DesignTokens.Colors.accentBlue)
                         .frame(width: 32, height: 32)
 
                     Image(systemName: providerIconName)
@@ -282,7 +282,7 @@ struct ProviderDetailPanel: View {
 
     /// Icon name based on provider type
     private var providerIconName: String {
-        switch provider.config.providerType.lowercased() {
+        switch provider.config.providerType?.lowercased() ?? "" {
         case "openai":
             return "brain.head.profile"
         case "claude", "anthropic":
@@ -298,7 +298,7 @@ struct ProviderDetailPanel: View {
 
     /// Provider type display name
     private var providerTypeName: String {
-        switch provider.config.providerType.lowercased() {
+        switch provider.config.providerType?.lowercased() ?? "" {
         case "openai":
             return "OpenAI"
         case "claude":
@@ -312,13 +312,13 @@ struct ProviderDetailPanel: View {
         case "google":
             return "Google"
         default:
-            return provider.config.providerType.capitalized
+            return provider.config.providerType?.capitalized ?? "Unknown"
         }
     }
 
     /// Provider description based on type
     private var providerDescription: String {
-        switch provider.config.providerType.lowercased() {
+        switch provider.config.providerType?.lowercased() ?? "" {
         case "openai":
             return "OpenAI provides access to GPT models including GPT-4o, GPT-4 Turbo, and GPT-3.5 Turbo. These models excel at natural language understanding, generation, and reasoning tasks."
         case "claude", "anthropic":
@@ -355,6 +355,30 @@ struct ProviderDetailPanel: View {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
     }
+
+    /// Parse hex color string to Color
+    private func parseHexColor(_ hex: String?) -> Color? {
+        guard let hex = hex else { return nil }
+        let trimmed = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: trimmed).scanHexInt64(&int)
+
+        let r, g, b: UInt64
+        switch trimmed.count {
+        case 6: // RGB (24-bit)
+            (r, g, b) = ((int >> 16) & 0xFF, (int >> 8) & 0xFF, int & 0xFF)
+        default:
+            return nil
+        }
+
+        return Color(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue: Double(b) / 255,
+            opacity: 1
+        )
+    }
 }
 
 // MARK: - Preview Provider
@@ -368,9 +392,10 @@ struct ProviderDetailPanel: View {
                 apiKey: "keychain:openai",
                 model: "gpt-4o",
                 baseUrl: "https://api.openai.com/v1",
+                color: "#10a37f",
+                timeoutSeconds: 30,
                 maxTokens: 4096,
-                temperature: 0.7,
-                color: "#10a37f"
+                temperature: 0.7
             )
         ),
         hasApiKey: true,
@@ -390,14 +415,16 @@ struct ProviderDetailPanel: View {
                 apiKey: "keychain:claude",
                 model: "claude-3-5-sonnet-20241022",
                 baseUrl: nil,
+                color: "#d97757",
+                timeoutSeconds: 30,
                 maxTokens: 4096,
-                temperature: 0.7,
-                color: "#d97757"
+                temperature: 0.7
             )
         ),
         hasApiKey: true,
         onEdit: {},
-        onDelete: {}
+        onDelete: {},
+        onTestConnection: {}
     )
     .frame(width: 350, height: 600)
 }
@@ -411,14 +438,16 @@ struct ProviderDetailPanel: View {
                 apiKey: nil,
                 model: "llama3.2",
                 baseUrl: "http://localhost:11434",
+                color: "#0000ff",
+                timeoutSeconds: 30,
                 maxTokens: 2048,
-                temperature: 0.8,
-                color: "#0000ff"
+                temperature: 0.8
             )
         ),
         hasApiKey: false,
         onEdit: {},
-        onDelete: {}
+        onDelete: {},
+        onTestConnection: {}
     )
     .frame(width: 350, height: 600)
 }

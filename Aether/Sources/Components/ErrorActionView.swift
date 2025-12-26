@@ -31,7 +31,7 @@ struct ErrorActionView: View {
                 .modifier(ShakeEffect(shakes: 3))
 
             // Error type label
-            Text(errorType.rawValue)
+            Text(errorType.displayName)
                 .font(.system(.caption, design: .rounded, weight: .semibold))
                 .foregroundColor(errorColor)
                 .textCase(.uppercase)
@@ -80,21 +80,21 @@ struct ErrorActionView: View {
         HStack(spacing: 12) {
             // Retry button for network and timeout errors
             if (errorType == .network || errorType == .timeout), let onRetry = onRetry {
-                ActionButton(title: "Retry", icon: "arrow.clockwise") {
+                ActionButton("Retry", icon: "arrow.clockwise", style: .secondary) {
                     onRetry()
                 }
             }
 
             // Open Settings button for permission errors
             if errorType == .permission, let onOpenSettings = onOpenSettings {
-                ActionButton(title: "Settings", icon: "gear") {
+                ActionButton("Settings", icon: "gear", style: .secondary) {
                     onOpenSettings()
                 }
             }
 
             // Dismiss button (always available)
             if let onDismiss = onDismiss {
-                ActionButton(title: "Dismiss", icon: "xmark") {
+                ActionButton("Dismiss", icon: "xmark", style: .secondary) {
                     onDismiss()
                 }
             }
@@ -116,45 +116,6 @@ struct ErrorActionView: View {
         case .unknown:
             return Color.red
         }
-    }
-}
-
-// MARK: - Action Button Component
-
-private struct ActionButton: View {
-    let title: String
-    let icon: String
-    let action: () -> Void
-
-    @State private var isPressed = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 12, weight: .semibold))
-                Text(title)
-                    .font(.system(.caption, design: .rounded, weight: .semibold))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.white.opacity(isPressed ? 0.3 : 0.2))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.white.opacity(0.4), lineWidth: 1)
-            )
-            .foregroundColor(.white)
-        }
-        .buttonStyle(PlainButtonStyle())
-        .scaleEffect(isPressed ? 0.95 : 1.0)
-        .onLongPressGesture(minimumDuration: 0, maximumDistance: 0, pressing: { pressing in
-            withAnimation(.easeInOut(duration: 0.1)) {
-                isPressed = pressing
-            }
-        }) {}
     }
 }
 

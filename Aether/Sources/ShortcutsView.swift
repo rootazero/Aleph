@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct ShortcutsView: View {
     @State private var currentHotkey: Hotkey?
@@ -121,7 +122,7 @@ struct ShortcutsView: View {
                         }
 
                         ActionButton("Open System Settings", icon: "gear", style: .primary) {
-                            PermissionManager().openAccessibilitySettings()
+                            openAccessibilitySettings()
                         }
                         .padding(.top, DesignTokens.Spacing.sm)
                     }
@@ -184,6 +185,13 @@ struct ShortcutsView: View {
     private func resetToDefault() {
         currentHotkey = Hotkey(modifiers: .command, keyCode: 50, character: "`")
         handleHotkeyChange(currentHotkey)
+    }
+
+    private func openAccessibilitySettings() {
+        // Open System Settings to Accessibility preferences
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
     }
 }
 

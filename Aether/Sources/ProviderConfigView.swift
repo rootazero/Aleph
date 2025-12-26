@@ -78,17 +78,8 @@ struct ProviderConfigView: View {
             _maxTokens = State(initialValue: provider.config.maxTokens.map { String($0) } ?? "")
             _temperature = State(initialValue: provider.config.temperature.map { String($0) } ?? "")
 
-            // Load API key from Keychain
+            // API key will be loaded in onAppear
             _apiKey = State(initialValue: "")
-            DispatchQueue.main.async {
-                do {
-                    if let key = try keychainManager.getApiKey(provider: providerName) {
-                        apiKey = key
-                    }
-                } catch {
-                    print("Failed to load API key from Keychain: \(error)")
-                }
-            }
         }
     }
 
@@ -308,6 +299,22 @@ struct ProviderConfigView: View {
             .padding(20)
         }
         .frame(width: 600, height: 700)
+        .onAppear {
+            // Load API key from Keychain when editing
+            if let providerName = editingProvider {
+                Task {
+                    do {
+                        if let key = try keychainManager.getApiKey(provider: providerName) {
+                            await MainActor.run {
+                                apiKey = key
+                            }
+                        }
+                    } catch {
+                        print("Failed to load API key from Keychain: \(error)")
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Form Validation

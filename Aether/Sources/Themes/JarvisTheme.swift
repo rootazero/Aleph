@@ -29,14 +29,15 @@ struct JarvisTheme: HaloTheme {
         AnyView(
             JarvisProcessingView(
                 color: providerColor ?? processingColor,
-                text: streamingText
+                text: streamingText,
+                textColor: textColor
             )
         )
     }
 
     func successView(finalText: String?) -> AnyView {
         AnyView(
-            JarvisSuccessView(color: successColor, text: finalText)
+            JarvisSuccessView(color: successColor, text: finalText, textColor: textColor)
         )
     }
 
@@ -120,6 +121,7 @@ private struct JarvisListeningView: View {
 private struct JarvisProcessingView: View {
     let color: Color
     let text: String?
+    let textColor: Color
     @State private var rotation: Double = 0
     @State private var coreIntensity: Double = 0.5
 
@@ -207,6 +209,7 @@ private struct JarvisProcessingView: View {
 private struct JarvisSuccessView: View {
     let color: Color
     let text: String?
+    let textColor: Color
     @State private var segmentScale: [CGFloat] = Array(repeating: 0.5, count: 6)
     @State private var checkmarkScale: CGFloat = 0.3
 
@@ -270,6 +273,7 @@ private struct JarvisErrorView: View {
     let errorType: ErrorType
     let message: String
     let color: Color
+    let textColor: Color
     @State private var warningFlash = false
     @State private var segmentOpacity: Double = 0.3
 
@@ -326,7 +330,7 @@ private struct JarvisErrorView: View {
                     Rectangle()
                         .fill(color)
                         .frame(width: 20, height: 2)
-                    Text("[\(errorType.rawValue.uppercased())]")
+                    Text("[\(errorType.displayName.uppercased())]")
                         .font(.system(.caption2, design: .monospaced))
                         .foregroundColor(color)
                     Rectangle()

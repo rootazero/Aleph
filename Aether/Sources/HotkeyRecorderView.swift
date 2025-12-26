@@ -9,7 +9,7 @@ import SwiftUI
 import AppKit
 
 /// Represents a keyboard shortcut with modifiers and key
-struct Hotkey: Equatable, Codable {
+struct Hotkey: Equatable {
     var modifiers: NSEvent.ModifierFlags
     var keyCode: UInt16
     var character: String
@@ -296,6 +296,7 @@ struct HotkeyConflictDetector {
 
 // MARK: - Preview
 
+@available(macOS 14.0, *)
 #Preview("Hotkey Recorder") {
     @Previewable @State var hotkey: Hotkey? = Hotkey(modifiers: .command, keyCode: 50, character: "`")
 

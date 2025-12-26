@@ -168,7 +168,9 @@ struct SettingsView: View {
         Task {
             do {
                 guard let core = core else {
-                    await showAlert(title: "Error", message: "AetherCore not initialized")
+                    await MainActor.run {
+                        showAlert(title: "Error", message: "AetherCore not initialized")
+                    }
                     return
                 }
 
@@ -189,18 +191,19 @@ struct SettingsView: View {
 
                 await MainActor.run {
                     handleConfigChange()
+                    showAlert(
+                        title: "Success",
+                        message: "Settings imported successfully!",
+                        style: .informational
+                    )
                 }
-
-                await showAlert(
-                    title: "Success",
-                    message: "Settings imported successfully!",
-                    style: .informational
-                )
             } catch {
-                await showAlert(
-                    title: "Import Failed",
-                    message: "Failed to import settings: \(error.localizedDescription)"
-                )
+                await MainActor.run {
+                    showAlert(
+                        title: "Import Failed",
+                        message: "Failed to import settings: \(error.localizedDescription)"
+                    )
+                }
             }
         }
     }
@@ -229,16 +232,20 @@ struct SettingsView: View {
                 // Write to selected location
                 try content.write(to: url, atomically: true, encoding: .utf8)
 
-                await showAlert(
-                    title: "Success",
-                    message: "Settings exported successfully!",
-                    style: .informational
-                )
+                await MainActor.run {
+                    showAlert(
+                        title: "Success",
+                        message: "Settings exported successfully!",
+                        style: .informational
+                    )
+                }
             } catch {
-                await showAlert(
-                    title: "Export Failed",
-                    message: "Failed to export settings: \(error.localizedDescription)"
-                )
+                await MainActor.run {
+                    showAlert(
+                        title: "Export Failed",
+                        message: "Failed to export settings: \(error.localizedDescription)"
+                    )
+                }
             }
         }
     }
@@ -246,18 +253,22 @@ struct SettingsView: View {
     /// Reset settings to defaults
     private func resetSettings() {
         Task {
-            let confirmed = await showConfirmation(
-                title: "Reset Settings",
-                message: "Are you sure you want to reset all settings to defaults? This action cannot be undone.",
-                confirmButton: "Reset",
-                isDestructive: true
-            )
+            let confirmed = await MainActor.run {
+                showConfirmation(
+                    title: "Reset Settings",
+                    message: "Are you sure you want to reset all settings to defaults? This action cannot be undone.",
+                    confirmButton: "Reset",
+                    isDestructive: true
+                )
+            }
 
             guard confirmed else { return }
 
             do {
                 guard let core = core else {
-                    await showAlert(title: "Error", message: "AetherCore not initialized")
+                    await MainActor.run {
+                        showAlert(title: "Error", message: "AetherCore not initialized")
+                    }
                     return
                 }
 
@@ -275,18 +286,19 @@ struct SettingsView: View {
 
                 await MainActor.run {
                     handleConfigChange()
+                    showAlert(
+                        title: "Success",
+                        message: "Settings have been reset to defaults!",
+                        style: .informational
+                    )
                 }
-
-                await showAlert(
-                    title: "Success",
-                    message: "Settings have been reset to defaults!",
-                    style: .informational
-                )
             } catch {
-                await showAlert(
-                    title: "Reset Failed",
-                    message: "Failed to reset settings: \(error.localizedDescription)"
-                )
+                await MainActor.run {
+                    showAlert(
+                        title: "Reset Failed",
+                        message: "Failed to reset settings: \(error.localizedDescription)"
+                    )
+                }
             }
         }
     }

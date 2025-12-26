@@ -28,14 +28,15 @@ struct CyberpunkTheme: HaloTheme {
         AnyView(
             CyberpunkProcessingView(
                 color: providerColor ?? processingColor,
-                text: streamingText
+                text: streamingText,
+                textColor: textColor
             )
         )
     }
 
     func successView(finalText: String?) -> AnyView {
         AnyView(
-            CyberpunkSuccessView(color: successColor, text: finalText)
+            CyberpunkSuccessView(color: successColor, text: finalText, textColor: textColor)
         )
     }
 
@@ -130,6 +131,7 @@ private struct CyberpunkListeningView: View {
 private struct CyberpunkProcessingView: View {
     let color: Color
     let text: String?
+    let textColor: Color
     @State private var rotation: Double = 0
     @State private var pulseScale: CGFloat = 1.0
 
@@ -194,6 +196,7 @@ private struct CyberpunkProcessingView: View {
 private struct CyberpunkSuccessView: View {
     let color: Color
     let text: String?
+    let textColor: Color
     @State private var checkmarkScale: CGFloat = 0.3
     @State private var glowIntensity: Double = 0
 
@@ -241,6 +244,7 @@ private struct CyberpunkErrorView: View {
     let errorType: ErrorType
     let message: String
     let color: Color
+    let textColor: Color
     @State private var glitchActive = false
 
     var body: some View {
@@ -283,7 +287,7 @@ private struct CyberpunkErrorView: View {
                 .shadow(color: color, radius: 3)
 
             // Error type badge
-            Text(errorType.rawValue.uppercased())
+            Text(errorType.displayName.uppercased())
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundColor(color)
                 .padding(.horizontal, 8)

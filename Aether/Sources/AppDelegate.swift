@@ -184,8 +184,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             case .listening:
                 button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Aether Listening")
                 // Could add color tint here
+            case .retrievingMemory:
+                button.image = NSImage(systemSymbolName: "brain.head.profile", accessibilityDescription: "Retrieving Memory")
+            case .processingWithAi:
+                button.image = NSImage(systemSymbolName: "cpu", accessibilityDescription: "Processing with AI")
             case .processing:
                 button.image = NSImage(systemSymbolName: "sparkles.square.filled.on.square", accessibilityDescription: "Aether Processing")
+            case .typewriting:
+                button.image = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "Typewriting")
             case .success:
                 button.image = NSImage(systemSymbolName: "checkmark.circle", accessibilityDescription: "Success")
             case .error:
@@ -209,23 +215,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if !ContextCapture.hasAccessibilityPermission() {
             print("[Aether] Accessibility permission not granted, requesting...")
 
-            // Show info alert first
+            // Show alert with button to open System Settings
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                let alert = NSAlert()
-                alert.messageText = "Accessibility Permission Needed"
-                alert.informativeText = """
-                Aether uses Accessibility permission to:
-                • Capture window context for memory features
-                • Provide context-aware AI responses
-
-                You'll see a system prompt next. Please grant permission.
-                """
-                alert.alertStyle = .informational
-                alert.addButton(withTitle: "Continue")
-                alert.runModal()
-
-                // Request permission (shows system prompt)
-                ContextCapture.requestAccessibilityPermission()
+                ContextCapture.showPermissionAlert()
             }
         } else {
             print("[Aether] Accessibility permission already granted")

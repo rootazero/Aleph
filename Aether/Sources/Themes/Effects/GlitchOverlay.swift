@@ -21,7 +21,7 @@ struct GlitchOverlay: View {
                     LinearGradient(
                         colors: [
                             Color.cyan.opacity(glitchIntensity * 0.3),
-                            Color.magenta.opacity(glitchIntensity * 0.3)
+                            Color(red: 1.0, green: 0.0, blue: 1.0).opacity(glitchIntensity * 0.3) // magenta
                         ],
                         startPoint: .leading,
                         endPoint: .trailing

@@ -49,7 +49,8 @@ struct ProvidersView: View {
             }
 
             // Search by provider type
-            if provider.config.providerType.localizedCaseInsensitiveContains(searchText) {
+            if let providerType = provider.config.providerType,
+               providerType.localizedCaseInsensitiveContains(searchText) {
                 return true
             }
 
@@ -448,8 +449,15 @@ struct ProvidersView: View {
 
 private class MockEventHandler: AetherEventHandler {
     func onStateChanged(state: ProcessingState) {}
-    func onHotkeyDetected(hotkey: String) {}
-    func onError(message: String) {}
-    func onAiProcessingStarted(providerName: String, providerColor: String?) {}
-    func onAiResponseReceived() {}
+    func onHotkeyDetected(clipboardContent: String) {}
+    func onError(message: String, suggestion: String?) {}
+    func onResponseChunk(text: String) {}
+    func onErrorTyped(errorType: ErrorType, message: String) {}
+    func onProgress(percent: Float) {}
+    func onAiProcessingStarted(providerName: String, providerColor: String) {}
+    func onAiResponseReceived(responsePreview: String) {}
+    func onProviderFallback(fromProvider: String, toProvider: String) {}
+    func onConfigChanged() {}
+    func onTypewriterProgress(percent: Float) {}
+    func onTypewriterCancelled() {}
 }
