@@ -13,6 +13,9 @@ struct ProviderCard: View {
     /// Whether the provider has a configured API key
     let hasApiKey: Bool
 
+    /// Whether the provider is active
+    let isActive: Bool
+
     /// Callback when card is tapped
     let onTap: () -> Void
 
@@ -34,6 +37,7 @@ struct ProviderCard: View {
         provider: ProviderConfigEntry,
         isSelected: Bool = false,
         hasApiKey: Bool = false,
+        isActive: Bool = false,
         onTap: @escaping () -> Void,
         onEdit: @escaping () -> Void,
         onDelete: @escaping () -> Void,
@@ -42,6 +46,7 @@ struct ProviderCard: View {
         self.provider = provider
         self.isSelected = isSelected
         self.hasApiKey = hasApiKey
+        self.isActive = isActive
         self.onTap = onTap
         self.onEdit = onEdit
         self.onDelete = onDelete
@@ -108,6 +113,20 @@ struct ProviderCard: View {
                     lineWidth: isSelected ? 2 : 1
                 )
         )
+        .overlay(alignment: .topTrailing) {
+            // Active/Inactive indicator in top-right corner
+            if isActive {
+                Circle()
+                    .fill(Color(hex: "#007AFF") ?? .blue)
+                    .frame(width: 8, height: 8)
+                    .padding(12)
+            } else {
+                Circle()
+                    .strokeBorder(DesignTokens.Colors.textSecondary.opacity(0.3), lineWidth: 1)
+                    .frame(width: 8, height: 8)
+                    .padding(12)
+            }
+        }
         .shadow(
             color: Color.black.opacity(isHovered ? 0.15 : 0.1),
             radius: isHovered ? 6 : 4,

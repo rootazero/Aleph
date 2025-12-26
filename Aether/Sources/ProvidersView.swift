@@ -237,6 +237,7 @@ struct ProvidersView: View {
                         provider: provider,
                         isSelected: selectedProvider == provider.name,
                         hasApiKey: checkApiKeyStatus(for: provider),
+                        isActive: isProviderActive(provider),
                         onTap: { selectProvider(provider.name) },
                         onEdit: { selectProvider(provider.name) }, // Just select, panel will have edit button
                         onDelete: { deleteProvider(provider.name) },
@@ -348,6 +349,21 @@ struct ProvidersView: View {
             // Ollama or other providers without API key
             return provider.config.apiKey != nil || provider.config.providerType == "ollama"
         }
+    }
+
+    /// Check if provider is active (initially same as API key status)
+    private func isProviderActive(_ provider: ProviderConfigEntry) -> Bool {
+        // For now, use API key presence as proxy for active state
+        // Future: could check explicit 'enabled' field in ProviderConfig
+        if let apiKey = provider.config.apiKey, apiKey.starts(with: "keychain:") {
+            do {
+                return try keychainManager.hasApiKey(provider: provider.name)
+            } catch {
+                return false
+            }
+        }
+        // Ollama doesn't need API key but is active if configured
+        return provider.config.providerType == "ollama"
     }
 
     /// Trigger shake animation for error state
