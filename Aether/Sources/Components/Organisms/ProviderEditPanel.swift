@@ -31,6 +31,9 @@ struct ProviderEditPanel: View {
     @State private var maxTokens: String = ""
     @State private var temperature: String = ""
 
+    // Provider active state
+    @State private var isProviderActive: Bool = false
+
     // UI state
     @State private var isSaving: Bool = false
     @State private var isTesting: Bool = false
@@ -145,13 +148,28 @@ struct ProviderEditPanel: View {
                 Text(provider.name)
                     .font(DesignTokens.Typography.title)
                     .foregroundColor(DesignTokens.Colors.textPrimary)
-            }
 
-            StatusIndicator(
-                status: hasApiKey ? .success : .inactive,
-                label: hasApiKey ? "Active" : "Inactive",
-                showLabel: true
-            )
+                Spacer()
+
+                // Active/Inactive badge and toggle
+                HStack(spacing: DesignTokens.Spacing.sm) {
+                    // Active/Inactive badge
+                    Text(hasApiKey ? "Active" : "Inactive")
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, DesignTokens.Spacing.sm)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule()
+                                .fill(hasApiKey ? Color.green : DesignTokens.Colors.textSecondary.opacity(0.5))
+                        )
+
+                    // Toggle switch (read-only in view mode, shows current state)
+                    Toggle("", isOn: .constant(hasApiKey))
+                        .labelsHidden()
+                        .disabled(true)
+                }
+            }
         }
     }
 
@@ -250,6 +268,25 @@ struct ProviderEditPanel: View {
                     .buttonStyle(.plain)
                 }
             }
+
+            Divider()
+
+            // Active state toggle (for edit mode)
+            HStack {
+                Text("Active")
+                    .font(DesignTokens.Typography.heading)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                Spacer()
+
+                Toggle("", isOn: $isProviderActive)
+                    .labelsHidden()
+            }
+            .padding(.vertical, DesignTokens.Spacing.xs)
+
+            Text(isProviderActive ? "Provider is enabled and will be used for routing" : "Provider is disabled and will be skipped by routing")
+                .font(DesignTokens.Typography.caption)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
 
             Divider()
 
@@ -470,6 +507,7 @@ struct ProviderEditPanel: View {
         resetForm()
         providerName = ""
         providerType = "openai"
+        isProviderActive = true  // New providers are active by default
         updateDefaultsForProviderType("openai")
     }
 
@@ -487,6 +525,9 @@ struct ProviderEditPanel: View {
         timeoutSeconds = String(provider.config.timeoutSeconds)
         maxTokens = provider.config.maxTokens.map { String($0) } ?? ""
         temperature = provider.config.temperature.map { String($0) } ?? ""
+
+        // Load active state (based on API key presence)
+        isProviderActive = hasApiKey
 
         // Load API key from Keychain
         Task {
@@ -520,6 +561,7 @@ struct ProviderEditPanel: View {
         timeoutSeconds = "30"
         maxTokens = ""
         temperature = ""
+        isProviderActive = false
         testResult = nil
         errorMessage = nil
     }
