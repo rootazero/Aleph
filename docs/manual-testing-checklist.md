@@ -1,6 +1,24 @@
-# Manual Testing Checklist - Phase 6 Settings UI
+# Manual Testing Checklist - Modernized Settings UI
 
-This checklist covers end-to-end testing of the Settings UI implementation (Phase 6).
+**Document Version**: 2.0 (Updated for modernize-settings-ui change)
+**Last Updated**: 2025-12-26
+
+## Important Note
+
+This document has been superseded by more comprehensive testing documentation. For complete testing coverage, please refer to:
+
+1. **`modernize-settings-ui-testing-plan.md`** - Overall test plan with all categories
+2. **`visual-testing-guide.md`** - Detailed visual testing (Light/Dark/Auto modes)
+3. **`performance-testing-guide.md`** - Performance and Instruments testing
+4. **`accessibility-testing-checklist.md`** - VoiceOver and accessibility testing
+
+This checklist remains as a quick reference for core functionality testing.
+
+---
+
+## Quick Start Testing Guide
+
+This checklist covers the most critical end-to-end tests for the modernized Settings UI. It focuses on user-facing features and basic functionality verification.
 
 ## Pre-Test Setup
 
