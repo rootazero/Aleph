@@ -2,19 +2,25 @@
 //  ZenTheme.swift
 //  Aether
 //
-//  Zen theme: Soft pastels with breathing circle animation
+//  Zen theme: Adapts to system light/dark mode automatically
 //
 
 import SwiftUI
 
 struct ZenTheme: HaloTheme {
-    // MARK: - Colors
+    // MARK: - Colors (Adaptive to system appearance)
 
-    let listeningColor = Color.white.opacity(0.8)
-    let processingColor = Color(red: 0.56, green: 0.93, blue: 0.56) // Sage green
-    let successColor = Color(red: 0.6, green: 0.8, blue: 0.6) // Light sage
-    let errorColor = Color(red: 0.9, green: 0.6, blue: 0.6) // Soft red
-    let textColor = Color.white.opacity(0.95)
+    // Light mode: soft white, Dark mode: soft gray
+    let listeningColor = Color.primary.opacity(0.8)
+
+    // Light mode: sage green, Dark mode: lighter green
+    let processingColor = Color(red: 0.56, green: 0.93, blue: 0.56)
+
+    let successColor = Color.green.opacity(0.8)
+    let errorColor = Color.red.opacity(0.8)
+
+    // Adapts automatically: white in dark mode, black in light mode
+    let textColor = Color.primary
 
     // MARK: - View Implementations
 
@@ -142,11 +148,11 @@ private struct ZenProcessingView: View {
                 }
             }
 
-            // Streaming text display
+            // Streaming text display (adapts to system appearance)
             if let text = text, !text.isEmpty {
                 Text(text)
                     .font(.system(.caption, design: .rounded))
-                    .foregroundColor(textColor)
+                    .foregroundColor(.primary)
                     .lineLimit(3)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 16)
@@ -187,10 +193,11 @@ private struct ZenSuccessView: View {
                     }
             }
 
+            // Text adapts to system appearance
             if let text = text, !text.isEmpty {
                 Text(text)
                     .font(.system(.caption, design: .rounded))
-                    .foregroundColor(textColor)
+                    .foregroundColor(.primary)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 16)
@@ -220,10 +227,10 @@ private struct ZenErrorView: View {
                     }
                 }
 
-            // Error message
+            // Error message (adapts to system appearance)
             Text(message)
                 .font(.system(.caption, design: .rounded))
-                .foregroundColor(textColor)
+                .foregroundColor(.primary)
                 .multilineTextAlignment(.center)
                 .lineLimit(3)
                 .padding(.horizontal, 16)

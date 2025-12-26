@@ -230,14 +230,9 @@ extension HaloTheme {
     }
 }
 
-/// Error types for typed error handling
-enum ErrorType: String, Codable {
-    case network = "Network"
-    case permission = "Permission"
-    case quota = "Quota"
-    case timeout = "Timeout"
-    case unknown = "Unknown"
-
+/// Extension for ErrorType (defined in UniFFI generated code)
+/// Adds UI-related properties for error display
+extension ErrorType {
     /// System icon name for error type
     var iconName: String {
         switch self {

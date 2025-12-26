@@ -18,14 +18,12 @@ enum SettingsTab {
 
 struct SettingsView: View {
     @State private var selectedTab: SettingsTab = .general
-    @ObservedObject var themeEngine: ThemeEngine
     let core: AetherCore?
     let keychainManager: KeychainManagerImpl
     @State private var providers: [ProviderConfigEntry] = []
     @State private var configReloadTrigger: Int = 0 // Trigger to force UI refresh
 
-    init(themeEngine: ThemeEngine, core: AetherCore? = nil, keychainManager: KeychainManagerImpl? = nil) {
-        self.themeEngine = themeEngine
+    init(core: AetherCore? = nil, keychainManager: KeychainManagerImpl? = nil) {
         self.core = core
         self.keychainManager = keychainManager ?? KeychainManagerImpl()
     }
@@ -59,7 +57,7 @@ struct SettingsView: View {
             Group {
                 switch selectedTab {
                 case .general:
-                    GeneralSettingsView(themeEngine: themeEngine, core: core)
+                    GeneralSettingsView(core: core)
                 case .providers:
                     if let core = core {
                         ProvidersView(core: core, keychainManager: keychainManager)
@@ -136,7 +134,6 @@ struct SettingsView: View {
 // MARK: - General Settings Tab
 
 struct GeneralSettingsView: View {
-    @ObservedObject var themeEngine: ThemeEngine
     @State private var soundEnabled = false
     @State private var showingLogViewer = false
     let core: AetherCore?
@@ -152,37 +149,6 @@ struct GeneralSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Form {
-                    Section(header: Text("Appearance")) {
-                        VStack(alignment: .leading, spacing: 16) {
-                            HStack {
-                                Text("Theme:")
-                                    .frame(width: 100, alignment: .leading)
-                                Picker("", selection: $themeEngine.currentTheme) {
-                                    ForEach(Theme.allCases, id: \.self) { theme in
-                                        Text(theme.displayName).tag(theme)
-                                    }
-                                }
-                                .pickerStyle(.segmented)
-                                .frame(width: 300)
-                                Spacer()
-                            }
-
-                            // Theme preview cards
-                            HStack(spacing: 16) {
-                                ForEach(Theme.allCases, id: \.self) { theme in
-                                    ThemePreviewCard(
-                                        theme: theme,
-                                        isSelected: themeEngine.currentTheme == theme
-                                    )
-                                    .onTapGesture {
-                                        themeEngine.setTheme(theme)
-                                    }
-                                }
-                            }
-                            .padding(.top, 8)
-                        }
-                    }
-
                     Section(header: Text("Sound")) {
                         Toggle("Sound Effects", isOn: $soundEnabled)
                             .onChange(of: soundEnabled) { newValue in
@@ -273,76 +239,10 @@ struct GeneralSettingsView: View {
     }
 }
 
-// MARK: - Theme Preview Card
-
-struct ThemePreviewCard: View {
-    let theme: Theme
-    let isSelected: Bool
-
-    var body: some View {
-        VStack(spacing: 8) {
-            // Preview image placeholder
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(previewBackgroundColor)
-                    .frame(width: 120, height: 80)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(isSelected ? Color.accentColor : Color.gray.opacity(0.3), lineWidth: isSelected ? 3 : 1)
-                    )
-
-                // Mini theme preview
-                Group {
-                    switch theme {
-                    case .zen:
-                        Circle()
-                            .stroke(Color.white.opacity(0.8), lineWidth: 2)
-                            .frame(width: 30, height: 30)
-                    case .cyberpunk:
-                        // Hexagon outline
-                        Text("⬡")
-                            .font(.system(size: 40))
-                            .foregroundColor(Color.cyan)
-                    case .jarvis:
-                        // Arc reactor style
-                        ZStack {
-                            ForEach(0..<6) { i in
-                                Rectangle()
-                                    .fill(Color(red: 0.0, green: 0.83, blue: 1.0))
-                                    .frame(width: 2, height: 15)
-                                    .offset(y: -15)
-                                    .rotationEffect(.degrees(Double(i) * 60))
-                            }
-                            Circle()
-                                .fill(Color(red: 0.0, green: 0.83, blue: 1.0))
-                                .frame(width: 12, height: 12)
-                        }
-                    }
-                }
-            }
-
-            Text(theme.displayName)
-                .font(.caption)
-                .foregroundColor(isSelected ? .primary : .secondary)
-        }
-    }
-
-    private var previewBackgroundColor: Color {
-        switch theme {
-        case .zen:
-            return Color(red: 0.95, green: 0.95, blue: 0.97)
-        case .cyberpunk:
-            return Color(red: 0.1, green: 0.1, blue: 0.15)
-        case .jarvis:
-            return Color(red: 0.05, green: 0.08, blue: 0.12)
-        }
-    }
-}
-
 // MARK: - Preview
 
 struct SettingsView_Previews: PreviewProvider {
     static var previews: some View {
-        SettingsView(themeEngine: ThemeEngine())
+        SettingsView()
     }
 }

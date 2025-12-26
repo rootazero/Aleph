@@ -60,7 +60,6 @@ struct HaloView: View {
         }
         .frame(width: dynamicWidth, height: dynamicHeight)
         .animation(.spring(response: 0.4), value: state)
-        .animation(.easeInOut(duration: 0.5), value: themeEngine.currentTheme)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabelForState)
         .accessibilityValue(accessibilityValueForState)

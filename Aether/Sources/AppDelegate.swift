@@ -41,11 +41,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         themeEngine = ThemeEngine()
 
         // Create Halo window with theme engine
-        guard let themeEngine = themeEngine else {
-            print("[Aether] Error: ThemeEngine not initialized")
-            return
-        }
-        haloWindow = HaloWindow(themeEngine: themeEngine)
+        haloWindow = HaloWindow(themeEngine: themeEngine!)
 
         // Initialize event handler
         eventHandler = EventHandler(haloWindow: haloWindow)
@@ -106,12 +102,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             settingsWindow = nil
         }
 
-        guard let themeEngine = themeEngine else {
-            print("[Aether] Error: ThemeEngine not initialized")
-            return
-        }
-
-        let settingsView = SettingsView(themeEngine: themeEngine, core: core)
+        let settingsView = SettingsView(core: core)
         let hostingController = NSHostingController(rootView: settingsView)
 
         let window = NSWindow(contentViewController: hostingController)

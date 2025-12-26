@@ -39,7 +39,16 @@ struct LogViewerView: View {
                 .frame(width: 250)
                 .onChange(of: logLevel) { newLevel in
                     do {
-                        try core.setLogLevel(level: newLevel)
+                        // Convert string to LogLevel enum
+                        let level: LogLevel
+                        switch newLevel {
+                        case "error": level = .error
+                        case "warn": level = .warn
+                        case "info": level = .info
+                        case "debug": level = .debug
+                        default: level = .info
+                        }
+                        try core.setLogLevel(level: level)
                         loadLogs()
                     } catch {
                         errorMessage = "Failed to set log level: \(error.localizedDescription)"
@@ -203,10 +212,14 @@ struct LogViewerView: View {
     }
 
     private func loadCurrentLogLevel() {
-        do {
-            logLevel = try core.getLogLevel()
-        } catch {
-            print("Failed to get log level: \(error)")
+        let level = core.getLogLevel()
+        // Convert LogLevel enum to string
+        switch level {
+        case .error: logLevel = "error"
+        case .warn: logLevel = "warn"
+        case .info: logLevel = "info"
+        case .debug: logLevel = "debug"
+        case .trace: logLevel = "debug"  // Map trace to debug for UI simplicity
         }
     }
 
@@ -403,7 +416,15 @@ struct LogViewerView_Previews: PreviewProvider {
 
 class PreviewEventHandler: AetherEventHandler {
     func onStateChanged(state: ProcessingState) {}
-    func onHaloShow(position: HaloPosition, providerColor: String?) {}
-    func onHaloHide() {}
-    func onError(message: String) {}
+    func onHotkeyDetected(clipboardContent: String) {}
+    func onError(message: String, suggestion: String?) {}
+    func onResponseChunk(text: String) {}
+    func onErrorTyped(errorType: ErrorType, message: String) {}
+    func onProgress(percent: Float) {}
+    func onAiProcessingStarted(providerName: String, providerColor: String) {}
+    func onAiResponseReceived(responsePreview: String) {}
+    func onProviderFallback(fromProvider: String, toProvider: String) {}
+    func onConfigChanged() {}
+    func onTypewriterProgress(percent: Float) {}
+    func onTypewriterCancelled() {}
 }
