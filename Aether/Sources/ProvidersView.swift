@@ -2,130 +2,84 @@
 //  ProvidersView.swift
 //  Aether
 //
-//  AI Providers configuration tab with full CRUD functionality (Phase 6).
+//  Modern AI Providers configuration with card-based UI (Phase 6 Modernized).
 //
 
 import SwiftUI
 
 struct ProvidersView: View {
-    // Core and Keychain manager references
+    // MARK: - Dependencies
+
     let core: AetherCore
     let keychainManager: KeychainManagerImpl
 
-    // Provider list state (loaded from config)
+    // MARK: - State
+
+    // Provider list state
     @State private var providers: [ProviderConfigEntry] = []
     @State private var isLoading: Bool = true
     @State private var errorMessage: String?
+
+    // Search and filter
+    @State private var searchText: String = ""
+
+    // Selection state
+    @State private var selectedProvider: String?
 
     // Modal state
     @State private var showingConfigModal: Bool = false
     @State private var editingProvider: String?
 
+    // MARK: - Computed Properties
+
+    /// Filtered providers based on search text
+    private var filteredProviders: [ProviderConfigEntry] {
+        guard !searchText.isEmpty else { return providers }
+
+        return providers.filter { provider in
+            // Search by provider name
+            if provider.name.localizedCaseInsensitiveContains(searchText) {
+                return true
+            }
+
+            // Search by provider type
+            if provider.config.providerType.localizedCaseInsensitiveContains(searchText) {
+                return true
+            }
+
+            // Search by model name
+            if provider.config.model.localizedCaseInsensitiveContains(searchText) {
+                return true
+            }
+
+            return false
+        }
+    }
+
+    /// Selected provider object
+    private var selectedProviderObject: ProviderConfigEntry? {
+        guard let selectedName = selectedProvider else { return nil }
+        return providers.first { $0.name == selectedName }
+    }
+
+    // MARK: - Body
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Header
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("AI Providers")
-                        .font(.title2)
+        HStack(spacing: 0) {
+            // Left: Provider list with search
+            providerListSection
+                .frame(minWidth: 400, idealWidth: 500, maxWidth: .infinity)
 
-                    Text("Configure your AI provider API keys. These will be used for routing requests.")
-                        .foregroundColor(.secondary)
-                        .font(.callout)
-                }
+            // Right: Detail panel (shown when a provider is selected)
+            if let selected = selectedProviderObject {
+                Divider()
 
-                Spacer()
-
-                // Add Provider button
-                Button(action: addProvider) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus.circle.fill")
-                        Text("Add Provider")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-            }
-
-            // Loading state
-            if isLoading {
-                HStack {
-                    Spacer()
-                    VStack(spacing: 12) {
-                        ProgressView()
-                        Text("Loading providers...")
-                            .foregroundColor(.secondary)
-                            .font(.callout)
-                    }
-                    Spacer()
-                }
-                .frame(maxHeight: .infinity)
-            }
-            // Error state
-            else if let error = errorMessage {
-                HStack {
-                    Spacer()
-                    VStack(spacing: 12) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.largeTitle)
-                            .foregroundColor(.orange)
-                        Text("Failed to load providers")
-                            .font(.headline)
-                        Text(error)
-                            .font(.callout)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                        Button("Retry") {
-                            loadProviders()
-                        }
-                    }
-                    .padding(40)
-                    Spacer()
-                }
-                .frame(maxHeight: .infinity)
-            }
-            // Empty state
-            else if providers.isEmpty {
-                HStack {
-                    Spacer()
-                    VStack(spacing: 16) {
-                        Image(systemName: "cloud.fill")
-                            .font(.system(size: 60))
-                            .foregroundColor(.secondary)
-                        Text("No Providers Configured")
-                            .font(.headline)
-                        Text("Add your first AI provider to get started")
-                            .foregroundColor(.secondary)
-                            .font(.callout)
-                        Button(action: addProvider) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "plus.circle.fill")
-                                Text("Add Provider")
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                    .padding(40)
-                    Spacer()
-                }
-                .frame(maxHeight: .infinity)
-            }
-            // Provider list
-            else {
-                List {
-                    ForEach(providers, id: \.name) { provider in
-                        ProviderRow(
-                            provider: provider,
-                            keychainManager: keychainManager,
-                            onEdit: { editProvider(provider.name) },
-                            onDelete: { deleteProvider(provider.name) }
-                        )
-                    }
-                }
-                .listStyle(.inset)
+                detailPanelSection(for: selected)
+                    .frame(width: 350)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             loadProviders()
         }
@@ -147,8 +101,172 @@ struct ProvidersView: View {
         }
     }
 
+    // MARK: - View Builders
+
+    /// Provider list section with header and search
+    @ViewBuilder
+    private var providerListSection: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            // Header with Add button
+            HStack {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                    Text("AI Providers")
+                        .font(DesignTokens.Typography.title)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                    Text("Configure your AI provider API keys")
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+
+                Spacer()
+
+                ActionButton(
+                    "Add Provider",
+                    icon: "plus.circle.fill",
+                    style: .primary,
+                    action: addProvider
+                )
+            }
+
+            // Search bar
+            SearchBar(searchText: $searchText, placeholder: "Search providers...")
+
+            // Content area
+            if isLoading {
+                loadingStateView
+            } else if let error = errorMessage {
+                errorStateView(error)
+            } else if filteredProviders.isEmpty {
+                emptyStateView
+            } else {
+                providerCardsView
+            }
+        }
+        .padding(DesignTokens.Spacing.lg)
+    }
+
+    /// Detail panel section for selected provider
+    @ViewBuilder
+    private func detailPanelSection(for provider: ProviderConfigEntry) -> some View {
+        ProviderDetailPanel(
+            provider: provider,
+            hasApiKey: checkApiKeyStatus(for: provider),
+            onEdit: { editProvider(provider.name) },
+            onDelete: { deleteProvider(provider.name) },
+            onTestConnection: nil // TODO: Implement test connection
+        )
+    }
+
+    /// Loading state view
+    @ViewBuilder
+    private var loadingStateView: some View {
+        VStack(spacing: DesignTokens.Spacing.md) {
+            ProgressView()
+                .scaleEffect(1.2)
+
+            Text("Loading providers...")
+                .font(DesignTokens.Typography.body)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Error state view
+    @ViewBuilder
+    private func errorStateView(_ error: String) -> some View {
+        VStack(spacing: DesignTokens.Spacing.md) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 60))
+                .foregroundColor(DesignTokens.Colors.error)
+
+            Text("Failed to load providers")
+                .font(DesignTokens.Typography.heading)
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+            Text(error)
+                .font(DesignTokens.Typography.caption)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, DesignTokens.Spacing.xl)
+
+            ActionButton(
+                "Retry",
+                icon: "arrow.clockwise",
+                style: .secondary,
+                action: loadProviders
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Empty state view
+    @ViewBuilder
+    private var emptyStateView: some View {
+        VStack(spacing: DesignTokens.Spacing.lg) {
+            Image(systemName: searchText.isEmpty ? "cloud.fill" : "magnifyingglass")
+                .font(.system(size: 60))
+                .foregroundColor(DesignTokens.Colors.textSecondary)
+
+            if searchText.isEmpty {
+                Text("No Providers Configured")
+                    .font(DesignTokens.Typography.heading)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                Text("Add your first AI provider to get started")
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                ActionButton(
+                    "Add Provider",
+                    icon: "plus.circle.fill",
+                    style: .primary,
+                    action: addProvider
+                )
+            } else {
+                Text("No Results Found")
+                    .font(DesignTokens.Typography.heading)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                Text("Try a different search term")
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                ActionButton(
+                    "Clear Search",
+                    icon: "xmark.circle",
+                    style: .secondary,
+                    action: { searchText = "" }
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Provider cards view
+    @ViewBuilder
+    private var providerCardsView: some View {
+        ScrollView {
+            LazyVStack(spacing: DesignTokens.Spacing.md) {
+                ForEach(filteredProviders, id: \.name) { provider in
+                    ProviderCard(
+                        provider: provider,
+                        isSelected: selectedProvider == provider.name,
+                        hasApiKey: checkApiKeyStatus(for: provider),
+                        onTap: { selectProvider(provider.name) },
+                        onEdit: { editProvider(provider.name) },
+                        onDelete: { deleteProvider(provider.name) },
+                        onTestConnection: nil // TODO: Implement test connection
+                    )
+                }
+            }
+            .padding(.vertical, DesignTokens.Spacing.xs)
+        }
+    }
+
     // MARK: - Actions
 
+    /// Load providers from config
     private func loadProviders() {
         isLoading = true
         errorMessage = nil
@@ -159,6 +277,11 @@ struct ProvidersView: View {
                 await MainActor.run {
                     providers = config.providers
                     isLoading = false
+
+                    // Auto-select first provider if none selected
+                    if selectedProvider == nil, let first = providers.first {
+                        selectedProvider = first.name
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -169,16 +292,19 @@ struct ProvidersView: View {
         }
     }
 
+    /// Add new provider
     private func addProvider() {
         editingProvider = nil
         showingConfigModal = true
     }
 
+    /// Edit existing provider
     private func editProvider(_ name: String) {
         editingProvider = name
         showingConfigModal = true
     }
 
+    /// Delete provider with confirmation
     private func deleteProvider(_ name: String) {
         // Show confirmation dialog
         let alert = NSAlert()
@@ -202,6 +328,11 @@ struct ProvidersView: View {
                 let config = try core.loadConfig()
                 await MainActor.run {
                     providers = config.providers
+
+                    // Clear selection if deleted provider was selected
+                    if selectedProvider == name {
+                        selectedProvider = providers.first?.name
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -210,117 +341,58 @@ struct ProvidersView: View {
             }
         }
     }
-}
 
-// MARK: - Provider Row
-
-struct ProviderRow: View {
-    let provider: ProviderConfigEntry
-    let keychainManager: KeychainManagerImpl
-    let onEdit: () -> Void
-    let onDelete: () -> Void
-
-    @State private var hasApiKey: Bool = false
-
-    var body: some View {
-        HStack(spacing: 12) {
-            // Color indicator
-            Circle()
-                .fill(Color(hex: provider.config.color) ?? .gray)
-                .frame(width: 14, height: 14)
-
-            // Provider info
-            VStack(alignment: .leading, spacing: 4) {
-                Text(provider.name)
-                    .font(.headline)
-
-                HStack(spacing: 8) {
-                    // API key status
-                    HStack(spacing: 4) {
-                        Image(systemName: hasApiKey ? "checkmark.circle.fill" : "xmark.circle.fill")
-                            .foregroundColor(hasApiKey ? .green : .red)
-                            .font(.caption)
-                        Text(hasApiKey ? "Configured" : "Not Configured")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-
-                    Text("•")
-                        .foregroundColor(.secondary)
-                        .font(.caption)
-
-                    // Model
-                    Text(provider.config.model)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-
-            Spacer()
-
-            // Action buttons
-            HStack(spacing: 8) {
-                Button(action: onEdit) {
-                    Image(systemName: "pencil.circle.fill")
-                        .foregroundColor(.blue)
-                }
-                .buttonStyle(.plain)
-                .help("Edit provider configuration")
-
-                Button(action: onDelete) {
-                    Image(systemName: "trash.circle.fill")
-                        .foregroundColor(.red)
-                }
-                .buttonStyle(.plain)
-                .help("Delete provider")
-            }
-        }
-        .padding(.vertical, 8)
-        .onAppear {
-            checkApiKeyStatus()
+    /// Select a provider
+    private func selectProvider(_ name: String) {
+        withAnimation(DesignTokens.Animation.quick) {
+            selectedProvider = name
         }
     }
 
-    private func checkApiKeyStatus() {
-        // Check if API key exists in Keychain
+    /// Check if provider has API key configured
+    private func checkApiKeyStatus(for provider: ProviderConfigEntry) -> Bool {
         if let apiKey = provider.config.apiKey, apiKey.starts(with: "keychain:") {
             do {
-                hasApiKey = try keychainManager.hasApiKey(provider: provider.name)
+                return try keychainManager.hasApiKey(provider: provider.name)
             } catch {
-                hasApiKey = false
+                return false
             }
         } else {
             // Ollama or other providers without API key
-            hasApiKey = provider.config.apiKey != nil || provider.config.providerType == "ollama"
+            return provider.config.apiKey != nil || provider.config.providerType == "ollama"
         }
     }
 }
 
-// MARK: - Color Extension for Hex
+// MARK: - Preview Provider
 
-extension Color {
-    init?(hex: String) {
-        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&int)
-        let a, r, g, b: UInt64
-        switch hex.count {
-        case 3: // RGB (12-bit)
-            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
-        case 6: // RGB (24-bit)
-            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
-        case 8: // ARGB (32-bit)
-            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
-        default:
-            return nil
+#Preview("With Providers") {
+    ProvidersView(
+        core: try! AetherCore(handler: MockEventHandler()),
+        keychainManager: KeychainManagerImpl()
+    )
+    .frame(width: 1000, height: 700)
+}
+
+#Preview("Loading State") {
+    struct LoadingPreview: View {
+        var body: some View {
+            ProvidersView(
+                core: try! AetherCore(handler: MockEventHandler()),
+                keychainManager: KeychainManagerImpl()
+            )
         }
-
-        self.init(
-            .sRGB,
-            red: Double(r) / 255,
-            green: Double(g) / 255,
-            blue:  Double(b) / 255,
-            opacity: Double(a) / 255
-        )
     }
+    return LoadingPreview()
+        .frame(width: 1000, height: 700)
+}
+
+// MARK: - Mock Event Handler for Preview
+
+private class MockEventHandler: AetherEventHandler {
+    func onStateChanged(state: ProcessingState) {}
+    func onHotkeyDetected(hotkey: String) {}
+    func onError(message: String) {}
+    func onAiProcessingStarted(providerName: String, providerColor: String?) {}
+    func onAiResponseReceived() {}
 }
