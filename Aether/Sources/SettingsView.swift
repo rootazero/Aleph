@@ -442,5 +442,5 @@ struct GeneralSettingsView: View {
 
 #Preview {
     SettingsView()
-        .frame(width: 1000, height: 700)
+        .frame(minWidth: 1200, minHeight: 800, idealWidth: 1400, idealHeight: 900)
 }

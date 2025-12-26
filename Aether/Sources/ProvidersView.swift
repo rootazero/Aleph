@@ -25,10 +25,7 @@ struct ProvidersView: View {
 
     // Selection state
     @State private var selectedProvider: String?
-
-    // Modal state
-    @State private var showingConfigModal: Bool = false
-    @State private var editingProvider: String?
+    @State private var isAddingNew: Bool = false
 
     // Toast notification state
     @State private var toastData: ToastData?
@@ -75,37 +72,25 @@ struct ProvidersView: View {
         HStack(spacing: 0) {
             // Left: Provider list with search
             providerListSection
-                .frame(minWidth: 400, idealWidth: 500, maxWidth: .infinity)
+                .frame(minWidth: 450, idealWidth: 550, maxWidth: .infinity)
 
-            // Right: Detail panel (shown when a provider is selected)
-            if let selected = selectedProviderObject {
-                Divider()
+            // Right: Edit panel (always shown)
+            Divider()
 
-                detailPanelSection(for: selected)
-                    .frame(width: 350)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
+            ProviderEditPanel(
+                core: core,
+                keychainManager: keychainManager,
+                providers: $providers,
+                selectedProvider: $selectedProvider,
+                isAddingNew: $isAddingNew
+            )
+            .frame(minWidth: 500, idealWidth: 600, maxWidth: .infinity)
+            .transition(.move(edge: .trailing).combined(with: .opacity))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toast($toastData)
         .onAppear {
             loadProviders()
-        }
-        .sheet(isPresented: $showingConfigModal) {
-            if let editing = editingProvider {
-                ProviderConfigView(
-                    providers: $providers,
-                    core: core,
-                    keychainManager: keychainManager,
-                    editing: editing
-                )
-            } else {
-                ProviderConfigView(
-                    providers: $providers,
-                    core: core,
-                    keychainManager: keychainManager
-                )
-            }
         }
     }
 
@@ -152,18 +137,6 @@ struct ProvidersView: View {
             }
         }
         .padding(DesignTokens.Spacing.lg)
-    }
-
-    /// Detail panel section for selected provider
-    @ViewBuilder
-    private func detailPanelSection(for provider: ProviderConfigEntry) -> some View {
-        ProviderDetailPanel(
-            provider: provider,
-            hasApiKey: checkApiKeyStatus(for: provider),
-            onEdit: { editProvider(provider.name) },
-            onDelete: { deleteProvider(provider.name) },
-            onTestConnection: nil // TODO: Implement test connection
-        )
     }
 
     /// Loading state view with skeleton cards
@@ -265,9 +238,9 @@ struct ProvidersView: View {
                         isSelected: selectedProvider == provider.name,
                         hasApiKey: checkApiKeyStatus(for: provider),
                         onTap: { selectProvider(provider.name) },
-                        onEdit: { editProvider(provider.name) },
+                        onEdit: { selectProvider(provider.name) }, // Just select, panel will have edit button
                         onDelete: { deleteProvider(provider.name) },
-                        onTestConnection: nil // TODO: Implement test connection
+                        onTestConnection: nil
                     )
                     .transition(.asymmetric(
                         insertion: .opacity.combined(with: .move(edge: .top)),
@@ -310,14 +283,8 @@ struct ProvidersView: View {
 
     /// Add new provider
     private func addProvider() {
-        editingProvider = nil
-        showingConfigModal = true
-    }
-
-    /// Edit existing provider
-    private func editProvider(_ name: String) {
-        editingProvider = name
-        showingConfigModal = true
+        isAddingNew = true
+        selectedProvider = nil
     }
 
     /// Delete provider with confirmation
