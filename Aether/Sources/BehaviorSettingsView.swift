@@ -21,205 +21,271 @@ struct BehaviorSettingsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Behavior Settings")
-                    .font(.title2)
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                // Header
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                    Text("Behavior Settings")
+                        .font(DesignTokens.Typography.title)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
 
-                Text("Configure how Aether captures input and delivers output.")
-                    .foregroundColor(.secondary)
-                    .font(.callout)
+                    Text("Configure how Aether captures input and delivers output.")
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
 
-                Form {
-                    // Input Mode Section
-                    Section(header: Text("Input Mode")) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("How should Aether capture your selected text?")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                // Input Mode Card
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                    Label("Input Mode", systemImage: "arrow.down.doc")
+                        .font(DesignTokens.Typography.heading)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
 
-                            Picker("Input Mode", selection: $inputMode) {
-                                ForEach(InputMode.allCases, id: \.self) { mode in
-                                    HStack {
-                                        Image(systemName: mode.iconName)
-                                        Text(mode.displayName)
-                                    }
-                                    .tag(mode)
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                        Text("How should Aether capture your selected text?")
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                        Picker("Input Mode", selection: $inputMode) {
+                            ForEach(InputMode.allCases, id: \.self) { mode in
+                                HStack(spacing: DesignTokens.Spacing.sm) {
+                                    Image(systemName: mode.iconName)
+                                    Text(mode.displayName)
                                 }
-                            }
-                            .pickerStyle(.segmented)
-
-                            // Mode description
-                            HStack(spacing: 8) {
-                                Image(systemName: "info.circle")
-                                    .foregroundColor(.blue)
-                                Text(inputMode.description)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(8)
-                            .background(Color.blue.opacity(0.05))
-                            .cornerRadius(6)
-                        }
-                    }
-
-                    // Output Mode Section
-                    Section(header: Text("Output Mode")) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("How should Aether deliver AI responses?")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-
-                            Picker("Output Mode", selection: $outputMode) {
-                                ForEach(OutputMode.allCases, id: \.self) { mode in
-                                    HStack {
-                                        Image(systemName: mode.iconName)
-                                        Text(mode.displayName)
-                                    }
-                                    .tag(mode)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-
-                            // Mode description
-                            HStack(spacing: 8) {
-                                Image(systemName: "info.circle")
-                                    .foregroundColor(.blue)
-                                Text(outputMode.description)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(8)
-                            .background(Color.blue.opacity(0.05))
-                            .cornerRadius(6)
-                        }
-                    }
-
-                    // Typing Speed Section (only shown when typewriter mode is selected)
-                    if outputMode == .typewriter {
-                        Section(header: Text("Typing Speed")) {
-                            VStack(alignment: .leading, spacing: 12) {
-                                HStack {
-                                    Text("Speed:")
-                                        .frame(width: 80, alignment: .leading)
-
-                                    Slider(value: $typingSpeed, in: 10...200, step: 5)
-
-                                    Text("\(Int(typingSpeed)) chars/sec")
-                                        .font(.system(.body, design: .monospaced))
-                                        .frame(width: 100, alignment: .trailing)
-                                }
-
-                                // Speed indicator bar
-                                HStack(spacing: 4) {
-                                    Text("Slow")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-
-                                    GeometryReader { geometry in
-                                        ZStack(alignment: .leading) {
-                                            // Background track
-                                            RoundedRectangle(cornerRadius: 2)
-                                                .fill(Color.gray.opacity(0.2))
-                                                .frame(height: 4)
-
-                                            // Speed indicator
-                                            RoundedRectangle(cornerRadius: 2)
-                                                .fill(speedColor)
-                                                .frame(width: geometry.size.width * CGFloat((typingSpeed - 10) / 190), height: 4)
-                                        }
-                                    }
-                                    .frame(height: 4)
-
-                                    Text("Fast")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-
-                                // Preview button
-                                Button {
-                                    showingPreview = true
-                                } label: {
-                                    Label("Preview Typing Effect", systemImage: "play.circle")
-                                }
-                                .buttonStyle(.bordered)
+                                .tag(mode)
                             }
                         }
+                        .pickerStyle(.segmented)
+
+                        // Mode description
+                        HStack(spacing: DesignTokens.Spacing.sm) {
+                            Image(systemName: "info.circle")
+                                .foregroundColor(DesignTokens.Colors.info)
+                            Text(inputMode.description)
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                        }
+                        .padding(DesignTokens.Spacing.sm)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(DesignTokens.Colors.info.opacity(0.05))
+                        .cornerRadius(DesignTokens.CornerRadius.small)
                     }
+                }
+                .padding(DesignTokens.Spacing.md)
+                .background(
+                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                        .fill(DesignTokens.Colors.cardBackground)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                        .stroke(DesignTokens.Colors.border, lineWidth: 1)
+                )
+                .shadow(DesignTokens.Shadows.card)
 
-                    // PII Scrubbing Section
-                    Section(header: Text("Privacy & Security")) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Toggle("Enable PII Scrubbing", isOn: $piiScrubbingEnabled)
-                                .toggleStyle(.switch)
+                // Output Mode Card
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                    Label("Output Mode", systemImage: "arrow.up.doc")
+                        .font(DesignTokens.Typography.heading)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
 
-                            Text("Automatically remove personally identifiable information (PII) before sending to AI providers.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                        Text("How should Aether deliver AI responses?")
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
 
-                            if piiScrubbingEnabled {
-                                Divider()
-                                    .padding(.vertical, 4)
-
-                                Text("Select types of PII to scrub:")
-                                    .font(.caption)
-                                    .fontWeight(.semibold)
-
-                                VStack(alignment: .leading, spacing: 8) {
-                                    ForEach(PIIType.allCases, id: \.self) { type in
-                                        Toggle(isOn: Binding(
-                                            get: { piiTypes.contains(type) },
-                                            set: { isOn in
-                                                if isOn {
-                                                    piiTypes.insert(type)
-                                                } else {
-                                                    piiTypes.remove(type)
-                                                }
-                                            }
-                                        )) {
-                                            HStack(spacing: 8) {
-                                                Image(systemName: type.iconName)
-                                                    .foregroundColor(.orange)
-                                                    .frame(width: 20)
-
-                                                VStack(alignment: .leading, spacing: 2) {
-                                                    Text(type.displayName)
-                                                        .font(.body)
-                                                    Text(type.example)
-                                                        .font(.caption)
-                                                        .foregroundColor(.secondary)
-                                                }
-                                            }
-                                        }
-                                        .toggleStyle(.checkbox)
-                                    }
+                        Picker("Output Mode", selection: $outputMode) {
+                            ForEach(OutputMode.allCases, id: \.self) { mode in
+                                HStack(spacing: DesignTokens.Spacing.sm) {
+                                    Image(systemName: mode.iconName)
+                                    Text(mode.displayName)
                                 }
-                                .padding(.leading, 8)
+                                .tag(mode)
                             }
                         }
-                    }
+                        .pickerStyle(.segmented)
 
-                    // Save Confirmation
-                    if showingSaveConfirmation {
-                        Section {
+                        // Mode description
+                        HStack(spacing: DesignTokens.Spacing.sm) {
+                            Image(systemName: "info.circle")
+                                .foregroundColor(DesignTokens.Colors.info)
+                            Text(outputMode.description)
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                        }
+                        .padding(DesignTokens.Spacing.sm)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(DesignTokens.Colors.info.opacity(0.05))
+                        .cornerRadius(DesignTokens.CornerRadius.small)
+                    }
+                }
+                .padding(DesignTokens.Spacing.md)
+                .background(
+                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                        .fill(DesignTokens.Colors.cardBackground)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                        .stroke(DesignTokens.Colors.border, lineWidth: 1)
+                )
+                .shadow(DesignTokens.Shadows.card)
+
+                // Typing Speed Card (only shown when typewriter mode is selected)
+                if outputMode == .typewriter {
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                        Label("Typing Speed", systemImage: "speedometer")
+                            .font(DesignTokens.Typography.heading)
+                            .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                             HStack {
-                                Spacer()
-                                Label("Settings saved successfully!", systemImage: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
-                                    .font(.callout)
-                                Spacer()
+                                Text("Speed:")
+                                    .font(DesignTokens.Typography.body)
+                                    .frame(width: 80, alignment: .leading)
+
+                                Slider(value: $typingSpeed, in: 10...200, step: 5)
+
+                                Text("\(Int(typingSpeed)) chars/sec")
+                                    .font(DesignTokens.Typography.code)
+                                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                                    .frame(width: 100, alignment: .trailing)
                             }
+
+                            // Speed indicator bar
+                            HStack(spacing: DesignTokens.Spacing.xs) {
+                                Text("Slow")
+                                    .font(DesignTokens.Typography.caption)
+                                    .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                                GeometryReader { geometry in
+                                    ZStack(alignment: .leading) {
+                                        // Background track
+                                        RoundedRectangle(cornerRadius: 2)
+                                            .fill(DesignTokens.Colors.border)
+                                            .frame(height: 4)
+
+                                        // Speed indicator
+                                        RoundedRectangle(cornerRadius: 2)
+                                            .fill(speedColor)
+                                            .frame(width: geometry.size.width * CGFloat((typingSpeed - 10) / 190), height: 4)
+                                    }
+                                }
+                                .frame(height: 4)
+
+                                Text("Fast")
+                                    .font(DesignTokens.Typography.caption)
+                                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                            }
+
+                            // Preview button
+                            ActionButton("Preview Typing Effect", icon: "play.circle", style: .secondary) {
+                                showingPreview = true
+                            }
+                        }
+                    }
+                    .padding(DesignTokens.Spacing.md)
+                    .background(
+                        RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                            .fill(DesignTokens.Colors.cardBackground)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                            .stroke(DesignTokens.Colors.border, lineWidth: 1)
+                    )
+                    .shadow(DesignTokens.Shadows.card)
+                }
+
+                // PII Scrubbing Card
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                    Label("Privacy & Security", systemImage: "lock.shield")
+                        .font(DesignTokens.Typography.heading)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                        Toggle("Enable PII Scrubbing", isOn: $piiScrubbingEnabled)
+                            .toggleStyle(.switch)
+                            .font(DesignTokens.Typography.body)
+
+                        Text("Automatically remove personally identifiable information (PII) before sending to AI providers.")
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                        if piiScrubbingEnabled {
+                            Divider()
+
+                            Text("Select types of PII to scrub:")
+                                .font(DesignTokens.Typography.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                            VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                                ForEach(PIIType.allCases, id: \.self) { type in
+                                    Toggle(isOn: Binding(
+                                        get: { piiTypes.contains(type) },
+                                        set: { isOn in
+                                            if isOn {
+                                                piiTypes.insert(type)
+                                            } else {
+                                                piiTypes.remove(type)
+                                            }
+                                        }
+                                    )) {
+                                        HStack(spacing: DesignTokens.Spacing.sm) {
+                                            Image(systemName: type.iconName)
+                                                .foregroundColor(DesignTokens.Colors.warning)
+                                                .frame(width: 20)
+
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(type.displayName)
+                                                    .font(DesignTokens.Typography.body)
+                                                Text(type.example)
+                                                    .font(DesignTokens.Typography.caption)
+                                                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                                            }
+                                        }
+                                    }
+                                    .toggleStyle(.checkbox)
+                                }
+                            }
+                            .padding(.leading, DesignTokens.Spacing.sm)
                         }
                     }
                 }
-                .formStyle(.grouped)
-                .onChange(of: inputMode) { _ in saveSettings() }
-                .onChange(of: outputMode) { _ in saveSettings() }
-                .onChange(of: typingSpeed) { _ in saveSettings() }
-                .onChange(of: piiScrubbingEnabled) { _ in saveSettings() }
-                .onChange(of: piiTypes) { _ in saveSettings() }
+                .padding(DesignTokens.Spacing.md)
+                .background(
+                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                        .fill(DesignTokens.Colors.cardBackground)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                        .stroke(DesignTokens.Colors.border, lineWidth: 1)
+                )
+                .shadow(DesignTokens.Shadows.card)
+
+                // Save Confirmation
+                if showingSaveConfirmation {
+                    HStack {
+                        Spacer()
+                        Label("Settings saved successfully!", systemImage: "checkmark.circle.fill")
+                            .foregroundColor(DesignTokens.Colors.providerActive)
+                            .font(DesignTokens.Typography.body)
+                        Spacer()
+                    }
+                    .padding(DesignTokens.Spacing.md)
+                    .background(
+                        RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                            .fill(DesignTokens.Colors.providerActive.opacity(0.1))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                            .stroke(DesignTokens.Colors.providerActive, lineWidth: 1)
+                    )
+                }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(20)
+            .padding(DesignTokens.Spacing.lg)
+            .onChange(of: inputMode) { _ in saveSettings() }
+            .onChange(of: outputMode) { _ in saveSettings() }
+            .onChange(of: typingSpeed) { _ in saveSettings() }
+            .onChange(of: piiScrubbingEnabled) { _ in saveSettings() }
+            .onChange(of: piiTypes) { _ in saveSettings() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showingPreview) {

@@ -24,16 +24,17 @@ struct RoutingView: View {
     @State private var showingImportExport: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
             // Header
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                     Text("Routing Rules")
-                        .font(.title2)
+                        .font(DesignTokens.Typography.title)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
 
                     Text("Define how clipboard content is routed to AI providers based on patterns.")
-                        .foregroundColor(.secondary)
-                        .font(.callout)
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
 
                 Spacer()
@@ -51,32 +52,29 @@ struct RoutingView: View {
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .imageScale(.large)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
                 }
                 .buttonStyle(.plain)
                 .help("Import/Export Rules")
 
                 // Add Rule button
-                Button(action: addNewRule) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus.circle.fill")
-                        Text("Add Rule")
-                    }
+                ActionButton("Add Rule", icon: "plus.circle.fill", style: .primary) {
+                    addNewRule()
                 }
-                .buttonStyle(.borderedProminent)
             }
 
             // Error message
             if let error = errorMessage {
-                HStack(spacing: 8) {
+                HStack(spacing: DesignTokens.Spacing.sm) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.orange)
+                        .foregroundColor(DesignTokens.Colors.warning)
                     Text(error)
-                        .font(.callout)
+                        .font(DesignTokens.Typography.body)
                 }
-                .padding(12)
+                .padding(DesignTokens.Spacing.md)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.orange.opacity(0.1))
-                .cornerRadius(8)
+                .background(DesignTokens.Colors.warning.opacity(0.1))
+                .cornerRadius(DesignTokens.CornerRadius.medium)
             }
 
             // Rules List
@@ -84,60 +82,53 @@ struct RoutingView: View {
                 ProgressView("Loading rules...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if rules.isEmpty {
-                VStack(spacing: 12) {
+                VStack(spacing: DesignTokens.Spacing.md) {
                     Image(systemName: "square.stack.3d.up.slash")
                         .font(.system(size: 48))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
 
                     Text("No routing rules configured")
-                        .font(.headline)
-                        .foregroundColor(.secondary)
+                        .font(DesignTokens.Typography.heading)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
 
                     Text("Add your first rule to start routing clipboard content")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
 
-                    Button(action: addNewRule) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus.circle.fill")
-                            Text("Add Rule")
-                        }
+                    ActionButton("Add Rule", icon: "plus.circle.fill", style: .secondary) {
+                        addNewRule()
                     }
-                    .buttonStyle(.bordered)
-                    .padding(.top, 8)
+                    .padding(.top, DesignTokens.Spacing.sm)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List {
+                VStack(spacing: 0) {
                     ForEach(Array(rules.enumerated()), id: \.offset) { index, rule in
-                        RuleRow(
+                        RuleCard(
                             rule: rule,
                             index: index,
                             provider: providers.first(where: { $0.name == rule.provider }),
                             onEdit: { editRule(at: index) },
                             onDelete: { confirmDelete(at: index) }
                         )
-                    }
-                    .onMove { source, destination in
-                        moveRule(from: source, to: destination)
+                        .padding(.vertical, DesignTokens.Spacing.xs)
                     }
                 }
-                .listStyle(.inset)
             }
 
             // Footer info
             if !rules.isEmpty {
-                HStack {
+                HStack(spacing: DesignTokens.Spacing.sm) {
                     Image(systemName: "info.circle")
-                        .foregroundColor(.secondary)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
                     Text("Rules are evaluated top-to-bottom. Drag to reorder priority.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(20)
+        .padding(DesignTokens.Spacing.lg)
         .onAppear {
             loadRules()
         }
@@ -394,67 +385,78 @@ struct RoutingView: View {
     }
 }
 
-// MARK: - Rule Row Component
+// MARK: - Rule Card Component
 
-struct RuleRow: View {
+/// Card component for displaying a routing rule with modern styling
+struct RuleCard: View {
     let rule: RoutingRuleConfig
     let index: Int
     let provider: ProviderConfigEntry?
     let onEdit: () -> Void
     let onDelete: () -> Void
 
+    @State private var isHovering = false
+
     var body: some View {
-        HStack(spacing: 12) {
-            // Priority number
-            Text("#\(index + 1)")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .frame(width: 30, alignment: .leading)
+        HStack(spacing: DesignTokens.Spacing.md) {
+            // Priority badge
+            ZStack {
+                Circle()
+                    .fill(DesignTokens.Colors.accentBlue.opacity(0.2))
+                    .frame(width: 32, height: 32)
+
+                Text("#\(index + 1)")
+                    .font(DesignTokens.Typography.caption)
+                    .fontWeight(.semibold)
+                    .foregroundColor(DesignTokens.Colors.accentBlue)
+            }
 
             // Rule details
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                 // Pattern
-                HStack(spacing: 8) {
+                HStack(spacing: DesignTokens.Spacing.xs) {
                     Text("Pattern:")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
                     Text(rule.regex)
-                        .font(.system(.body, design: .monospaced))
+                        .font(DesignTokens.Typography.code)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
                 }
 
                 // Provider
-                HStack(spacing: 8) {
+                HStack(spacing: DesignTokens.Spacing.xs) {
                     Text("Provider:")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
 
                     if let provider = provider {
-                        HStack(spacing: 4) {
+                        HStack(spacing: DesignTokens.Spacing.xs) {
                             Circle()
                                 .fill(Color(hex: provider.config.color) ?? .gray)
                                 .frame(width: 8, height: 8)
                             Text(provider.name)
-                                .font(.body)
+                                .font(DesignTokens.Typography.body)
+                                .foregroundColor(DesignTokens.Colors.textPrimary)
                         }
                     } else {
                         Text(rule.provider)
-                            .font(.body)
-                            .foregroundColor(.orange)
+                            .font(DesignTokens.Typography.body)
+                            .foregroundColor(DesignTokens.Colors.warning)
                         Text("(not configured)")
-                            .font(.caption)
-                            .foregroundColor(.orange)
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.warning)
                     }
                 }
 
                 // System prompt preview (if exists)
                 if let prompt = rule.systemPrompt, !prompt.isEmpty {
-                    HStack(spacing: 8) {
+                    HStack(spacing: DesignTokens.Spacing.xs) {
                         Text("Prompt:")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
                         Text(prompt.prefix(50) + (prompt.count > 50 ? "..." : ""))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
                             .lineLimit(1)
                     }
                 }
@@ -463,23 +465,40 @@ struct RuleRow: View {
             Spacer()
 
             // Action buttons
-            HStack(spacing: 8) {
+            HStack(spacing: DesignTokens.Spacing.sm) {
                 Button(action: onEdit) {
                     Image(systemName: "pencil")
-                        .foregroundColor(.blue)
+                        .foregroundColor(DesignTokens.Colors.accentBlue)
+                        .font(DesignTokens.Typography.body)
                 }
                 .buttonStyle(.plain)
                 .help("Edit rule")
 
                 Button(action: onDelete) {
                     Image(systemName: "trash")
-                        .foregroundColor(.red)
+                        .foregroundColor(DesignTokens.Colors.error)
+                        .font(DesignTokens.Typography.body)
                 }
                 .buttonStyle(.plain)
                 .help("Delete rule")
             }
         }
-        .padding(.vertical, 8)
+        .padding(DesignTokens.Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                .fill(DesignTokens.Colors.cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                .stroke(DesignTokens.Colors.border, lineWidth: 1)
+        )
+        .shadow(DesignTokens.Shadows.card)
+        .scaleEffect(isHovering ? 1.02 : 1.0)
+        .shadow(isHovering ? DesignTokens.Shadows.elevated : DesignTokens.Shadows.card)
+        .animation(DesignTokens.Animation.quick, value: isHovering)
+        .onHover { hovering in
+            isHovering = hovering
+        }
     }
 }
 

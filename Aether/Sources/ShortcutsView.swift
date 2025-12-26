@@ -15,90 +15,130 @@ struct ShortcutsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Keyboard Shortcuts")
-                    .font(.title2)
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                // Header
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                    Text("Keyboard Shortcuts")
+                        .font(DesignTokens.Typography.title)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
 
-                Text("Configure global keyboard shortcuts for Aether.")
-                    .foregroundColor(.secondary)
-                    .font(.callout)
+                    Text("Configure global keyboard shortcuts for Aether.")
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
 
-                Form {
-                    Section(header: Text("Global Hotkey")) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Text("Summon Aether:")
-                                    .frame(width: 120, alignment: .leading)
-                                Spacer()
-                            }
+                // Global Hotkey Card
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                    Label("Global Hotkey", systemImage: "keyboard")
+                        .font(DesignTokens.Typography.heading)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
 
-                            HotkeyRecorderView(hotkey: $currentHotkey) { newHotkey in
-                                handleHotkeyChange(newHotkey)
-                            }
-
-                            // Conflict warning
-                            if let warning = conflictWarning {
-                                Label(warning, systemImage: "exclamationmark.triangle")
-                                    .foregroundColor(.orange)
-                                    .font(.caption)
-                                    .padding(8)
-                                    .background(Color.orange.opacity(0.1))
-                                    .cornerRadius(6)
-                            }
-
-                            // Action buttons
-                            HStack(spacing: 12) {
-                                Button("Reset to Default") {
-                                    resetToDefault()
-                                }
-                                .buttonStyle(.bordered)
-
-                                Button("Choose Preset...") {
-                                    showingPresets = true
-                                }
-                                .buttonStyle(.bordered)
-
-                                Spacer()
-
-                                if showingSaveConfirmation {
-                                    Label("Saved!", systemImage: "checkmark.circle.fill")
-                                        .foregroundColor(.green)
-                                        .font(.caption)
-                                }
-                            }
-                            .padding(.top, 8)
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                        HStack {
+                            Text("Summon Aether:")
+                                .font(DesignTokens.Typography.body)
+                                .frame(width: 120, alignment: .leading)
+                            Spacer()
                         }
-                    }
 
-                    Section(header: Text("Permission Required")) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Aether requires **Accessibility** permission to detect global hotkeys.")
-                                .font(.callout)
-
-                            Text("Why this is needed:")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Label("Detect ⌘~ hotkey in any app", systemImage: "checkmark.circle")
-                                    .font(.caption)
-                                Label("Read clipboard content", systemImage: "checkmark.circle")
-                                    .font(.caption)
-                                Label("Simulate keyboard input for paste", systemImage: "checkmark.circle")
-                                    .font(.caption)
-                            }
-
-                            Button("Open System Settings") {
-                                PermissionManager().openAccessibilitySettings()
-                            }
-                            .padding(.top, 8)
+                        HotkeyRecorderView(hotkey: $currentHotkey) { newHotkey in
+                            handleHotkeyChange(newHotkey)
                         }
+
+                        // Conflict warning
+                        if let warning = conflictWarning {
+                            HStack(spacing: DesignTokens.Spacing.sm) {
+                                Image(systemName: "exclamationmark.triangle")
+                                    .foregroundColor(DesignTokens.Colors.warning)
+                                Text(warning)
+                                    .font(DesignTokens.Typography.caption)
+                                    .foregroundColor(DesignTokens.Colors.warning)
+                            }
+                            .padding(DesignTokens.Spacing.sm)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(DesignTokens.Colors.warning.opacity(0.1))
+                            .cornerRadius(DesignTokens.CornerRadius.small)
+                        }
+
+                        // Action buttons
+                        HStack(spacing: DesignTokens.Spacing.md) {
+                            ActionButton("Reset to Default", style: .secondary) {
+                                resetToDefault()
+                            }
+
+                            ActionButton("Choose Preset...", style: .secondary) {
+                                showingPresets = true
+                            }
+
+                            Spacer()
+
+                            if showingSaveConfirmation {
+                                Label("Saved!", systemImage: "checkmark.circle.fill")
+                                    .foregroundColor(DesignTokens.Colors.providerActive)
+                                    .font(DesignTokens.Typography.caption)
+                            }
+                        }
+                        .padding(.top, DesignTokens.Spacing.sm)
                     }
                 }
-                .formStyle(.grouped)
+                .padding(DesignTokens.Spacing.md)
+                .background(
+                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                        .fill(DesignTokens.Colors.cardBackground)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                        .stroke(DesignTokens.Colors.border, lineWidth: 1)
+                )
+                .shadow(DesignTokens.Shadows.card)
+
+                // Permission Card
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                    Label("Permission Required", systemImage: "lock.shield")
+                        .font(DesignTokens.Typography.heading)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                        Text("Aether requires **Accessibility** permission to detect global hotkeys.")
+                            .font(DesignTokens.Typography.body)
+                            .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                        Text("Why this is needed:")
+                            .font(DesignTokens.Typography.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                            Label("Detect ⌘~ hotkey in any app", systemImage: "checkmark.circle")
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                            Label("Read clipboard content", systemImage: "checkmark.circle")
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                            Label("Simulate keyboard input for paste", systemImage: "checkmark.circle")
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                        }
+
+                        ActionButton("Open System Settings", icon: "gear", style: .primary) {
+                            PermissionManager().openAccessibilitySettings()
+                        }
+                        .padding(.top, DesignTokens.Spacing.sm)
+                    }
+                }
+                .padding(DesignTokens.Spacing.md)
+                .background(
+                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                        .fill(DesignTokens.Colors.cardBackground)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                        .stroke(DesignTokens.Colors.border, lineWidth: 1)
+                )
+                .shadow(DesignTokens.Shadows.card)
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(20)
+            .padding(DesignTokens.Spacing.lg)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showingPresets) {
@@ -154,10 +194,11 @@ struct PresetShortcutsSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
             HStack {
                 Text("Choose a Preset Shortcut")
-                    .font(.title2)
+                    .font(DesignTokens.Typography.title)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
                 Spacer()
                 Button("Close") {
                     dismiss()
@@ -165,13 +206,13 @@ struct PresetShortcutsSheet: View {
             }
 
             Text("Select a common keyboard shortcut combination:")
-                .foregroundColor(.secondary)
-                .font(.callout)
+                .font(DesignTokens.Typography.caption)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
 
             Divider()
 
             ScrollView {
-                VStack(spacing: 8) {
+                VStack(spacing: DesignTokens.Spacing.sm) {
                     ForEach(PresetShortcut.presets) { preset in
                         PresetShortcutRow(
                             preset: preset,
@@ -183,7 +224,7 @@ struct PresetShortcutsSheet: View {
                 }
             }
         }
-        .padding(24)
+        .padding(DesignTokens.Spacing.lg)
         .frame(width: 600, height: 500)
     }
 }
@@ -197,45 +238,47 @@ struct PresetShortcutRow: View {
     @State private var conflictWarning: String?
 
     var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
+        HStack(spacing: DesignTokens.Spacing.md) {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                HStack(spacing: DesignTokens.Spacing.sm) {
                     Text(preset.hotkey.displayString)
-                        .font(.system(.body, design: .monospaced))
+                        .font(DesignTokens.Typography.code)
                         .fontWeight(.semibold)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
 
                     if isSelected {
                         Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
+                            .foregroundColor(DesignTokens.Colors.providerActive)
                     }
                 }
 
                 Text(preset.description)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
 
                 if let warning = conflictWarning {
                     Label(warning, systemImage: "exclamationmark.triangle")
-                        .foregroundColor(.orange)
-                        .font(.caption2)
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.warning)
                 }
             }
 
             Spacer()
 
-            Button("Use This") {
+            ActionButton("Use This", style: .primary, isDisabled: isSelected) {
                 onSelect()
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(isSelected)
         }
-        .padding(12)
-        .background(isSelected ? Color.blue.opacity(0.1) : Color.gray.opacity(0.05))
-        .cornerRadius(8)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 2)
+        .padding(DesignTokens.Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                .fill(isSelected ? DesignTokens.Colors.accentBlue.opacity(0.1) : DesignTokens.Colors.cardBackground)
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                .stroke(isSelected ? DesignTokens.Colors.borderSelected : DesignTokens.Colors.border, lineWidth: isSelected ? 2 : 1)
+        )
+        .shadow(DesignTokens.Shadows.card)
         .onAppear {
             conflictWarning = HotkeyConflictDetector.detectConflict(for: preset.hotkey)
         }

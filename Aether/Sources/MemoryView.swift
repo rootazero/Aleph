@@ -31,22 +31,22 @@ struct MemoryView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
                 // Header
                 headerSection
 
-                // Configuration Section
-                configurationSection
+                // Configuration Card
+                configurationCard
 
-                // Statistics Section
+                // Statistics Card
                 if memoryConfig.enabled {
-                    statisticsSection
+                    statisticsCard
 
-                    // Memory Browser Section
-                    memoryBrowserSection
+                    // Memory Browser Card
+                    memoryBrowserCard
                 }
             }
-            .padding(20)
+            .padding(DesignTokens.Spacing.lg)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
@@ -86,22 +86,26 @@ struct MemoryView: View {
     // MARK: - Header Section
 
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
             Text("Memory Management")
-                .font(.title)
-                .fontWeight(.bold)
+                .font(DesignTokens.Typography.title)
+                .foregroundColor(DesignTokens.Colors.textPrimary)
 
             Text("Aether remembers past interactions to provide context-aware responses. All data is stored locally and never leaves your device.")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+                .font(DesignTokens.Typography.caption)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
         }
     }
 
-    // MARK: - Configuration Section
+    // MARK: - Configuration Card
 
-    private var configurationSection: some View {
-        GroupBox(label: Label("Configuration", systemImage: "gearshape.fill")) {
-            VStack(alignment: .leading, spacing: 16) {
+    private var configurationCard: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            Label("Configuration", systemImage: "gearshape.fill")
+                .font(DesignTokens.Typography.heading)
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                 // Enable/Disable Toggle
                 Toggle("Enable Memory", isOn: Binding(
                     get: { memoryConfig.enabled },
@@ -111,6 +115,7 @@ struct MemoryView: View {
                     }
                 ))
                 .toggleStyle(.switch)
+                .font(DesignTokens.Typography.body)
 
                 if memoryConfig.enabled {
                     Divider()
@@ -118,6 +123,7 @@ struct MemoryView: View {
                     // Retention Policy
                     HStack {
                         Text("Retention Policy:")
+                            .font(DesignTokens.Typography.body)
                             .frame(width: 150, alignment: .leading)
 
                         Picker("", selection: Binding(
@@ -139,13 +145,14 @@ struct MemoryView: View {
                         Spacer()
 
                         Text("Auto-delete memories older than selected period")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
 
                     // Max Context Items
                     HStack {
                         Text("Max Context Items:")
+                            .font(DesignTokens.Typography.body)
                             .frame(width: 150, alignment: .leading)
 
                         Slider(
@@ -163,18 +170,20 @@ struct MemoryView: View {
 
                         Text("\(memoryConfig.maxContextItems)")
                             .frame(width: 30)
-                            .foregroundColor(.secondary)
+                            .font(DesignTokens.Typography.body)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
 
                         Spacer()
 
                         Text("Number of past interactions to retrieve")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
 
                     // Similarity Threshold
                     HStack {
                         Text("Similarity Threshold:")
+                            .font(DesignTokens.Typography.body)
                             .frame(width: 150, alignment: .leading)
 
                         Slider(
@@ -192,46 +201,66 @@ struct MemoryView: View {
 
                         Text(String(format: "%.2f", memoryConfig.similarityThreshold))
                             .frame(width: 40)
-                            .foregroundColor(.secondary)
+                            .font(DesignTokens.Typography.code)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
 
                         Spacer()
 
                         Text("Minimum similarity score to include memory")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
                 }
             }
-            .padding(.vertical, 8)
         }
+        .padding(DesignTokens.Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                .fill(DesignTokens.Colors.cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                .stroke(DesignTokens.Colors.border, lineWidth: 1)
+        )
+        .shadow(DesignTokens.Shadows.card)
     }
 
-    // MARK: - Statistics Section
+    // MARK: - Statistics Card
 
-    private var statisticsSection: some View {
-        GroupBox(label: Label("Statistics", systemImage: "chart.bar.fill")) {
+    private var statisticsCard: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            Label("Statistics", systemImage: "chart.bar.fill")
+                .font(DesignTokens.Typography.heading)
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+
             if let stats = memoryStats {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                     HStack {
                         Text("Total Memories:")
+                            .font(DesignTokens.Typography.body)
                             .frame(width: 150, alignment: .leading)
                         Text("\(stats.totalMemories)")
+                            .font(DesignTokens.Typography.body)
                             .fontWeight(.semibold)
                         Spacer()
                     }
 
                     HStack {
                         Text("Total Apps:")
+                            .font(DesignTokens.Typography.body)
                             .frame(width: 150, alignment: .leading)
                         Text("\(stats.totalApps)")
+                            .font(DesignTokens.Typography.body)
                             .fontWeight(.semibold)
                         Spacer()
                     }
 
                     HStack {
                         Text("Database Size:")
+                            .font(DesignTokens.Typography.body)
                             .frame(width: 150, alignment: .leading)
                         Text(String(format: "%.2f MB", stats.databaseSizeMb))
+                            .font(DesignTokens.Typography.body)
                             .fontWeight(.semibold)
                         Spacer()
                     }
@@ -239,29 +268,44 @@ struct MemoryView: View {
                     if stats.totalMemories > 0 {
                         HStack {
                             Text("Date Range:")
+                                .font(DesignTokens.Typography.body)
                                 .frame(width: 150, alignment: .leading)
                             Text("\(formatTimestamp(stats.oldestMemoryTimestamp)) - \(formatTimestamp(stats.newestMemoryTimestamp))")
+                                .font(DesignTokens.Typography.caption)
                                 .fontWeight(.semibold)
                             Spacer()
                         }
                     }
                 }
-                .padding(.vertical, 8)
             } else {
                 Text("Loading statistics...")
-                    .foregroundColor(.secondary)
-                    .padding(.vertical, 8)
+                    .font(DesignTokens.Typography.body)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
             }
         }
+        .padding(DesignTokens.Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                .fill(DesignTokens.Colors.cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                .stroke(DesignTokens.Colors.border, lineWidth: 1)
+        )
+        .shadow(DesignTokens.Shadows.card)
     }
 
-    // MARK: - Memory Browser Section
+    // MARK: - Memory Browser Card
 
-    private var memoryBrowserSection: some View {
-        GroupBox(label: Label("Memory Browser", systemImage: "tray.fill")) {
-            VStack(alignment: .leading, spacing: 16) {
+    private var memoryBrowserCard: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            Label("Memory Browser", systemImage: "tray.fill")
+                .font(DesignTokens.Typography.heading)
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                 // Controls
-                HStack {
+                HStack(spacing: DesignTokens.Spacing.md) {
                     // Filter by app
                     Picker("Filter:", selection: $selectedAppFilter) {
                         Text("All Apps").tag("All Apps")
@@ -276,18 +320,14 @@ struct MemoryView: View {
                     Spacer()
 
                     // Refresh button
-                    Button(action: refreshData) {
-                        Label("Refresh", systemImage: "arrow.clockwise")
+                    ActionButton("Refresh", icon: "arrow.clockwise", style: .secondary) {
+                        refreshData()
                     }
 
                     // Clear all button
-                    Button(action: {
+                    ActionButton("Clear All", icon: "trash.fill", style: .danger) {
                         showClearAllConfirmation = true
-                    }) {
-                        Label("Clear All", systemImage: "trash.fill")
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
                 }
 
                 Divider()
@@ -299,25 +339,25 @@ struct MemoryView: View {
                         ProgressView("Loading memories...")
                         Spacer()
                     }
-                    .padding(.vertical, 20)
+                    .padding(.vertical, DesignTokens.Spacing.lg)
                 } else if memories.isEmpty {
-                    VStack(spacing: 8) {
+                    VStack(spacing: DesignTokens.Spacing.sm) {
                         Image(systemName: "tray")
                             .font(.system(size: 48))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
                         Text("No memories stored yet")
-                            .font(.headline)
-                            .foregroundColor(.secondary)
+                            .font(DesignTokens.Typography.heading)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
                         Text("Memories will appear here after you use Aether with memory enabled.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
                             .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 40)
+                    .padding(.vertical, DesignTokens.Spacing.xl)
                 } else {
                     ScrollView {
-                        VStack(spacing: 12) {
+                        VStack(spacing: DesignTokens.Spacing.md) {
                             ForEach(memories, id: \.id) { memory in
                                 MemoryEntryCard(memory: memory) {
                                     memoryToDelete = memory
@@ -329,8 +369,17 @@ struct MemoryView: View {
                     .frame(maxHeight: 400)
                 }
             }
-            .padding(.vertical, 8)
         }
+        .padding(DesignTokens.Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                .fill(DesignTokens.Colors.cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                .stroke(DesignTokens.Colors.border, lineWidth: 1)
+        )
+        .shadow(DesignTokens.Shadows.card)
     }
 
     // MARK: - Helper Methods
@@ -426,24 +475,25 @@ struct MemoryEntryCard: View {
     @State private var isExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
             // Header
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                     Text(memory.appBundleId)
-                        .font(.headline)
+                        .font(DesignTokens.Typography.heading)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
                         .lineLimit(1)
 
                     if !memory.windowTitle.isEmpty {
                         Text(memory.windowTitle)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
                             .lineLimit(1)
                     }
 
                     Text(formatTimestamp(memory.timestamp))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
 
                 Spacer()
@@ -451,47 +501,54 @@ struct MemoryEntryCard: View {
                 // Similarity score badge
                 if let score = memory.similarityScore {
                     Text(String(format: "%.0f%%", score * 100))
-                        .font(.caption)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.blue.opacity(0.2))
-                        .cornerRadius(4)
+                        .font(DesignTokens.Typography.caption)
+                        .padding(.horizontal, DesignTokens.Spacing.sm)
+                        .padding(.vertical, DesignTokens.Spacing.xs)
+                        .background(DesignTokens.Colors.accentBlue.opacity(0.2))
+                        .cornerRadius(DesignTokens.CornerRadius.small)
                 }
 
                 // Delete button
                 Button(action: onDelete) {
                     Image(systemName: "trash")
-                        .foregroundColor(.red)
+                        .foregroundColor(DesignTokens.Colors.error)
+                        .font(DesignTokens.Typography.body)
                 }
                 .buttonStyle(.plain)
                 .help("Delete this memory")
             }
 
             // Content preview
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                 Text("User: \(memory.userInput)")
-                    .font(.caption)
+                    .font(DesignTokens.Typography.caption)
                     .lineLimit(isExpanded ? nil : 2)
-                    .foregroundColor(.primary)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
 
                 Text("AI: \(memory.aiOutput)")
-                    .font(.caption)
+                    .font(DesignTokens.Typography.caption)
                     .lineLimit(isExpanded ? nil : 2)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
             }
-            .padding(.top, 4)
+            .padding(.top, DesignTokens.Spacing.xs)
 
             // Expand/Collapse button
             Button(action: { isExpanded.toggle() }) {
                 Text(isExpanded ? "Show Less" : "Show More")
-                    .font(.caption)
-                    .foregroundColor(.accentColor)
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.accentBlue)
             }
             .buttonStyle(.plain)
         }
-        .padding(12)
-        .background(Color.gray.opacity(0.1))
-        .cornerRadius(8)
+        .padding(DesignTokens.Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                .fill(DesignTokens.Colors.cardBackground.opacity(0.5))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                .stroke(DesignTokens.Colors.border, lineWidth: 1)
+        )
     }
 
     private func formatTimestamp(_ timestamp: Int64) -> String {
