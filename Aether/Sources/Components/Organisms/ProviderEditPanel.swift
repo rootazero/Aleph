@@ -306,6 +306,7 @@ struct ProviderEditPanel: View {
                 .pickerStyle(.segmented)
                 .onChange(of: providerType) { newType in
                     updateDefaultsForProviderType(newType)
+                    testResult = nil // Clear test result when provider type changes
                 }
             }
 
@@ -314,6 +315,9 @@ struct ProviderEditPanel: View {
                 FormField(title: "API Key") {
                     SecureField("Enter your API key", text: $apiKey)
                         .textFieldStyle(.roundedBorder)
+                        .onChange(of: apiKey) { _ in
+                            testResult = nil // Clear test result when API key changes
+                        }
                     Text("Stored securely in macOS Keychain")
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
@@ -323,11 +327,17 @@ struct ProviderEditPanel: View {
             FormField(title: "Model") {
                 TextField("e.g., gpt-4o, claude-3-5-sonnet-20241022", text: $model)
                     .textFieldStyle(.roundedBorder)
+                    .onChange(of: model) { _ in
+                        testResult = nil // Clear test result when model changes
+                    }
             }
 
             FormField(title: "Base URL (Optional)") {
                 TextField("Leave empty for official API", text: $baseURL)
                     .textFieldStyle(.roundedBorder)
+                    .onChange(of: baseURL) { _ in
+                        testResult = nil // Clear test result when base URL changes
+                    }
                 Text("For custom OpenAI-compatible endpoints")
                     .font(DesignTokens.Typography.caption)
                     .foregroundColor(DesignTokens.Colors.textSecondary)
@@ -372,11 +382,6 @@ struct ProviderEditPanel: View {
                 .padding(.top, DesignTokens.Spacing.sm)
             }
 
-            // Test result
-            if let result = testResult {
-                testResultView(result)
-            }
-
             // Error message
             if let error = errorMessage {
                 errorMessageView(error)
@@ -392,14 +397,23 @@ struct ProviderEditPanel: View {
     @ViewBuilder
     private var editModeActionButtons: some View {
         VStack(spacing: DesignTokens.Spacing.sm) {
-            HStack(spacing: DesignTokens.Spacing.sm) {
-                ActionButton(
-                    isTesting ? "Testing..." : "Test Connection",
-                    icon: "network",
-                    style: .secondary,
-                    action: testConnection
-                )
-                .disabled(isTesting || !isFormValid())
+            // Test Connection button with inline result below
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                HStack(spacing: DesignTokens.Spacing.sm) {
+                    ActionButton(
+                        isTesting ? "Testing..." : "Test Connection",
+                        icon: "network",
+                        style: .secondary,
+                        action: testConnection
+                    )
+                    .disabled(isTesting || !isFormValid())
+                }
+
+                // Inline test result below button
+                if let result = testResult {
+                    testResultView(result)
+                        .padding(.leading, DesignTokens.Spacing.xs)
+                }
             }
 
             HStack(spacing: DesignTokens.Spacing.sm) {
@@ -461,28 +475,33 @@ struct ProviderEditPanel: View {
     private func testResultView(_ result: TestResult) -> some View {
         switch result {
         case .success(let message):
-            HStack(spacing: DesignTokens.Spacing.sm) {
+            HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundColor(.green)
+                    .font(.system(size: 12))
+
                 Text(message)
                     .font(DesignTokens.Typography.caption)
+                    .foregroundColor(.green)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
             }
-            .padding(DesignTokens.Spacing.sm)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.green.opacity(0.1))
-            .cornerRadius(DesignTokens.CornerRadius.small)
 
         case .failure(let message):
-            HStack(spacing: DesignTokens.Spacing.sm) {
+            HStack(spacing: 6) {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundColor(.red)
-                Text(message)
+                    .font(.system(size: 12))
+
+                // Truncate long error messages
+                let truncatedMessage = message.count > 80 ? String(message.prefix(80)) + "..." : message
+                Text(truncatedMessage)
                     .font(DesignTokens.Typography.caption)
+                    .foregroundColor(.red)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .help(message) // Full message in tooltip
             }
-            .padding(DesignTokens.Spacing.sm)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.red.opacity(0.1))
-            .cornerRadius(DesignTokens.CornerRadius.small)
         }
     }
 
