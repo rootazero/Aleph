@@ -22,6 +22,12 @@ log_retention_days = 7
 # WARNING: May generate large log files when enabled
 enable_performance_logging = false
 
+# Maximum image size for clipboard operations (in MB, default: 10)
+# Images larger than this will be rejected with an error
+# Range: 1-50 MB
+# Note: Large images may slow down AI processing and increase API costs
+max_image_size_mb = 10
+
 # ============================================================================
 # Shortcuts Configuration (Phase 6)
 # ============================================================================
@@ -270,6 +276,25 @@ excluded_apps = [
 # - AI receives: "Contact me at [EMAIL_REDACTED] or [PHONE_REDACTED]"
 # - Protects sensitive information from cloud providers
 #
+# Example 8: Image clipboard support (Phase 7)
+# - Copy an image (screenshot, photo, etc.)
+# - Press Cmd+~
+# - Image is sent to vision-capable AI (GPT-4 Vision or Claude 3 Opus)
+# - Get image descriptions, OCR, visual analysis
+# - Supports PNG, JPEG, GIF formats up to max_image_size_mb
+#
+# Example 9: Typewriter animation control (Phase 7)
+# - Set output_mode = "typewriter" and typing_speed = 150
+# - AI response types out character-by-character at 150 chars/sec
+# - Press Escape during animation to skip and paste instantly
+# - Creates smooth, cinematic effect for AI responses
+#
+# Example 10: Performance profiling (Phase 7)
+# - Set enable_performance_logging = true
+# - Check logs at ~/.config/aether/logs/aether-YYYY-MM-DD.log
+# - Logs show timing for: clipboard, memory, AI, paste stages
+# - Useful for debugging slow operations or API latency issues
+#
 # ============================================================================
 # Tips
 # ============================================================================
@@ -336,6 +361,32 @@ excluded_apps = [
 #     - Invalid changes are ignored (app continues with old config)
 #     - UI shows notification when config reloads
 #
+# 13. Image Clipboard (Phase 7):
+#     - Automatically detects images in clipboard
+#     - Routes to vision-capable models only (GPT-4V, Claude Opus)
+#     - Respects max_image_size_mb limit
+#     - Base64-encoded for API transmission
+#     - Supported formats: PNG, JPEG, GIF
+#
+# 14. Logging & Privacy (Phase 7):
+#     - Logs stored in ~/.config/aether/logs/
+#     - Automatic daily rotation
+#     - Old logs deleted after log_retention_days
+#     - PII automatically scrubbed (emails, phones, API keys)
+#     - View/export logs via Settings UI
+#
+# 15. Performance Monitoring (Phase 7):
+#     - Enable via enable_performance_logging = true
+#     - Logs timing for: clipboard (target <50ms), memory (<100ms), AI (<500ms)
+#     - Slow operations (>2x target) trigger warnings
+#     - Helps identify bottlenecks and optimize pipeline
+#
+# 16. Error Feedback (Phase 7):
+#     - All errors include actionable suggestions
+#     - Examples: "Check API key in Settings", "Verify internet connection"
+#     - Halo displays suggestions below error message
+#     - Retry, Settings, Dismiss buttons for recovery
+#
 # ============================================================================
 # Troubleshooting
 # ============================================================================
@@ -377,5 +428,30 @@ excluded_apps = [
 # - File watcher requires macOS FSEvents support
 # - Edit config with text editor (not vim in-place mode)
 # - Save changes fully before expecting reload
+#
+# "Image too large" error (Phase 7):
+# - Check image size (must be < max_image_size_mb)
+# - Compress or resize image before copying
+# - Consider increasing max_image_size_mb (warning: higher API costs)
+#
+# "No vision model available" error (Phase 7):
+# - Image requests require GPT-4 Vision or Claude 3 Opus
+# - Check routing rules - Ollama doesn't support vision
+# - Configure at least one vision-capable provider
+#
+# "Typewriter skipped" (Phase 7):
+# - Press Escape during animation to skip intentionally
+# - If auto-skipping: check for conflicting keyboard events
+# - Verify output_mode = "typewriter" in config
+#
+# "Logs not appearing" (Phase 7):
+# - Check ~/.config/aether/logs/ directory exists
+# - Verify log_retention_days > 0 (0 = logs disabled)
+# - Check disk space (logs auto-delete when full)
+#
+# "PII not scrubbed" (Phase 7):
+# - Verify pii_scrubbing_enabled = true in config
+# - Check logs: PII should show as [EMAIL_REDACTED], [PHONE_REDACTED]
+# - Some formats may not be detected (false negatives)
 #
 # For more help, see: https://github.com/your-repo/aether/docs
