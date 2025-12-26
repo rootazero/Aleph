@@ -495,7 +495,7 @@ mod tests {
     fn test_routing_rule_invalid_regex() {
         let rule = RoutingRule::new(r"[invalid(regex", "claude", None);
         assert!(rule.is_err());
-        assert!(matches!(rule, Err(AetherError::InvalidConfig(_))));
+        assert!(matches!(rule, Err(AetherError::InvalidConfig { .. })));
     }
 
     #[test]
@@ -568,7 +568,7 @@ mod tests {
         let router = Router::new(&config);
 
         assert!(router.is_err());
-        assert!(matches!(router, Err(AetherError::InvalidConfig(_))));
+        assert!(matches!(router, Err(AetherError::InvalidConfig { .. })));
     }
 
     #[test]

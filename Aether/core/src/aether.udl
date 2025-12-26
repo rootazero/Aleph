@@ -266,6 +266,7 @@ callback interface KeychainManager {
 dictionary GeneralConfig {
   string? default_provider;
   u32 log_retention_days;
+  boolean enable_performance_logging;
 };
 
 dictionary MemoryConfig {

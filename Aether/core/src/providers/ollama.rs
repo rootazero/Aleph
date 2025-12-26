@@ -305,7 +305,7 @@ mod tests {
         let mut config = create_test_config();
         config.model = "".to_string();
         let result = OllamaProvider::new(config);
-        assert!(matches!(result, Err(AetherError::InvalidConfig(_))));
+        assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
     }
 
     #[test]
@@ -313,7 +313,7 @@ mod tests {
         let mut config = create_test_config();
         config.timeout_seconds = 0;
         let result = OllamaProvider::new(config);
-        assert!(matches!(result, Err(AetherError::InvalidConfig(_))));
+        assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
     }
 
     #[test]

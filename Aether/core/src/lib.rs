@@ -78,6 +78,7 @@ mod hotkey;
 pub mod input; // Make input module public for integration tests
 pub mod logging;
 pub mod memory;
+pub mod metrics;
 pub mod providers;
 pub mod router;
 pub mod utils;
@@ -95,6 +96,7 @@ pub use crate::hotkey::{HotkeyListener, RdevListener};
 pub use crate::input::InputSimulator;
 pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer};
 pub use crate::memory::database::MemoryStats;
+pub use crate::metrics::StageTimer;
 pub use crate::providers::AiProvider;
 pub use crate::router::{Router, RoutingRule};
 pub use crate::utils::pii;

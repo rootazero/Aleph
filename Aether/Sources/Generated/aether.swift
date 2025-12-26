@@ -1106,12 +1106,14 @@ public func FfiConverterTypeFullConfig_lower(_ value: FullConfig) -> RustBuffer 
 public struct GeneralConfig {
     public var defaultProvider: String?
     public var logRetentionDays: UInt32
+    public var enablePerformanceLogging: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultProvider: String?, logRetentionDays: UInt32) {
+    public init(defaultProvider: String?, logRetentionDays: UInt32, enablePerformanceLogging: Bool) {
         self.defaultProvider = defaultProvider
         self.logRetentionDays = logRetentionDays
+        self.enablePerformanceLogging = enablePerformanceLogging
     }
 }
 
@@ -1124,12 +1126,16 @@ extension GeneralConfig: Equatable, Hashable {
         if lhs.logRetentionDays != rhs.logRetentionDays {
             return false
         }
+        if lhs.enablePerformanceLogging != rhs.enablePerformanceLogging {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(defaultProvider)
         hasher.combine(logRetentionDays)
+        hasher.combine(enablePerformanceLogging)
     }
 }
 
@@ -1138,13 +1144,15 @@ public struct FfiConverterTypeGeneralConfig: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GeneralConfig {
         return try GeneralConfig(
             defaultProvider: FfiConverterOptionString.read(from: &buf), 
-            logRetentionDays: FfiConverterUInt32.read(from: &buf)
+            logRetentionDays: FfiConverterUInt32.read(from: &buf), 
+            enablePerformanceLogging: FfiConverterBool.read(from: &buf)
         )
     }
 
     public static func write(_ value: GeneralConfig, into buf: inout [UInt8]) {
         FfiConverterOptionString.write(value.defaultProvider, into: &buf)
         FfiConverterUInt32.write(value.logRetentionDays, into: &buf)
+        FfiConverterBool.write(value.enablePerformanceLogging, into: &buf)
     }
 }
 

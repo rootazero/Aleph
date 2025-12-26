@@ -454,7 +454,7 @@ mod tests {
 
         let result = create_provider("test", config);
         assert!(result.is_err());
-        assert!(matches!(result, Err(AetherError::InvalidConfig(_))));
+        assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
     }
 
     #[test]

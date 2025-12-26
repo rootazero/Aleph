@@ -247,8 +247,8 @@ mod tests {
         let result = registry.register("openai".to_string(), provider2);
         assert!(result.is_err());
 
-        if let Err(AetherError::InvalidConfig(msg)) = result {
-            assert!(msg.contains("already registered"));
+        if let Err(AetherError::InvalidConfig { message, .. }) = result {
+            assert!(message.contains("already registered"));
         } else {
             panic!("Expected InvalidConfig error");
         }

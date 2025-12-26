@@ -656,7 +656,7 @@ mod integration_tests {
         let model = create_test_model();
         let config = create_test_config();
 
-        let ingestion = MemoryIngestion::new(db.clone(), model, config);
+        let _ingestion = MemoryIngestion::new(db.clone(), model, config);
         let context = ContextAnchor::now("com.apple.Notes".to_string(), "Test.txt".to_string());
 
         // Store 10 memories with known IDs

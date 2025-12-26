@@ -196,8 +196,8 @@ mod tests {
         let result = provider.process("input", None).await;
         assert!(result.is_err());
 
-        if let Err(AetherError::AuthenticationError(msg)) = result {
-            assert_eq!(msg, "invalid key");
+        if let Err(AetherError::AuthenticationError { message, .. }) = result {
+            assert_eq!(message, "invalid key");
         } else {
             panic!("Expected AuthenticationError");
         }
@@ -208,7 +208,7 @@ mod tests {
         let provider = MockProvider::new("ignored").with_error(MockError::Timeout);
 
         let result = provider.process("input", None).await;
-        assert!(matches!(result, Err(AetherError::Timeout)));
+        assert!(matches!(result, Err(AetherError::Timeout { .. })));
     }
 
     #[tokio::test]

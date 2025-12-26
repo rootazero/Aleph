@@ -9,6 +9,7 @@ use crate::hotkey::{HotkeyListener, RdevListener};
 use crate::input::{EnigoSimulator, InputSimulator};
 use crate::memory::cleanup::CleanupService;
 use crate::memory::database::{MemoryStats, VectorDatabase};
+use crate::metrics::{StageTimer, TARGET_CLIPBOARD_TO_MEMORY_MS, TARGET_MEMORY_TO_AI_MS};
 use crate::router::Router;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -904,6 +905,9 @@ impl AetherCore {
         _context: CapturedContext,
         start_time: std::time::Instant,
     ) -> Result<String> {
+        // Overall pipeline timer
+        let _pipeline_timer = StageTimer::start("total_pipeline");
+
         // Step 1: Check if router is available
         let router = self
             .router
@@ -915,12 +919,25 @@ impl AetherCore {
         // Step 2: Retrieve memories and augment prompt (if enabled)
         let config = self.config.lock().unwrap();
         let base_system_prompt = "You are a helpful AI assistant.".to_string();
+        let perf_logging_enabled = config.general.enable_performance_logging;
         drop(config); // Release lock before async operations
 
         let augmented_input = if self.memory_db.is_some() {
             // Notify UI that we're retrieving memory
             self.event_handler
                 .on_state_changed(ProcessingState::RetrievingMemory);
+
+            // Performance monitoring for memory retrieval
+            let _memory_timer = if perf_logging_enabled {
+                Some(
+                    StageTimer::start("memory_retrieval")
+                        .with_target(TARGET_CLIPBOARD_TO_MEMORY_MS)
+                        .with_meta("app", &_context.app_bundle_id)
+                        .with_meta("window", _context.window_title.as_deref().unwrap_or("N/A"))
+                )
+            } else {
+                None
+            };
 
             match self.retrieve_and_augment_prompt(base_system_prompt.clone(), input.clone()) {
                 Ok(augmented) => {
@@ -971,57 +988,71 @@ impl AetherCore {
         let system_prompt = system_prompt_override.unwrap_or(&base_system_prompt);
 
         // Try primary provider with retry
-        let response = self.runtime.block_on(async {
-            use crate::providers::retry_with_backoff;
+        let response = {
+            // Performance monitoring for AI request
+            let _ai_timer = if perf_logging_enabled {
+                Some(
+                    StageTimer::start("ai_request")
+                        .with_target(TARGET_MEMORY_TO_AI_MS)
+                        .with_meta("provider", &provider_name)
+                        .with_meta("input_length", &input.len().to_string())
+                )
+            } else {
+                None
+            };
 
-            // Attempt with primary provider (with retry)
-            let primary_result = retry_with_backoff(
-                || provider.process(&augmented_input, Some(system_prompt)),
-                Some(3),
-            )
-            .await;
+            self.runtime.block_on(async {
+                use crate::providers::retry_with_backoff;
 
-            match primary_result {
-                Ok(response) => {
-                    info!(provider = %provider_name, "Primary provider succeeded");
-                    Ok(response)
-                }
-                Err(primary_error) => {
-                    warn!(
-                        provider = %provider_name,
-                        error = ?primary_error,
-                        "Primary provider failed"
-                    );
+                // Attempt with primary provider (with retry)
+                let primary_result = retry_with_backoff(
+                    || provider.process(&augmented_input, Some(system_prompt)),
+                    Some(3),
+                )
+                .await;
 
-                    // Try fallback provider if available
-                    if let Some(fallback) = fallback_provider {
-                        let fallback_name = fallback.name().to_string();
+                match primary_result {
+                    Ok(response) => {
+                        info!(provider = %provider_name, "Primary provider succeeded");
+                        Ok(response)
+                    }
+                    Err(primary_error) => {
                         warn!(
-                            from_provider = %provider_name,
-                            to_provider = %fallback_name,
-                            "Attempting fallback to alternative provider"
-                        );
-
-                        // Notify UI about fallback (Task 10.2)
-                        self.event_handler
-                            .on_provider_fallback(provider_name.clone(), fallback_name.clone());
-
-                        // Try fallback provider (with retry)
-                        retry_with_backoff(
-                            || fallback.process(&augmented_input, Some(system_prompt)),
-                            Some(3),
-                        )
-                        .await
-                    } else {
-                        error!(
                             provider = %provider_name,
-                            "No fallback provider available"
+                            error = ?primary_error,
+                            "Primary provider failed"
                         );
-                        Err(primary_error)
+
+                        // Try fallback provider if available
+                        if let Some(fallback) = fallback_provider {
+                            let fallback_name = fallback.name().to_string();
+                            warn!(
+                                from_provider = %provider_name,
+                                to_provider = %fallback_name,
+                                "Attempting fallback to alternative provider"
+                            );
+
+                            // Notify UI about fallback (Task 10.2)
+                            self.event_handler
+                                .on_provider_fallback(provider_name.clone(), fallback_name.clone());
+
+                            // Try fallback provider (with retry)
+                            retry_with_backoff(
+                                || fallback.process(&augmented_input, Some(system_prompt)),
+                                Some(3),
+                            )
+                            .await
+                        } else {
+                            error!(
+                                provider = %provider_name,
+                                "No fallback provider available"
+                            );
+                            Err(primary_error)
+                        }
                     }
                 }
-            }
-        })?;
+            })?
+        };
 
         let ai_time = start_time.elapsed();
         info!(

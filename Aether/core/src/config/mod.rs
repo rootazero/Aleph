@@ -54,6 +54,9 @@ pub struct GeneralConfig {
     /// Log retention in days (1-30, default: 7)
     #[serde(default = "default_log_retention_days")]
     pub log_retention_days: u32,
+    /// Enable performance logging (default: false)
+    #[serde(default)]
+    pub enable_performance_logging: bool,
 }
 
 fn default_log_retention_days() -> u32 {

@@ -12,6 +12,16 @@ default_hotkey = "Command+Grave"  # macOS: Cmd+~, Windows: Ctrl+~
 # Must match one of the provider names defined below
 default_provider = "openai"
 
+# Log retention in days (1-30, default: 7)
+# Automatically deletes logs older than this many days
+log_retention_days = 7
+
+# Enable performance logging (default: false)
+# When enabled, logs detailed timing information for each pipeline stage
+# Useful for debugging slow operations or optimizing performance
+# WARNING: May generate large log files when enabled
+enable_performance_logging = false
+
 # ============================================================================
 # Shortcuts Configuration (Phase 6)
 # ============================================================================

@@ -2,7 +2,7 @@
 ///
 /// This module provides utilities for retrying failed requests with
 /// exponential backoff strategy.
-use crate::error::AetherError;
+use crate::error::{AetherError, Result};
 use std::future::Future;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -71,10 +71,10 @@ fn is_retryable(error: &AetherError) -> bool {
 pub async fn retry_with_backoff<F, Fut, T>(
     mut operation: F,
     max_retries: Option<u32>,
-) -> Result<T, AetherError>
+) -> Result<T>
 where
     F: FnMut() -> Fut,
-    Fut: Future<Output = Result<T, AetherError>>,
+    Fut: Future<Output = Result<T>>,
 {
     let max_retries = max_retries.unwrap_or(MAX_RETRIES);
     let mut attempt = 0;
@@ -170,7 +170,7 @@ mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
 
-        let result = retry_with_backoff(
+        let result: Result<String> = retry_with_backoff(
             || {
                 let counter = counter_clone.clone();
                 async move {
@@ -192,13 +192,13 @@ mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
 
-        let result = retry_with_backoff(
+        let result: Result<String> = retry_with_backoff(
             || {
                 let counter = counter_clone.clone();
                 async move {
                     let count = counter.fetch_add(1, Ordering::SeqCst);
                     if count < 2 {
-                        Err(AetherError::NetworkError("temporary failure".into()))
+                        Err(AetherError::network("temporary failure"))
                     } else {
                         Ok::<_, AetherError>("success".to_string())
                     }
@@ -218,12 +218,12 @@ mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
 
-        let result = retry_with_backoff(
+        let result: Result<String> = retry_with_backoff(
             || {
                 let counter = counter_clone.clone();
                 async move {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    Err::<String, _>(AetherError::NetworkError("persistent failure".into()))
+                    Err(AetherError::network("persistent failure"))
                 }
             },
             Some(3),
@@ -239,12 +239,12 @@ mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
 
-        let result = retry_with_backoff(
+        let result: Result<String> = retry_with_backoff(
             || {
                 let counter = counter_clone.clone();
                 async move {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    Err::<String, _>(AetherError::AuthenticationError("invalid key".into()))
+                    Err(AetherError::authentication("OpenAI", "invalid key"))
                 }
             },
             Some(3),
@@ -261,12 +261,12 @@ mod tests {
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
 
-        let result = retry_with_backoff(
+        let result: Result<String> = retry_with_backoff(
             || {
                 let counter = counter_clone.clone();
                 async move {
                     counter.fetch_add(1, Ordering::SeqCst);
-                    Err::<String, _>(AetherError::NetworkError("failure".into()))
+                    Err(AetherError::network("failure"))
                 }
             },
             Some(5),
