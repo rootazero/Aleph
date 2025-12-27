@@ -256,8 +256,8 @@ struct ProvidersView: View {
     private func selectProvider(_ id: String) {
         selectedProviderId = id
 
-        // Find the preset
-        if let preset = PresetProviders.find(byId: id) {
+        // Find the preset (including custom providers in allProviders)
+        if let preset = allProviders.first(where: { $0.id == id }) {
             selectedPreset = preset
 
             // Check if this provider is already configured

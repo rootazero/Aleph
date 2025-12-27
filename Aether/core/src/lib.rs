@@ -88,6 +88,7 @@ pub use crate::clipboard::{ArboardManager, ClipboardManager, ImageData, ImageFor
 pub use crate::config::{
     BehaviorConfig, Config, FullConfig, GeneralConfig, KeychainManager, MemoryConfig,
     ProviderConfig, ProviderConfigEntry, RoutingRuleConfig, ShortcutsConfig,
+    TestConnectionResult,
 };
 pub use crate::core::{AetherCore, CapturedContext, MemoryEntryFFI as MemoryEntry};
 pub use crate::error::{AetherError, AetherException, Result};

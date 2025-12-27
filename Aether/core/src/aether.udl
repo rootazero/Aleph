@@ -166,8 +166,7 @@ interface AetherCore {
   boolean validate_regex(string pattern);
 
   // Test provider connection
-  [Throws=AetherException]
-  string test_provider_connection(string provider_name);
+  TestConnectionResult test_provider_connection(string provider_name);
 
   // IMAGE CLIPBOARD METHODS (Phase 7.1 - Image Clipboard Support)
 
@@ -307,6 +306,12 @@ dictionary ProviderConfig {
 
   // Ollama-specific parameters
   f32? repeat_penalty;
+};
+
+// Test connection result (for provider connection testing)
+dictionary TestConnectionResult {
+  boolean success;
+  string message;
 };
 
 // Routing rule configuration (Phase 6 - Task 1.5)

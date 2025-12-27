@@ -130,6 +130,13 @@ pub struct ProviderConfigEntry {
     pub config: ProviderConfig,
 }
 
+/// Test connection result (for provider connection testing)
+#[derive(Debug, Clone)]
+pub struct TestConnectionResult {
+    pub success: bool,
+    pub message: String,
+}
+
 /// Full configuration exposed through UniFFI
 /// This wraps Config with a flattened provider list
 #[derive(Debug, Clone, Serialize, Deserialize)]

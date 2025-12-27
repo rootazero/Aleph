@@ -361,16 +361,20 @@ struct ProviderConfigView: View {
                 // First, temporarily save the provider config (without persisting)
                 try await saveProviderConfig(persist: false)
 
-                // Test connection
-                let result = try core.testProviderConnection(providerName: providerName)
+                // Test connection - returns TestConnectionResult
+                let result = core.testProviderConnection(providerName: providerName)
 
                 await MainActor.run {
-                    testResult = .success(result)
+                    if result.success {
+                        testResult = .success(result.message)
+                    } else {
+                        testResult = .failure(result.message)
+                    }
                     isTesting = false
                 }
             } catch {
                 await MainActor.run {
-                    testResult = .failure(error.localizedDescription)
+                    testResult = .failure("Unexpected error: \(error.localizedDescription)")
                     isTesting = false
                 }
             }

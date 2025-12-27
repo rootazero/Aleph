@@ -134,13 +134,15 @@ struct ProviderEditPanel: View {
         }
         .onChange(of: selectedPreset) { newPreset in
             // When preset changes, load provider data
-            if newPreset != nil {
+            // Skip if we're just updating the preset after save
+            if newPreset != nil && !isSaving {
                 loadProviderData()
             }
         }
         .onChange(of: selectedProvider) { newProvider in
             // When selected provider changes, load provider data
-            if newProvider != nil {
+            // Skip if we're in the middle of saving to prevent reload
+            if newProvider != nil && !isSaving {
                 loadProviderData()
             }
         }
@@ -173,14 +175,14 @@ struct ProviderEditPanel: View {
                 }
             }
 
-            // Provider Information Display Card (for preset providers only)
-            if let preset = selectedPreset, !isCustomProvider {
+            // Provider Information Display Card (unified for both preset and custom)
+            if let preset = selectedPreset {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
                     HStack(spacing: DesignTokens.Spacing.md) {
                         // Provider icon
                         ZStack {
                             Circle()
-                                .fill(Color(hex: preset.color) ?? DesignTokens.Colors.accentBlue)
+                                .fill(isCustomProvider ? color : (Color(hex: preset.color) ?? DesignTokens.Colors.accentBlue))
                                 .frame(width: 48, height: 48)
 
                             Image(systemName: preset.iconName)
@@ -189,9 +191,20 @@ struct ProviderEditPanel: View {
                         }
 
                         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                            Text(preset.name)
-                                .font(DesignTokens.Typography.title)
-                                .foregroundColor(DesignTokens.Colors.textPrimary)
+                            // Show provider name - editable for custom, fixed for preset
+                            if isCustomProvider && !providerName.isEmpty {
+                                Text(providerName)
+                                    .font(DesignTokens.Typography.title)
+                                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                            } else if !isCustomProvider {
+                                Text(preset.name)
+                                    .font(DesignTokens.Typography.title)
+                                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                            } else {
+                                Text("Custom Provider")
+                                    .font(DesignTokens.Typography.title)
+                                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                            }
 
                             Text(getProviderTypeName(preset.providerType))
                                 .font(DesignTokens.Typography.caption)
@@ -206,31 +219,27 @@ struct ProviderEditPanel: View {
                             .labelsHidden()
                     }
 
-                    Text(preset.description)
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // Description - custom or preset
+                    if isCustomProvider {
+                        if !baseURL.isEmpty {
+                            Text("OpenAI-compatible API: \(baseURL)")
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            Text("Custom OpenAI-compatible provider")
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    } else {
+                        Text(preset.description)
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .padding(.vertical, DesignTokens.Spacing.sm)
-
-                Divider()
-            }
-
-            // Active toggle for custom providers
-            if isCustomProvider {
-                HStack {
-                    Text("Active")
-                        .font(DesignTokens.Typography.heading)
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
-
-                    Spacer()
-
-                    // Active toggle (iOS-style switch)
-                    Toggle("", isOn: $isProviderActive)
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                }
-                .padding(.vertical, DesignTokens.Spacing.xs)
 
                 Divider()
             }
@@ -729,16 +738,20 @@ struct ProviderEditPanel: View {
                 // Temporarily save config (without persisting)
                 try await saveProviderConfig(persist: false)
 
-                // Test connection
-                let result = try core.testProviderConnection(providerName: providerName)
+                // Test connection - returns TestConnectionResult
+                let result = core.testProviderConnection(providerName: providerName)
 
                 await MainActor.run {
-                    testResult = .success(result)
+                    if result.success {
+                        testResult = .success(result.message)
+                    } else {
+                        testResult = .failure(result.message)
+                    }
                     isTesting = false
                 }
             } catch {
                 await MainActor.run {
-                    testResult = .failure(error.localizedDescription)
+                    testResult = .failure("Unexpected error: \(error.localizedDescription)")
                     isTesting = false
                 }
             }
@@ -751,20 +764,44 @@ struct ProviderEditPanel: View {
         isSaving = true
         errorMessage = nil
 
+        // Save the current provider name to restore selection after save
+        let savedProviderName = providerName
+
         Task {
             do {
                 try await saveProviderConfig(persist: true)
 
                 await MainActor.run {
-                    // Reload providers
+                    // Reload providers list
                     let config = try! core.loadConfig()
                     providers = config.providers
-                    selectedProvider = providerName
 
-                    // Exit add mode and reload the saved provider data
+                    // CRITICAL: Keep the current provider selected
+                    // This prevents jumping to the first provider
+                    selectedProvider = savedProviderName
+
+                    // Update selectedPreset for custom providers
+                    // Custom providers are dynamically generated in ProvidersView.customProviders
+                    // We need to find the matching preset after providers are reloaded
+                    if isCustomProvider {
+                        // For custom providers, create a temporary PresetProvider
+                        // This will be replaced when ProvidersView updates
+                        let customPreset = PresetProvider(
+                            id: savedProviderName,
+                            name: savedProviderName,
+                            iconName: "puzzlepiece.extension",
+                            color: color.toHex(),
+                            providerType: providerType,
+                            defaultModel: model,
+                            description: baseURL.isEmpty ? "Custom OpenAI-compatible provider" : "OpenAI-compatible API: \(baseURL)",
+                            baseUrl: baseURL.isEmpty ? nil : baseURL
+                        )
+                        selectedPreset = customPreset
+                    }
+
+                    // Exit add mode if we were adding a new provider
                     isAddingNew = false
-                    loadProviderData()
-                    resetForm()
+
                     isSaving = false
                 }
             } catch {
@@ -964,5 +1001,28 @@ struct ProviderEditPanel: View {
         case "ollama": return "Controls randomness (higher = more creative)"
         default: return "Controls randomness (0.0-2.0, 0=deterministic)"
         }
+    }
+}
+
+// MARK: - Color Extension
+
+extension Color {
+    /// Convert Color to hex string
+    func toHex() -> String {
+        #if os(macOS)
+        guard let components = NSColor(self).cgColor.components else {
+            return "#808080"
+        }
+        #else
+        guard let components = UIColor(self).cgColor.components else {
+            return "#808080"
+        }
+        #endif
+
+        let r = Int(components[0] * 255.0)
+        let g = Int(components[1] * 255.0)
+        let b = Int(components[2] * 255.0)
+
+        return String(format: "#%02X%02X%02X", r, g, b)
     }
 }

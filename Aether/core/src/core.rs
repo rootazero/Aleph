@@ -2,7 +2,7 @@
 ///
 /// Orchestrates hotkey listening, clipboard management, and event callbacks.
 use crate::clipboard::{ArboardManager, ClipboardManager};
-use crate::config::{Config, ConfigWatcher, MemoryConfig};
+use crate::config::{Config, ConfigWatcher, MemoryConfig, TestConnectionResult};
 use crate::error::{AetherError, Result};
 use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 use crate::hotkey::{HotkeyListener, RdevListener};
@@ -1340,43 +1340,68 @@ impl AetherCore {
     /// Test provider connection
     ///
     /// Sends a test request to the provider to verify configuration.
-    /// Returns a success message if the provider responds correctly.
-    pub fn test_provider_connection(&self, provider_name: String) -> Result<String> {
+    /// Returns a TestConnectionResult with success status and message.
+    pub fn test_provider_connection(&self, provider_name: String) -> TestConnectionResult {
         use crate::providers::create_provider;
 
         // Get provider config
         let config = self.config.lock().unwrap();
-        let provider_config = config
-            .providers
-            .get(&provider_name)
-            .ok_or_else(|| {
-                AetherError::invalid_config(format!("Provider '{}' not found", provider_name))
-            })?
-            .clone();
+        let provider_config = match config.providers.get(&provider_name) {
+            Some(cfg) => cfg.clone(),
+            None => {
+                drop(config);
+                return TestConnectionResult {
+                    success: false,
+                    message: format!("Provider '{}' not found in configuration", provider_name),
+                };
+            }
+        };
 
         drop(config); // Release lock before async operations
 
         // Create provider instance
-        let provider = create_provider(&provider_name, provider_config)?;
+        let provider = match create_provider(&provider_name, provider_config) {
+            Ok(p) => p,
+            Err(e) => {
+                return TestConnectionResult {
+                    success: false,
+                    message: format!("Failed to create provider: {}", e.user_friendly_message()),
+                };
+            }
+        };
 
         // Send test request (block on async operation)
         let test_prompt = "Say 'OK' if you can read this.";
-        let runtime = Runtime::new().map_err(|e| {
-            AetherError::provider(format!("Failed to create runtime for test: {}", e))
-        })?;
+        let runtime = match Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                return TestConnectionResult {
+                    success: false,
+                    message: format!("Failed to create runtime: {}", e),
+                };
+            }
+        };
 
-        let result: String = runtime.block_on(async {
-            let response = provider
+        let result = runtime.block_on(async {
+            provider
                 .process(test_prompt, None)
                 .await
-                .map_err(|e| AetherError::provider(format!("Connection test failed: {}", e)))?;
-            Ok::<String, AetherError>(response)
-        })?;
+                .map_err(|e| e.user_friendly_message())
+        });
 
-        Ok(format!(
-            "✓ Connection successful! Provider responded: {}",
-            result.chars().take(50).collect::<String>()
-        ))
+        match result {
+            Ok(response) => TestConnectionResult {
+                success: true,
+                message: format!(
+                    "✓ Connection successful! Provider responded: {}",
+                    response.chars().take(50).collect::<String>()
+                ),
+            },
+            Err(err_msg) => TestConnectionResult {
+                success: false,
+                message: err_msg,
+            },
+        }
     }
 }
 

@@ -460,7 +460,7 @@ public protocol AetherCoreProtocol {
     func stopListening()  throws
     func storeInteractionMemory(userInput: String, aiOutput: String)  throws -> String
     func storeRequestContext(clipboardContent: String, provider: String)  
-    func testProviderConnection(providerName: String)  throws -> String
+    func testProviderConnection(providerName: String)   -> TestConnectionResult
     func testStreamingResponse()  
     func testTypedError(errorType: ErrorType, message: String)  
     func updateBehavior(behavior: BehaviorConfig)  throws
@@ -744,10 +744,11 @@ public class AetherCore: AetherCoreProtocol {
 }
     }
 
-    public func testProviderConnection(providerName: String) throws -> String {
-        return try  FfiConverterString.lift(
-            try 
-    rustCallWithError(FfiConverterTypeAetherException.lift) {
+    public func testProviderConnection(providerName: String)  -> TestConnectionResult {
+        return try!  FfiConverterTypeTestConnectionResult.lift(
+            try! 
+    rustCall() {
+    
     uniffi_aethecore_fn_method_aethercore_test_provider_connection(self.pointer, 
         FfiConverterString.lower(providerName),$0
     )
@@ -1827,6 +1828,61 @@ public func FfiConverterTypeShortcutsConfig_lift(_ buf: RustBuffer) throws -> Sh
 
 public func FfiConverterTypeShortcutsConfig_lower(_ value: ShortcutsConfig) -> RustBuffer {
     return FfiConverterTypeShortcutsConfig.lower(value)
+}
+
+
+public struct TestConnectionResult {
+    public var success: Bool
+    public var message: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(success: Bool, message: String) {
+        self.success = success
+        self.message = message
+    }
+}
+
+
+extension TestConnectionResult: Equatable, Hashable {
+    public static func ==(lhs: TestConnectionResult, rhs: TestConnectionResult) -> Bool {
+        if lhs.success != rhs.success {
+            return false
+        }
+        if lhs.message != rhs.message {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(success)
+        hasher.combine(message)
+    }
+}
+
+
+public struct FfiConverterTypeTestConnectionResult: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TestConnectionResult {
+        return try TestConnectionResult(
+            success: FfiConverterBool.read(from: &buf), 
+            message: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TestConnectionResult, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.success, into: &buf)
+        FfiConverterString.write(value.message, into: &buf)
+    }
+}
+
+
+public func FfiConverterTypeTestConnectionResult_lift(_ buf: RustBuffer) throws -> TestConnectionResult {
+    return try FfiConverterTypeTestConnectionResult.lift(buf)
+}
+
+public func FfiConverterTypeTestConnectionResult_lower(_ value: TestConnectionResult) -> RustBuffer {
+    return FfiConverterTypeTestConnectionResult.lower(value)
 }
 
 public enum AetherException {
@@ -3171,7 +3227,7 @@ private var initializationResult: InitializationResult {
     if (uniffi_aethecore_checksum_method_aethercore_store_request_context() != 34566) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_test_provider_connection() != 49526) {
+    if (uniffi_aethecore_checksum_method_aethercore_test_provider_connection() != 10890) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_test_streaming_response() != 24597) {

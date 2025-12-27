@@ -24,11 +24,11 @@ struct SidebarItem: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: DesignTokens.Spacing.sm) {
-                // Selection indicator bar
+                // Selection indicator bar - fixed element with no animation
                 Rectangle()
-                    .fill(DesignTokens.Colors.accentBlue)
+                    .fill(isSelected ? DesignTokens.Colors.accentBlue : Color.clear)
                     .frame(width: 3)
-                    .opacity(isSelected ? 1 : 0)
+                    .animation(nil, value: isSelected)  // Explicitly disable animation
 
                 // Icon
                 Image(systemName: iconName)
@@ -50,13 +50,12 @@ struct SidebarItem: View {
                     .fill(backgroundColor)
             )
             .contentShape(Rectangle())  // Make entire area clickable
-            .animation(DesignTokens.Animation.quick, value: isSelected)
-            .animation(DesignTokens.Animation.quick, value: isHovered)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
             isHovered = hovering
         }
+        .animation(DesignTokens.Animation.quick, value: isHovered)  // Only animate hover state
     }
 
     // MARK: - Helpers

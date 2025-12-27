@@ -321,8 +321,7 @@ pub type Result<T> = std::result::Result<T, AetherError>;
 /// Simple exception enum for UniFFI 0.25 compatibility
 ///
 /// UniFFI 0.25 has bugs with [Error] enum when variants have associated data (flat_error issue).
-/// This simple unit-variant enum works perfectly. Error messages are provided separately
-/// through Display implementation, which UniFFI automatically uses for exception messages.
+/// This simple unit-variant enum works. Error details must be handled at call site.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum AetherException {
     #[error("An error occurred")]
@@ -331,7 +330,8 @@ pub enum AetherException {
 
 impl From<AetherError> for AetherException {
     fn from(_error: AetherError) -> Self {
-        // UniFFI will use the Display implementation for the actual error message
+        // Note: Error details are lost here due to UniFFI limitations
+        // Callers should catch AetherError and convert to user-friendly message before throwing
         AetherException::Error
     }
 }
