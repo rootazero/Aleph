@@ -12,8 +12,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Menu bar status item
     private var statusItem: NSStatusItem?
 
-    // Rust core instance
-    private var core: AetherCore?
+    // Rust core instance (internal for access from AetherApp)
+    internal var core: AetherCore?
+
+    // Keychain manager for secure API key storage (internal for access from AetherApp)
+    internal var keychainManager: KeychainManagerImpl = KeychainManagerImpl()
 
     // Event handler for Rust callbacks
     private var eventHandler: EventHandler?
@@ -21,7 +24,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Halo overlay window
     private var haloWindow: HaloWindow?
 
-    // Settings window
+    // Settings window (used by legacy Settings scene and WindowGroup)
     private var settingsWindow: NSWindow?
 
     // Theme engine
@@ -96,6 +99,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showSettings() {
+        #if DEBUG
+        // MARK: - New Window Design (WindowGroup)
+        // For WindowGroup, find existing window or activate app to trigger window creation
+        if let window = NSApp.windows.first(where: { $0.title == "" || $0.isVisible }) {
+            // Existing window found - bring to front
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            // No window exists - activate app (WindowGroup will create one)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        #else
+        // MARK: - Legacy Settings Window
         // Always recreate the window to ensure default size
         if let existingWindow = settingsWindow {
             existingWindow.close()
@@ -122,6 +138,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Show and activate the window
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        #endif
     }
 
     @objc private func quit() {
