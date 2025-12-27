@@ -54,9 +54,11 @@ struct RootContentView: View {
         .onAppear {
             loadProviders()
         }
-        .onChange(of: appDelegate.core) { _ in
+        .onChange(of: appDelegate.core != nil) { isInitialized in
             // Reload providers when core is initialized
-            loadProviders()
+            if isInitialized {
+                loadProviders()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("AetherConfigDidChange"))) { _ in
             handleConfigChange()
