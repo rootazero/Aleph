@@ -18,6 +18,17 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.aether.url</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>aether</string>
+			</array>
+		</dict>
+	</array>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
 	<key>LSUIElement</key>

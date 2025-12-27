@@ -14,7 +14,7 @@ struct AetherApp: App {
 
     var body: some Scene {
         // Settings window with macOS 26 design language
-        WindowGroup {
+        WindowGroup(id: "settings") {
             RootContentView(
                 core: appDelegate.core,
                 keychainManager: appDelegate.keychainManager
@@ -25,9 +25,18 @@ struct AetherApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact)
         .defaultSize(width: 980, height: 750)  // Initial window size
+        .handlesExternalEvents(matching: Set(arrayLiteral: "settings"))  // Allow reopening via URL
         .commands {
-            // Remove default "New Window" command
-            CommandGroup(replacing: .newItem) {}
+            // Keep the New Window command but redirect it to open settings window
+            CommandGroup(replacing: .newItem) {
+                Button("New Window") {
+                    // Open settings window via URL
+                    if let url = URL(string: "aether://settings") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .keyboardShortcut("n", modifiers: .command)
+            }
         }
     }
 }

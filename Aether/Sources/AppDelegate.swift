@@ -101,15 +101,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     @objc private func showSettings() {
-        // Find existing WindowGroup window or activate app to trigger window creation
-        if let window = NSApp.windows.first(where: { $0.title == "" || $0.isVisible }) {
-            // Existing window found - bring to front
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-        } else {
-            // No window exists - activate app (WindowGroup will create one)
-            NSApp.activate(ignoringOtherApps: true)
+        // Use URL scheme to open settings window (works even after window is closed)
+        if let url = URL(string: "aether://settings") {
+            NSWorkspace.shared.open(url)
         }
+
+        // Activate app to bring window to front
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func quit() {
