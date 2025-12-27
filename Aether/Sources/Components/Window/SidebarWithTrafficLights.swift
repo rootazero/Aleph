@@ -43,9 +43,9 @@ struct SidebarWithTrafficLights: View {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .strokeBorder(.separator.opacity(0.25))
                 )
-                .padding(8)  // Uniform padding on all sides
+                .padding(8)  // Uniform padding on all sides for floating effect
 
-            // Content: Traffic lights + Navigation items
+            // Content: Traffic lights + Logo + Navigation items
             VStack(alignment: .leading, spacing: 12) {
                 // Traffic light buttons at the top
                 HStack(spacing: 8) {
@@ -55,6 +55,27 @@ struct SidebarWithTrafficLights: View {
                 }
                 .padding(.top, 14)
                 .padding(.leading, 18)
+
+                // Logo section
+                VStack(spacing: 6) {
+                    // App icon
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 32))
+                        .foregroundColor(.accentColor)
+
+                    // App name
+                    Text("Aether")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.primary)
+
+                    // Version
+                    Text("v\(appVersion)")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
 
                 // Navigation items
                 VStack(alignment: .leading, spacing: 8) {
@@ -92,15 +113,20 @@ struct SidebarWithTrafficLights: View {
 
     // MARK: - Helpers
 
+    /// App version from Info.plist
+    private var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+    }
+
     /// Adaptive background color based on color scheme
+    /// Uses softer, lighter tones for a more gentle appearance
     private var sidebarBackground: Color {
         if colorScheme == .dark {
-            // Dark mode: slightly transparent window background
-            return Color(nsColor: .windowBackgroundColor)
-                .opacity(0.9)
+            // Dark mode: lighter gray with subtle transparency for softer look
+            return Color(white: 0.18, opacity: 0.75)
         } else {
-            // Light mode: under-page background color
-            return Color(nsColor: .underPageBackgroundColor)
+            // Light mode: very light gray with subtle warmth (almost white)
+            return Color(white: 0.98, opacity: 0.9)
         }
     }
 
