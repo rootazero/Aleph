@@ -19,12 +19,12 @@ struct AetherApp: App {
                 core: appDelegate.core,
                 keychainManager: appDelegate.keychainManager
             )
-            .frame(minWidth: 980, minHeight: 680)  // Set minimum size to prevent layout distortion
+            .frame(minWidth: 980, minHeight: 750)  // Set minimum size to prevent layout distortion
             .environmentObject(appDelegate)  // Provide appDelegate as environment object
         }
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact)
-        .defaultSize(width: 980, height: 680)  // Initial window size
+        .defaultSize(width: 980, height: 750)  // Initial window size
         .commands {
             // Remove default "New Window" command
             CommandGroup(replacing: .newItem) {}
