@@ -24,7 +24,7 @@ struct AetherApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact)
-        .defaultSize(width: 1000, height: 680)
+        .defaultSize(width: 993, height: 680)
         .commands {
             // Remove default "New Window" command
             CommandGroup(replacing: .newItem) {}

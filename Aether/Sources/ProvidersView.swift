@@ -127,7 +127,7 @@ struct ProvidersView: View {
                         .stroke(DesignTokens.Colors.border, lineWidth: 1)
                 )
             }
-            .padding(.horizontal, DesignTokens.Spacing.md)
+            .padding(.horizontal, DesignTokens.Spacing.sm)  // Changed from .md (16pt) to .sm (8pt)
             .padding(.bottom, DesignTokens.Spacing.lg)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
