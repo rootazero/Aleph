@@ -88,7 +88,14 @@ final class ThemeManager: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
-            // Get all windows
+            // Set application-wide appearance first
+            if self.currentTheme == .auto {
+                NSApp.appearance = nil
+            } else {
+                NSApp.appearance = self.currentTheme.appearance
+            }
+
+            // Get all windows and apply appearance
             let windows = NSApplication.shared.windows
 
             // Apply appearance to each window
@@ -100,7 +107,14 @@ final class ThemeManager: ObservableObject {
                     // Set specific appearance
                     window.appearance = self.currentTheme.appearance
                 }
+
+                // Force window to update its appearance
+                window.invalidateShadow()
+                window.displayIfNeeded()
             }
+
+            // Notify that the theme has changed
+            self.objectWillChange.send()
         }
     }
 

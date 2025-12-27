@@ -55,7 +55,7 @@ pub struct AetherCore {
     router: Option<Arc<Router>>,
     // Config hot-reload (must be kept alive for file watching)
     #[allow(dead_code)]
-    config_watcher: Option<ConfigWatcher>,
+    config_watcher: Option<Arc<ConfigWatcher>>,
     // Typewriter cancellation
     cancellation_token: CancellationToken,
     // Track if typewriter is currently active
@@ -72,8 +72,15 @@ impl AetherCore {
     /// * `Result<Self>` - New AetherCore instance or error
     pub fn new(event_handler: Box<dyn AetherEventHandler>) -> Result<Self> {
         let event_handler: Arc<dyn AetherEventHandler> = Arc::from(event_handler);
-        // Initialize tokio runtime for async operations
-        let runtime = Runtime::new()
+
+        // Initialize tokio runtime with optimized configuration for macOS
+        // Use fewer threads to reduce priority inversion risk with UI thread
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2) // Limit to 2 worker threads (down from default based on CPU cores)
+            .max_blocking_threads(2) // Limit blocking threads (down from default 512)
+            .thread_name("aether-worker")
+            .enable_all()
+            .build()
             .map_err(|e| AetherError::other(format!("Failed to create tokio runtime: {}", e)))?;
 
         // Clone event handler for the hotkey callback
@@ -172,7 +179,7 @@ impl AetherCore {
             let handler_clone = Arc::clone(&event_handler);
             let config_clone = Arc::clone(&config);
 
-            let watcher = ConfigWatcher::new(move |config_result| {
+            let watcher = Arc::new(ConfigWatcher::new(move |config_result| {
                 match config_result {
                     Ok(new_config) => {
                         log::info!("Config file changed, reloading configuration");
@@ -191,19 +198,27 @@ impl AetherCore {
                         handler_clone.on_error(format!("Config reload failed: {}", e), suggestion);
                     }
                 }
-            });
+            }));
 
-            // Start watching config file
-            match watcher.start() {
-                Ok(_) => {
-                    log::info!("Config watcher started successfully");
-                    Some(watcher)
-                }
-                Err(e) => {
-                    log::warn!("Failed to start config watcher: {}", e);
-                    None
-                }
-            }
+            // Start watching config file asynchronously to avoid blocking UI thread
+            // This prevents priority inversion warnings on macOS when called from Swift
+            let watcher_for_thread = Arc::clone(&watcher);
+            std::thread::Builder::new()
+                .name("config-watcher-init".to_string())
+                .spawn(move || {
+                    match watcher_for_thread.start() {
+                        Ok(_) => {
+                            log::info!("Config watcher started successfully");
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to start config watcher: {}", e);
+                        }
+                    }
+                })
+                .map_err(|e| log::warn!("Failed to spawn config watcher thread: {}", e))
+                .ok();
+
+            Some(watcher)
         };
 
         // Create input simulator
