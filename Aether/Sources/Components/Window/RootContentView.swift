@@ -44,7 +44,7 @@ struct RootContentView: View {
     // MARK: - Body
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .top, spacing: 0) {
             // Left: Rounded sidebar with traffic lights
             SidebarWithTrafficLights(
                 selectedTab: $selectedTab,
@@ -60,6 +60,7 @@ struct RootContentView: View {
             contentArea
         }
         .background(.windowBackground)
+        .edgesIgnoringSafeArea(.top)  // Ensure content extends to window top edge
         .hideNativeTrafficLights()
         .onAppear {
             loadProviders()
