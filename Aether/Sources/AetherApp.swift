@@ -20,6 +20,7 @@ struct AetherApp: App {
                 keychainManager: appDelegate.keychainManager
             )
             .frame(minWidth: 800, minHeight: 500)
+            .environmentObject(appDelegate)  // Provide appDelegate as environment object
         }
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact)

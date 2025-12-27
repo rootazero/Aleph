@@ -20,6 +20,9 @@ struct RootContentView: View {
     let core: AetherCore?
     let keychainManager: KeychainManagerImpl
 
+    // Observe AppDelegate for core updates
+    @EnvironmentObject private var appDelegate: AppDelegate
+
     // MARK: - State
 
     @State private var selectedTab: SettingsTab = .general
@@ -51,6 +54,10 @@ struct RootContentView: View {
         .onAppear {
             loadProviders()
         }
+        .onChange(of: appDelegate.core) { _ in
+            // Reload providers when core is initialized
+            loadProviders()
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("AetherConfigDidChange"))) { _ in
             handleConfigChange()
         }
@@ -73,10 +80,10 @@ struct RootContentView: View {
     private var tabContent: some View {
         switch selectedTab {
         case .general:
-            GeneralSettingsView(core: core)
+            GeneralSettingsView(core: appDelegate.core)
 
         case .providers:
-            if let core = core {
+            if let core = appDelegate.core {
                 ProvidersView(core: core, keychainManager: keychainManager)
                     .id(configReloadTrigger)
             } else {
@@ -84,7 +91,7 @@ struct RootContentView: View {
             }
 
         case .routing:
-            if let core = core {
+            if let core = appDelegate.core {
                 RoutingView(core: core, providers: providers)
                     .id(configReloadTrigger)
             } else {
@@ -95,11 +102,11 @@ struct RootContentView: View {
             ShortcutsView()
 
         case .behavior:
-            BehaviorSettingsView(core: core)
+            BehaviorSettingsView(core: appDelegate.core)
                 .id(configReloadTrigger)
 
         case .memory:
-            if let core = core {
+            if let core = appDelegate.core {
                 MemoryView(core: core)
             } else {
                 placeholderView("Memory management requires AetherCore initialization")
@@ -128,7 +135,10 @@ struct RootContentView: View {
 
     /// Load providers from config
     private func loadProviders() {
-        guard let core = core else { return }
+        guard let core = appDelegate.core else {
+            print("[RootContentView] Core not initialized yet, skipping provider load")
+            return
+        }
 
         Task {
             do {
@@ -155,15 +165,18 @@ struct RootContentView: View {
 #Preview("Light Mode") {
     RootContentView()
         .frame(width: 1200, height: 800)
+        .environmentObject(AppDelegate())
 }
 
 #Preview("Dark Mode") {
     RootContentView()
         .frame(width: 1200, height: 800)
         .preferredColorScheme(.dark)
+        .environmentObject(AppDelegate())
 }
 
 #Preview("Compact Size") {
     RootContentView()
         .frame(width: 800, height: 500)
+        .environmentObject(AppDelegate())
 }

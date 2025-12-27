@@ -7,13 +7,15 @@
 
 import Cocoa
 import SwiftUI
+import Combine
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Menu bar status item
     private var statusItem: NSStatusItem?
 
     // Rust core instance (internal for access from AetherApp)
-    internal var core: AetherCore?
+    // Published to trigger UI updates when initialized
+    @Published internal var core: AetherCore?
 
     // Keychain manager for secure API key storage (internal for access from AetherApp)
     internal var keychainManager: KeychainManagerImpl = KeychainManagerImpl()
