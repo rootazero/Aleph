@@ -83,9 +83,17 @@ struct RootContentView: View {
     @ViewBuilder
     private var contentArea: some View {
         VStack(spacing: 0) {
-            // Header with ThemeSwitcher
+            // Header with Settings title and ThemeSwitcher
             HStack {
+                // Settings title on the left
+                Text("Settings")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .padding(.leading, DesignTokens.Spacing.lg)
+
                 Spacer()
+
+                // ThemeSwitcher on the right
                 ThemeSwitcher(themeManager: themeManager)
                     .padding(.trailing, DesignTokens.Spacing.lg)
             }

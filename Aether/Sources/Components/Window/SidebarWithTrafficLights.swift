@@ -79,13 +79,6 @@ struct SidebarWithTrafficLights: View {
 
                 // Navigation items
                 VStack(alignment: .leading, spacing: 8) {
-                    // Header
-                    Text("Settings")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                        .padding(.top, 8)
-                        .padding(.horizontal, 10)
-
                     // Navigation tabs
                     ForEach(navigationItems, id: \.tab) { item in
                         SidebarNavigationItem(
@@ -97,6 +90,7 @@ struct SidebarWithTrafficLights: View {
                     }
                 }
                 .padding(.horizontal, 18)
+                .padding(.top, 8)
 
                 Spacer()
 
