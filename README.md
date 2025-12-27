@@ -44,6 +44,13 @@ Aether acts as an invisible "ether" connecting your intent with AI models throug
 
 ### Full Configuration UI
 
+**Modern macOS 26 Design Language:**
+- **Integrated Traffic Lights**: Custom red/yellow/green buttons embedded in rounded sidebar
+- **Content-First Layout**: Hidden title bar with content extending to window edge
+- **Continuous Curves**: 18pt rounded corners for refined, native appearance
+- **Adaptive Materials**: Self-adjusting Dark/Light mode backgrounds
+
+**Settings Tabs:**
 - **Providers Tab**: Add/edit/delete AI providers, test connections, manage API keys
 - **Routing Tab**: Create rules with drag-to-reorder, import/export as JSON
 - **Shortcuts Tab**: Customize hotkeys with visual recorder and conflict detection

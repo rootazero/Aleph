@@ -13,9 +13,7 @@ struct AetherApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        #if DEBUG
-        // MARK: - New Window Design (macOS 26 Style)
-        // Debug mode: Use new WindowGroup with custom traffic lights
+        // Settings window with macOS 26 design language
         WindowGroup {
             RootContentView(
                 core: appDelegate.core,
@@ -30,12 +28,5 @@ struct AetherApp: App {
             // Remove default "New Window" command
             CommandGroup(replacing: .newItem) {}
         }
-        #else
-        // MARK: - Legacy Settings Window
-        // Release mode: Use traditional Settings scene (fallback)
-        Settings {
-            SettingsView()
-        }
-        #endif
     }
 }

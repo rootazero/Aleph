@@ -99,9 +99,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showSettings() {
-        #if DEBUG
-        // MARK: - New Window Design (WindowGroup)
-        // For WindowGroup, find existing window or activate app to trigger window creation
+        // Find existing WindowGroup window or activate app to trigger window creation
         if let window = NSApp.windows.first(where: { $0.title == "" || $0.isVisible }) {
             // Existing window found - bring to front
             window.makeKeyAndOrderFront(nil)
@@ -110,35 +108,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // No window exists - activate app (WindowGroup will create one)
             NSApp.activate(ignoringOtherApps: true)
         }
-        #else
-        // MARK: - Legacy Settings Window
-        // Always recreate the window to ensure default size
-        if let existingWindow = settingsWindow {
-            existingWindow.close()
-            settingsWindow = nil
-        }
-
-        let settingsView = SettingsView(core: core)
-        let hostingController = NSHostingController(rootView: settingsView)
-
-        let window = NSWindow(contentViewController: hostingController)
-        window.title = "Aether Settings"
-        window.setContentSize(NSSize(width: 1000, height: 700))
-
-        // Modern macOS unified window style (traffic lights embedded in sidebar)
-        window.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-
-        window.minSize = NSSize(width: 1000, height: 700)
-        window.center()
-
-        settingsWindow = window
-
-        // Show and activate the window
-        settingsWindow?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        #endif
     }
 
     @objc private func quit() {
