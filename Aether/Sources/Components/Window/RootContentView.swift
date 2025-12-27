@@ -7,6 +7,8 @@
 //
 
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
 /// Root content view for Settings window
 ///
@@ -29,6 +31,9 @@ struct RootContentView: View {
     @State private var providers: [ProviderConfigEntry] = []
     @State private var configReloadTrigger: Int = 0
 
+    // Theme management
+    @StateObject private var themeManager = ThemeManager()
+
     // MARK: - Initialization
 
     init(core: AetherCore? = nil, keychainManager: KeychainManagerImpl? = nil) {
@@ -41,7 +46,12 @@ struct RootContentView: View {
     var body: some View {
         HStack(spacing: 0) {
             // Left: Rounded sidebar with traffic lights
-            SidebarWithTrafficLights(selectedTab: $selectedTab)
+            SidebarWithTrafficLights(
+                selectedTab: $selectedTab,
+                onImportSettings: importSettings,
+                onExportSettings: exportSettings,
+                onResetSettings: resetSettings
+            )
 
             // Middle: Divider
             Divider()
@@ -53,6 +63,7 @@ struct RootContentView: View {
         .hideNativeTrafficLights()
         .onAppear {
             loadProviders()
+            themeManager.applyTheme()
         }
         .onChange(of: appDelegate.core != nil) { isInitialized in
             // Reload providers when core is initialized
@@ -71,6 +82,15 @@ struct RootContentView: View {
     @ViewBuilder
     private var contentArea: some View {
         VStack(spacing: 0) {
+            // Header with ThemeSwitcher
+            HStack {
+                Spacer()
+                ThemeSwitcher(themeManager: themeManager)
+                    .padding(.trailing, DesignTokens.Spacing.lg)
+            }
+            .frame(height: 52)
+            .background(DesignTokens.Materials.titlebar)
+
             // Tab content
             tabContent
         }
@@ -159,6 +179,185 @@ struct RootContentView: View {
         loadProviders()
         configReloadTrigger += 1
         print("[RootContentView] Configuration reloaded from file")
+    }
+
+    // MARK: - Import/Export/Reset Actions
+
+    /// Import settings from file
+    private func importSettings() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Settings"
+        panel.message = "Choose a configuration file to import"
+        panel.allowedContentTypes = [.toml, .item]
+        panel.allowsMultipleSelection = false
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        Task {
+            do {
+                guard let core = appDelegate.core else {
+                    await MainActor.run {
+                        showAlert(title: "Error", message: "AetherCore not initialized")
+                    }
+                    return
+                }
+
+                // Read the file content
+                let content = try String(contentsOf: url, encoding: .utf8)
+
+                // Get the config directory
+                let configDir = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".config")
+                    .appendingPathComponent("aether")
+
+                // Write to config.toml
+                let configPath = configDir.appendingPathComponent("config.toml")
+                try content.write(to: configPath, atomically: true, encoding: .utf8)
+
+                // Reload config
+                _ = try core.loadConfig()
+
+                await MainActor.run {
+                    handleConfigChange()
+                    showAlert(
+                        title: "Success",
+                        message: "Settings imported successfully!",
+                        style: .informational
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    showAlert(
+                        title: "Import Failed",
+                        message: "Failed to import settings: \(error.localizedDescription)"
+                    )
+                }
+            }
+        }
+    }
+
+    /// Export settings to file
+    private func exportSettings() {
+        let panel = NSSavePanel()
+        panel.title = "Export Settings"
+        panel.message = "Choose where to save your configuration"
+        panel.nameFieldStringValue = "aether-config.toml"
+        panel.allowedContentTypes = [.toml, .item]
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        Task {
+            do {
+                // Get current config file path
+                let configDir = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".config")
+                    .appendingPathComponent("aether")
+                let configPath = configDir.appendingPathComponent("config.toml")
+
+                // Read current config
+                let content = try String(contentsOf: configPath, encoding: .utf8)
+
+                // Write to selected location
+                try content.write(to: url, atomically: true, encoding: .utf8)
+
+                await MainActor.run {
+                    showAlert(
+                        title: "Success",
+                        message: "Settings exported successfully!",
+                        style: .informational
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    showAlert(
+                        title: "Export Failed",
+                        message: "Failed to export settings: \(error.localizedDescription)"
+                    )
+                }
+            }
+        }
+    }
+
+    /// Reset settings to defaults
+    private func resetSettings() {
+        Task {
+            let confirmed = await MainActor.run {
+                showConfirmation(
+                    title: "Reset Settings",
+                    message: "Are you sure you want to reset all settings to defaults? This action cannot be undone.",
+                    confirmButton: "Reset",
+                    isDestructive: true
+                )
+            }
+
+            guard confirmed else { return }
+
+            do {
+                guard let core = appDelegate.core else {
+                    await MainActor.run {
+                        showAlert(title: "Error", message: "AetherCore not initialized")
+                    }
+                    return
+                }
+
+                // Get config path
+                let configDir = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".config")
+                    .appendingPathComponent("aether")
+                let configPath = configDir.appendingPathComponent("config.toml")
+
+                // Delete current config file
+                try? FileManager.default.removeItem(at: configPath)
+
+                // Reload config (will create default)
+                _ = try core.loadConfig()
+
+                await MainActor.run {
+                    handleConfigChange()
+                    showAlert(
+                        title: "Success",
+                        message: "Settings have been reset to defaults!",
+                        style: .informational
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    showAlert(
+                        title: "Reset Failed",
+                        message: "Failed to reset settings: \(error.localizedDescription)"
+                    )
+                }
+            }
+        }
+    }
+
+    // MARK: - Helper Methods
+
+    /// Show an alert dialog
+    private func showAlert(title: String, message: String, style: NSAlert.Style = .warning) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = style
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    /// Show a confirmation dialog
+    @MainActor
+    private func showConfirmation(
+        title: String,
+        message: String,
+        confirmButton: String = "OK",
+        isDestructive: Bool = false
+    ) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = isDestructive ? .critical : .warning
+        alert.addButton(withTitle: confirmButton)
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 }
 

@@ -14,12 +14,18 @@ import SwiftUI
 /// - Custom traffic light buttons at the top
 /// - Rounded rectangle background (18pt radius)
 /// - Navigation items for settings tabs
+/// - Action buttons at the bottom (import/export/reset)
 /// - Adaptive background color (Light/Dark Mode)
 struct SidebarWithTrafficLights: View {
     // MARK: - Properties
 
     /// Currently selected tab
     @Binding var selectedTab: SettingsTab
+
+    /// Callbacks for action buttons
+    var onImportSettings: (() -> Void)? = nil
+    var onExportSettings: (() -> Void)? = nil
+    var onResetSettings: (() -> Void)? = nil
 
     // MARK: - Environment
 
@@ -37,8 +43,7 @@ struct SidebarWithTrafficLights: View {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .strokeBorder(.separator.opacity(0.25))
                 )
-                .padding(.leading, 8)
-                .padding(.vertical, 8)
+                .padding(8)  // Uniform padding on all sides
 
             // Content: Traffic lights + Navigation items
             VStack(alignment: .leading, spacing: 12) {
@@ -73,6 +78,13 @@ struct SidebarWithTrafficLights: View {
                 .padding(.horizontal, 18)
 
                 Spacer()
+
+                // Action buttons at the bottom
+                if onImportSettings != nil || onExportSettings != nil || onResetSettings != nil {
+                    actionButtonsSection
+                        .padding(.horizontal, 18)
+                        .padding(.bottom, 18)
+                }
             }
         }
         .frame(width: 220)
@@ -90,6 +102,57 @@ struct SidebarWithTrafficLights: View {
             // Light mode: under-page background color
             return Color(nsColor: .underPageBackgroundColor)
         }
+    }
+
+    /// Action buttons section (import/export/reset)
+    @ViewBuilder
+    private var actionButtonsSection: some View {
+        VStack(spacing: 6) {
+            if let onImport = onImportSettings {
+                compactButton(
+                    icon: "square.and.arrow.down",
+                    label: "Import",
+                    action: onImport
+                )
+            }
+
+            if let onExport = onExportSettings {
+                compactButton(
+                    icon: "square.and.arrow.up",
+                    label: "Export",
+                    action: onExport
+                )
+            }
+
+            if let onReset = onResetSettings {
+                compactButton(
+                    icon: "arrow.counterclockwise",
+                    label: "Reset",
+                    action: onReset
+                )
+            }
+        }
+    }
+
+    /// Compact button for action section
+    @ViewBuilder
+    private func compactButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 11))
+                Text(label)
+                    .font(.system(size: 11))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(0.05))
+            )
+            .foregroundColor(.primary)
+        }
+        .buttonStyle(.plain)
     }
 
     /// Navigation items configuration

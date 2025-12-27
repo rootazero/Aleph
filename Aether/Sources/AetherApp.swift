@@ -19,12 +19,12 @@ struct AetherApp: App {
                 core: appDelegate.core,
                 keychainManager: appDelegate.keychainManager
             )
-            .frame(minWidth: 800, minHeight: 500)
+            .frame(minWidth: 800, minHeight: 600)
             .environmentObject(appDelegate)  // Provide appDelegate as environment object
         }
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact)
-        .defaultSize(width: 1200, height: 800)
+        .defaultSize(width: 1024, height: 700)
         .commands {
             // Remove default "New Window" command
             CommandGroup(replacing: .newItem) {}
