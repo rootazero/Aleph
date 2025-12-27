@@ -370,7 +370,7 @@ impl Default for MemoryConfig {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            default_hotkey: "Command+Grave".to_string(),
+            default_hotkey: "Grave".to_string(),  // Single ` key (backtick) for quick access
             general: GeneralConfig::default(),
             memory: MemoryConfig::default(),
             providers: HashMap::new(),
@@ -888,14 +888,14 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.default_hotkey, "Command+Grave");
+        assert_eq!(config.default_hotkey, "Grave");  // Single ` key
         assert!(config.memory.enabled);
     }
 
     #[test]
     fn test_new_config() {
         let config = Config::new();
-        assert_eq!(config.default_hotkey, "Command+Grave");
+        assert_eq!(config.default_hotkey, "Grave");  // Single ` key
     }
 
     #[test]
@@ -908,9 +908,9 @@ mod tests {
 
     #[test]
     fn test_config_deserialization() {
-        let json = r#"{"default_hotkey":"Command+Grave"}"#;
+        let json = r#"{"default_hotkey":"Grave"}"#;
         let config: Config = serde_json::from_str(json).unwrap();
-        assert_eq!(config.default_hotkey, "Command+Grave");
+        assert_eq!(config.default_hotkey, "Grave");
         // memory field should use default
         assert_eq!(config.memory.embedding_model, "all-MiniLM-L6-v2");
     }
@@ -1086,7 +1086,7 @@ mod tests {
     #[test]
     fn test_config_load_from_toml() {
         let toml_str = r##"
-default_hotkey = "Command+Grave"
+default_hotkey = "Grave"
 
 [general]
 default_provider = "openai"
@@ -1110,7 +1110,7 @@ max_context_items = 5
 "##;
 
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.default_hotkey, "Command+Grave");
+        assert_eq!(config.default_hotkey, "Grave");  // Single ` key
         assert_eq!(config.general.default_provider, Some("openai".to_string()));
         assert!(config.providers.contains_key("openai"));
         assert_eq!(config.rules.len(), 1);

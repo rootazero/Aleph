@@ -200,8 +200,9 @@ struct ProviderEditPanel: View {
 
                         Spacer()
 
-                        // Active toggle
+                        // Active toggle (iOS-style switch)
                         Toggle("", isOn: $isProviderActive)
+                            .toggleStyle(.switch)
                             .labelsHidden()
                     }
 
@@ -224,8 +225,9 @@ struct ProviderEditPanel: View {
 
                     Spacer()
 
-                    // Active toggle
+                    // Active toggle (iOS-style switch)
                     Toggle("", isOn: $isProviderActive)
+                        .toggleStyle(.switch)
                         .labelsHidden()
                 }
                 .padding(.vertical, DesignTokens.Spacing.xs)
@@ -604,8 +606,8 @@ struct ProviderEditPanel: View {
         // Ollama-specific
         repeatPenalty = provider.config.repeatPenalty.map { String($0) } ?? ""
 
-        // Load active state (based on API key presence)
-        isProviderActive = hasApiKey
+        // Load active state (default to inactive)
+        isProviderActive = false
 
         // Load API key from Keychain
         Task {
@@ -641,7 +643,7 @@ struct ProviderEditPanel: View {
         timeoutSeconds = "30"
         maxTokens = ""
         temperature = ""
-        isProviderActive = true
+        isProviderActive = false
         apiKey = ""
     }
 
@@ -649,7 +651,7 @@ struct ProviderEditPanel: View {
         resetForm()
         providerName = ""
         providerType = "openai"
-        isProviderActive = true  // New providers are active by default
+        isProviderActive = false  // New providers are inactive by default
         updateDefaultsForProviderType("openai")
     }
 

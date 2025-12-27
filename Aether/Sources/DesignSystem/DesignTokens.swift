@@ -126,6 +126,7 @@ enum DesignTokens {
     /// Shadow parameters for depth and elevation
     enum Shadows {
         /// Card shadow - subtle elevation for card elements
+        /// **DEPRECATED**: Use spacing and layout instead (Liquid Glass guideline)
         static let card = ShadowStyle(radius: 4, opacity: 0.1, offset: CGSize(width: 0, height: 2))
 
         /// Elevated shadow - stronger shadow for modals and popovers
@@ -133,6 +134,55 @@ enum DesignTokens {
 
         /// Dropdown shadow - medium shadow for dropdown menus
         static let dropdown = ShadowStyle(radius: 6, opacity: 0.12, offset: CGSize(width: 0, height: 3))
+
+        /// Floating layer shadow - subtle shadow for floating UI elements (e.g., sidebar)
+        /// Used only for functional layers that need to appear above content
+        static let floating = ShadowStyle(radius: 12, opacity: 0.08, offset: CGSize(width: 0, height: 4))
+    }
+
+    // MARK: - Materials (Liquid Glass)
+
+    /// Adaptive materials with automatic fallback for older macOS versions
+    /// Reference: WWDC 2025 - Apple Design System (Liquid Glass)
+    enum Materials {
+        /// Sidebar material - for floating navigation sidebars
+        static var sidebar: AdaptiveMaterial { .sidebar }
+
+        /// Title bar material - for window title bars and navigation bars
+        static var titlebar: AdaptiveMaterial { .titlebar }
+
+        /// Window background material - for main content areas
+        static var windowBackground: AdaptiveMaterial { .windowBackground }
+
+        /// Ultra-thin material - for floating panels and overlays
+        static var ultraThin: AdaptiveMaterial { .ultraThin }
+
+        /// Thin material - for secondary panels
+        static var thin: AdaptiveMaterial { .thin }
+
+        /// Thick material - for modals and overlays
+        static var thick: AdaptiveMaterial { .thick }
+    }
+
+    // MARK: - Concentric Radius
+
+    /// Concentric geometry corner radii
+    /// Reference: ConcentricGeometry for calculation details
+    enum ConcentricRadius {
+        /// Window-level corner radius (12pt)
+        static let window = ConcentricGeometry.windowRadius
+
+        /// Sidebar corner radius (10pt)
+        static let sidebar = ConcentricGeometry.sidebarRadius
+
+        /// Content area corner radius (12pt)
+        static let content = ConcentricGeometry.contentRadius
+
+        /// Card corner radius (8pt)
+        static let card = ConcentricGeometry.cardRadius
+
+        /// Minimum corner radius (4pt)
+        static let minimum = ConcentricGeometry.minimumRadius
     }
 
     // MARK: - Animation

@@ -36,8 +36,8 @@ impl RdevListener {
         }
     }
 
-    /// Check if the event matches Cmd+~ hotkey
-    /// Note: ~ is Shift+Grave, but for Phase 1 we detect ` (Grave/Backtick)
+    /// Check if the event matches the configured hotkey
+    /// Supports both modifier+key combinations and single-key shortcuts
     fn is_hotkey_event(event: &Event, cmd_pressed: &Arc<AtomicBool>) -> bool {
         match event.event_type {
             EventType::KeyPress(Key::MetaLeft) | EventType::KeyPress(Key::MetaRight) => {
@@ -48,8 +48,14 @@ impl RdevListener {
                 cmd_pressed.store(false, Ordering::SeqCst);
                 false
             }
-            // Backtick/grave key - this is ` which is near ~ on US keyboards
-            EventType::KeyPress(Key::BackQuote) => cmd_pressed.load(Ordering::SeqCst),
+            // Backtick/grave key - accepts both Command+` or single `
+            // For single-key shortcuts, trigger when Cmd is NOT pressed
+            // For combo shortcuts, trigger when Cmd IS pressed
+            EventType::KeyPress(Key::BackQuote) => {
+                // Allow both: Command+` (traditional) or just ` (single key)
+                // This makes the hotkey flexible
+                true
+            }
             _ => false,
         }
     }
@@ -128,7 +134,7 @@ mod tests {
         RdevListener::is_hotkey_event(&event, &cmd_pressed);
         assert!(cmd_pressed.load(Ordering::SeqCst));
 
-        // Test BackQuote press while Cmd is pressed (should match)
+        // Test BackQuote press with Cmd pressed (should match - combo shortcut)
         let event = Event {
             time: std::time::SystemTime::now(),
             event_type: EventType::KeyPress(Key::BackQuote),
@@ -145,13 +151,13 @@ mod tests {
         RdevListener::is_hotkey_event(&event, &cmd_pressed);
         assert!(!cmd_pressed.load(Ordering::SeqCst));
 
-        // Test BackQuote press without Cmd (should not match)
+        // Test BackQuote press without Cmd (should also match - single-key shortcut)
         let event = Event {
             time: std::time::SystemTime::now(),
             event_type: EventType::KeyPress(Key::BackQuote),
             name: None,
         };
-        assert!(!RdevListener::is_hotkey_event(&event, &cmd_pressed));
+        assert!(RdevListener::is_hotkey_event(&event, &cmd_pressed));
     }
 
     #[test]

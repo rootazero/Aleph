@@ -83,15 +83,8 @@ struct ShortcutsView: View {
                     }
                 }
                 .padding(DesignTokens.Spacing.md)
-                .background(
-                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                        .fill(DesignTokens.Colors.cardBackground)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                        .stroke(DesignTokens.Colors.border, lineWidth: 1)
-                )
-                .shadow(DesignTokens.Shadows.card)
+                .background(DesignTokens.Colors.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
 
                 // Permission Card
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
@@ -128,15 +121,8 @@ struct ShortcutsView: View {
                     }
                 }
                 .padding(DesignTokens.Spacing.md)
-                .background(
-                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                        .fill(DesignTokens.Colors.cardBackground)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                        .stroke(DesignTokens.Colors.border, lineWidth: 1)
-                )
-                .shadow(DesignTokens.Shadows.card)
+                .background(DesignTokens.Colors.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .padding(DesignTokens.Spacing.lg)
@@ -154,8 +140,8 @@ struct ShortcutsView: View {
     }
 
     private func loadCurrentHotkey() {
-        // Load from config - for now, use default
-        currentHotkey = Hotkey(modifiers: .command, keyCode: 50, character: "`")
+        // Load from config - default is single-key backtick
+        currentHotkey = Hotkey(modifiers: [], keyCode: 50, character: "`")
     }
 
     private func handleHotkeyChange(_ newHotkey: Hotkey?) {
@@ -164,8 +150,8 @@ struct ShortcutsView: View {
             return
         }
 
-        // Check for conflicts
-        conflictWarning = HotkeyConflictDetector.detectConflict(for: hotkey)
+        // Check for conflicts (will show warning for single-key if not default)
+        conflictWarning = HotkeyConflictDetector.detectConflict(for: hotkey, isDefault: false)
 
         // Save to config
         saveHotkey(hotkey)
@@ -183,8 +169,11 @@ struct ShortcutsView: View {
     }
 
     private func resetToDefault() {
-        currentHotkey = Hotkey(modifiers: .command, keyCode: 50, character: "`")
-        handleHotkeyChange(currentHotkey)
+        // Default is single-key backtick (no modifiers)
+        currentHotkey = Hotkey(modifiers: [], keyCode: 50, character: "`")
+        // Don't show conflict warning for default
+        conflictWarning = nil
+        saveHotkey(currentHotkey!)
     }
 
     private func openAccessibilitySettings() {
@@ -278,17 +267,10 @@ struct PresetShortcutRow: View {
             }
         }
         .padding(DesignTokens.Spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                .fill(isSelected ? DesignTokens.Colors.accentBlue.opacity(0.1) : DesignTokens.Colors.cardBackground)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                .stroke(isSelected ? DesignTokens.Colors.borderSelected : DesignTokens.Colors.border, lineWidth: isSelected ? 2 : 1)
-        )
-        .shadow(DesignTokens.Shadows.card)
+        .background(isSelected ? DesignTokens.Colors.accentBlue.opacity(0.15) : DesignTokens.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
         .onAppear {
-            conflictWarning = HotkeyConflictDetector.detectConflict(for: preset.hotkey)
+            conflictWarning = HotkeyConflictDetector.detectConflict(for: preset.hotkey, isDefault: false)
         }
     }
 }

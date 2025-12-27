@@ -206,8 +206,11 @@ struct HotkeyRecorderView: View {
             character: String(char)
         )
 
-        // Require at least one modifier key
+        // Require at least one modifier key for manual recording
+        // (Default single-key ` is set via "Reset to Default" button only)
         if newHotkey.modifiers.isEmpty {
+            // Show visual feedback that modifier is required
+            NSSound.beep()
             return
         }
 
@@ -230,7 +233,7 @@ extension PresetShortcut {
         PresetShortcut(
             name: "Command + Grave",
             hotkey: Hotkey(modifiers: .command, keyCode: 50, character: "`"),
-            description: "Default Aether shortcut (⌘ + ~)"
+            description: "⌘ + ` (Safe, no typing conflicts)"
         ),
         PresetShortcut(
             name: "Command + Shift + A",
@@ -275,7 +278,20 @@ struct HotkeyConflictDetector {
     ]
 
     /// Check if hotkey conflicts with known system shortcuts
-    static func detectConflict(for hotkey: Hotkey) -> String? {
+    /// - Parameters:
+    ///   - hotkey: The hotkey to check
+    ///   - isDefault: Whether this is the default hotkey (single ` key)
+    static func detectConflict(for hotkey: Hotkey, isDefault: Bool = false) -> String? {
+        // Allow default single-key ` without warning
+        if hotkey.modifiers.isEmpty && hotkey.character == "`" && isDefault {
+            return nil
+        }
+
+        // Skip warning for other single-key shortcuts (they are blocked in UI)
+        if hotkey.modifiers.isEmpty {
+            return nil
+        }
+
         for systemHotkey in systemShortcuts {
             if systemHotkey == hotkey {
                 return "This hotkey conflicts with a macOS system shortcut: \(systemHotkey.displayString)"
@@ -317,7 +333,7 @@ struct HotkeyConflictDetector {
                 Text("Config: \(hotkey.configString)")
                     .font(.caption)
 
-                if let conflict = HotkeyConflictDetector.detectConflict(for: hotkey) {
+                if let conflict = HotkeyConflictDetector.detectConflict(for: hotkey, isDefault: hotkey.modifiers.isEmpty && hotkey.character == "`") {
                     Label(conflict, systemImage: "exclamationmark.triangle")
                         .foregroundColor(.orange)
                         .font(.caption)

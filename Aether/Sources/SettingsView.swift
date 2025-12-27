@@ -43,26 +43,26 @@ struct SettingsView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // Left: Modern Sidebar
+            // Left: Sidebar
             ModernSidebarView(
                 selectedTab: $selectedTab,
                 onImportSettings: importSettings,
                 onExportSettings: exportSettings,
                 onResetSettings: resetSettings
             )
-
-            Divider()
+            .frame(width: 200)
+            .background(DesignTokens.Materials.sidebar)
+            .overlay(
+                Rectangle()
+                    .fill(DesignTokens.Colors.border.opacity(0.3))
+                    .frame(width: 1),
+                alignment: .trailing
+            )
 
             // Right: Content area
             contentArea
-                .toolbar {
-                    ToolbarItem(placement: .automatic) {
-                        ThemeSwitcher(themeManager: themeManager)
-                    }
-                }
+                .background(DesignTokens.Materials.windowBackground)
         }
-        .frame(width: 1000, height: 700)
-        .fixedSize()
         .onAppear {
             loadProviders()
             themeManager.applyTheme()
@@ -77,6 +77,24 @@ struct SettingsView: View {
     /// Content area based on selected tab
     @ViewBuilder
     private var contentArea: some View {
+        VStack(spacing: 0) {
+            // Theme switcher header
+            HStack {
+                Spacer()
+                ThemeSwitcher(themeManager: themeManager)
+                    .padding(.trailing, DesignTokens.Spacing.lg)
+            }
+            .frame(height: 52)
+            .background(DesignTokens.Materials.titlebar)
+
+            // Tab content
+            tabContent
+        }
+    }
+
+    /// Tab-specific content
+    @ViewBuilder
+    private var tabContent: some View {
         switch selectedTab {
         case .general:
             GeneralSettingsView(core: core)

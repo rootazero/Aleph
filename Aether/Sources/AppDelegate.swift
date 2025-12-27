@@ -107,10 +107,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Aether Settings"
-        window.setContentSize(NSSize(width: 800, height: 550))
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.minSize = NSSize(width: 700, height: 500)
-        window.maxSize = NSSize(width: 1200, height: 800)
+        window.setContentSize(NSSize(width: 1000, height: 700))
+
+        // Modern macOS unified window style (traffic lights embedded in sidebar)
+        window.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+
+        window.minSize = NSSize(width: 1000, height: 700)
         window.center()
 
         settingsWindow = window

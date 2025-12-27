@@ -50,7 +50,7 @@ struct SearchBar: View {
             }
         }
         .padding(.horizontal, DesignTokens.Spacing.sm)
-        .padding(.vertical, DesignTokens.Spacing.xs)
+        .padding(.vertical, DesignTokens.Spacing.sm)
         .background(
             RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small)
                 .fill(DesignTokens.Colors.cardBackground)

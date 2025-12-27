@@ -70,15 +70,8 @@ struct BehaviorSettingsView: View {
                     }
                 }
                 .padding(DesignTokens.Spacing.md)
-                .background(
-                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                        .fill(DesignTokens.Colors.cardBackground)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                        .stroke(DesignTokens.Colors.border, lineWidth: 1)
-                )
-                .shadow(DesignTokens.Shadows.card)
+                .background(DesignTokens.Colors.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
 
                 // Output Mode Card
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
@@ -117,15 +110,8 @@ struct BehaviorSettingsView: View {
                     }
                 }
                 .padding(DesignTokens.Spacing.md)
-                .background(
-                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                        .fill(DesignTokens.Colors.cardBackground)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                        .stroke(DesignTokens.Colors.border, lineWidth: 1)
-                )
-                .shadow(DesignTokens.Shadows.card)
+                .background(DesignTokens.Colors.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
 
                 // Typing Speed Card (only shown when typewriter mode is selected)
                 if outputMode == .typewriter {
@@ -181,15 +167,8 @@ struct BehaviorSettingsView: View {
                         }
                     }
                     .padding(DesignTokens.Spacing.md)
-                    .background(
-                        RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                            .fill(DesignTokens.Colors.cardBackground)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                            .stroke(DesignTokens.Colors.border, lineWidth: 1)
-                    )
-                    .shadow(DesignTokens.Shadows.card)
+                    .background(DesignTokens.Colors.cardBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
                 }
 
                 // PII Scrubbing Card
@@ -249,15 +228,8 @@ struct BehaviorSettingsView: View {
                     }
                 }
                 .padding(DesignTokens.Spacing.md)
-                .background(
-                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                        .fill(DesignTokens.Colors.cardBackground)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                        .stroke(DesignTokens.Colors.border, lineWidth: 1)
-                )
-                .shadow(DesignTokens.Shadows.card)
+                .background(DesignTokens.Colors.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
 
                 // Save Confirmation
                 if showingSaveConfirmation {
@@ -269,14 +241,8 @@ struct BehaviorSettingsView: View {
                         Spacer()
                     }
                     .padding(DesignTokens.Spacing.md)
-                    .background(
-                        RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                            .fill(DesignTokens.Colors.providerActive.opacity(0.1))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                            .stroke(DesignTokens.Colors.providerActive, lineWidth: 1)
-                    )
+                    .background(DesignTokens.Colors.providerActive.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -287,6 +253,7 @@ struct BehaviorSettingsView: View {
             .onChange(of: piiScrubbingEnabled) { _ in saveSettings() }
             .onChange(of: piiTypes) { _ in saveSettings() }
         }
+        .scrollEdge(edges: [.top, .bottom], style: .hard())
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showingPreview) {
             TypingSpeedPreviewSheet(speed: typingSpeed)

@@ -29,7 +29,6 @@ struct SidebarItem: View {
                     .fill(DesignTokens.Colors.accentBlue)
                     .frame(width: 3)
                     .opacity(isSelected ? 1 : 0)
-                    .offset(x: isSelected ? 0 : -3)
 
                 // Icon
                 Image(systemName: iconName)
@@ -50,6 +49,7 @@ struct SidebarItem: View {
                 RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small)
                     .fill(backgroundColor)
             )
+            .contentShape(Rectangle())  // Make entire area clickable
             .animation(DesignTokens.Animation.quick, value: isSelected)
             .animation(DesignTokens.Animation.quick, value: isHovered)
         }

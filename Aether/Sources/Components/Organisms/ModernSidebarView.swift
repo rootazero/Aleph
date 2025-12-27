@@ -20,13 +20,11 @@ struct ModernSidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
+            // Header section
             headerSection
                 .padding(.horizontal, DesignTokens.Spacing.md)
-                .padding(.top, DesignTokens.Spacing.lg)
+                .padding(.top, DesignTokens.Spacing.xl)
                 .padding(.bottom, DesignTokens.Spacing.md)
-
-            Divider()
 
             // Navigation items
             ScrollView {
@@ -43,18 +41,14 @@ struct ModernSidebarView: View {
                 .padding(.horizontal, DesignTokens.Spacing.sm)
                 .padding(.vertical, DesignTokens.Spacing.md)
             }
-
-            Divider()
+            .scrollEdge(edges: [.top, .bottom], style: .soft())
 
             // Bottom action buttons
             actionButtonsSection
                 .padding(.horizontal, DesignTokens.Spacing.md)
-                .padding(.vertical, DesignTokens.Spacing.md)
+                .padding(.top, DesignTokens.Spacing.lg)
+                .padding(.bottom, DesignTokens.Spacing.md)
         }
-        .frame(width: 200)
-        .background(
-            VisualEffectBackground(material: .sidebar, blendingMode: .behindWindow)
-        )
     }
 
     // MARK: - View Builders

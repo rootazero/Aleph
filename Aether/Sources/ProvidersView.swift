@@ -102,7 +102,7 @@ struct ProvidersView: View {
             HStack(spacing: DesignTokens.Spacing.md) {
                 // Left: Provider list (cards only)
                 providerCardsSection
-                    .frame(width: 300)
+                    .frame(width: 260)
                     .background(DesignTokens.Colors.sidebarBackground)
                     .cornerRadius(DesignTokens.CornerRadius.medium)
                     .overlay(
@@ -110,7 +110,7 @@ struct ProvidersView: View {
                             .stroke(DesignTokens.Colors.border, lineWidth: 1)
                     )
 
-                // Right: Edit panel
+                // Right: Edit panel with rounded border and background
                 ProviderEditPanel(
                     core: core,
                     keychainManager: keychainManager,
@@ -119,7 +119,7 @@ struct ProvidersView: View {
                     isAddingNew: $isAddingNew,
                     selectedPreset: $selectedPreset
                 )
-                .frame(width: 500)
+                .frame(width: 480)
                 .background(DesignTokens.Colors.contentBackground)
                 .cornerRadius(DesignTokens.CornerRadius.medium)
                 .overlay(
@@ -127,7 +127,7 @@ struct ProvidersView: View {
                         .stroke(DesignTokens.Colors.border, lineWidth: 1)
                 )
             }
-            .padding(.horizontal, DesignTokens.Spacing.lg)
+            .padding(.horizontal, DesignTokens.Spacing.md)
             .padding(.bottom, DesignTokens.Spacing.lg)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -155,7 +155,7 @@ struct ProvidersView: View {
         HStack(spacing: DesignTokens.Spacing.md) {
             // Search bar
             SearchBar(searchText: $searchText, placeholder: "Search providers...")
-                .frame(width: 300, height: 36)
+                .frame(width: 260)
 
             Spacer()
 

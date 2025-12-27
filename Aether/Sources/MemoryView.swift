@@ -48,6 +48,7 @@ struct MemoryView: View {
             }
             .padding(DesignTokens.Spacing.lg)
         }
+        .scrollEdge(edges: [.top, .bottom], style: .hard())
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             refreshData()
@@ -118,8 +119,6 @@ struct MemoryView: View {
                 .font(DesignTokens.Typography.body)
 
                 if memoryConfig.enabled {
-                    Divider()
-
                     // Retention Policy
                     HStack {
                         Text("Retention Policy:")
@@ -214,15 +213,8 @@ struct MemoryView: View {
             }
         }
         .padding(DesignTokens.Spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                .fill(DesignTokens.Colors.cardBackground)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                .stroke(DesignTokens.Colors.border, lineWidth: 1)
-        )
-        .shadow(DesignTokens.Shadows.card)
+        .background(DesignTokens.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
     }
 
     // MARK: - Statistics Card
@@ -284,15 +276,8 @@ struct MemoryView: View {
             }
         }
         .padding(DesignTokens.Spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                .fill(DesignTokens.Colors.cardBackground)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                .stroke(DesignTokens.Colors.border, lineWidth: 1)
-        )
-        .shadow(DesignTokens.Shadows.card)
+        .background(DesignTokens.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
     }
 
     // MARK: - Memory Browser Card
@@ -329,8 +314,6 @@ struct MemoryView: View {
                         showClearAllConfirmation = true
                     }
                 }
-
-                Divider()
 
                 // Memory list
                 if isLoading {
@@ -371,15 +354,8 @@ struct MemoryView: View {
             }
         }
         .padding(DesignTokens.Spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                .fill(DesignTokens.Colors.cardBackground)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                .stroke(DesignTokens.Colors.border, lineWidth: 1)
-        )
-        .shadow(DesignTokens.Shadows.card)
+        .background(DesignTokens.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
     }
 
     // MARK: - Helper Methods
@@ -541,14 +517,8 @@ struct MemoryEntryCard: View {
             .buttonStyle(.plain)
         }
         .padding(DesignTokens.Spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                .fill(DesignTokens.Colors.cardBackground.opacity(0.5))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                .stroke(DesignTokens.Colors.border, lineWidth: 1)
-        )
+        .background(DesignTokens.Colors.cardBackground.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
     }
 
     private func formatTimestamp(_ timestamp: Int64) -> String {

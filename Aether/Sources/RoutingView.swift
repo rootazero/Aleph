@@ -485,17 +485,9 @@ struct RuleCard: View {
             }
         }
         .padding(DesignTokens.Spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                .fill(DesignTokens.Colors.cardBackground)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                .stroke(DesignTokens.Colors.border, lineWidth: 1)
-        )
-        .shadow(DesignTokens.Shadows.card)
+        .background(DesignTokens.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
         .scaleEffect(isHovering ? 1.02 : 1.0)
-        .shadow(isHovering ? DesignTokens.Shadows.elevated : DesignTokens.Shadows.card)
         .animation(DesignTokens.Animation.quick, value: isHovering)
         .onHover { hovering in
             isHovering = hovering
