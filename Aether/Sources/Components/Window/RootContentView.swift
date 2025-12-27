@@ -46,12 +46,24 @@ struct RootContentView: View {
             // Right: Content area
             contentArea
         }
-        .background(.windowBackground)
+        .background(windowBackgroundColor)
         .onAppear {
             loadProviders()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("AetherConfigDidChange"))) { _ in
             handleConfigChange()
+        }
+    }
+
+    // MARK: - Computed Properties
+
+    /// Window background color with macOS version compatibility
+    private var windowBackgroundColor: Color {
+        if #available(macOS 14.0, *) {
+            return Color(.windowBackground)
+        } else {
+            // Fallback for macOS 13.0
+            return Color(NSColor.windowBackgroundColor)
         }
     }
 
