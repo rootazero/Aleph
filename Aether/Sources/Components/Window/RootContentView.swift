@@ -47,6 +47,7 @@ struct RootContentView: View {
             contentArea
         }
         .background(.windowBackground)
+        .hideNativeTrafficLights()
         .onAppear {
             loadProviders()
         }
