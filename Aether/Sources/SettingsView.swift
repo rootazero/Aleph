@@ -381,7 +381,7 @@ struct GeneralSettingsView: View {
                 Form {
                     Section(header: Text("Sound")) {
                         Toggle("Sound Effects", isOn: $soundEnabled)
-                            .onChange(of: soundEnabled) { newValue in
+                            .onChange(of: soundEnabled) { _, newValue in
                                 showComingSoonAlert(feature: "Sound effects")
                             }
                     }

@@ -37,7 +37,7 @@ struct LogViewerView: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 250)
-                .onChange(of: logLevel) { newLevel in
+                .onChange(of: logLevel) { _, newLevel in
                     do {
                         // Convert string to LogLevel enum
                         let level: LogLevel

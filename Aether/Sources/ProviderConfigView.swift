@@ -120,7 +120,7 @@ struct ProviderConfigView: View {
                             }
                         }
                         .pickerStyle(.segmented)
-                        .onChange(of: providerType) { newType in
+                        .onChange(of: providerType) { _, newType in
                             // Update default color when provider type changes
                             if let defaultColor = defaultColors[newType] {
                                 color = defaultColor

@@ -127,19 +127,19 @@ struct ProviderEditPanel: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(DesignTokens.Colors.contentBackground)
-        .onChange(of: isAddingNew) { newValue in
+        .onChange(of: isAddingNew) { _, newValue in
             if newValue {
                 startNewProviderFromPreset()
             }
         }
-        .onChange(of: selectedPreset) { newPreset in
+        .onChange(of: selectedPreset) { _, newPreset in
             // When preset changes, load provider data
             // Skip if we're just updating the preset after save
             if newPreset != nil && !isSaving {
                 loadProviderData()
             }
         }
-        .onChange(of: selectedProvider) { newProvider in
+        .onChange(of: selectedProvider) { _, newProvider in
             // When selected provider changes, load provider data
             // Skip if we're in the middle of saving to prevent reload
             if newProvider != nil && !isSaving {
@@ -282,7 +282,7 @@ struct ProviderEditPanel: View {
                 FormField(title: "API Key") {
                     SecureField("Enter your API key", text: $apiKey)
                         .textFieldStyle(.roundedBorder)
-                        .onChange(of: apiKey) { _ in
+                        .onChange(of: apiKey) {
                             testResult = nil // Clear test result when API key changes
                         }
                     Text("Stored securely in macOS Keychain")
@@ -294,7 +294,7 @@ struct ProviderEditPanel: View {
             FormField(title: "Model") {
                 TextField("e.g., gpt-4o, claude-3-5-sonnet-20241022", text: $model)
                     .textFieldStyle(.roundedBorder)
-                    .onChange(of: model) { _ in
+                    .onChange(of: model) {
                         testResult = nil // Clear test result when model changes
                     }
             }
@@ -302,7 +302,7 @@ struct ProviderEditPanel: View {
             FormField(title: isCustomProvider ? "Base URL" : "Base URL (Optional)") {
                 TextField(isCustomProvider ? "https://api.example.com/v1" : "Leave empty for official API", text: $baseURL)
                     .textFieldStyle(.roundedBorder)
-                    .onChange(of: baseURL) { _ in
+                    .onChange(of: baseURL) {
                         testResult = nil // Clear test result when base URL changes
                     }
                 Text(isCustomProvider ? "OpenAI-compatible API endpoint" : "For custom OpenAI-compatible endpoints")

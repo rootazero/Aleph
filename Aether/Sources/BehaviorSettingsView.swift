@@ -247,11 +247,11 @@ struct BehaviorSettingsView: View {
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .padding(DesignTokens.Spacing.lg)
-            .onChange(of: inputMode) { _ in saveSettings() }
-            .onChange(of: outputMode) { _ in saveSettings() }
-            .onChange(of: typingSpeed) { _ in saveSettings() }
-            .onChange(of: piiScrubbingEnabled) { _ in saveSettings() }
-            .onChange(of: piiTypes) { _ in saveSettings() }
+            .onChange(of: inputMode) { saveSettings() }
+            .onChange(of: outputMode) { saveSettings() }
+            .onChange(of: typingSpeed) { saveSettings() }
+            .onChange(of: piiScrubbingEnabled) { saveSettings() }
+            .onChange(of: piiTypes) { saveSettings() }
         }
         .scrollEdge(edges: [.top, .bottom], style: .hard())
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -28,7 +28,7 @@ struct StreamingTextView: View {
             .padding(.horizontal, 16)
             .frame(maxWidth: 280)
             .fixedSize(horizontal: false, vertical: true)
-            .onChange(of: text) { newValue in
+            .onChange(of: text) { _, newValue in
                 // When text changes, extend visible characters to include new content
                 if newValue.count > visibleCharacters {
                     animateNewText(from: visibleCharacters, to: newValue.count)

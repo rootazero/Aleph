@@ -298,7 +298,7 @@ struct MemoryView: View {
                     }
                     .pickerStyle(.menu)
                     .frame(width: 200)
-                    .onChange(of: selectedAppFilter) { _ in
+                    .onChange(of: selectedAppFilter) {
                         loadMemories()
                     }
 

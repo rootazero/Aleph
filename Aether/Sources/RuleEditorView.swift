@@ -92,7 +92,7 @@ struct RuleEditorView: View {
                         TextField("e.g., ^/draw or .*code.*", text: $pattern)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
-                            .onChange(of: pattern) { _ in
+                            .onChange(of: pattern) {
                                 validatePattern()
                             }
 
