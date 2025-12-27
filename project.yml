@@ -2,7 +2,7 @@ name: Aether
 options:
   bundleIdPrefix: Rootazero
   deploymentTarget:
-    macOS: "13.0"
+    macOS: "15.0"
   createIntermediateGroups: true
   groupSortPosition: top
   generateEmptyDirectories: false
@@ -12,7 +12,7 @@ settings:
     SWIFT_VERSION: 5.0
     MARKETING_VERSION: 0.1.0
     CURRENT_PROJECT_VERSION: 1
-    MACOSX_DEPLOYMENT_TARGET: 13.0
+    MACOSX_DEPLOYMENT_TARGET: 15.0
     SDKROOT: macosx
     SUPPORTED_PLATFORMS: macosx
     ENABLE_PREVIEWS: YES
@@ -45,7 +45,7 @@ targets:
         CFBundlePackageType: $(PRODUCT_BUNDLE_PACKAGE_TYPE)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        LSMinimumSystemVersion: "13.0"
+        LSMinimumSystemVersion: "15.0"
         LSUIElement: true
         NSAppleEventsUsageDescription: "Aether needs to simulate keyboard input to paste AI responses into your applications."
         NSHumanReadableCopyright: "Copyright © 2025 Aether. All rights reserved."
