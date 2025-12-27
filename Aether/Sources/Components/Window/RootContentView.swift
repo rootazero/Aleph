@@ -66,7 +66,7 @@ struct RootContentView: View {
             loadProviders()
             themeManager.applyTheme()
         }
-        .onChange(of: appDelegate.core != nil) { isInitialized in
+        .onChange(of: appDelegate.core != nil) { _, isInitialized in
             // Reload providers when core is initialized
             if isInitialized {
                 loadProviders()
@@ -95,7 +95,8 @@ struct RootContentView: View {
             // Tab content
             tabContent
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxHeight: .infinity)
+        // No maxWidth - let content area fill remaining space in HStack naturally
     }
 
     /// Tab-specific content based on selection
