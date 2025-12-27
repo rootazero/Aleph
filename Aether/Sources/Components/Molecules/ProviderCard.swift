@@ -66,6 +66,8 @@ struct ProviderCard: View {
                 Text(provider.name)
                     .font(DesignTokens.Typography.heading)
                     .foregroundColor(DesignTokens.Colors.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
 
                 // Provider type badge
                 Text(providerTypeName)
@@ -99,6 +101,8 @@ struct ProviderCard: View {
                 Text(provider.config.model)
                     .font(DesignTokens.Typography.caption)
                     .foregroundColor(DesignTokens.Colors.textSecondary)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
             }
         }
         .padding(DesignTokens.Spacing.md)
@@ -256,7 +260,15 @@ struct ProviderCard: View {
                 color: "#10a37f",
                 timeoutSeconds: 30,
                 maxTokens: 4096,
-                temperature: 0.7
+                temperature: 0.7,
+                topP: nil,
+                topK: nil,
+                frequencyPenalty: nil,
+                presencePenalty: nil,
+                stopSequences: nil,
+                thinkingLevel: nil,
+                mediaResolution: nil,
+                repeatPenalty: nil
             )
         ),
         isSelected: false,
@@ -281,7 +293,15 @@ struct ProviderCard: View {
                 color: "#d97757",
                 timeoutSeconds: 30,
                 maxTokens: 4096,
-                temperature: 0.7
+                temperature: 0.7,
+                topP: nil,
+                topK: nil,
+                frequencyPenalty: nil,
+                presencePenalty: nil,
+                stopSequences: nil,
+                thinkingLevel: nil,
+                mediaResolution: nil,
+                repeatPenalty: nil
             )
         ),
         isSelected: true,
@@ -306,7 +326,15 @@ struct ProviderCard: View {
                 color: "#0000ff",
                 timeoutSeconds: 30,
                 maxTokens: 2048,
-                temperature: 0.8
+                temperature: 0.8,
+                topP: nil,
+                topK: nil,
+                frequencyPenalty: nil,
+                presencePenalty: nil,
+                stopSequences: nil,
+                thinkingLevel: nil,
+                mediaResolution: nil,
+                repeatPenalty: nil
             )
         ),
         isSelected: false,
@@ -332,7 +360,15 @@ struct ProviderCard: View {
                     color: "#10a37f",
                     timeoutSeconds: 30,
                     maxTokens: 4096,
-                    temperature: 0.7
+                    temperature: 0.7,
+                    topP: nil,
+                    topK: nil,
+                    frequencyPenalty: nil,
+                    presencePenalty: nil,
+                    stopSequences: nil,
+                    thinkingLevel: nil,
+                    mediaResolution: nil,
+                    repeatPenalty: nil
                 )
             ),
             isSelected: true,
@@ -353,7 +389,15 @@ struct ProviderCard: View {
                     color: "#d97757",
                     timeoutSeconds: 30,
                     maxTokens: 4096,
-                    temperature: 0.7
+                    temperature: 0.7,
+                    topP: nil,
+                    topK: nil,
+                    frequencyPenalty: nil,
+                    presencePenalty: nil,
+                    stopSequences: nil,
+                    thinkingLevel: nil,
+                    mediaResolution: nil,
+                    repeatPenalty: nil
                 )
             ),
             isSelected: false,
@@ -374,7 +418,15 @@ struct ProviderCard: View {
                     color: "#0000ff",
                     timeoutSeconds: 30,
                     maxTokens: 2048,
-                    temperature: 0.8
+                    temperature: 0.8,
+                    topP: nil,
+                    topK: nil,
+                    frequencyPenalty: nil,
+                    presencePenalty: nil,
+                    stopSequences: nil,
+                    thinkingLevel: nil,
+                    mediaResolution: nil,
+                    repeatPenalty: nil
                 )
             ),
             isSelected: false,

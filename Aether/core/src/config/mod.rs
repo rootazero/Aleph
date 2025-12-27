@@ -198,14 +198,14 @@ pub struct RoutingRuleConfig {
 /// AI Provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
-    /// Provider type: "openai", "claude", "ollama", or custom name
+    /// Provider type: "openai", "claude", "gemini", "ollama", or custom name
     /// If not specified, inferred from provider name in config
     #[serde(default)]
     pub provider_type: Option<String>,
-    /// API key for cloud providers (required for OpenAI, Claude)
+    /// API key for cloud providers (required for OpenAI, Claude, Gemini)
     #[serde(default)]
     pub api_key: Option<String>,
-    /// Model name (e.g., "gpt-4o", "claude-3-5-sonnet-20241022", "llama3.2")
+    /// Model name (e.g., "gpt-4o", "claude-3-5-sonnet-20241022", "gemini-3-flash", "llama3.2")
     pub model: String,
     /// Base URL for API endpoint (optional, defaults to official API)
     #[serde(default)]
@@ -216,12 +216,46 @@ pub struct ProviderConfig {
     /// Request timeout in seconds
     #[serde(default = "default_timeout_seconds")]
     pub timeout_seconds: u64,
+
+    // Common generation parameters
     /// Maximum tokens in response (optional)
     #[serde(default)]
     pub max_tokens: Option<u32>,
-    /// Temperature for response randomness (0.0-2.0, optional)
+    /// Temperature for response randomness (0.0-2.0 for OpenAI/Gemini, 0.0-1.0 for Claude)
     #[serde(default)]
     pub temperature: Option<f32>,
+    /// Top-p nucleus sampling (0.0-1.0, optional)
+    #[serde(default)]
+    pub top_p: Option<f32>,
+    /// Top-k sampling (integer, optional, used by Claude, Gemini, Ollama)
+    #[serde(default)]
+    pub top_k: Option<u32>,
+
+    // OpenAI-specific parameters
+    /// Frequency penalty (-2.0 to 2.0, OpenAI only)
+    #[serde(default)]
+    pub frequency_penalty: Option<f32>,
+    /// Presence penalty (-2.0 to 2.0, OpenAI only)
+    #[serde(default)]
+    pub presence_penalty: Option<f32>,
+
+    // Claude/Gemini/Ollama-specific parameters
+    /// Stop sequences (comma-separated, Claude/Gemini/Ollama)
+    #[serde(default)]
+    pub stop_sequences: Option<String>,
+
+    // Gemini-specific parameters
+    /// Thinking level for Gemini 3 models (LOW or HIGH)
+    #[serde(default)]
+    pub thinking_level: Option<String>,
+    /// Media resolution for Gemini (LOW, MEDIUM, HIGH)
+    #[serde(default)]
+    pub media_resolution: Option<String>,
+
+    // Ollama-specific parameters
+    /// Repeat penalty for Ollama (default 1.1)
+    #[serde(default)]
+    pub repeat_penalty: Option<f32>,
 }
 
 fn default_provider_color() -> String {
@@ -239,6 +273,7 @@ impl ProviderConfig {
     /// Otherwise, infer from provider name:
     /// - "openai" -> "openai"
     /// - "claude" -> "claude"
+    /// - "gemini" -> "gemini"
     /// - "ollama" -> "ollama"
     /// - anything with base_url -> "openai" (OpenAI-compatible)
     /// - default -> "openai"
@@ -251,6 +286,8 @@ impl ProviderConfig {
         let name_lower = provider_name.to_lowercase();
         if name_lower.contains("claude") {
             "claude".to_string()
+        } else if name_lower.contains("gemini") || name_lower.contains("google") {
+            "gemini".to_string()
         } else if name_lower.contains("ollama") {
             "ollama".to_string()
         } else {
@@ -497,8 +534,8 @@ impl Config {
         for (name, provider) in &self.providers {
             let provider_type = provider.infer_provider_type(name);
 
-            // Check API key for cloud providers
-            if (provider_type == "openai" || provider_type == "claude")
+            // Check API key for cloud providers (not required for Ollama)
+            if (provider_type == "openai" || provider_type == "claude" || provider_type == "gemini")
                 && provider.api_key.is_none()
             {
                 error!(provider = %name, provider_type = %provider_type, "Provider missing API key");
@@ -517,14 +554,114 @@ impl Config {
                 )));
             }
 
-            // Validate temperature if specified
+            // Validate temperature if specified (provider-specific ranges)
             if let Some(temp) = provider.temperature {
-                if !(0.0..=2.0).contains(&temp) {
-                    error!(provider = %name, temperature = temp, "Invalid temperature");
+                let (min, max, provider_name): (f32, f32, &str) = match provider_type.as_str() {
+                    "claude" => (0.0, 1.0, "Claude"),
+                    "openai" => (0.0, 2.0, "OpenAI"),
+                    "gemini" => (0.0, 2.0, "Gemini"),
+                    "ollama" => (0.0, f32::MAX, "Ollama"),
+                    _ => (0.0, 2.0, "Custom"),
+                };
+
+                if !(min..=max).contains(&temp) {
+                    error!(provider = %name, temperature = temp, "Invalid temperature for {}", provider_name);
                     return Err(AetherError::invalid_config(format!(
-                        "Provider '{}' temperature must be between 0.0 and 2.0, got {}",
-                        name, temp
+                        "Provider '{}' ({}) temperature must be between {} and {}, got {}",
+                        name, provider_name, min, max, temp
                     )));
+                }
+            }
+
+            // Validate max_tokens if specified
+            if let Some(max_tokens) = provider.max_tokens {
+                if max_tokens == 0 {
+                    error!(provider = %name, max_tokens = max_tokens, "Invalid max_tokens");
+                    return Err(AetherError::invalid_config(format!(
+                        "Provider '{}' max_tokens must be greater than 0, got {}",
+                        name, max_tokens
+                    )));
+                }
+            }
+
+            // Validate top_p if specified
+            if let Some(top_p) = provider.top_p {
+                if !(0.0..=1.0).contains(&top_p) {
+                    error!(provider = %name, top_p = top_p, "Invalid top_p");
+                    return Err(AetherError::invalid_config(format!(
+                        "Provider '{}' top_p must be between 0.0 and 1.0, got {}",
+                        name, top_p
+                    )));
+                }
+            }
+
+            // Validate top_k if specified
+            if let Some(top_k) = provider.top_k {
+                if top_k == 0 {
+                    error!(provider = %name, top_k = top_k, "Invalid top_k");
+                    return Err(AetherError::invalid_config(format!(
+                        "Provider '{}' top_k must be greater than 0, got {}",
+                        name, top_k
+                    )));
+                }
+            }
+
+            // Validate OpenAI-specific parameters
+            if provider_type == "openai" {
+                if let Some(freq_pen) = provider.frequency_penalty {
+                    if !(-2.0..=2.0).contains(&freq_pen) {
+                        error!(provider = %name, frequency_penalty = freq_pen, "Invalid frequency_penalty");
+                        return Err(AetherError::invalid_config(format!(
+                            "Provider '{}' frequency_penalty must be between -2.0 and 2.0, got {}",
+                            name, freq_pen
+                        )));
+                    }
+                }
+
+                if let Some(pres_pen) = provider.presence_penalty {
+                    if !(-2.0..=2.0).contains(&pres_pen) {
+                        error!(provider = %name, presence_penalty = pres_pen, "Invalid presence_penalty");
+                        return Err(AetherError::invalid_config(format!(
+                            "Provider '{}' presence_penalty must be between -2.0 and 2.0, got {}",
+                            name, pres_pen
+                        )));
+                    }
+                }
+            }
+
+            // Validate Gemini-specific parameters
+            if provider_type == "gemini" {
+                if let Some(ref thinking_level) = provider.thinking_level {
+                    if thinking_level != "LOW" && thinking_level != "HIGH" {
+                        error!(provider = %name, thinking_level = %thinking_level, "Invalid thinking_level");
+                        return Err(AetherError::invalid_config(format!(
+                            "Provider '{}' thinking_level must be 'LOW' or 'HIGH', got '{}'",
+                            name, thinking_level
+                        )));
+                    }
+                }
+
+                if let Some(ref media_res) = provider.media_resolution {
+                    if media_res != "LOW" && media_res != "MEDIUM" && media_res != "HIGH" {
+                        error!(provider = %name, media_resolution = %media_res, "Invalid media_resolution");
+                        return Err(AetherError::invalid_config(format!(
+                            "Provider '{}' media_resolution must be 'LOW', 'MEDIUM', or 'HIGH', got '{}'",
+                            name, media_res
+                        )));
+                    }
+                }
+            }
+
+            // Validate Ollama-specific parameters
+            if provider_type == "ollama" {
+                if let Some(repeat_pen) = provider.repeat_penalty {
+                    if repeat_pen < 0.0 {
+                        error!(provider = %name, repeat_penalty = repeat_pen, "Invalid repeat_penalty");
+                        return Err(AetherError::invalid_config(format!(
+                            "Provider '{}' repeat_penalty must be >= 0.0, got {}",
+                            name, repeat_pen
+                        )));
+                    }
                 }
             }
 

@@ -414,7 +414,15 @@ struct ProviderConfigView: View {
             color: color.toHex(),
             timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
             maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
-            temperature: temperature.isEmpty ? nil : Float(temperature)
+            temperature: temperature.isEmpty ? nil : Float(temperature),
+            topP: nil,
+            topK: nil,
+            frequencyPenalty: nil,
+            presencePenalty: nil,
+            stopSequences: nil,
+            thinkingLevel: nil,
+            mediaResolution: nil,
+            repeatPenalty: nil
         )
 
         // Update via Rust core (will validate and persist to config.toml)

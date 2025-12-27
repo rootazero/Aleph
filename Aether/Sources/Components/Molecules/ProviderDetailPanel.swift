@@ -395,7 +395,15 @@ struct ProviderDetailPanel: View {
                 color: "#10a37f",
                 timeoutSeconds: 30,
                 maxTokens: 4096,
-                temperature: 0.7
+                temperature: 0.7,
+                topP: nil,
+                topK: nil,
+                frequencyPenalty: nil,
+                presencePenalty: nil,
+                stopSequences: nil,
+                thinkingLevel: nil,
+                mediaResolution: nil,
+                repeatPenalty: nil
             )
         ),
         hasApiKey: true,
@@ -418,7 +426,15 @@ struct ProviderDetailPanel: View {
                 color: "#d97757",
                 timeoutSeconds: 30,
                 maxTokens: 4096,
-                temperature: 0.7
+                temperature: 0.7,
+                topP: nil,
+                topK: nil,
+                frequencyPenalty: nil,
+                presencePenalty: nil,
+                stopSequences: nil,
+                thinkingLevel: nil,
+                mediaResolution: nil,
+                repeatPenalty: nil
             )
         ),
         hasApiKey: true,
@@ -441,7 +457,15 @@ struct ProviderDetailPanel: View {
                 color: "#0000ff",
                 timeoutSeconds: 30,
                 maxTokens: 2048,
-                temperature: 0.8
+                temperature: 0.8,
+                topP: nil,
+                topK: nil,
+                frequencyPenalty: nil,
+                presencePenalty: nil,
+                stopSequences: nil,
+                thinkingLevel: nil,
+                mediaResolution: nil,
+                repeatPenalty: nil
             )
         ),
         hasApiKey: false,

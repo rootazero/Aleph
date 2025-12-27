@@ -279,7 +279,7 @@ dictionary MemoryConfig {
   sequence<string> excluded_apps;
 };
 
-// Provider configuration (Phase 6 - Task 1.5)
+// Provider configuration (Phase 6 - Task 1.5, Extended in refactor-provider-edit-panel)
 dictionary ProviderConfig {
   string? provider_type;
   string? api_key;
@@ -287,8 +287,26 @@ dictionary ProviderConfig {
   string? base_url;
   string color;
   u64 timeout_seconds;
+
+  // Common generation parameters
   u32? max_tokens;
   f32? temperature;
+  f32? top_p;
+  u32? top_k;
+
+  // OpenAI-specific parameters
+  f32? frequency_penalty;
+  f32? presence_penalty;
+
+  // Claude/Gemini/Ollama-specific parameters
+  string? stop_sequences;
+
+  // Gemini-specific parameters
+  string? thinking_level;
+  string? media_resolution;
+
+  // Ollama-specific parameters
+  f32? repeat_penalty;
 };
 
 // Routing rule configuration (Phase 6 - Task 1.5)

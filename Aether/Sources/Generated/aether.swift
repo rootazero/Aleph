@@ -1499,10 +1499,18 @@ public struct ProviderConfig {
     public var timeoutSeconds: UInt64
     public var maxTokens: UInt32?
     public var temperature: Float?
+    public var topP: Float?
+    public var topK: UInt32?
+    public var frequencyPenalty: Float?
+    public var presencePenalty: Float?
+    public var stopSequences: String?
+    public var thinkingLevel: String?
+    public var mediaResolution: String?
+    public var repeatPenalty: Float?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(providerType: String?, apiKey: String?, model: String, baseUrl: String?, color: String, timeoutSeconds: UInt64, maxTokens: UInt32?, temperature: Float?) {
+    public init(providerType: String?, apiKey: String?, model: String, baseUrl: String?, color: String, timeoutSeconds: UInt64, maxTokens: UInt32?, temperature: Float?, topP: Float?, topK: UInt32?, frequencyPenalty: Float?, presencePenalty: Float?, stopSequences: String?, thinkingLevel: String?, mediaResolution: String?, repeatPenalty: Float?) {
         self.providerType = providerType
         self.apiKey = apiKey
         self.model = model
@@ -1511,6 +1519,14 @@ public struct ProviderConfig {
         self.timeoutSeconds = timeoutSeconds
         self.maxTokens = maxTokens
         self.temperature = temperature
+        self.topP = topP
+        self.topK = topK
+        self.frequencyPenalty = frequencyPenalty
+        self.presencePenalty = presencePenalty
+        self.stopSequences = stopSequences
+        self.thinkingLevel = thinkingLevel
+        self.mediaResolution = mediaResolution
+        self.repeatPenalty = repeatPenalty
     }
 }
 
@@ -1541,6 +1557,30 @@ extension ProviderConfig: Equatable, Hashable {
         if lhs.temperature != rhs.temperature {
             return false
         }
+        if lhs.topP != rhs.topP {
+            return false
+        }
+        if lhs.topK != rhs.topK {
+            return false
+        }
+        if lhs.frequencyPenalty != rhs.frequencyPenalty {
+            return false
+        }
+        if lhs.presencePenalty != rhs.presencePenalty {
+            return false
+        }
+        if lhs.stopSequences != rhs.stopSequences {
+            return false
+        }
+        if lhs.thinkingLevel != rhs.thinkingLevel {
+            return false
+        }
+        if lhs.mediaResolution != rhs.mediaResolution {
+            return false
+        }
+        if lhs.repeatPenalty != rhs.repeatPenalty {
+            return false
+        }
         return true
     }
 
@@ -1553,6 +1593,14 @@ extension ProviderConfig: Equatable, Hashable {
         hasher.combine(timeoutSeconds)
         hasher.combine(maxTokens)
         hasher.combine(temperature)
+        hasher.combine(topP)
+        hasher.combine(topK)
+        hasher.combine(frequencyPenalty)
+        hasher.combine(presencePenalty)
+        hasher.combine(stopSequences)
+        hasher.combine(thinkingLevel)
+        hasher.combine(mediaResolution)
+        hasher.combine(repeatPenalty)
     }
 }
 
@@ -1567,7 +1615,15 @@ public struct FfiConverterTypeProviderConfig: FfiConverterRustBuffer {
             color: FfiConverterString.read(from: &buf), 
             timeoutSeconds: FfiConverterUInt64.read(from: &buf), 
             maxTokens: FfiConverterOptionUInt32.read(from: &buf), 
-            temperature: FfiConverterOptionFloat.read(from: &buf)
+            temperature: FfiConverterOptionFloat.read(from: &buf), 
+            topP: FfiConverterOptionFloat.read(from: &buf), 
+            topK: FfiConverterOptionUInt32.read(from: &buf), 
+            frequencyPenalty: FfiConverterOptionFloat.read(from: &buf), 
+            presencePenalty: FfiConverterOptionFloat.read(from: &buf), 
+            stopSequences: FfiConverterOptionString.read(from: &buf), 
+            thinkingLevel: FfiConverterOptionString.read(from: &buf), 
+            mediaResolution: FfiConverterOptionString.read(from: &buf), 
+            repeatPenalty: FfiConverterOptionFloat.read(from: &buf)
         )
     }
 
@@ -1580,6 +1636,14 @@ public struct FfiConverterTypeProviderConfig: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.timeoutSeconds, into: &buf)
         FfiConverterOptionUInt32.write(value.maxTokens, into: &buf)
         FfiConverterOptionFloat.write(value.temperature, into: &buf)
+        FfiConverterOptionFloat.write(value.topP, into: &buf)
+        FfiConverterOptionUInt32.write(value.topK, into: &buf)
+        FfiConverterOptionFloat.write(value.frequencyPenalty, into: &buf)
+        FfiConverterOptionFloat.write(value.presencePenalty, into: &buf)
+        FfiConverterOptionString.write(value.stopSequences, into: &buf)
+        FfiConverterOptionString.write(value.thinkingLevel, into: &buf)
+        FfiConverterOptionString.write(value.mediaResolution, into: &buf)
+        FfiConverterOptionFloat.write(value.repeatPenalty, into: &buf)
     }
 }
 
@@ -2207,7 +2271,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnStateChanged(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            swiftCallbackInterface.onStateChanged(
+            try swiftCallbackInterface.onStateChanged(
                     state:  try FfiConverterTypeProcessingState.read(from: &reader)
                     )
             return UNIFFI_CALLBACK_SUCCESS
@@ -2218,7 +2282,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnHotkeyDetected(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            swiftCallbackInterface.onHotkeyDetected(
+            try swiftCallbackInterface.onHotkeyDetected(
                     clipboardContent:  try FfiConverterString.read(from: &reader)
                     )
             return UNIFFI_CALLBACK_SUCCESS
@@ -2229,7 +2293,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnError(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            swiftCallbackInterface.onError(
+            try swiftCallbackInterface.onError(
                     message:  try FfiConverterString.read(from: &reader), 
                     suggestion:  try FfiConverterOptionString.read(from: &reader)
                     )
@@ -2241,7 +2305,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnResponseChunk(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            swiftCallbackInterface.onResponseChunk(
+            try swiftCallbackInterface.onResponseChunk(
                     text:  try FfiConverterString.read(from: &reader)
                     )
             return UNIFFI_CALLBACK_SUCCESS
@@ -2252,7 +2316,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnErrorTyped(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            swiftCallbackInterface.onErrorTyped(
+            try swiftCallbackInterface.onErrorTyped(
                     errorType:  try FfiConverterTypeErrorType.read(from: &reader), 
                     message:  try FfiConverterString.read(from: &reader)
                     )
@@ -2264,7 +2328,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnProgress(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            swiftCallbackInterface.onProgress(
+            try swiftCallbackInterface.onProgress(
                     percent:  try FfiConverterFloat.read(from: &reader)
                     )
             return UNIFFI_CALLBACK_SUCCESS
@@ -2275,7 +2339,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnAiProcessingStarted(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            swiftCallbackInterface.onAiProcessingStarted(
+            try swiftCallbackInterface.onAiProcessingStarted(
                     providerName:  try FfiConverterString.read(from: &reader), 
                     providerColor:  try FfiConverterString.read(from: &reader)
                     )
@@ -2287,7 +2351,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnAiResponseReceived(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            swiftCallbackInterface.onAiResponseReceived(
+            try swiftCallbackInterface.onAiResponseReceived(
                     responsePreview:  try FfiConverterString.read(from: &reader)
                     )
             return UNIFFI_CALLBACK_SUCCESS
@@ -2298,7 +2362,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnProviderFallback(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            swiftCallbackInterface.onProviderFallback(
+            try swiftCallbackInterface.onProviderFallback(
                     fromProvider:  try FfiConverterString.read(from: &reader), 
                     toProvider:  try FfiConverterString.read(from: &reader)
                     )
@@ -2309,7 +2373,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
 
     func invokeOnConfigChanged(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         func makeCall() throws -> Int32 {
-            swiftCallbackInterface.onConfigChanged(
+            try swiftCallbackInterface.onConfigChanged(
                     )
             return UNIFFI_CALLBACK_SUCCESS
         }
@@ -2319,7 +2383,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
     func invokeOnTypewriterProgress(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
         func makeCall() throws -> Int32 {
-            swiftCallbackInterface.onTypewriterProgress(
+            try swiftCallbackInterface.onTypewriterProgress(
                     percent:  try FfiConverterFloat.read(from: &reader)
                     )
             return UNIFFI_CALLBACK_SUCCESS
@@ -2329,7 +2393,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
 
     func invokeOnTypewriterCancelled(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
         func makeCall() throws -> Int32 {
-            swiftCallbackInterface.onTypewriterCancelled(
+            try swiftCallbackInterface.onTypewriterCancelled(
                     )
             return UNIFFI_CALLBACK_SUCCESS
         }

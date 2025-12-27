@@ -14,13 +14,11 @@ struct ProviderEditPanel: View {
     @Binding var providers: [ProviderConfigEntry]
     @Binding var selectedProvider: String?
     @Binding var isAddingNew: Bool  // NEW: External control for adding new provider
+    @Binding var selectedPreset: PresetProvider?  // NEW: Selected preset provider
 
     // MARK: - State
 
-    // Edit mode toggle
-    @State private var isEditing: Bool = false
-
-    // Form fields
+    // Form fields - Basic
     @State private var providerName: String = ""
     @State private var providerType: String = "openai"
     @State private var apiKey: String = ""
@@ -28,8 +26,26 @@ struct ProviderEditPanel: View {
     @State private var baseURL: String = ""
     @State private var color: Color = .blue
     @State private var timeoutSeconds: String = "30"
+
+    // Form fields - Common generation parameters
     @State private var maxTokens: String = ""
     @State private var temperature: String = ""
+    @State private var topP: String = ""
+    @State private var topK: String = ""
+
+    // Form fields - OpenAI-specific
+    @State private var frequencyPenalty: String = ""
+    @State private var presencePenalty: String = ""
+
+    // Form fields - Claude/Gemini/Ollama-specific
+    @State private var stopSequences: String = ""
+
+    // Form fields - Gemini-specific
+    @State private var thinkingLevel: String = "HIGH"
+    @State private var mediaResolution: String = "MEDIUM"
+
+    // Form fields - Ollama-specific
+    @State private var repeatPenalty: String = ""
 
     // Provider active state
     @State private var isProviderActive: Bool = false
@@ -52,11 +68,10 @@ struct ProviderEditPanel: View {
 
     // MARK: - Constants
 
-    private let providerTypes = ["openai", "claude", "ollama", "custom"]
-
     private let defaultColors: [String: Color] = [
         "openai": Color(hex: "#10a37f") ?? .green,
         "claude": Color(hex: "#d97757") ?? .orange,
+        "gemini": Color(hex: "#4285F4") ?? .blue,
         "ollama": .black,
         "custom": .gray
     ]
@@ -67,6 +82,11 @@ struct ProviderEditPanel: View {
     private var currentProvider: ProviderConfigEntry? {
         guard let name = selectedProvider else { return nil }
         return providers.first { $0.name == name }
+    }
+
+    /// Check if current provider is a custom provider
+    private var isCustomProvider: Bool {
+        return selectedPreset?.id == "custom" || providerType == "custom"
     }
 
     /// Check if provider has API key configured
@@ -85,230 +105,166 @@ struct ProviderEditPanel: View {
     // MARK: - Body
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                if isAddingNew || isEditing {
-                    // Edit mode: Editable form
-                    editModeContent
-                } else if let provider = currentProvider {
-                    // View mode: Read-only information
-                    viewModeContent(for: provider)
-                } else {
-                    // No provider selected
-                    emptyStateView
+        VStack(spacing: 0) {
+            // Scrollable content
+            ScrollView {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                    if selectedProvider != nil || selectedPreset != nil {
+                        // Always show edit form when a provider is selected
+                        editModeFormContent
+                    } else {
+                        // No provider selected
+                        emptyStateView
+                    }
                 }
+                .padding(DesignTokens.Spacing.lg)
             }
-            .padding(DesignTokens.Spacing.lg)
+
+            // Fixed footer for action buttons (always shown when provider selected)
+            if selectedProvider != nil || selectedPreset != nil {
+                editModeFooter
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(DesignTokens.Colors.contentBackground)
         .onChange(of: isAddingNew) { newValue in
             if newValue {
-                startNewProvider()
+                startNewProviderFromPreset()
             }
         }
-    }
-
-    // MARK: - View Builders: View Mode
-
-    @ViewBuilder
-    private func viewModeContent(for provider: ProviderConfigEntry) -> some View {
-        // Header
-        headerSection(for: provider)
-
-        Divider()
-
-        // Description
-        descriptionSection(for: provider)
-
-        // Configuration (read-only)
-        viewModeConfigSection(for: provider)
-
-        Spacer()
-
-        // Action buttons
-        viewModeActionButtons(for: provider)
-    }
-
-    @ViewBuilder
-    private func headerSection(for provider: ProviderConfigEntry) -> some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-            HStack(spacing: DesignTokens.Spacing.sm) {
-                // Provider icon
-                ZStack {
-                    Circle()
-                        .fill(Color(hex: provider.config.color) ?? DesignTokens.Colors.accentBlue)
-                        .frame(width: 32, height: 32)
-
-                    Image(systemName: getProviderIconName(provider.config.providerType))
-                        .font(.system(size: 16))
-                        .foregroundColor(.white)
-                }
-
-                Text(provider.name)
-                    .font(DesignTokens.Typography.title)
-                    .foregroundColor(DesignTokens.Colors.textPrimary)
-
-                Spacer()
-
-                // Active/Inactive badge and toggle
-                HStack(spacing: DesignTokens.Spacing.sm) {
-                    // Active/Inactive badge
-                    Text(hasApiKey ? "Active" : "Inactive")
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, DesignTokens.Spacing.sm)
-                        .padding(.vertical, 4)
-                        .background(
-                            Capsule()
-                                .fill(hasApiKey ? Color.green : DesignTokens.Colors.textSecondary.opacity(0.5))
-                        )
-
-                    // Toggle switch (read-only in view mode, shows current state)
-                    Toggle("", isOn: .constant(hasApiKey))
-                        .labelsHidden()
-                        .disabled(true)
-                }
+        .onChange(of: selectedPreset) { newPreset in
+            // When preset changes, load provider data
+            if newPreset != nil {
+                loadProviderData()
             }
         }
-    }
-
-    @ViewBuilder
-    private func descriptionSection(for provider: ProviderConfigEntry) -> some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-            Text("About")
-                .font(DesignTokens.Typography.heading)
-                .foregroundColor(DesignTokens.Colors.textPrimary)
-
-            Text(getProviderDescription(provider.config.providerType))
-                .font(DesignTokens.Typography.body)
-                .foregroundColor(DesignTokens.Colors.textSecondary)
-        }
-    }
-
-    @ViewBuilder
-    private func viewModeConfigSection(for provider: ProviderConfigEntry) -> some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-            Text("Configuration")
-                .font(DesignTokens.Typography.heading)
-                .foregroundColor(DesignTokens.Colors.textPrimary)
-
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-                configRow(label: "Provider Type", value: getProviderTypeName(provider.config.providerType))
-                configRow(label: "Model", value: provider.config.model)
-
-                if let baseUrl = provider.config.baseUrl {
-                    configRow(label: "Base URL", value: baseUrl)
-                }
-
-                configRow(
-                    label: "Max Tokens",
-                    value: provider.config.maxTokens.map { "\($0)" } ?? "Default"
-                )
-
-                configRow(
-                    label: "Temperature",
-                    value: provider.config.temperature.map { String(format: "%.1f", $0) } ?? "Default"
-                )
-
-                configRow(
-                    label: "API Key",
-                    value: hasApiKey ? "••••••••" : "Not configured"
-                )
+        .onChange(of: selectedProvider) { newProvider in
+            // When selected provider changes, load provider data
+            if newProvider != nil {
+                loadProviderData()
             }
-        }
-    }
-
-    @ViewBuilder
-    private func viewModeActionButtons(for provider: ProviderConfigEntry) -> some View {
-        VStack(spacing: DesignTokens.Spacing.sm) {
-            ActionButton(
-                "Edit Configuration",
-                icon: "pencil",
-                style: .primary,
-                action: { enterEditMode() }
-            )
-
-            ActionButton(
-                "Delete Provider",
-                icon: "trash",
-                style: .danger,
-                action: { showDeleteConfirmation = true }
-            )
-        }
-        .alert("Delete Provider", isPresented: $showDeleteConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Delete", role: .destructive) {
-                deleteCurrentProvider()
-            }
-        } message: {
-            Text("Are you sure you want to delete \"\(provider.name)\"? This will also remove the API key from Keychain.")
         }
     }
 
     // MARK: - View Builders: Edit Mode
 
     @ViewBuilder
-    private var editModeContent: some View {
+    private var editModeFormContent: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-            // Header
-            HStack {
-                Text(isAddingNew ? "Add Provider" : "Edit Provider")
-                    .font(DesignTokens.Typography.title)
-                    .foregroundColor(DesignTokens.Colors.textPrimary)
+            // Delete button for existing providers (top-right corner)
+            if !isAddingNew, let provider = currentProvider {
+                HStack {
+                    Spacer()
 
-                Spacer()
-
-                if !isAddingNew {
-                    Button(action: cancelEdit) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    Button(action: { showDeleteConfirmation = true }) {
+                        Image(systemName: "trash")
+                            .foregroundColor(.red)
                             .imageScale(.large)
                     }
                     .buttonStyle(.plain)
-                }
-            }
-
-            Divider()
-
-            // Active state toggle (for edit mode)
-            HStack {
-                Text("Active")
-                    .font(DesignTokens.Typography.heading)
-                    .foregroundColor(DesignTokens.Colors.textPrimary)
-
-                Spacer()
-
-                Toggle("", isOn: $isProviderActive)
-                    .labelsHidden()
-            }
-            .padding(.vertical, DesignTokens.Spacing.xs)
-
-            Text(isProviderActive ? "Provider is enabled and will be used for routing" : "Provider is disabled and will be skipped by routing")
-                .font(DesignTokens.Typography.caption)
-                .foregroundColor(DesignTokens.Colors.textSecondary)
-
-            Divider()
-
-            // Form fields
-            FormField(title: "Provider Name") {
-                TextField("e.g., openai, claude, my-custom-provider", text: $providerName)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(!isAddingNew) // Can't rename existing provider
-            }
-
-            FormField(title: "Provider Type") {
-                Picker("", selection: $providerType) {
-                    ForEach(providerTypes, id: \.self) { type in
-                        Text(type.capitalized).tag(type)
+                    .alert("Delete Provider", isPresented: $showDeleteConfirmation) {
+                        Button("Cancel", role: .cancel) {}
+                        Button("Delete", role: .destructive) {
+                            deleteCurrentProvider()
+                        }
+                    } message: {
+                        Text("Are you sure you want to delete \"\(provider.name)\"? This will also remove the API key from Keychain.")
                     }
                 }
-                .pickerStyle(.segmented)
-                .onChange(of: providerType) { newType in
-                    updateDefaultsForProviderType(newType)
-                    testResult = nil // Clear test result when provider type changes
+            }
+
+            // Provider Information Display Card (for preset providers only)
+            if let preset = selectedPreset, !isCustomProvider {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                    HStack(spacing: DesignTokens.Spacing.md) {
+                        // Provider icon
+                        ZStack {
+                            Circle()
+                                .fill(Color(hex: preset.color) ?? DesignTokens.Colors.accentBlue)
+                                .frame(width: 48, height: 48)
+
+                            Image(systemName: preset.iconName)
+                                .font(.system(size: 24))
+                                .foregroundColor(.white)
+                        }
+
+                        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                            Text(preset.name)
+                                .font(DesignTokens.Typography.title)
+                                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                            Text(getProviderTypeName(preset.providerType))
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                        }
+
+                        Spacer()
+
+                        // Active toggle
+                        Toggle("", isOn: $isProviderActive)
+                            .labelsHidden()
+                    }
+
+                    Text(preset.description)
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, DesignTokens.Spacing.sm)
+
+                Divider()
+            }
+
+            // Active toggle for custom providers
+            if isCustomProvider {
+                HStack {
+                    Text("Active")
+                        .font(DesignTokens.Typography.heading)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                    Spacer()
+
+                    // Active toggle
+                    Toggle("", isOn: $isProviderActive)
+                        .labelsHidden()
+                }
+                .padding(.vertical, DesignTokens.Spacing.xs)
+
+                Divider()
+            }
+
+            // Form fields
+            // Provider Name (only for custom providers)
+            if isCustomProvider {
+                FormField(title: "Provider Name") {
+                    TextField("Enter a unique identifier", text: $providerName)
+                        .textFieldStyle(.roundedBorder)
+                    Text("This name is used to reference the provider in routing rules")
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
             }
+
+            // Theme Color (only for custom providers)
+            if isCustomProvider {
+                FormField(title: "Theme Color") {
+                    HStack(spacing: DesignTokens.Spacing.sm) {
+                        ColorPicker("", selection: $color, supportsOpacity: false)
+                            .labelsHidden()
+
+                        Circle()
+                            .fill(color)
+                            .frame(width: 32, height: 32)
+
+                        Text("Used in Halo overlay")
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+                }
+            }
+
+            // Provider Type is hidden and auto-determined from preset
+            // No user selection needed
 
             // API Key (not required for Ollama)
             if providerType != "ollama" {
@@ -332,51 +288,155 @@ struct ProviderEditPanel: View {
                     }
             }
 
-            FormField(title: "Base URL (Optional)") {
-                TextField("Leave empty for official API", text: $baseURL)
+            FormField(title: isCustomProvider ? "Base URL" : "Base URL (Optional)") {
+                TextField(isCustomProvider ? "https://api.example.com/v1" : "Leave empty for official API", text: $baseURL)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: baseURL) { _ in
                         testResult = nil // Clear test result when base URL changes
                     }
-                Text("For custom OpenAI-compatible endpoints")
+                Text(isCustomProvider ? "OpenAI-compatible API endpoint" : "For custom OpenAI-compatible endpoints")
                     .font(DesignTokens.Typography.caption)
                     .foregroundColor(DesignTokens.Colors.textSecondary)
             }
 
-            FormField(title: "Theme Color") {
-                HStack(spacing: DesignTokens.Spacing.sm) {
-                    ColorPicker("", selection: $color, supportsOpacity: false)
-                        .labelsHidden()
-
-                    Circle()
-                        .fill(color)
-                        .frame(width: 32, height: 32)
-
-                    Text("Used in Halo overlay")
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-                }
-            }
-
-            // Advanced settings (collapsible)
-            DisclosureGroup("Advanced Settings", isExpanded: $isAdvancedExpanded) {
+            // Generation Parameters (collapsible)
+            DisclosureGroup("Generation Parameters", isExpanded: $isAdvancedExpanded) {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                    // Common parameters (all providers)
+                    FormField(title: "Max Tokens (Optional)") {
+                        TextField(getMaxTokensPlaceholder(), text: $maxTokens)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 150)
+                        Text("Maximum length of generated response")
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+
+                    FormField(title: "Temperature (Optional)") {
+                        TextField(getTemperaturePlaceholder(), text: $temperature)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 150)
+                        Text(getTemperatureHelp())
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+
+                    // Top-P (all providers except Ollama uses it optionally)
+                    FormField(title: "Top-P (Optional)") {
+                        TextField("0.0-1.0, leave empty for default", text: $topP)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 150)
+                        Text("Nucleus sampling threshold (higher = more diverse)")
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+
+                    // Top-K (Claude, Gemini, Ollama)
+                    if providerType == "claude" || providerType == "gemini" || providerType == "ollama" {
+                        FormField(title: "Top-K (Optional)") {
+                            TextField(providerType == "ollama" ? "e.g., 40" : "Leave empty for default", text: $topK)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 150)
+                            Text("Consider only top K tokens (integer > 0)")
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                        }
+                    }
+
+                    // OpenAI-specific parameters
+                    if providerType == "openai" {
+                        Divider()
+                        Text("OpenAI-Specific Parameters")
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                        FormField(title: "Frequency Penalty (Optional)") {
+                            TextField("-2.0 to 2.0, leave empty for default", text: $frequencyPenalty)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 150)
+                            Text("Reduce repetition based on token frequency")
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                        }
+
+                        FormField(title: "Presence Penalty (Optional)") {
+                            TextField("-2.0 to 2.0, leave empty for default", text: $presencePenalty)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 150)
+                            Text("Encourage exploring new topics")
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                        }
+                    }
+
+                    // Claude/Gemini/Ollama stop sequences
+                    if providerType == "claude" || providerType == "gemini" || providerType == "ollama" {
+                        Divider()
+                        FormField(title: "Stop Sequences (Optional)") {
+                            TextField("Comma-separated, e.g., END,STOP", text: $stopSequences)
+                                .textFieldStyle(.roundedBorder)
+                            Text("Sequences that will stop generation")
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                        }
+                    }
+
+                    // Gemini-specific parameters
+                    if providerType == "gemini" {
+                        Divider()
+                        Text("Gemini-Specific Parameters")
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                        FormField(title: "Thinking Level") {
+                            Picker("", selection: $thinkingLevel) {
+                                Text("Low").tag("LOW")
+                                Text("High (Recommended)").tag("HIGH")
+                            }
+                            .pickerStyle(.segmented)
+                            Text("Depth of reasoning for Gemini 3 models")
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                        }
+
+                        FormField(title: "Media Resolution") {
+                            Picker("", selection: $mediaResolution) {
+                                Text("Low").tag("LOW")
+                                Text("Medium").tag("MEDIUM")
+                                Text("High").tag("HIGH")
+                            }
+                            .pickerStyle(.segmented)
+                            Text("Resolution for image/video processing")
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                        }
+                    }
+
+                    // Ollama-specific parameters
+                    if providerType == "ollama" {
+                        Divider()
+                        Text("Ollama-Specific Parameters")
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                        FormField(title: "Repeat Penalty (Optional)") {
+                            TextField("e.g., 1.1 (default)", text: $repeatPenalty)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 150)
+                            Text("Penalty for repeating tokens (>= 1.0)")
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                        }
+                    }
+
+                    Divider()
                     FormField(title: "Timeout (seconds)") {
                         TextField("30", text: $timeoutSeconds)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 100)
-                    }
-
-                    FormField(title: "Max Tokens (Optional)") {
-                        TextField("Leave empty for default", text: $maxTokens)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 150)
-                    }
-
-                    FormField(title: "Temperature (0.0-2.0)") {
-                        TextField("Leave empty for default", text: $temperature)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 150)
+                        Text("Request timeout in seconds")
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
                 }
                 .padding(.top, DesignTokens.Spacing.sm)
@@ -386,20 +446,17 @@ struct ProviderEditPanel: View {
             if let error = errorMessage {
                 errorMessageView(error)
             }
-
-            Spacer()
-
-            // Action buttons
-            editModeActionButtons
         }
     }
 
     @ViewBuilder
-    private var editModeActionButtons: some View {
-        VStack(spacing: DesignTokens.Spacing.sm) {
-            // Test Connection button with inline result below
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                HStack(spacing: DesignTokens.Spacing.sm) {
+    private var editModeFooter: some View {
+        VStack(spacing: 0) {
+            Divider()
+
+            HStack(spacing: DesignTokens.Spacing.md) {
+                // Left side: Test Connection button with inline result
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                     ActionButton(
                         isTesting ? "Testing..." : "Test Connection",
                         icon: "network",
@@ -407,25 +464,16 @@ struct ProviderEditPanel: View {
                         action: testConnection
                     )
                     .disabled(isTesting || !isFormValid())
+
+                    // Inline test result below button
+                    if let result = testResult {
+                        testResultView(result)
+                    }
                 }
 
-                // Inline test result below button
-                if let result = testResult {
-                    testResultView(result)
-                        .padding(.leading, DesignTokens.Spacing.xs)
-                }
-            }
+                Spacer()
 
-            HStack(spacing: DesignTokens.Spacing.sm) {
-                if !isAddingNew {
-                    ActionButton(
-                        "Cancel",
-                        icon: "xmark",
-                        style: .secondary,
-                        action: cancelEdit
-                    )
-                }
-
+                // Right side: Save button only
                 ActionButton(
                     isSaving ? "Saving..." : "Save",
                     icon: "checkmark",
@@ -434,8 +482,11 @@ struct ProviderEditPanel: View {
                 )
                 .disabled(isSaving || !isFormValid())
             }
+            .padding(DesignTokens.Spacing.lg)
+            .background(DesignTokens.Colors.contentBackground)
         }
     }
+
 
     // MARK: - Helper Views
 
@@ -455,20 +506,6 @@ struct ProviderEditPanel: View {
                 .foregroundColor(DesignTokens.Colors.textSecondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    @ViewBuilder
-    private func configRow(label: String, value: String) -> some View {
-        HStack(alignment: .top) {
-            Text(label)
-                .font(DesignTokens.Typography.caption)
-                .foregroundColor(DesignTokens.Colors.textSecondary)
-                .frame(width: 100, alignment: .leading)
-
-            Text(value)
-                .font(DesignTokens.Typography.body)
-                .foregroundColor(DesignTokens.Colors.textPrimary)
-        }
     }
 
     @ViewBuilder
@@ -521,29 +558,51 @@ struct ProviderEditPanel: View {
 
     // MARK: - Actions
 
-    func startNewProvider() {
-        isEditing = true
-        resetForm()
-        providerName = ""
-        providerType = "openai"
-        isProviderActive = true  // New providers are active by default
-        updateDefaultsForProviderType("openai")
+    /// Load provider data into form (for both new and existing providers)
+    private func loadProviderData() {
+        // If adding new provider from preset
+        if isAddingNew {
+            startNewProviderFromPreset()
+            return
+        }
+
+        // If editing existing provider
+        if let provider = currentProvider {
+            loadExistingProvider(provider)
+        } else if let preset = selectedPreset {
+            // Preset selected but not configured yet
+            loadPresetDefaults(preset)
+        }
     }
 
-    private func enterEditMode() {
-        guard let provider = currentProvider else { return }
-
-        isEditing = true
-
-        // Load provider data into form
+    /// Load existing configured provider data
+    private func loadExistingProvider(_ provider: ProviderConfigEntry) {
         providerName = provider.name
         providerType = provider.config.providerType ?? "openai"
         model = provider.config.model
         baseURL = provider.config.baseUrl ?? ""
         color = Color(hex: provider.config.color) ?? .blue
         timeoutSeconds = String(provider.config.timeoutSeconds)
+
+        // Common generation parameters
         maxTokens = provider.config.maxTokens.map { String($0) } ?? ""
         temperature = provider.config.temperature.map { String($0) } ?? ""
+        topP = provider.config.topP.map { String($0) } ?? ""
+        topK = provider.config.topK.map { String($0) } ?? ""
+
+        // OpenAI-specific
+        frequencyPenalty = provider.config.frequencyPenalty.map { String($0) } ?? ""
+        presencePenalty = provider.config.presencePenalty.map { String($0) } ?? ""
+
+        // Claude/Gemini/Ollama
+        stopSequences = provider.config.stopSequences ?? ""
+
+        // Gemini-specific
+        thinkingLevel = provider.config.thinkingLevel ?? "HIGH"
+        mediaResolution = provider.config.mediaResolution ?? "MEDIUM"
+
+        // Ollama-specific
+        repeatPenalty = provider.config.repeatPenalty.map { String($0) } ?? ""
 
         // Load active state (based on API key presence)
         isProviderActive = hasApiKey
@@ -562,15 +621,46 @@ struct ProviderEditPanel: View {
         }
     }
 
-    private func cancelEdit() {
-        if isAddingNew {
-            isAddingNew = false
-            isEditing = false
-            selectedProvider = providers.first?.name
+    /// Load preset defaults for unconfigured provider
+    private func loadPresetDefaults(_ preset: PresetProvider) {
+        if preset.id == "custom" {
+            // Custom provider - user will define everything
+            providerName = ""
+            providerType = preset.providerType
+            model = ""
+            baseURL = ""
+            color = Color(hex: preset.color) ?? .gray
         } else {
-            isEditing = false
+            // Preset provider - use predefined values
+            providerName = preset.id
+            providerType = preset.providerType
+            model = preset.defaultModel
+            baseURL = preset.baseUrl ?? ""
+            color = Color(hex: preset.color) ?? .blue
         }
+        timeoutSeconds = "30"
+        maxTokens = ""
+        temperature = ""
+        isProviderActive = true
+        apiKey = ""
+    }
+
+    func startNewProvider() {
         resetForm()
+        providerName = ""
+        providerType = "openai"
+        isProviderActive = true  // New providers are active by default
+        updateDefaultsForProviderType("openai")
+    }
+
+    func startNewProviderFromPreset() {
+        guard let preset = selectedPreset else {
+            startNewProvider()
+            return
+        }
+
+        resetForm()
+        loadPresetDefaults(preset)
     }
 
     private func resetForm() {
@@ -578,8 +668,27 @@ struct ProviderEditPanel: View {
         model = ""
         baseURL = ""
         timeoutSeconds = "30"
+
+        // Common generation parameters
         maxTokens = ""
         temperature = ""
+        topP = ""
+        topK = ""
+
+        // OpenAI-specific
+        frequencyPenalty = ""
+        presencePenalty = ""
+
+        // Claude/Gemini/Ollama
+        stopSequences = ""
+
+        // Gemini-specific
+        thinkingLevel = "HIGH"
+        mediaResolution = "MEDIUM"
+
+        // Ollama-specific
+        repeatPenalty = ""
+
         isProviderActive = false
         testResult = nil
         errorMessage = nil
@@ -597,6 +706,8 @@ struct ProviderEditPanel: View {
             if model.isEmpty { model = "gpt-4o" }
         case "claude":
             if model.isEmpty { model = "claude-3-5-sonnet-20241022" }
+        case "gemini":
+            if model.isEmpty { model = "gemini-3-flash" }
         case "ollama":
             if model.isEmpty { model = "llama3.2" }
         default:
@@ -648,9 +759,9 @@ struct ProviderEditPanel: View {
                     providers = config.providers
                     selectedProvider = providerName
 
-                    // Exit edit mode
-                    isEditing = false
+                    // Exit add mode and reload the saved provider data
                     isAddingNew = false
+                    loadProviderData()
                     resetForm()
                     isSaving = false
                 }
@@ -669,7 +780,7 @@ struct ProviderEditPanel: View {
             try keychainManager.setApiKey(provider: providerName, key: apiKey)
         }
 
-        // Build config
+        // Build config with all parameters
         let config = ProviderConfig(
             providerType: providerType,
             apiKey: providerType == "ollama" ? nil : "keychain:\(providerName)",
@@ -678,7 +789,15 @@ struct ProviderEditPanel: View {
             color: color.toHex(),
             timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
             maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
-            temperature: temperature.isEmpty ? nil : Float(temperature)
+            temperature: temperature.isEmpty ? nil : Float(temperature),
+            topP: topP.isEmpty ? nil : Float(topP),
+            topK: topK.isEmpty ? nil : UInt32(topK),
+            frequencyPenalty: frequencyPenalty.isEmpty ? nil : Float(frequencyPenalty),
+            presencePenalty: presencePenalty.isEmpty ? nil : Float(presencePenalty),
+            stopSequences: stopSequences.isEmpty ? nil : stopSequences,
+            thinkingLevel: (providerType == "gemini" && !thinkingLevel.isEmpty) ? thinkingLevel : nil,
+            mediaResolution: (providerType == "gemini" && !mediaResolution.isEmpty) ? mediaResolution : nil,
+            repeatPenalty: repeatPenalty.isEmpty ? nil : Float(repeatPenalty)
         )
 
         if persist {
@@ -710,21 +829,67 @@ struct ProviderEditPanel: View {
     // MARK: - Form Validation
 
     private func isFormValid() -> Bool {
+        // Basic required fields
         guard !providerName.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
         guard !model.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
 
+        // API key required for non-Ollama providers
         if providerType != "ollama" {
             guard !apiKey.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
         }
 
+        // Base URL required for custom providers
+        if isCustomProvider {
+            guard !baseURL.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        }
+
+        // Timeout validation
         guard let timeout = UInt64(timeoutSeconds), timeout > 0 else { return false }
 
+        // Common parameter validation
         if !maxTokens.isEmpty {
-            guard UInt32(maxTokens) != nil else { return false }
+            guard let tokens = UInt32(maxTokens), tokens > 0 else { return false }
         }
 
         if !temperature.isEmpty {
-            guard let temp = Float(temperature), temp >= 0.0, temp <= 2.0 else { return false }
+            guard let temp = Float(temperature) else { return false }
+            // Provider-specific temperature range
+            switch providerType {
+            case "claude":
+                guard temp >= 0.0 && temp <= 1.0 else { return false }
+            case "openai", "gemini":
+                guard temp >= 0.0 && temp <= 2.0 else { return false }
+            case "ollama":
+                guard temp >= 0.0 else { return false }
+            default:
+                guard temp >= 0.0 && temp <= 2.0 else { return false }
+            }
+        }
+
+        if !topP.isEmpty {
+            guard let p = Float(topP), p >= 0.0, p <= 1.0 else { return false }
+        }
+
+        if !topK.isEmpty {
+            guard let k = UInt32(topK), k > 0 else { return false }
+        }
+
+        // OpenAI-specific validation
+        if providerType == "openai" {
+            if !frequencyPenalty.isEmpty {
+                guard let penalty = Float(frequencyPenalty), penalty >= -2.0, penalty <= 2.0 else { return false }
+            }
+
+            if !presencePenalty.isEmpty {
+                guard let penalty = Float(presencePenalty), penalty >= -2.0, penalty <= 2.0 else { return false }
+            }
+        }
+
+        // Ollama-specific validation
+        if providerType == "ollama" {
+            if !repeatPenalty.isEmpty {
+                guard let penalty = Float(repeatPenalty), penalty >= 1.0 else { return false }
+            }
         }
 
         return true
@@ -768,48 +933,34 @@ struct ProviderEditPanel: View {
             return "A configured AI language model provider for use with Aether."
         }
     }
-}
 
-// MARK: - Form Field Helper (reuse from ProviderConfigView)
+    // MARK: - Parameter Helpers
 
-struct FormField<Content: View>: View {
-    let title: String
-    let content: Content
-
-    init(title: String, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-            Text(title)
-                .font(DesignTokens.Typography.heading)
-                .foregroundColor(DesignTokens.Colors.textPrimary)
-            content
+    private func getMaxTokensPlaceholder() -> String {
+        switch providerType {
+        case "openai": return "e.g., 1024 (default)"
+        case "claude": return "e.g., 1024 (default)"
+        case "gemini": return "e.g., 2048 (default)"
+        case "ollama": return "e.g., 512 (default)"
+        default: return "Leave empty for default"
         }
     }
-}
 
-// MARK: - Color Extension
-
-extension Color {
-    /// Convert Color to hex string
-    func toHex() -> String {
-        #if os(macOS)
-        guard let components = NSColor(self).cgColor.components else {
-            return "#808080"
+    private func getTemperaturePlaceholder() -> String {
+        switch providerType {
+        case "openai": return "0.0-2.0, default 1.0"
+        case "claude": return "0.0-1.0, default 1.0"
+        case "gemini": return "0.0-2.0, default 1.0"
+        case "ollama": return "0.0+, default 0.8"
+        default: return "Leave empty for default"
         }
-        #else
-        guard let components = UIColor(self).cgColor.components else {
-            return "#808080"
+    }
+
+    private func getTemperatureHelp() -> String {
+        switch providerType {
+        case "claude": return "Controls randomness (0.0-1.0, 0=deterministic)"
+        case "ollama": return "Controls randomness (higher = more creative)"
+        default: return "Controls randomness (0.0-2.0, 0=deterministic)"
         }
-        #endif
-
-        let r = Int(components[0] * 255.0)
-        let g = Int(components[1] * 255.0)
-        let b = Int(components[2] * 255.0)
-
-        return String(format: "#%02X%02X%02X", r, g, b)
     }
 }

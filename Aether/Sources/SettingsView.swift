@@ -55,14 +55,14 @@ struct SettingsView: View {
 
             // Right: Content area
             contentArea
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .toolbar {
                     ToolbarItem(placement: .automatic) {
                         ThemeSwitcher(themeManager: themeManager)
                     }
                 }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(width: 1000, height: 700)
+        .fixedSize()
         .onAppear {
             loadProviders()
             themeManager.applyTheme()
@@ -442,5 +442,5 @@ struct GeneralSettingsView: View {
 
 #Preview {
     SettingsView()
-        .frame(minWidth: 1200, minHeight: 800, idealWidth: 1400, idealHeight: 900)
+        .frame(width: 1000, height: 700)
 }

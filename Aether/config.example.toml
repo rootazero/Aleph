@@ -91,11 +91,13 @@ pii_scrubbing_enabled = false
 # Supported provider types:
 # - "openai"  : OpenAI and OpenAI-compatible APIs (DeepSeek, Moonshot, etc.)
 # - "claude"  : Anthropic Claude API
+# - "gemini"  : Google Gemini API
 # - "ollama"  : Local Ollama models
 #
 # Provider type inference:
 # - If not specified, automatically inferred from provider name
 # - Names containing "claude" → claude provider
+# - Names containing "gemini" or "google" → gemini provider
 # - Names containing "ollama" → ollama provider
 # - Everything else → openai provider (including custom APIs)
 
@@ -108,8 +110,15 @@ api_key = "sk-..."        # Get from https://platform.openai.com
 model = "gpt-4o"          # Options: gpt-4o, gpt-4o-mini, gpt-3.5-turbo
 color = "#10a37f"         # Brand color for UI
 timeout_seconds = 30
-max_tokens = 4096
-temperature = 0.7
+
+# Common generation parameters (optional)
+max_tokens = 4096         # Maximum response length
+temperature = 0.7         # Randomness (0.0-2.0, 0=deterministic, higher=creative)
+top_p = 1.0               # Nucleus sampling (0.0-1.0)
+
+# OpenAI-specific parameters (optional)
+frequency_penalty = 0.0   # Reduce repetition (-2.0 to 2.0)
+presence_penalty = 0.0    # Encourage new topics (-2.0 to 2.0)
 
 # ----------------------------------------------------------------------------
 # Anthropic Claude
@@ -120,8 +129,37 @@ api_key = "sk-ant-..."    # Get from https://console.anthropic.com
 model = "claude-3-5-sonnet-20241022"  # Options: claude-3-5-sonnet, claude-3-opus, etc.
 color = "#d97757"
 timeout_seconds = 30
-max_tokens = 4096
-temperature = 0.7
+
+# Common generation parameters (optional)
+max_tokens = 4096         # Maximum response length
+temperature = 0.7         # Randomness (0.0-1.0 for Claude)
+top_p = 1.0               # Nucleus sampling (0.0-1.0)
+top_k = 40                # Top-K sampling (integer > 0)
+
+# Claude-specific parameters (optional)
+stop_sequences = "END,STOP"  # Comma-separated stop sequences
+
+# ----------------------------------------------------------------------------
+# Google Gemini
+# ----------------------------------------------------------------------------
+[providers.gemini]
+provider_type = "gemini"  # Optional, inferred from name
+api_key = "..."           # Get from https://makersuite.google.com/app/apikey
+model = "gemini-3-flash"  # Options: gemini-3-flash, gemini-3-pro
+base_url = "https://generativelanguage.googleapis.com/v1beta"
+color = "#4285F4"         # Google Blue
+timeout_seconds = 30
+
+# Common generation parameters (optional)
+max_tokens = 2048         # Maximum response length (maxOutputTokens)
+temperature = 1.0         # Randomness (0.0-2.0)
+top_p = 0.95              # Nucleus sampling (0.0-1.0)
+top_k = 40                # Top-K sampling (integer > 0)
+
+# Gemini-specific parameters (optional)
+thinking_level = "HIGH"   # Depth of reasoning: LOW or HIGH
+media_resolution = "MEDIUM"  # Image/video resolution: LOW, MEDIUM, or HIGH
+stop_sequences = "END"    # Comma-separated stop sequences
 
 # ----------------------------------------------------------------------------
 # Local Ollama
@@ -132,6 +170,16 @@ provider_type = "ollama"  # Optional, inferred from name
 model = "llama3.2"        # Options: llama3.2, codellama, mistral, etc.
 color = "#0000ff"
 timeout_seconds = 60      # Longer timeout for local models
+
+# Common generation parameters (optional)
+max_tokens = 512          # Maximum response length (num_predict)
+temperature = 0.8         # Randomness (0.0+)
+top_p = 0.9               # Nucleus sampling (0.0-1.0)
+top_k = 40                # Top-K sampling (integer > 0)
+
+# Ollama-specific parameters (optional)
+repeat_penalty = 1.1      # Penalty for repeating tokens (>= 1.0)
+stop_sequences = "END"    # Comma-separated stop sequences
 
 # Note: Ollama must be installed and running
 # Install: https://ollama.ai/download
