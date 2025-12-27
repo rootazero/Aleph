@@ -94,15 +94,16 @@ struct ProvidersView: View {
         VStack(spacing: 0) {
             // Top: Toolbar spanning full width
             providerListToolbar
-                .padding(.horizontal, DesignTokens.Spacing.lg)
+                .padding(.leading, DesignTokens.Spacing.sm)     // 8pt left padding
+                .padding(.trailing, DesignTokens.Spacing.lg)    // 24pt right padding (align with ThemeSwitcher)
                 .padding(.top, DesignTokens.Spacing.lg)
                 .padding(.bottom, DesignTokens.Spacing.md)
 
-            // Bottom: Two-panel layout
+            // Bottom: Two-panel layout with auto-expanding edit panel
             HStack(spacing: DesignTokens.Spacing.md) {
                 // Left: Provider list (cards only)
                 providerCardsSection
-                    .frame(width: 260)
+                    .frame(width: 245)  // Fixed width
                     .background(DesignTokens.Colors.sidebarBackground)
                     .cornerRadius(DesignTokens.CornerRadius.medium)
                     .overlay(
@@ -110,7 +111,7 @@ struct ProvidersView: View {
                             .stroke(DesignTokens.Colors.border, lineWidth: 1)
                     )
 
-                // Right: Edit panel with rounded border and background
+                // Right: Edit panel with auto-expanding width
                 ProviderEditPanel(
                     core: core,
                     keychainManager: keychainManager,
@@ -119,7 +120,7 @@ struct ProvidersView: View {
                     isAddingNew: $isAddingNew,
                     selectedPreset: $selectedPreset
                 )
-                .frame(width: 480)
+                .frame(maxWidth: .infinity)  // Auto-expand to fill remaining space
                 .background(DesignTokens.Colors.contentBackground)
                 .cornerRadius(DesignTokens.CornerRadius.medium)
                 .overlay(
@@ -127,7 +128,8 @@ struct ProvidersView: View {
                         .stroke(DesignTokens.Colors.border, lineWidth: 1)
                 )
             }
-            .padding(.horizontal, DesignTokens.Spacing.sm)  // Changed from .md (16pt) to .sm (8pt)
+            .padding(.leading, DesignTokens.Spacing.sm)     // 8pt left padding
+            .padding(.trailing, DesignTokens.Spacing.lg)    // 24pt right padding (align with ThemeSwitcher)
             .padding(.bottom, DesignTokens.Spacing.lg)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -155,7 +157,7 @@ struct ProvidersView: View {
         HStack(spacing: DesignTokens.Spacing.md) {
             // Search bar
             SearchBar(searchText: $searchText, placeholder: "Search providers...")
-                .frame(width: 260)
+                .frame(width: 245)  // Widened by 5pt to match provider list: 240 + 5 = 245
 
             Spacer()
 

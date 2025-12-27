@@ -8,17 +8,19 @@ struct SimpleProviderCard: View {
     let onTap: () -> Void
 
     var body: some View {
-        HStack(spacing: DesignTokens.Spacing.md) {
+        HStack(spacing: 10) {  // Reduced from 16pt to 10pt for tighter layout
             // Provider icon
             Image(systemName: preset.iconName)
                 .font(.system(size: 18))
                 .foregroundColor(Color(hex: preset.color) ?? .gray)
                 .frame(width: 28, height: 28)
 
-            // Provider name
+            // Provider name - auto-scales to fit in single line
             Text(preset.name)
                 .font(DesignTokens.Typography.body)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)  // Allow font to shrink to 85% if needed
 
             Spacer()
 
@@ -27,7 +29,7 @@ struct SimpleProviderCard: View {
                 .fill(isConfigured ? Color(hex: "#007AFF") ?? .blue : Color.clear)
                 .frame(width: 8, height: 8)
         }
-        .padding(.horizontal, DesignTokens.Spacing.md)
+        .padding(.horizontal, 12)  // Reduced from 16pt to 12pt for more text space
         .padding(.vertical, DesignTokens.Spacing.sm + 2)
         .background(
             RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
