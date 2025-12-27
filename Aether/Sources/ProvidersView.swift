@@ -103,7 +103,7 @@ struct ProvidersView: View {
             HStack(spacing: DesignTokens.Spacing.md) {
                 // Left: Provider list (cards only)
                 providerCardsSection
-                    .frame(width: 245)  // Fixed width
+                    .frame(width: 240)  // Fixed width
                     .background(DesignTokens.Colors.sidebarBackground)
                     .cornerRadius(DesignTokens.CornerRadius.medium)
                     .overlay(
@@ -157,7 +157,7 @@ struct ProvidersView: View {
         HStack(spacing: DesignTokens.Spacing.md) {
             // Search bar
             SearchBar(searchText: $searchText, placeholder: "Search providers...")
-                .frame(width: 245)  // Widened by 5pt to match provider list: 240 + 5 = 245
+                .frame(width: 240)
 
             Spacer()
 
