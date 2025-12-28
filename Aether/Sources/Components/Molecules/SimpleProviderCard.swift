@@ -4,6 +4,7 @@ import SwiftUI
 struct SimpleProviderCard: View {
     let preset: PresetProvider
     let isConfigured: Bool
+    let isActive: Bool  // NEW: Whether the provider is enabled/active
     let isSelected: Bool
     let onTap: () -> Void
 
@@ -24,9 +25,9 @@ struct SimpleProviderCard: View {
 
             Spacer()
 
-            // Status indicator (blue dot if configured)
+            // Status indicator (blue dot if configured AND active)
             Circle()
-                .fill(isConfigured ? Color(hex: "#007AFF") ?? .blue : Color.clear)
+                .fill((isConfigured && isActive) ? Color(hex: "#007AFF") ?? .blue : Color.clear)
                 .frame(width: 8, height: 8)
         }
         .padding(.horizontal, 12)  // Reduced from 16pt to 12pt for more text space

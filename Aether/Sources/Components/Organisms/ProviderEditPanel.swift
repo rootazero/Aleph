@@ -615,8 +615,8 @@ struct ProviderEditPanel: View {
         // Ollama-specific
         repeatPenalty = provider.config.repeatPenalty.map { String($0) } ?? ""
 
-        // Load active state (default to inactive)
-        isProviderActive = false
+        // Load active state from config
+        isProviderActive = provider.config.enabled
 
         // Load API key from Keychain
         Task {
@@ -652,7 +652,7 @@ struct ProviderEditPanel: View {
         timeoutSeconds = "30"
         maxTokens = ""
         temperature = ""
-        isProviderActive = false
+        isProviderActive = true  // New providers are active by default
         apiKey = ""
     }
 
@@ -660,7 +660,7 @@ struct ProviderEditPanel: View {
         resetForm()
         providerName = ""
         providerType = "openai"
-        isProviderActive = false  // New providers are inactive by default
+        isProviderActive = true  // New providers are active by default
         updateDefaultsForProviderType("openai")
     }
 
@@ -780,9 +780,8 @@ struct ProviderEditPanel: View {
                     // This prevents jumping to the first provider
                     selectedProvider = savedProviderName
 
-                    // Update selectedPreset for custom providers
-                    // Custom providers are dynamically generated in ProvidersView.customProviders
-                    // We need to find the matching preset after providers are reloaded
+                    // Update selectedPreset for both custom and preset providers
+                    // This ensures the UI stays on the current provider after save
                     if isCustomProvider {
                         // For custom providers, create a temporary PresetProvider
                         // This will be replaced when ProvidersView updates
@@ -797,6 +796,12 @@ struct ProviderEditPanel: View {
                             baseUrl: baseURL.isEmpty ? nil : baseURL
                         )
                         selectedPreset = customPreset
+                    } else {
+                        // For preset providers, find and update the preset
+                        // This ensures the displayed information matches the saved provider
+                        if let preset = PresetProviders.find(byId: savedProviderName) {
+                            selectedPreset = preset
+                        }
                     }
 
                     // Exit add mode if we were adding a new provider
@@ -827,6 +832,7 @@ struct ProviderEditPanel: View {
             baseUrl: baseURL.isEmpty ? nil : baseURL,
             color: color.toHex(),
             timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
+            enabled: isProviderActive,
             maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
             temperature: temperature.isEmpty ? nil : Float(temperature),
             topP: topP.isEmpty ? nil : Float(topP),

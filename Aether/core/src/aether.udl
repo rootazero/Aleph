@@ -286,6 +286,7 @@ dictionary ProviderConfig {
   string? base_url;
   string color;
   u64 timeout_seconds;
+  boolean enabled;  // Whether the provider is active/enabled
 
   // Common generation parameters
   u32? max_tokens;

@@ -83,6 +83,14 @@ struct ProvidersView: View {
         return configuredProviders.contains { $0.name == preset.id }
     }
 
+    /// Check if a preset provider is active/enabled
+    private func isActive(_ preset: PresetProvider) -> Bool {
+        guard let config = configuredProviders.first(where: { $0.name == preset.id }) else {
+            return false
+        }
+        return config.config.enabled
+    }
+
     /// Get configuration for a preset provider
     private func getConfig(for preset: PresetProvider) -> ProviderConfigEntry? {
         return configuredProviders.first { $0.name == preset.id }
@@ -207,6 +215,7 @@ struct ProvidersView: View {
                     SimpleProviderCard(
                         preset: preset,
                         isConfigured: isConfigured(preset),
+                        isActive: isActive(preset),
                         isSelected: selectedProviderId == preset.id,
                         onTap: { selectProvider(preset.id) }
                     )

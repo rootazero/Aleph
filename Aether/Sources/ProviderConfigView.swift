@@ -417,6 +417,7 @@ struct ProviderConfigView: View {
             baseUrl: baseURL.isEmpty ? nil : baseURL,
             color: color.toHex(),
             timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
+            enabled: true,  // Providers created via this dialog are enabled by default
             maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
             temperature: temperature.isEmpty ? nil : Float(temperature),
             topP: nil,

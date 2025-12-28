@@ -1498,6 +1498,7 @@ public struct ProviderConfig {
     public var baseUrl: String?
     public var color: String
     public var timeoutSeconds: UInt64
+    public var enabled: Bool
     public var maxTokens: UInt32?
     public var temperature: Float?
     public var topP: Float?
@@ -1511,13 +1512,14 @@ public struct ProviderConfig {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(providerType: String?, apiKey: String?, model: String, baseUrl: String?, color: String, timeoutSeconds: UInt64, maxTokens: UInt32?, temperature: Float?, topP: Float?, topK: UInt32?, frequencyPenalty: Float?, presencePenalty: Float?, stopSequences: String?, thinkingLevel: String?, mediaResolution: String?, repeatPenalty: Float?) {
+    public init(providerType: String?, apiKey: String?, model: String, baseUrl: String?, color: String, timeoutSeconds: UInt64, enabled: Bool, maxTokens: UInt32?, temperature: Float?, topP: Float?, topK: UInt32?, frequencyPenalty: Float?, presencePenalty: Float?, stopSequences: String?, thinkingLevel: String?, mediaResolution: String?, repeatPenalty: Float?) {
         self.providerType = providerType
         self.apiKey = apiKey
         self.model = model
         self.baseUrl = baseUrl
         self.color = color
         self.timeoutSeconds = timeoutSeconds
+        self.enabled = enabled
         self.maxTokens = maxTokens
         self.temperature = temperature
         self.topP = topP
@@ -1550,6 +1552,9 @@ extension ProviderConfig: Equatable, Hashable {
             return false
         }
         if lhs.timeoutSeconds != rhs.timeoutSeconds {
+            return false
+        }
+        if lhs.enabled != rhs.enabled {
             return false
         }
         if lhs.maxTokens != rhs.maxTokens {
@@ -1592,6 +1597,7 @@ extension ProviderConfig: Equatable, Hashable {
         hasher.combine(baseUrl)
         hasher.combine(color)
         hasher.combine(timeoutSeconds)
+        hasher.combine(enabled)
         hasher.combine(maxTokens)
         hasher.combine(temperature)
         hasher.combine(topP)
@@ -1615,6 +1621,7 @@ public struct FfiConverterTypeProviderConfig: FfiConverterRustBuffer {
             baseUrl: FfiConverterOptionString.read(from: &buf), 
             color: FfiConverterString.read(from: &buf), 
             timeoutSeconds: FfiConverterUInt64.read(from: &buf), 
+            enabled: FfiConverterBool.read(from: &buf), 
             maxTokens: FfiConverterOptionUInt32.read(from: &buf), 
             temperature: FfiConverterOptionFloat.read(from: &buf), 
             topP: FfiConverterOptionFloat.read(from: &buf), 
@@ -1635,6 +1642,7 @@ public struct FfiConverterTypeProviderConfig: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.baseUrl, into: &buf)
         FfiConverterString.write(value.color, into: &buf)
         FfiConverterUInt64.write(value.timeoutSeconds, into: &buf)
+        FfiConverterBool.write(value.enabled, into: &buf)
         FfiConverterOptionUInt32.write(value.maxTokens, into: &buf)
         FfiConverterOptionFloat.write(value.temperature, into: &buf)
         FfiConverterOptionFloat.write(value.topP, into: &buf)

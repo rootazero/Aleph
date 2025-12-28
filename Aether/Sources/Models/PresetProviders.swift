@@ -27,6 +27,7 @@ struct PresetProvider: Equatable {
             baseUrl: baseUrl,
             color: color,
             timeoutSeconds: 30,
+            enabled: true,  // Providers from presets are enabled by default
             maxTokens: 4096,
             temperature: 0.7,
             topP: nil,

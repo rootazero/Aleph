@@ -223,6 +223,9 @@ pub struct ProviderConfig {
     /// Request timeout in seconds
     #[serde(default = "default_timeout_seconds")]
     pub timeout_seconds: u64,
+    /// Whether the provider is enabled/active
+    #[serde(default = "default_provider_enabled")]
+    pub enabled: bool,
 
     // Common generation parameters
     /// Maximum tokens in response (optional)
@@ -271,6 +274,10 @@ fn default_provider_color() -> String {
 
 fn default_timeout_seconds() -> u64 {
     30 // 30 seconds default timeout
+}
+
+fn default_provider_enabled() -> bool {
+    true // Providers are enabled by default when added
 }
 
 impl ProviderConfig {
