@@ -392,6 +392,7 @@ struct ProviderCard: View {
                     baseUrl: nil,
                     color: "#d97757",
                     timeoutSeconds: 30,
+                    enabled: true,
                     maxTokens: 4096,
                     temperature: 0.7,
                     topP: nil,
