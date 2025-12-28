@@ -53,9 +53,6 @@ struct RootContentView: View {
                 onResetSettings: resetSettings
             )
 
-            // Middle: Divider
-            Divider()
-
             // Right: Content area
             contentArea
         }
