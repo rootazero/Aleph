@@ -20,8 +20,6 @@ Cargo.lock
 *.swo
 *~
 openspec/
-AGENTS.md
-CLAUDE.md
 porompt.md
 
 # macOS
