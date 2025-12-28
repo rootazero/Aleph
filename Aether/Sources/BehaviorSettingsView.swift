@@ -46,11 +46,8 @@ struct BehaviorSettingsView: View {
 
                         Picker("Input Mode", selection: $inputMode) {
                             ForEach(InputMode.allCases, id: \.self) { mode in
-                                HStack(spacing: DesignTokens.Spacing.sm) {
-                                    Image(systemName: mode.iconName)
-                                    Text(mode.displayName)
-                                }
-                                .tag(mode)
+                                Label(mode.displayName, systemImage: mode.iconName)
+                                    .tag(mode)
                             }
                         }
                         .pickerStyle(.segmented)
@@ -86,11 +83,8 @@ struct BehaviorSettingsView: View {
 
                         Picker("Output Mode", selection: $outputMode) {
                             ForEach(OutputMode.allCases, id: \.self) { mode in
-                                HStack(spacing: DesignTokens.Spacing.sm) {
-                                    Image(systemName: mode.iconName)
-                                    Text(mode.displayName)
-                                }
-                                .tag(mode)
+                                Label(mode.displayName, systemImage: mode.iconName)
+                                    .tag(mode)
                             }
                         }
                         .pickerStyle(.segmented)
