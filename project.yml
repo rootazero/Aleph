@@ -92,14 +92,16 @@ targets:
       - name: "Build Rust Core"
         script: |
           # Build Rust core library if needed
+          CARGO_PATH="${HOME}/.cargo/bin/cargo"
+
           if [ "${CONFIGURATION}" = "Debug" ]; then
               cd "${PROJECT_DIR}/Aether/core"
-              cargo build
+              "${CARGO_PATH}" build
               # Copy debug library
               cp target/debug/libaethecore.dylib "${PROJECT_DIR}/Aether/Frameworks/"
           else
               cd "${PROJECT_DIR}/Aether/core"
-              cargo build --release
+              "${CARGO_PATH}" build --release
               # Copy release library
               cp target/release/libaethecore.dylib "${PROJECT_DIR}/Aether/Frameworks/"
           fi
@@ -107,11 +109,19 @@ targets:
       - name: "Generate UniFFI Bindings"
         script: |
           # Generate Swift bindings from Rust using Cargo uniffi-bindgen
+          CARGO_PATH="${HOME}/.cargo/bin/cargo"
           cd "${PROJECT_DIR}/Aether/core"
 
+          # Determine which library to use based on configuration
+          if [ "${CONFIGURATION}" = "Debug" ]; then
+              LIBRARY_PATH="target/debug/libaethecore.dylib"
+          else
+              LIBRARY_PATH="target/release/libaethecore.dylib"
+          fi
+
           # Use Cargo to run uniffi-bindgen (more reliable than Python version)
-          cargo run --bin uniffi-bindgen -- generate \
-            --library target/debug/libaethecore.dylib \
+          "${CARGO_PATH}" run --bin uniffi-bindgen -- generate \
+            --library "${LIBRARY_PATH}" \
             --language swift \
             --out-dir "${PROJECT_DIR}/Aether/Sources/Generated/"
 
