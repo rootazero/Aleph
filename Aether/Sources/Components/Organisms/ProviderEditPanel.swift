@@ -652,7 +652,7 @@ struct ProviderEditPanel: View {
         timeoutSeconds = "30"
         maxTokens = ""
         temperature = ""
-        isProviderActive = true  // New providers are active by default
+        isProviderActive = false  // New providers are disabled by default
         apiKey = ""
     }
 
@@ -660,7 +660,7 @@ struct ProviderEditPanel: View {
         resetForm()
         providerName = ""
         providerType = "openai"
-        isProviderActive = true  // New providers are active by default
+        isProviderActive = false  // New providers are disabled by default
         updateDefaultsForProviderType("openai")
     }
 

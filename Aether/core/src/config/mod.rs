@@ -277,7 +277,7 @@ fn default_timeout_seconds() -> u64 {
 }
 
 fn default_provider_enabled() -> bool {
-    true // Providers are enabled by default when added
+    false // Providers are disabled by default, user must explicitly enable them
 }
 
 impl ProviderConfig {
