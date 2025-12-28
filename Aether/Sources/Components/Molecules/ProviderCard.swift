@@ -422,6 +422,7 @@ struct ProviderCard: View {
                     baseUrl: "http://localhost:11434",
                     color: "#0000ff",
                     timeoutSeconds: 30,
+                    enabled: true,
                     maxTokens: 2048,
                     temperature: 0.8,
                     topP: nil,
