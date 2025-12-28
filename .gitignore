@@ -19,8 +19,6 @@ Cargo.lock
 *.swp
 *.swo
 *~
-openspec/
-porompt.md
 
 # macOS
 .DS_Store
