@@ -357,47 +357,40 @@ struct ProviderConfigView: View {
         errorMessage = nil
 
         Task {
-            do {
-                // Build temporary provider config with actual API key (not keychain reference)
-                let testConfig = ProviderConfig(
-                    providerType: providerType,
-                    apiKey: providerType == "ollama" ? nil : apiKey,  // Use actual API key for testing
-                    model: model,
-                    baseUrl: baseURL.isEmpty ? nil : baseURL,
-                    color: color.toHex(),
-                    timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
-                    enabled: false,
-                    maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
-                    temperature: temperature.isEmpty ? nil : Float(temperature),
-                    topP: nil,
-                    topK: nil,
-                    frequencyPenalty: nil,
-                    presencePenalty: nil,
-                    stopSequences: nil,
-                    thinkingLevel: nil,
-                    mediaResolution: nil,
-                    repeatPenalty: nil
-                )
+            // Build temporary provider config with actual API key (not keychain reference)
+            let testConfig = ProviderConfig(
+                providerType: providerType,
+                apiKey: providerType == "ollama" ? nil : apiKey,  // Use actual API key for testing
+                model: model,
+                baseUrl: baseURL.isEmpty ? nil : baseURL,
+                color: color.toHex(),
+                timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
+                enabled: false,
+                maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
+                temperature: temperature.isEmpty ? nil : Float(temperature),
+                topP: nil,
+                topK: nil,
+                frequencyPenalty: nil,
+                presencePenalty: nil,
+                stopSequences: nil,
+                thinkingLevel: nil,
+                mediaResolution: nil,
+                repeatPenalty: nil
+            )
 
-                // Test connection with temporary config (does not persist to disk)
-                let result = core.testProviderConnectionWithConfig(
-                    providerName: providerName,
-                    providerConfig: testConfig
-                )
+            // Test connection with temporary config (does not persist to disk)
+            let result = core.testProviderConnectionWithConfig(
+                providerName: providerName,
+                providerConfig: testConfig
+            )
 
-                await MainActor.run {
-                    if result.success {
-                        testResult = .success(result.message)
-                    } else {
-                        testResult = .failure(result.message)
-                    }
-                    isTesting = false
+            await MainActor.run {
+                if result.success {
+                    testResult = .success(result.message)
+                } else {
+                    testResult = .failure(result.message)
                 }
-            } catch {
-                await MainActor.run {
-                    testResult = .failure("Unexpected error: \(error.localizedDescription)")
-                    isTesting = false
-                }
+                isTesting = false
             }
         }
     }

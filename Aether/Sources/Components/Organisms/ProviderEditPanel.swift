@@ -734,48 +734,41 @@ struct ProviderEditPanel: View {
         errorMessage = nil
 
         Task {
-            do {
-                // Build temporary provider config with actual API key (not keychain reference)
-                // This allows testing without persisting the configuration to disk
-                let testConfig = ProviderConfig(
-                    providerType: providerType,
-                    apiKey: providerType == "ollama" ? nil : apiKey,  // Use actual API key for testing
-                    model: model,
-                    baseUrl: baseURL.isEmpty ? nil : baseURL,
-                    color: color.toHex(),
-                    timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
-                    enabled: isProviderActive,
-                    maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
-                    temperature: temperature.isEmpty ? nil : Float(temperature),
-                    topP: topP.isEmpty ? nil : Float(topP),
-                    topK: topK.isEmpty ? nil : UInt32(topK),
-                    frequencyPenalty: frequencyPenalty.isEmpty ? nil : Float(frequencyPenalty),
-                    presencePenalty: presencePenalty.isEmpty ? nil : Float(presencePenalty),
-                    stopSequences: stopSequences.isEmpty ? nil : stopSequences,
-                    thinkingLevel: (providerType == "gemini" && !thinkingLevel.isEmpty) ? thinkingLevel : nil,
-                    mediaResolution: (providerType == "gemini" && !mediaResolution.isEmpty) ? mediaResolution : nil,
-                    repeatPenalty: repeatPenalty.isEmpty ? nil : Float(repeatPenalty)
-                )
+            // Build temporary provider config with actual API key (not keychain reference)
+            // This allows testing without persisting the configuration to disk
+            let testConfig = ProviderConfig(
+                providerType: providerType,
+                apiKey: providerType == "ollama" ? nil : apiKey,  // Use actual API key for testing
+                model: model,
+                baseUrl: baseURL.isEmpty ? nil : baseURL,
+                color: color.toHex(),
+                timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
+                enabled: isProviderActive,
+                maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
+                temperature: temperature.isEmpty ? nil : Float(temperature),
+                topP: topP.isEmpty ? nil : Float(topP),
+                topK: topK.isEmpty ? nil : UInt32(topK),
+                frequencyPenalty: frequencyPenalty.isEmpty ? nil : Float(frequencyPenalty),
+                presencePenalty: presencePenalty.isEmpty ? nil : Float(presencePenalty),
+                stopSequences: stopSequences.isEmpty ? nil : stopSequences,
+                thinkingLevel: (providerType == "gemini" && !thinkingLevel.isEmpty) ? thinkingLevel : nil,
+                mediaResolution: (providerType == "gemini" && !mediaResolution.isEmpty) ? mediaResolution : nil,
+                repeatPenalty: repeatPenalty.isEmpty ? nil : Float(repeatPenalty)
+            )
 
-                // Test connection with temporary config (does not persist to disk)
-                let result = core.testProviderConnectionWithConfig(
-                    providerName: providerName,
-                    providerConfig: testConfig
-                )
+            // Test connection with temporary config (does not persist to disk)
+            let result = core.testProviderConnectionWithConfig(
+                providerName: providerName,
+                providerConfig: testConfig
+            )
 
-                await MainActor.run {
-                    if result.success {
-                        testResult = .success(result.message)
-                    } else {
-                        testResult = .failure(result.message)
-                    }
-                    isTesting = false
+            await MainActor.run {
+                if result.success {
+                    testResult = .success(result.message)
+                } else {
+                    testResult = .failure(result.message)
                 }
-            } catch {
-                await MainActor.run {
-                    testResult = .failure("Unexpected error: \(error.localizedDescription)")
-                    isTesting = false
-                }
+                isTesting = false
             }
         }
     }
