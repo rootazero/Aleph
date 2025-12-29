@@ -191,8 +191,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         print("[Aether] Pre-Core init permission check - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
 
         if !hasAccessibility || !hasInputMonitoring {
-            print("[Aether] ERROR: Permissions not fully granted, cannot initialize Core")
-            print("[Aether] This should not happen - showing permission gate again")
+            print("[Aether] ERROR: Permissions not fully granted, BLOCKING Core initialization")
+            print("[Aether] Missing permissions:")
+            if !hasAccessibility {
+                print("[Aether]   - Accessibility: REQUIRED for global hotkey detection")
+            }
+            if !hasInputMonitoring {
+                print("[Aether]   - Input Monitoring: REQUIRED to prevent rdev crashes")
+            }
+
+            // CRITICAL: DO NOT initialize Core or call start_listening() without permissions
+            // This will cause rdev::listen() to crash the entire application
 
             // Show permission gate again
             DispatchQueue.main.async { [weak self] in
@@ -204,14 +213,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         do {
             // Create AetherCore with event handler
             core = try AetherCore(handler: eventHandler)
-            print("[Aether] AetherCore initialized")
+            print("[Aether] AetherCore initialized successfully")
 
             // Set core reference in event handler for retry functionality
             eventHandler.setCore(core!)
 
-            // Start listening for hotkeys
+            // IMPORTANT: Only start listening if permissions are confirmed
+            // start_listening() will call rdev::listen() which REQUIRES Input Monitoring permission
+            print("[Aether] Starting hotkey listener (this requires Input Monitoring permission)...")
             try core?.startListening()
-            print("[Aether] Hotkey listening started (⌘~)")
+            print("[Aether] ✅ Hotkey listening started successfully (⌘~)")
 
             // Reset retry count on success
             coreInitRetryCount = 0
@@ -220,7 +231,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             updateMenuBarIcon(state: .listening)
 
         } catch {
-            print("[Aether] Error initializing core: \(error)")
+            print("[Aether] ❌ Error initializing core: \(error)")
 
             // Attempt retry with exponential backoff
             if coreInitRetryCount < maxRetryAttempts {

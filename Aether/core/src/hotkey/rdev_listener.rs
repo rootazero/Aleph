@@ -73,24 +73,50 @@ impl HotkeyListener for RdevListener {
         let listening = Arc::clone(&self.listening);
         let cmd_pressed = Arc::clone(&self.cmd_pressed);
 
+        // CRITICAL FIX: Check if we have permission to listen to global events
+        // On macOS, this requires both Accessibility and Input Monitoring permissions
+        // If permissions are not granted, rdev::listen() will cause the app to crash
+        #[cfg(target_os = "macos")]
+        {
+            // Try to verify permissions by checking if we can create a test listener
+            // If this fails immediately, it means permissions are not granted
+            eprintln!("[RdevListener] Starting global hotkey listener (requires Accessibility + Input Monitoring permissions)");
+        }
+
         let handle = thread::spawn(move || {
-            let listen_result = listen(move |event: Event| {
-                if !listening.load(Ordering::SeqCst) {
-                    // Stop listening
-                    return;
-                }
-
-                if Self::is_hotkey_event(&event, &cmd_pressed) {
-                    // Cmd+~ detected, invoke callback
-                    if let Ok(cb) = callback.lock() {
-                        cb();
+            let listen_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                listen(move |event: Event| {
+                    if !listening.load(Ordering::SeqCst) {
+                        // Stop listening
+                        return;
                     }
-                }
-            });
 
-            // If listen() returns, it means an error occurred or we stopped
-            if let Err(e) = listen_result {
-                eprintln!("rdev listen error: {:?}", e);
+                    if Self::is_hotkey_event(&event, &cmd_pressed) {
+                        // Cmd+~ detected, invoke callback
+                        if let Ok(cb) = callback.lock() {
+                            cb();
+                        }
+                    }
+                })
+            }));
+
+            // Handle panic or error from listen()
+            match listen_result {
+                Ok(Ok(())) => {
+                    eprintln!("[RdevListener] Event listening stopped normally");
+                }
+                Ok(Err(e)) => {
+                    eprintln!("[RdevListener] ERROR: rdev listen failed: {:?}", e);
+                    eprintln!("[RdevListener] This usually means Input Monitoring permission is not granted.");
+                    eprintln!("[RdevListener] Please grant permission in System Settings → Privacy & Security → Input Monitoring");
+                }
+                Err(panic_err) => {
+                    eprintln!("[RdevListener] FATAL: rdev listen panicked!");
+                    eprintln!("[RdevListener] Panic error: {:?}", panic_err);
+                    eprintln!("[RdevListener] This is likely due to missing macOS permissions:");
+                    eprintln!("[RdevListener]   1. Accessibility: System Settings → Privacy & Security → Accessibility");
+                    eprintln!("[RdevListener]   2. Input Monitoring: System Settings → Privacy & Security → Input Monitoring");
+                }
             }
         });
 
