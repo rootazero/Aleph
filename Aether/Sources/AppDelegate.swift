@@ -228,11 +228,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     private func checkAccessibilityPermission() {
         if !ContextCapture.hasAccessibilityPermission() {
-            print("[Aether] Accessibility permission not granted, requesting...")
+            print("[Aether] Accessibility permission not granted, showing prompt...")
 
-            // Show alert with button to open System Settings
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                ContextCapture.showPermissionAlert()
+            // Use unified software popup instead of system NSAlert
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.eventHandler?.showPermissionPrompt(type: .accessibility)
             }
         } else {
             print("[Aether] Accessibility permission already granted")

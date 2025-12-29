@@ -347,6 +347,26 @@ class EventHandler: AetherEventHandler {
         accumulatedText = ""
     }
 
+    /// Show permission prompt in Halo window
+    func showPermissionPrompt(type: PermissionType) {
+        print("[EventHandler] Showing permission prompt: \(type)")
+        // Show halo window centered on screen
+        if let screen = NSScreen.main {
+            let screenRect = screen.frame
+            let position = CGPoint(
+                x: screenRect.midX,
+                y: screenRect.midY
+            )
+            haloWindow?.show(at: position)
+        } else {
+            // Fallback to center of primary screen
+            haloWindow?.show(at: CGPoint(x: 960, y: 540))
+        }
+
+        // Set permission required state
+        haloWindow?.setState(.permissionRequired(type: type))
+    }
+
     // MARK: - Hotkey Handling
 
     private func handleHotkeyDetected(clipboardContent: String) {

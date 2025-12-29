@@ -56,6 +56,22 @@ struct HaloView: View {
                     onDismiss: eventHandler?.handleDismiss
                 )
                 .transition(.scale.combined(with: .opacity))
+
+            case .permissionRequired(let permissionType):
+                PermissionPromptView(
+                    permissionType: permissionType,
+                    onOpenSettings: {
+                        // Open System Settings to the appropriate permission pane
+                        if let url = URL(string: permissionType.systemSettingsURL) {
+                            NSWorkspace.shared.open(url)
+                        }
+                    },
+                    onDismiss: {
+                        // Dismiss permission prompt
+                        eventHandler?.handleDismiss()
+                    }
+                )
+                .transition(.scale.combined(with: .opacity))
             }
         }
         .frame(width: dynamicWidth, height: dynamicHeight)
@@ -103,6 +119,8 @@ struct HaloView: View {
                 errorTypeString = "Unknown"
             }
             return "\(errorTypeString) error occurred"
+        case .permissionRequired(let permissionType):
+            return permissionType.title
         }
     }
 
@@ -127,7 +145,7 @@ struct HaloView: View {
             return [.updatesFrequently]
         case .processing, .retrievingMemory, .processingWithAI:
             return [.updatesFrequently]
-        case .error:
+        case .error, .permissionRequired:
             return [.isStaticText]
         default:
             return []
@@ -145,6 +163,8 @@ struct HaloView: View {
             return 200
         case .error:
             return 300
+        case .permissionRequired:
+            return 480  // Wider for permission prompt
         default:
             return 120
         }
@@ -162,6 +182,8 @@ struct HaloView: View {
             return text != nil ? 150 : 120
         case .error:
             return 180
+        case .permissionRequired:
+            return 450  // Taller for permission prompt
         default:
             return 120
         }

@@ -100,7 +100,14 @@ class ContextCapture {
     }
 
     /// Show alert to guide user to grant Accessibility permission
+    /// DEPRECATED: Use EventHandler.showPermissionPrompt instead for unified UI
     static func showPermissionAlert() {
+        // Note: This method is deprecated and kept for backward compatibility
+        // New code should use EventHandler.showPermissionPrompt() for unified software popup
+        print("[ContextCapture] showPermissionAlert() called - consider using EventHandler.showPermissionPrompt()")
+
+        // For now, we'll keep the NSAlert implementation as fallback
+        // but this should be migrated to use EventHandler in the next refactor
         DispatchQueue.main.async {
             let alert = NSAlert()
             alert.messageText = "Accessibility Permission Required"
