@@ -178,12 +178,44 @@
 "settings.behavior.pii_example_credit_card" = "e.g., 1234-5678-9012-3456";
 
 // MARK: - Settings Window - Memory Tab
-"settings.memory.title" = "Memory";
+"settings.memory.title" = "Memory Management";
+"settings.memory.description" = "Aether remembers past interactions to provide context-aware responses. All data is stored locally and never leaves your device.";
 "settings.memory.enabled" = "Enable Memory";
-"settings.memory.retention_days" = "Retention (days)";
-"settings.memory.max_context_items" = "Max Context Items";
-"settings.memory.view_history" = "View History";
-"settings.memory.clear_all" = "Clear All Memories";
+"settings.memory.configuration" = "Configuration";
+"settings.memory.retention_policy" = "Retention Policy:";
+"settings.memory.retention_7days" = "7 days";
+"settings.memory.retention_30days" = "30 days";
+"settings.memory.retention_90days" = "90 days";
+"settings.memory.retention_1year" = "1 year";
+"settings.memory.retention_never" = "Never";
+"settings.memory.retention_help" = "Auto-delete memories older than selected period";
+"settings.memory.max_context_items" = "Max Context Items:";
+"settings.memory.max_context_help" = "Number of past interactions to retrieve";
+"settings.memory.similarity_threshold" = "Similarity Threshold:";
+"settings.memory.similarity_help" = "Minimum similarity score to include memory";
+"settings.memory.statistics" = "Statistics";
+"settings.memory.total_memories" = "Total Memories:";
+"settings.memory.total_apps" = "Total Apps:";
+"settings.memory.database_size" = "Database Size:";
+"settings.memory.date_range" = "Date Range:";
+"settings.memory.loading_stats" = "Loading statistics...";
+"settings.memory.browser" = "Memory Browser";
+"settings.memory.filter" = "Filter:";
+"settings.memory.all_apps" = "All Apps";
+"settings.memory.refresh" = "Refresh";
+"settings.memory.clear_all_button" = "Clear All";
+"settings.memory.loading_memories" = "Loading memories...";
+"settings.memory.no_memories" = "No memories stored yet";
+"settings.memory.no_memories_message" = "Memories will appear here after you use Aether with memory enabled.";
+"settings.memory.delete_memory" = "Delete Memory";
+"settings.memory.delete_memory_message" = "Are you sure you want to delete this memory? This action cannot be undone.";
+"settings.memory.delete_memory_help" = "Delete this memory";
+"settings.memory.clear_all_title" = "Clear All Memories";
+"settings.memory.clear_all_message" = "Are you sure you want to delete ALL memories? This action cannot be undone.";
+"settings.memory.user_prefix" = "User: %@";
+"settings.memory.ai_prefix" = "AI: %@";
+"settings.memory.show_more" = "Show More";
+"settings.memory.show_less" = "Show Less";
 
 // MARK: - Menu Bar
 "menu.settings" = "Settings...";

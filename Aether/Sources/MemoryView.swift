@@ -53,8 +53,8 @@ struct MemoryView: View {
         .onAppear {
             refreshData()
         }
-        .alert("Error", isPresented: .constant(errorMessage != nil)) {
-            Button("OK") {
+        .alert(NSLocalizedString("common.error", comment: ""), isPresented: .constant(errorMessage != nil)) {
+            Button(NSLocalizedString("common.ok", comment: "")) {
                 errorMessage = nil
             }
         } message: {
@@ -62,25 +62,25 @@ struct MemoryView: View {
                 Text(error)
             }
         }
-        .alert("Delete Memory", isPresented: $showDeleteConfirmation) {
-            Button("Cancel", role: .cancel) {
+        .alert(NSLocalizedString("settings.memory.delete_memory", comment: ""), isPresented: $showDeleteConfirmation) {
+            Button(NSLocalizedString("common.cancel", comment: ""), role: .cancel) {
                 memoryToDelete = nil
             }
-            Button("Delete", role: .destructive) {
+            Button(NSLocalizedString("common.delete", comment: ""), role: .destructive) {
                 if let memory = memoryToDelete {
                     deleteMemory(memory)
                 }
             }
         } message: {
-            Text("Are you sure you want to delete this memory? This action cannot be undone.")
+            Text(LocalizedStringKey("settings.memory.delete_memory_message"))
         }
-        .alert("Clear All Memories", isPresented: $showClearAllConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Clear All", role: .destructive) {
+        .alert(NSLocalizedString("settings.memory.clear_all_title", comment: ""), isPresented: $showClearAllConfirmation) {
+            Button(NSLocalizedString("common.cancel", comment: ""), role: .cancel) {}
+            Button(NSLocalizedString("settings.memory.clear_all_button", comment: ""), role: .destructive) {
                 clearAllMemories()
             }
         } message: {
-            Text("Are you sure you want to delete ALL memories? This action cannot be undone.")
+            Text(LocalizedStringKey("settings.memory.clear_all_message"))
         }
     }
 
@@ -88,11 +88,11 @@ struct MemoryView: View {
 
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-            Text("Memory Management")
+            Text(LocalizedStringKey("settings.memory.title"))
                 .font(DesignTokens.Typography.title)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text("Aether remembers past interactions to provide context-aware responses. All data is stored locally and never leaves your device.")
+            Text(LocalizedStringKey("settings.memory.description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
         }
@@ -102,13 +102,13 @@ struct MemoryView: View {
 
     private var configurationCard: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label("Configuration", systemImage: "gearshape.fill")
+            Label(LocalizedStringKey("settings.memory.configuration"), systemImage: "gearshape.fill")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                 // Enable/Disable Toggle
-                Toggle("Enable Memory", isOn: Binding(
+                Toggle(LocalizedStringKey("settings.memory.enabled"), isOn: Binding(
                     get: { memoryConfig.enabled },
                     set: { newValue in
                         memoryConfig.enabled = newValue
@@ -121,7 +121,7 @@ struct MemoryView: View {
                 if memoryConfig.enabled {
                     // Retention Policy
                     HStack {
-                        Text("Retention Policy:")
+                        Text(LocalizedStringKey("settings.memory.retention_policy"))
                             .font(DesignTokens.Typography.body)
                             .frame(width: 150, alignment: .leading)
 
@@ -132,25 +132,25 @@ struct MemoryView: View {
                                 updateConfig()
                             }
                         )) {
-                            Text("7 days").tag(UInt32(7))
-                            Text("30 days").tag(UInt32(30))
-                            Text("90 days").tag(UInt32(90))
-                            Text("1 year").tag(UInt32(365))
-                            Text("Never").tag(UInt32(0))
+                            Text(LocalizedStringKey("settings.memory.retention_7days")).tag(UInt32(7))
+                            Text(LocalizedStringKey("settings.memory.retention_30days")).tag(UInt32(30))
+                            Text(LocalizedStringKey("settings.memory.retention_90days")).tag(UInt32(90))
+                            Text(LocalizedStringKey("settings.memory.retention_1year")).tag(UInt32(365))
+                            Text(LocalizedStringKey("settings.memory.retention_never")).tag(UInt32(0))
                         }
                         .pickerStyle(.menu)
                         .frame(width: 150)
 
                         Spacer()
 
-                        Text("Auto-delete memories older than selected period")
+                        Text(LocalizedStringKey("settings.memory.retention_help"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
 
                     // Max Context Items
                     HStack {
-                        Text("Max Context Items:")
+                        Text(LocalizedStringKey("settings.memory.max_context_items"))
                             .font(DesignTokens.Typography.body)
                             .frame(width: 150, alignment: .leading)
 
@@ -174,14 +174,14 @@ struct MemoryView: View {
 
                         Spacer()
 
-                        Text("Number of past interactions to retrieve")
+                        Text(LocalizedStringKey("settings.memory.max_context_help"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
 
                     // Similarity Threshold
                     HStack {
-                        Text("Similarity Threshold:")
+                        Text(LocalizedStringKey("settings.memory.similarity_threshold"))
                             .font(DesignTokens.Typography.body)
                             .frame(width: 150, alignment: .leading)
 
@@ -205,7 +205,7 @@ struct MemoryView: View {
 
                         Spacer()
 
-                        Text("Minimum similarity score to include memory")
+                        Text(LocalizedStringKey("settings.memory.similarity_help"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
@@ -221,14 +221,14 @@ struct MemoryView: View {
 
     private var statisticsCard: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label("Statistics", systemImage: "chart.bar.fill")
+            Label(LocalizedStringKey("settings.memory.statistics"), systemImage: "chart.bar.fill")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
             if let stats = memoryStats {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                     HStack {
-                        Text("Total Memories:")
+                        Text(LocalizedStringKey("settings.memory.total_memories"))
                             .font(DesignTokens.Typography.body)
                             .frame(width: 150, alignment: .leading)
                         Text("\(stats.totalMemories)")
@@ -238,7 +238,7 @@ struct MemoryView: View {
                     }
 
                     HStack {
-                        Text("Total Apps:")
+                        Text(LocalizedStringKey("settings.memory.total_apps"))
                             .font(DesignTokens.Typography.body)
                             .frame(width: 150, alignment: .leading)
                         Text("\(stats.totalApps)")
@@ -248,7 +248,7 @@ struct MemoryView: View {
                     }
 
                     HStack {
-                        Text("Database Size:")
+                        Text(LocalizedStringKey("settings.memory.database_size"))
                             .font(DesignTokens.Typography.body)
                             .frame(width: 150, alignment: .leading)
                         Text(String(format: "%.2f MB", stats.databaseSizeMb))
@@ -259,7 +259,7 @@ struct MemoryView: View {
 
                     if stats.totalMemories > 0 {
                         HStack {
-                            Text("Date Range:")
+                            Text(LocalizedStringKey("settings.memory.date_range"))
                                 .font(DesignTokens.Typography.body)
                                 .frame(width: 150, alignment: .leading)
                             Text("\(formatTimestamp(stats.oldestMemoryTimestamp)) - \(formatTimestamp(stats.newestMemoryTimestamp))")
@@ -270,7 +270,7 @@ struct MemoryView: View {
                     }
                 }
             } else {
-                Text("Loading statistics...")
+                Text(LocalizedStringKey("settings.memory.loading_stats"))
                     .font(DesignTokens.Typography.body)
                     .foregroundColor(DesignTokens.Colors.textSecondary)
             }
@@ -284,7 +284,7 @@ struct MemoryView: View {
 
     private var memoryBrowserCard: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label("Memory Browser", systemImage: "tray.fill")
+            Label(LocalizedStringKey("settings.memory.browser"), systemImage: "tray.fill")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
@@ -292,8 +292,8 @@ struct MemoryView: View {
                 // Controls
                 HStack(spacing: DesignTokens.Spacing.md) {
                     // Filter by app
-                    Picker("Filter:", selection: $selectedAppFilter) {
-                        Text("All Apps").tag("All Apps")
+                    Picker(LocalizedStringKey("settings.memory.filter"), selection: $selectedAppFilter) {
+                        Text(LocalizedStringKey("settings.memory.all_apps")).tag("All Apps")
                         // TODO: Add dynamic app list from database
                     }
                     .pickerStyle(.menu)
@@ -305,12 +305,12 @@ struct MemoryView: View {
                     Spacer()
 
                     // Refresh button
-                    ActionButton("Refresh", icon: "arrow.clockwise", style: .secondary) {
+                    ActionButton(LocalizedStringKey("settings.memory.refresh"), icon: "arrow.clockwise", style: .secondary) {
                         refreshData()
                     }
 
                     // Clear all button
-                    ActionButton("Clear All", icon: "trash.fill", style: .danger) {
+                    ActionButton(LocalizedStringKey("settings.memory.clear_all_button"), icon: "trash.fill", style: .danger) {
                         showClearAllConfirmation = true
                     }
                 }
@@ -319,7 +319,7 @@ struct MemoryView: View {
                 if isLoading {
                     HStack {
                         Spacer()
-                        ProgressView("Loading memories...")
+                        ProgressView(LocalizedStringKey("settings.memory.loading_memories"))
                         Spacer()
                     }
                     .padding(.vertical, DesignTokens.Spacing.lg)
@@ -328,10 +328,10 @@ struct MemoryView: View {
                         Image(systemName: "tray")
                             .font(.system(size: 48))
                             .foregroundColor(DesignTokens.Colors.textSecondary)
-                        Text("No memories stored yet")
+                        Text(LocalizedStringKey("settings.memory.no_memories"))
                             .font(DesignTokens.Typography.heading)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
-                        Text("Memories will appear here after you use Aether with memory enabled.")
+                        Text(LocalizedStringKey("settings.memory.no_memories_message"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                             .multilineTextAlignment(.center)
@@ -491,17 +491,17 @@ struct MemoryEntryCard: View {
                         .font(DesignTokens.Typography.body)
                 }
                 .buttonStyle(.plain)
-                .help("Delete this memory")
+                .help(LocalizedStringKey("settings.memory.delete_memory_help"))
             }
 
             // Content preview
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                Text("User: \(memory.userInput)")
+                Text(String(format: NSLocalizedString("settings.memory.user_prefix", comment: ""), memory.userInput))
                     .font(DesignTokens.Typography.caption)
                     .lineLimit(isExpanded ? nil : 2)
                     .foregroundColor(DesignTokens.Colors.textPrimary)
 
-                Text("AI: \(memory.aiOutput)")
+                Text(String(format: NSLocalizedString("settings.memory.ai_prefix", comment: ""), memory.aiOutput))
                     .font(DesignTokens.Typography.caption)
                     .lineLimit(isExpanded ? nil : 2)
                     .foregroundColor(DesignTokens.Colors.textSecondary)
@@ -510,7 +510,7 @@ struct MemoryEntryCard: View {
 
             // Expand/Collapse button
             Button(action: { isExpanded.toggle() }) {
-                Text(isExpanded ? "Show Less" : "Show More")
+                Text(isExpanded ? LocalizedStringKey("settings.memory.show_less") : LocalizedStringKey("settings.memory.show_more"))
                     .font(DesignTokens.Typography.caption)
                     .foregroundColor(DesignTokens.Colors.accentBlue)
             }

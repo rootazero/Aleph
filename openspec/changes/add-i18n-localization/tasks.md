@@ -96,10 +96,10 @@
   - **Validation**: ✅ Test behavior UI in Chinese
 
 ### Memory Tab (1 task)
-- [ ] **Task 2.12: Localize Memory tab (if exists) and add Chinese translations**
+- [x] **Task 2.12: Localize Memory tab (if exists) and add Chinese translations**
   - Localize all memory-related strings
   - Add Chinese translations
-  - **Validation**: Test memory settings in both languages
+  - **Validation**: ✅ Test memory settings in both languages
 
 ## Phase 3: System Components Localization (5 tasks)
 

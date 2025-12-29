@@ -177,12 +177,44 @@
 "settings.behavior.pii_example_credit_card" = "例如：1234-5678-9012-3456";
 
 // MARK: - Settings Window - Memory Tab
-"settings.memory.title" = "记忆";
+"settings.memory.title" = "记忆管理";
+"settings.memory.description" = "Aether 会记住过去的交互以提供上下文感知的响应。所有数据都存储在本地，永远不会离开您的设备。";
 "settings.memory.enabled" = "启用记忆";
-"settings.memory.retention_days" = "保留天数";
-"settings.memory.max_context_items" = "最大上下文项";
-"settings.memory.view_history" = "查看历史";
-"settings.memory.clear_all" = "清除所有记忆";
+"settings.memory.configuration" = "配置";
+"settings.memory.retention_policy" = "保留策略：";
+"settings.memory.retention_7days" = "7 天";
+"settings.memory.retention_30days" = "30 天";
+"settings.memory.retention_90days" = "90 天";
+"settings.memory.retention_1year" = "1 年";
+"settings.memory.retention_never" = "永不删除";
+"settings.memory.retention_help" = "自动删除超过所选时间的记忆";
+"settings.memory.max_context_items" = "最大上下文条目数：";
+"settings.memory.max_context_help" = "要检索的过去交互数量";
+"settings.memory.similarity_threshold" = "相似度阈值：";
+"settings.memory.similarity_help" = "包含记忆的最小相似度分数";
+"settings.memory.statistics" = "统计信息";
+"settings.memory.total_memories" = "总记忆数：";
+"settings.memory.total_apps" = "应用总数：";
+"settings.memory.database_size" = "数据库大小：";
+"settings.memory.date_range" = "日期范围：";
+"settings.memory.loading_stats" = "加载统计信息中...";
+"settings.memory.browser" = "记忆浏览器";
+"settings.memory.filter" = "筛选：";
+"settings.memory.all_apps" = "所有应用";
+"settings.memory.refresh" = "刷新";
+"settings.memory.clear_all_button" = "全部清除";
+"settings.memory.loading_memories" = "加载记忆中...";
+"settings.memory.no_memories" = "尚未存储记忆";
+"settings.memory.no_memories_message" = "启用记忆后使用 Aether，记忆将显示在此处。";
+"settings.memory.delete_memory" = "删除记忆";
+"settings.memory.delete_memory_message" = "您确定要删除此记忆吗？此操作无法撤销。";
+"settings.memory.delete_memory_help" = "删除此记忆";
+"settings.memory.clear_all_title" = "清除所有记忆";
+"settings.memory.clear_all_message" = "您确定要删除所有记忆吗？此操作无法撤销。";
+"settings.memory.user_prefix" = "用户：%@";
+"settings.memory.ai_prefix" = "AI：%@";
+"settings.memory.show_more" = "显示更多";
+"settings.memory.show_less" = "显示更少";
 
 // MARK: - Menu Bar
 "menu.settings" = "设置...";
