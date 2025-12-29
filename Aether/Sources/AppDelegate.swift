@@ -48,13 +48,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Set up menu bar
         setupMenuBar()
 
-        // Check all required permissions (Accessibility + Input Monitoring)
-        if !checkAllRequiredPermissions() {
-            // Show mandatory permission gate if any permission is missing
-            showPermissionGate()
-        } else {
-            // All permissions granted, proceed with normal initialization
-            initializeAppComponents()
+        // CRITICAL FIX: Delay permission check to allow macOS to sync permission state
+        // macOS needs time to update permission status after app launch
+        // Without this delay, AXIsProcessTrusted() and IOHIDRequestAccess() may return
+        // cached/stale values, causing false negatives even when permissions are granted
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self = self else { return }
+
+            print("[Aether] Checking permissions after startup delay...")
+
+            // Check all required permissions (Accessibility + Input Monitoring)
+            if !self.checkAllRequiredPermissions() {
+                // Show mandatory permission gate if any permission is missing
+                self.showPermissionGate()
+            } else {
+                print("[Aether] ✅ All permissions granted, proceeding with initialization")
+                // All permissions granted, proceed with normal initialization
+                self.initializeAppComponents()
+            }
         }
     }
 

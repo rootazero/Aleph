@@ -15,10 +15,35 @@ class PermissionChecker {
 
     // MARK: - Accessibility Permission
 
-    /// Check if Accessibility permission is granted
+    /// Check if Accessibility permission is granted with retry mechanism
+    ///
+    /// macOS may return stale cached values immediately after app launch.
+    /// This method retries up to 3 times with 100ms intervals to get accurate status.
+    ///
     /// - Returns: true if permission granted, false otherwise
     static func hasAccessibilityPermission() -> Bool {
-        return AXIsProcessTrusted()
+        // Try multiple times to handle macOS permission cache lag
+        let maxAttempts = 3
+        let retryDelay: UInt32 = 100_000 // 100ms in microseconds
+
+        for attempt in 1...maxAttempts {
+            let result = AXIsProcessTrusted()
+
+            // If permission granted, return immediately
+            if result {
+                if attempt > 1 {
+                    print("[PermissionChecker] Accessibility permission detected on attempt \(attempt)")
+                }
+                return true
+            }
+
+            // If not last attempt, wait before retrying
+            if attempt < maxAttempts {
+                usleep(retryDelay)
+            }
+        }
+
+        return false
     }
 
     /// Request Accessibility permission (shows system prompt if not granted)
@@ -30,20 +55,41 @@ class PermissionChecker {
 
     // MARK: - Input Monitoring Permission
 
-    /// Check if Input Monitoring permission is granted
+    /// Check if Input Monitoring permission is granted with retry mechanism
     ///
     /// This permission is required for global hotkey detection using rdev.
     /// On macOS 10.15+, apps need explicit permission to monitor keyboard and mouse events.
+    ///
+    /// macOS may return stale cached values immediately after app launch.
+    /// This method retries up to 3 times with 100ms intervals to get accurate status.
     ///
     /// - Returns: true if permission granted, false otherwise
     static func hasInputMonitoringPermission() -> Bool {
         // Method 1: Try to use IOHIDRequestAccess (macOS 10.15+)
         // This is the official API for checking Input Monitoring permission
         if #available(macOS 10.15, *) {
-            // IOHIDRequestAccess returns true if permission is granted
-            // We use kIOHIDRequestTypeListenEvent to check for event listening permission
-            let accessGranted = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
-            return accessGranted
+            // Try multiple times to handle macOS permission cache lag
+            let maxAttempts = 3
+            let retryDelay: UInt32 = 100_000 // 100ms in microseconds
+
+            for attempt in 1...maxAttempts {
+                let result = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+
+                // If permission granted, return immediately
+                if result {
+                    if attempt > 1 {
+                        print("[PermissionChecker] Input Monitoring permission detected on attempt \(attempt)")
+                    }
+                    return true
+                }
+
+                // If not last attempt, wait before retrying
+                if attempt < maxAttempts {
+                    usleep(retryDelay)
+                }
+            }
+
+            return false
         }
 
         // Fallback for older macOS versions (should not reach here due to minimum version requirement)

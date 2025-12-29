@@ -279,21 +279,27 @@ struct PermissionGateView: View {
     // MARK: - Permission Monitoring
 
     private func checkInitialPermissions() {
-        hasAccessibility = PermissionChecker.hasAccessibilityPermission()
-        hasInputMonitoring = PermissionChecker.hasInputMonitoringPermission()
+        // CRITICAL FIX: Delay initial permission check to ensure we get accurate values
+        // This prevents false negatives due to macOS permission cache lag at app startup
+        // Without this delay, hasAccessibility/hasInputMonitoring would start as false,
+        // then change to true 1 second later, incorrectly triggering the "just granted" restart logic
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            self.hasAccessibility = PermissionChecker.hasAccessibilityPermission()
+            self.hasInputMonitoring = PermissionChecker.hasInputMonitoringPermission()
 
-        print("[PermissionGateView] Initial permissions - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
+            print("[PermissionGateView] Initial permissions (after delay) - Accessibility: \(self.hasAccessibility), InputMonitoring: \(self.hasInputMonitoring)")
 
-        // If Accessibility is already granted, skip to Input Monitoring step
-        if hasAccessibility && !hasInputMonitoring {
-            currentStep = .inputMonitoring
-        }
+            // If Accessibility is already granted, skip to Input Monitoring step
+            if self.hasAccessibility && !self.hasInputMonitoring {
+                self.currentStep = .inputMonitoring
+            }
 
-        // If both permissions already granted, dismiss gate immediately
-        if hasAccessibility && hasInputMonitoring {
-            print("[PermissionGateView] All permissions already granted, dismissing gate")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                onAllPermissionsGranted()
+            // If both permissions already granted, dismiss gate immediately
+            if self.hasAccessibility && self.hasInputMonitoring {
+                print("[PermissionGateView] All permissions already granted, dismissing gate")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    self.onAllPermissionsGranted()
+                }
             }
         }
     }
