@@ -86,15 +86,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Create menu
         let menu = NSMenu()
 
-        menu.addItem(NSMenuItem(title: "About Aether", action: #selector(showAbout), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(
+            title: NSLocalizedString("menu.about", comment: "About menu item"),
+            action: #selector(showAbout),
+            keyEquivalent: ""
+        ))
         menu.addItem(NSMenuItem.separator())
 
         // Create and store Settings menu item for enable/disable control
-        settingsMenuItem = NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ",")
+        settingsMenuItem = NSMenuItem(
+            title: NSLocalizedString("menu.settings", comment: "Settings menu item"),
+            action: #selector(showSettings),
+            keyEquivalent: ","
+        )
         menu.addItem(settingsMenuItem!)
 
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit Aether", action: #selector(quit), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(
+            title: NSLocalizedString("menu.quit", comment: "Quit menu item"),
+            action: #selector(quit),
+            keyEquivalent: "q"
+        ))
 
         statusItem?.menu = menu
 
@@ -107,7 +119,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         alert.messageText = "Aether"
         alert.informativeText = "AI Middleware for macOS\nVersion 0.1.0 (Phase 2)\n\nBrings AI intelligence to your cursor."
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: NSLocalizedString("common.ok", comment: "OK button"))
         alert.runModal()
     }
 

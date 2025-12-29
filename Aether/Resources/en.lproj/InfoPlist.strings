@@ -1,0 +1,10 @@
+/*
+  InfoPlist.strings (English)
+  Aether
+
+  Localized permission descriptions for macOS system prompts.
+*/
+
+"NSAppleEventsUsageDescription" = "Aether needs to simulate keyboard input to paste AI responses into your applications and monitor global hotkeys for seamless AI integration.";
+"CFBundleName" = "Aether";
+"NSHumanReadableCopyright" = "Copyright © 2025 Aether. All rights reserved.";

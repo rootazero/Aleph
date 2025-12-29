@@ -178,12 +178,12 @@ struct SidebarWithTrafficLights: View {
     /// Navigation items configuration
     private var navigationItems: [NavigationItemConfig] {
         [
-            NavigationItemConfig(tab: .general, iconName: "gear", title: "General"),
-            NavigationItemConfig(tab: .providers, iconName: "brain.head.profile", title: "Providers"),
-            NavigationItemConfig(tab: .routing, iconName: "arrow.triangle.branch", title: "Routing"),
-            NavigationItemConfig(tab: .shortcuts, iconName: "command", title: "Shortcuts"),
-            NavigationItemConfig(tab: .behavior, iconName: "slider.horizontal.3", title: "Behavior"),
-            NavigationItemConfig(tab: .memory, iconName: "brain", title: "Memory")
+            NavigationItemConfig(tab: .general, iconName: "gear", titleKey: "settings.general.title"),
+            NavigationItemConfig(tab: .providers, iconName: "brain.head.profile", titleKey: "settings.providers.title"),
+            NavigationItemConfig(tab: .routing, iconName: "arrow.triangle.branch", titleKey: "settings.routing.title"),
+            NavigationItemConfig(tab: .shortcuts, iconName: "command", titleKey: "settings.shortcuts.title"),
+            NavigationItemConfig(tab: .behavior, iconName: "slider.horizontal.3", titleKey: "settings.behavior.title"),
+            NavigationItemConfig(tab: .memory, iconName: "brain", titleKey: "settings.memory.title")
         ]
     }
 }
@@ -194,7 +194,11 @@ struct SidebarWithTrafficLights: View {
 private struct NavigationItemConfig {
     let tab: SettingsTab
     let iconName: String
-    let title: String
+    let titleKey: String
+
+    var title: LocalizedStringKey {
+        LocalizedStringKey(titleKey)
+    }
 }
 
 // MARK: - Sidebar Navigation Item
@@ -204,7 +208,7 @@ private struct NavigationItemConfig {
 /// Similar to `SidebarItem` but with minimal styling to fit the new design.
 private struct SidebarNavigationItem: View {
     let iconName: String
-    let title: String
+    let title: LocalizedStringKey
     let isSelected: Bool
     let action: () -> Void
 

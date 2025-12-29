@@ -1149,12 +1149,23 @@ func onStateChanged(state: ProcessingState) {
 5. **Memory Safety**: No crashes at FFI boundary
 6. **Smooth Animations**: 60fps Halo transitions
 
-**python environment**:
-- Python path: $HOME/.python3/bin/python
-- Python activation: source $HOME/.python3/bin/activate
-- Install package: cd $HOME/.python3 && uv pip install <package>
-- Project generation: xcodegen generate
-- Syntax validation: $HOME/.python3/bin/python Scripts/verify_swift_syntax.py <file.swift>
+## Skills
+使用skills：~/.claude/skills/build-macos-apps中的macOS开发规范和技能。
+
+## Environment
+- Python path: ~/.python3/bin/python
+- Activate python: source ~/.python3/bin/activate
+- Install package: cd ~/.python3 && uv pip install <package>
+- Xcode generation: xcodegen generate
+- Syntax validation: ~/.python3/bin/python verify_swift_syntax.py <file.swift>
+- This project uses XcodeGen to manage the Xcode project. See docs/XCODEGEN_README.md for detailed workflow instructions. 
+- The script file is in the Scripts folder, and all kinds of document files are in the docs folder.
+
+## git commit
+After completing a task or fixing an issue, use git add and git commit to submit this modification.
+
+## memory prompt
+When the token is low to 10% of the limit, summarize this session at the end of the session to generate a "memory prompt" that can be directly copied and used, so that the next session can be inherited.
 
 ## language
 - Reply language in Chinese

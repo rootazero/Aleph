@@ -1,0 +1,140 @@
+/*
+  Localizable.strings (English)
+  Aether
+
+  English base localization strings for Aether macOS application.
+  All UI text should use these keys via NSLocalizedString() or LocalizedStringKey.
+*/
+
+// MARK: - Common UI Elements
+"common.save" = "Save";
+"common.cancel" = "Cancel";
+"common.ok" = "OK";
+"common.apply" = "Apply";
+"common.reset" = "Reset";
+"common.delete" = "Delete";
+"common.add" = "Add";
+"common.edit" = "Edit";
+"common.test_connection" = "Test Connection";
+"common.close" = "Close";
+"common.done" = "Done";
+
+// MARK: - Settings Window - Sidebar
+"settings.sidebar.title" = "Aether";
+
+// MARK: - Settings Window - General Tab
+"settings.general.title" = "General";
+"settings.general.sound" = "Sound";
+"settings.general.sound_effects" = "Sound Effects";
+"settings.general.updates" = "Updates";
+"settings.general.check_updates" = "Check for Updates";
+"settings.general.logs" = "Logs";
+"settings.general.view_logs" = "View Logs";
+"settings.general.about" = "About";
+"settings.general.version" = "Version:";
+"settings.general.coming_soon" = "Coming Soon";
+"settings.general.coming_soon_message" = "%@ will be available in a future update.";
+
+// MARK: - Settings Window - Providers Tab
+"settings.providers.title" = "Providers";
+"settings.providers.search_placeholder" = "Search providers...";
+"settings.providers.add_custom" = "Add Custom Provider";
+"settings.providers.preset_providers" = "Preset Providers";
+"settings.providers.configured_providers" = "Configured Providers";
+"settings.providers.no_results" = "No providers found";
+
+// MARK: - Provider Configuration
+"provider.field.active" = "Active";
+"provider.field.provider_name" = "Provider Name";
+"provider.field.theme_color" = "Theme Color";
+"provider.field.api_key" = "API Key";
+"provider.field.model" = "Model";
+"provider.field.base_url" = "Base URL";
+"provider.field.temperature" = "Temperature";
+"provider.field.max_tokens" = "Max Tokens";
+"provider.field.top_p" = "Top P";
+"provider.field.top_k" = "Top K";
+"provider.field.timeout" = "Timeout (seconds)";
+
+"provider.placeholder.provider_name" = "e.g., My Custom Provider";
+"provider.placeholder.api_key" = "Enter your API key";
+"provider.placeholder.model" = "e.g., gpt-4o";
+"provider.placeholder.base_url" = "e.g., https://api.openai.com/v1";
+
+"provider.help.base_url" = "Optional custom API endpoint";
+"provider.help.temperature" = "Controls randomness (0-2)";
+"provider.help.max_tokens" = "Maximum response length";
+"provider.help.top_p" = "Nucleus sampling (0-1)";
+"provider.help.top_k" = "Top-k sampling";
+"provider.help.timeout" = "Request timeout in seconds";
+
+"provider.section.basic_settings" = "Basic Settings";
+"provider.section.generation_params" = "Generation Parameters";
+"provider.section.advanced_settings" = "Advanced Settings";
+
+// MARK: - Settings Window - Routing Tab
+"settings.routing.title" = "Routing";
+"settings.routing.add_rule" = "Add Rule";
+"settings.routing.edit_rule" = "Edit Rule";
+"settings.routing.delete_rule" = "Delete Rule";
+"settings.routing.no_rules" = "No routing rules configured";
+
+// MARK: - Settings Window - Shortcuts Tab
+"settings.shortcuts.title" = "Shortcuts";
+"settings.shortcuts.global_hotkey" = "Global Hotkey";
+"settings.shortcuts.cancel_hotkey" = "Cancel Hotkey";
+"settings.shortcuts.record_instruction" = "Press any key combination to record...";
+"settings.shortcuts.press_escape" = "Press Escape to cancel";
+
+// MARK: - Settings Window - Behavior Tab
+"settings.behavior.title" = "Behavior";
+"settings.behavior.input_mode" = "Input Mode";
+"settings.behavior.output_mode" = "Output Mode";
+"settings.behavior.typing_speed" = "Typing Speed";
+"settings.behavior.pii_scrubbing" = "PII Scrubbing";
+"settings.behavior.input_mode_cut" = "Cut (Cmd+X)";
+"settings.behavior.input_mode_copy" = "Copy (Cmd+C)";
+"settings.behavior.output_mode_typewriter" = "Typewriter Effect";
+"settings.behavior.output_mode_instant" = "Instant Paste";
+
+// MARK: - Settings Window - Memory Tab
+"settings.memory.title" = "Memory";
+"settings.memory.enabled" = "Enable Memory";
+"settings.memory.retention_days" = "Retention (days)";
+"settings.memory.max_context_items" = "Max Context Items";
+"settings.memory.view_history" = "View History";
+"settings.memory.clear_all" = "Clear All Memories";
+
+// MARK: - Menu Bar
+"menu.settings" = "Settings...";
+"menu.quit" = "Quit Aether";
+"menu.about" = "About Aether";
+
+// MARK: - Permissions
+"permission.accessibility.title" = "Accessibility Permission Required";
+"permission.accessibility.description" = "Aether needs Accessibility permission to detect global hotkeys and simulate keyboard input.";
+"permission.input_monitoring.title" = "Input Monitoring Permission Required";
+"permission.input_monitoring.description" = "Aether needs Input Monitoring permission to capture keyboard events.";
+"permission.open_settings" = "Open System Settings";
+"permission.grant_instruction" = "Please grant permission in System Settings and return to this app.";
+
+// MARK: - Error Messages
+"error.provider.invalid_api_key" = "Invalid API key. Please check your credentials.";
+"error.provider.connection_failed" = "Connection failed. Please check your network and API endpoint.";
+"error.provider.timeout" = "Request timed out. Please try again.";
+"error.routing.invalid_regex" = "Invalid regex pattern.";
+"error.permission.accessibility_denied" = "Accessibility permission denied.";
+"error.permission.input_monitoring_denied" = "Input Monitoring permission denied.";
+"error.general.unknown" = "An unknown error occurred.";
+
+// MARK: - Alerts
+"alert.confirm_delete" = "Are you sure you want to delete this item?";
+"alert.confirm_reset" = "This will reset all settings to defaults. Continue?";
+"alert.unsaved_changes" = "You have unsaved changes. Do you want to save them?";
+
+// MARK: - Halo Overlay
+"halo.state.idle" = "Idle";
+"halo.state.listening" = "Listening...";
+"halo.state.processing" = "Processing...";
+"halo.state.success" = "Success";
+"halo.state.error" = "Error";

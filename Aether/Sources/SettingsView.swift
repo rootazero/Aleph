@@ -45,31 +45,31 @@ struct GeneralSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Form {
-                    Section(header: Text("Sound")) {
-                        Toggle("Sound Effects", isOn: $soundEnabled)
+                    Section(header: Text("settings.general.sound")) {
+                        Toggle("settings.general.sound_effects", isOn: $soundEnabled)
                             .onChange(of: soundEnabled) { _, newValue in
-                                showComingSoonAlert(feature: "Sound effects")
+                                showComingSoonAlert(feature: NSLocalizedString("settings.general.sound_effects", comment: "Sound effects feature"))
                             }
                     }
 
-                    Section(header: Text("Updates")) {
-                        Button("Check for Updates") {
+                    Section(header: Text("settings.general.updates")) {
+                        Button("settings.general.check_updates") {
                             checkForUpdates()
                         }
                         .help("Check for Aether updates")
                     }
 
-                    Section(header: Text("Logs")) {
-                        Button("View Logs") {
+                    Section(header: Text("settings.general.logs")) {
+                        Button("settings.general.view_logs") {
                             showingLogViewer = true
                         }
                         .help("View application logs")
                         .disabled(core == nil)
                     }
 
-                    Section(header: Text("About")) {
+                    Section(header: Text("settings.general.about")) {
                         HStack {
-                            Text("Version:")
+                            Text("settings.general.version")
                             Spacer()
                             Text(appVersion)
                                 .foregroundColor(.secondary)
@@ -91,16 +91,19 @@ struct GeneralSettingsView: View {
 
     private func showComingSoonAlert(feature: String) {
         let alert = NSAlert()
-        alert.messageText = "Coming Soon"
-        alert.informativeText = "\(feature) will be available in a future update."
+        alert.messageText = NSLocalizedString("settings.general.coming_soon", comment: "Coming soon alert title")
+        alert.informativeText = String.localizedStringWithFormat(
+            NSLocalizedString("settings.general.coming_soon_message", comment: "Coming soon message"),
+            feature
+        )
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: NSLocalizedString("common.ok", comment: "OK button"))
         alert.runModal()
     }
 
     private func checkForUpdates() {
         let alert = NSAlert()
-        alert.messageText = "Check for Updates"
+        alert.messageText = NSLocalizedString("settings.general.check_updates", comment: "Check updates alert title")
         alert.informativeText = """
         Current Version: \(appVersion)
 
@@ -110,7 +113,7 @@ struct GeneralSettingsView: View {
         Automatic updates will be available in a future release.
         """
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: NSLocalizedString("common.ok", comment: "OK button"))
         alert.addButton(withTitle: "Visit GitHub")
 
         let response = alert.runModal()

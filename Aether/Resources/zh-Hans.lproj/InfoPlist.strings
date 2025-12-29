@@ -1,0 +1,10 @@
+/*
+  InfoPlist.strings (Simplified Chinese)
+  Aether
+
+  简体中文权限描述
+*/
+
+"NSAppleEventsUsageDescription" = "Aether 需要模拟键盘输入以将 AI 响应粘贴到您的应用程序中，并监控全局快捷键以实现无缝的 AI 集成。";
+"CFBundleName" = "Aether";
+"NSHumanReadableCopyright" = "版权所有 © 2025 Aether。保留所有权利。";

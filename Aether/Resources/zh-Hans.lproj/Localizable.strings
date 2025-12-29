@@ -1,0 +1,139 @@
+/*
+  Localizable.strings (Simplified Chinese)
+  Aether
+
+  简体中文本地化字符串
+*/
+
+// MARK: - Common UI Elements
+"common.save" = "保存";
+"common.cancel" = "取消";
+"common.ok" = "确定";
+"common.apply" = "应用";
+"common.reset" = "重置";
+"common.delete" = "删除";
+"common.add" = "添加";
+"common.edit" = "编辑";
+"common.test_connection" = "测试连接";
+"common.close" = "关闭";
+"common.done" = "完成";
+
+// MARK: - Settings Window - Sidebar
+"settings.sidebar.title" = "Aether";
+
+// MARK: - Settings Window - General Tab
+"settings.general.title" = "通用";
+"settings.general.sound" = "声音";
+"settings.general.sound_effects" = "声音效果";
+"settings.general.updates" = "更新";
+"settings.general.check_updates" = "检查更新";
+"settings.general.logs" = "日志";
+"settings.general.view_logs" = "查看日志";
+"settings.general.about" = "关于";
+"settings.general.version" = "版本：";
+"settings.general.coming_soon" = "即将推出";
+"settings.general.coming_soon_message" = "%@ 将在未来的更新中提供。";
+
+// MARK: - Settings Window - Providers Tab
+"settings.providers.title" = "提供商";
+"settings.providers.search_placeholder" = "搜索提供商...";
+"settings.providers.add_custom" = "添加自定义提供商";
+"settings.providers.preset_providers" = "预设提供商";
+"settings.providers.configured_providers" = "已配置提供商";
+"settings.providers.no_results" = "未找到提供商";
+
+// MARK: - Provider Configuration
+"provider.field.active" = "启用";
+"provider.field.provider_name" = "提供商名称";
+"provider.field.theme_color" = "主题颜色";
+"provider.field.api_key" = "API 密钥";
+"provider.field.model" = "模型";
+"provider.field.base_url" = "基础 URL";
+"provider.field.temperature" = "温度";
+"provider.field.max_tokens" = "最大令牌数";
+"provider.field.top_p" = "Top P";
+"provider.field.top_k" = "Top K";
+"provider.field.timeout" = "超时（秒）";
+
+"provider.placeholder.provider_name" = "例如：我的自定义提供商";
+"provider.placeholder.api_key" = "输入您的 API 密钥";
+"provider.placeholder.model" = "例如：gpt-4o";
+"provider.placeholder.base_url" = "例如：https://api.openai.com/v1";
+
+"provider.help.base_url" = "可选的自定义 API 端点";
+"provider.help.temperature" = "控制随机性（0-2）";
+"provider.help.max_tokens" = "最大响应长度";
+"provider.help.top_p" = "核采样（0-1）";
+"provider.help.top_k" = "Top-k 采样";
+"provider.help.timeout" = "请求超时时间（秒）";
+
+"provider.section.basic_settings" = "基础设置";
+"provider.section.generation_params" = "生成参数";
+"provider.section.advanced_settings" = "高级设置";
+
+// MARK: - Settings Window - Routing Tab
+"settings.routing.title" = "路由";
+"settings.routing.add_rule" = "添加规则";
+"settings.routing.edit_rule" = "编辑规则";
+"settings.routing.delete_rule" = "删除规则";
+"settings.routing.no_rules" = "未配置路由规则";
+
+// MARK: - Settings Window - Shortcuts Tab
+"settings.shortcuts.title" = "快捷键";
+"settings.shortcuts.global_hotkey" = "全局快捷键";
+"settings.shortcuts.cancel_hotkey" = "取消快捷键";
+"settings.shortcuts.record_instruction" = "按任意组合键进行录制...";
+"settings.shortcuts.press_escape" = "按 Escape 键取消";
+
+// MARK: - Settings Window - Behavior Tab
+"settings.behavior.title" = "行为";
+"settings.behavior.input_mode" = "输入模式";
+"settings.behavior.output_mode" = "输出模式";
+"settings.behavior.typing_speed" = "打字速度";
+"settings.behavior.pii_scrubbing" = "PII 清理";
+"settings.behavior.input_mode_cut" = "剪切（Cmd+X）";
+"settings.behavior.input_mode_copy" = "复制（Cmd+C）";
+"settings.behavior.output_mode_typewriter" = "打字机效果";
+"settings.behavior.output_mode_instant" = "即时粘贴";
+
+// MARK: - Settings Window - Memory Tab
+"settings.memory.title" = "记忆";
+"settings.memory.enabled" = "启用记忆";
+"settings.memory.retention_days" = "保留天数";
+"settings.memory.max_context_items" = "最大上下文项";
+"settings.memory.view_history" = "查看历史";
+"settings.memory.clear_all" = "清除所有记忆";
+
+// MARK: - Menu Bar
+"menu.settings" = "设置...";
+"menu.quit" = "退出 Aether";
+"menu.about" = "关于 Aether";
+
+// MARK: - Permissions
+"permission.accessibility.title" = "需要辅助功能权限";
+"permission.accessibility.description" = "Aether 需要辅助功能权限来检测全局快捷键并模拟键盘输入。";
+"permission.input_monitoring.title" = "需要输入监控权限";
+"permission.input_monitoring.description" = "Aether 需要输入监控权限来捕获键盘事件。";
+"permission.open_settings" = "打开系统设置";
+"permission.grant_instruction" = "请在系统设置中授予权限，然后返回此应用。";
+
+// MARK: - Error Messages
+"error.provider.invalid_api_key" = "无效的 API 密钥。请检查您的凭据。";
+"error.provider.connection_failed" = "连接失败。请检查您的网络和 API 端点。";
+"error.provider.timeout" = "请求超时。请重试。";
+"error.routing.invalid_regex" = "无效的正则表达式。";
+"error.permission.accessibility_denied" = "辅助功能权限被拒绝。";
+"error.permission.input_monitoring_denied" = "输入监控权限被拒绝。";
+"error.general.unknown" = "发生未知错误。";
+
+// MARK: - Alerts
+"alert.confirm_delete" = "您确定要删除此项吗？";
+"alert.confirm_reset" = "这将把所有设置重置为默认值。是否继续？";
+"alert.unsaved_changes" = "您有未保存的更改。是否要保存它们？";
+
+// MARK: - Halo Overlay
+"halo.state.idle" = "空闲";
+"halo.state.listening" = "监听中...";
+"halo.state.processing" = "处理中...";
+"halo.state.success" = "成功";
+"halo.state.error" = "错误";
