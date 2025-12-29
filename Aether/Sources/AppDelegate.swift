@@ -101,13 +101,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     @objc private func showSettings() {
-        // Use URL scheme to open settings window (works even after window is closed)
-        if let url = URL(string: "aether://settings") {
-            NSWorkspace.shared.open(url)
+        // Find existing settings window or activate app to show WindowGroup
+        let settingsWindows = NSApp.windows.filter { window in
+            // Look for windows without title (WindowGroup) or with Settings in title
+            window.title.isEmpty || window.title.contains("Settings") || window.title.contains("Aether")
         }
 
-        // Activate app to bring window to front
-        NSApp.activate(ignoringOtherApps: true)
+        if let window = settingsWindows.first {
+            // Window exists, bring to front
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            // No window found, activate app to trigger WindowGroup creation
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     @objc private func quit() {
