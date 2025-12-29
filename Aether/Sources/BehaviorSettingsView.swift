@@ -24,23 +24,23 @@ struct BehaviorSettingsView: View {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
                 // Header
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                    Text("Behavior Settings")
+                    Text(LocalizedStringKey("settings.behavior.title"))
                         .font(DesignTokens.Typography.title)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
 
-                    Text("Configure how Aether captures input and delivers output.")
+                    Text(LocalizedStringKey("settings.behavior.description"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
 
                 // Input Mode Card
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                    Label("Input Mode", systemImage: "arrow.down.doc")
+                    Label(LocalizedStringKey("settings.behavior.input_mode"), systemImage: "arrow.down.doc")
                         .font(DesignTokens.Typography.heading)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
 
                     VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                        Text("How should Aether capture your selected text?")
+                        Text(LocalizedStringKey("settings.behavior.input_mode_description"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
 
@@ -72,12 +72,12 @@ struct BehaviorSettingsView: View {
 
                 // Output Mode Card
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                    Label("Output Mode", systemImage: "arrow.up.doc")
+                    Label(LocalizedStringKey("settings.behavior.output_mode"), systemImage: "arrow.up.doc")
                         .font(DesignTokens.Typography.heading)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
 
                     VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                        Text("How should Aether deliver AI responses?")
+                        Text(LocalizedStringKey("settings.behavior.output_mode_description"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
 
@@ -110,13 +110,13 @@ struct BehaviorSettingsView: View {
                 // Typing Speed Card (only shown when typewriter mode is selected)
                 if outputMode == .typewriter {
                     VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                        Label("Typing Speed", systemImage: "speedometer")
+                        Label(LocalizedStringKey("settings.behavior.typing_speed"), systemImage: "speedometer")
                             .font(DesignTokens.Typography.heading)
                             .foregroundColor(DesignTokens.Colors.textPrimary)
 
                         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                             HStack {
-                                Text("Speed:")
+                                Text(LocalizedStringKey("settings.behavior.typing_speed_label"))
                                     .font(DesignTokens.Typography.body)
                                     .frame(width: 80, alignment: .leading)
 
@@ -130,7 +130,7 @@ struct BehaviorSettingsView: View {
 
                             // Speed indicator bar
                             HStack(spacing: DesignTokens.Spacing.xs) {
-                                Text("Slow")
+                                Text(LocalizedStringKey("settings.behavior.speed_slow"))
                                     .font(DesignTokens.Typography.caption)
                                     .foregroundColor(DesignTokens.Colors.textSecondary)
 
@@ -149,13 +149,13 @@ struct BehaviorSettingsView: View {
                                 }
                                 .frame(height: 4)
 
-                                Text("Fast")
+                                Text(LocalizedStringKey("settings.behavior.speed_fast"))
                                     .font(DesignTokens.Typography.caption)
                                     .foregroundColor(DesignTokens.Colors.textSecondary)
                             }
 
                             // Preview button
-                            ActionButton("Preview Typing Effect", icon: "play.circle", style: .secondary) {
+                            ActionButton(LocalizedStringKey("settings.behavior.preview_button"), icon: "play.circle", style: .secondary) {
                                 showingPreview = true
                             }
                         }
@@ -167,23 +167,23 @@ struct BehaviorSettingsView: View {
 
                 // PII Scrubbing Card
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                    Label("Privacy & Security", systemImage: "lock.shield")
+                    Label(LocalizedStringKey("settings.behavior.pii_scrubbing"), systemImage: "lock.shield")
                         .font(DesignTokens.Typography.heading)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
 
                     VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                        Toggle("Enable PII Scrubbing", isOn: $piiScrubbingEnabled)
+                        Toggle(LocalizedStringKey("settings.behavior.pii_scrubbing_enable"), isOn: $piiScrubbingEnabled)
                             .toggleStyle(.switch)
                             .font(DesignTokens.Typography.body)
 
-                        Text("Automatically remove personally identifiable information (PII) before sending to AI providers.")
+                        Text(LocalizedStringKey("settings.behavior.pii_scrubbing_description"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
 
                         if piiScrubbingEnabled {
                             Divider()
 
-                            Text("Select types of PII to scrub:")
+                            Text(LocalizedStringKey("settings.behavior.pii_types_label"))
                                 .font(DesignTokens.Typography.caption)
                                 .fontWeight(.semibold)
                                 .foregroundColor(DesignTokens.Colors.textSecondary)
@@ -229,7 +229,7 @@ struct BehaviorSettingsView: View {
                 if showingSaveConfirmation {
                     HStack {
                         Spacer()
-                        Label("Settings saved successfully!", systemImage: "checkmark.circle.fill")
+                        Label(LocalizedStringKey("settings.behavior.save_confirmation"), systemImage: "checkmark.circle.fill")
                             .foregroundColor(DesignTokens.Colors.providerActive)
                             .font(DesignTokens.Typography.body)
                         Spacer()
@@ -350,8 +350,8 @@ enum InputMode: String, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .cut: return "Cut"
-        case .copy: return "Copy"
+        case .cut: return NSLocalizedString("settings.behavior.input_mode_cut", comment: "")
+        case .copy: return NSLocalizedString("settings.behavior.input_mode_copy", comment: "")
         }
     }
 
@@ -365,9 +365,9 @@ enum InputMode: String, CaseIterable {
     var description: String {
         switch self {
         case .cut:
-            return "Text disappears (⌘X), providing physical feedback. Original content is removed."
+            return NSLocalizedString("settings.behavior.input_mode_cut_description", comment: "")
         case .copy:
-            return "Text remains visible (⌘C). Original content is preserved."
+            return NSLocalizedString("settings.behavior.input_mode_copy_description", comment: "")
         }
     }
 
@@ -384,8 +384,8 @@ enum OutputMode: String, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .typewriter: return "Typewriter"
-        case .instant: return "Instant"
+        case .typewriter: return NSLocalizedString("settings.behavior.output_mode_typewriter", comment: "")
+        case .instant: return NSLocalizedString("settings.behavior.output_mode_instant", comment: "")
         }
     }
 
@@ -399,9 +399,9 @@ enum OutputMode: String, CaseIterable {
     var description: String {
         switch self {
         case .typewriter:
-            return "AI response is typed character-by-character at configurable speed (cinematic effect)."
+            return NSLocalizedString("settings.behavior.output_mode_typewriter_description", comment: "")
         case .instant:
-            return "AI response is pasted immediately (⌘V). Fastest delivery."
+            return NSLocalizedString("settings.behavior.output_mode_instant_description", comment: "")
         }
     }
 
@@ -420,10 +420,10 @@ enum PIIType: String, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .email: return "Email Addresses"
-        case .phone: return "Phone Numbers"
-        case .ssn: return "Social Security Numbers"
-        case .creditCard: return "Credit Card Numbers"
+        case .email: return NSLocalizedString("settings.behavior.pii_type_email", comment: "")
+        case .phone: return NSLocalizedString("settings.behavior.pii_type_phone", comment: "")
+        case .ssn: return NSLocalizedString("settings.behavior.pii_type_ssn", comment: "")
+        case .creditCard: return NSLocalizedString("settings.behavior.pii_type_credit_card", comment: "")
         }
     }
 
@@ -438,10 +438,10 @@ enum PIIType: String, CaseIterable {
 
     var example: String {
         switch self {
-        case .email: return "e.g., user@example.com"
-        case .phone: return "e.g., (555) 123-4567"
-        case .ssn: return "e.g., 123-45-6789"
-        case .creditCard: return "e.g., 1234-5678-9012-3456"
+        case .email: return NSLocalizedString("settings.behavior.pii_example_email", comment: "")
+        case .phone: return NSLocalizedString("settings.behavior.pii_example_phone", comment: "")
+        case .ssn: return NSLocalizedString("settings.behavior.pii_example_ssn", comment: "")
+        case .creditCard: return NSLocalizedString("settings.behavior.pii_example_credit_card", comment: "")
         }
     }
 }

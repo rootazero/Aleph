@@ -164,13 +164,13 @@ struct ProviderEditPanel: View {
                             .imageScale(.large)
                     }
                     .buttonStyle(.plain)
-                    .alert("Delete Provider", isPresented: $showDeleteConfirmation) {
-                        Button("Cancel", role: .cancel) {}
-                        Button("Delete", role: .destructive) {
+                    .alert(NSLocalizedString("provider.delete.title", comment: ""), isPresented: $showDeleteConfirmation) {
+                        Button(NSLocalizedString("common.cancel", comment: ""), role: .cancel) {}
+                        Button(NSLocalizedString("common.delete", comment: ""), role: .destructive) {
                             deleteCurrentProvider()
                         }
                     } message: {
-                        Text("Are you sure you want to delete \"\(provider.name)\"? This will also remove the API key from Keychain.")
+                        Text(String(format: NSLocalizedString("provider.delete.message", comment: ""), provider.name))
                     }
                 }
             }
@@ -201,7 +201,7 @@ struct ProviderEditPanel: View {
                                     .font(DesignTokens.Typography.title)
                                     .foregroundColor(DesignTokens.Colors.textPrimary)
                             } else {
-                                Text("Custom Provider")
+                                Text(LocalizedStringKey("provider.custom_provider"))
                                     .font(DesignTokens.Typography.title)
                                     .foregroundColor(DesignTokens.Colors.textSecondary)
                             }
@@ -222,12 +222,12 @@ struct ProviderEditPanel: View {
                     // Description - custom or preset
                     if isCustomProvider {
                         if !baseURL.isEmpty {
-                            Text("OpenAI-compatible API: \(baseURL)")
+                            Text(String(format: NSLocalizedString("provider.custom_api_endpoint", comment: ""), baseURL))
                                 .font(DesignTokens.Typography.caption)
                                 .foregroundColor(DesignTokens.Colors.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         } else {
-                            Text("Custom OpenAI-compatible provider")
+                            Text(LocalizedStringKey("provider.custom_compatible"))
                                 .font(DesignTokens.Typography.caption)
                                 .foregroundColor(DesignTokens.Colors.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -247,10 +247,10 @@ struct ProviderEditPanel: View {
             // Form fields
             // Provider Name (only for custom providers)
             if isCustomProvider {
-                FormField(title: "Provider Name") {
-                    TextField("Enter a unique identifier", text: $providerName)
+                FormField(title: LocalizedStringKey("provider.field.provider_name")) {
+                    TextField(LocalizedStringKey("provider.placeholder.provider_name"), text: $providerName)
                         .textFieldStyle(.roundedBorder)
-                    Text("This name is used to reference the provider in routing rules")
+                    Text(LocalizedStringKey("provider.help.provider_name"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
@@ -258,7 +258,7 @@ struct ProviderEditPanel: View {
 
             // Theme Color (only for custom providers)
             if isCustomProvider {
-                FormField(title: "Theme Color") {
+                FormField(title: LocalizedStringKey("provider.field.theme_color")) {
                     HStack(spacing: DesignTokens.Spacing.sm) {
                         ColorPicker("", selection: $color, supportsOpacity: false)
                             .labelsHidden()
@@ -267,7 +267,7 @@ struct ProviderEditPanel: View {
                             .fill(color)
                             .frame(width: 32, height: 32)
 
-                        Text("Used in Halo overlay")
+                        Text(LocalizedStringKey("provider.help.theme_color"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
@@ -279,51 +279,51 @@ struct ProviderEditPanel: View {
 
             // API Key (not required for Ollama)
             if providerType != "ollama" {
-                FormField(title: "API Key") {
-                    SecureField("Enter your API key", text: $apiKey)
+                FormField(title: LocalizedStringKey("provider.field.api_key")) {
+                    SecureField(LocalizedStringKey("provider.placeholder.api_key"), text: $apiKey)
                         .textFieldStyle(.roundedBorder)
                         .onChange(of: apiKey) {
                             testResult = nil // Clear test result when API key changes
                         }
-                    Text("Stored securely in macOS Keychain")
+                    Text(LocalizedStringKey("provider.help.api_key"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
             }
 
-            FormField(title: "Model") {
-                TextField("e.g., gpt-4o, claude-3-5-sonnet-20241022", text: $model)
+            FormField(title: LocalizedStringKey("provider.field.model")) {
+                TextField(LocalizedStringKey("provider.placeholder.model"), text: $model)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: model) {
                         testResult = nil // Clear test result when model changes
                     }
             }
 
-            FormField(title: isCustomProvider ? "Base URL" : "Base URL (Optional)") {
-                TextField(isCustomProvider ? "https://api.example.com/v1" : "Leave empty for official API", text: $baseURL)
+            FormField(title: isCustomProvider ? LocalizedStringKey("provider.field.base_url") : LocalizedStringKey("provider.field.base_url_optional")) {
+                TextField(isCustomProvider ? LocalizedStringKey("provider.placeholder.base_url_custom") : LocalizedStringKey("provider.placeholder.base_url_official"), text: $baseURL)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: baseURL) {
                         testResult = nil // Clear test result when base URL changes
                     }
-                Text(isCustomProvider ? "OpenAI-compatible API endpoint" : "For custom OpenAI-compatible endpoints")
+                Text(isCustomProvider ? LocalizedStringKey("provider.help.base_url_custom") : LocalizedStringKey("provider.help.base_url_official"))
                     .font(DesignTokens.Typography.caption)
                     .foregroundColor(DesignTokens.Colors.textSecondary)
             }
 
             // Generation Parameters (collapsible)
-            DisclosureGroup("Generation Parameters", isExpanded: $isAdvancedExpanded) {
+            DisclosureGroup(LocalizedStringKey("provider.section.generation_params"), isExpanded: $isAdvancedExpanded) {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                     // Common parameters (all providers)
-                    FormField(title: "Max Tokens (Optional)") {
+                    FormField(title: LocalizedStringKey("provider.field.max_tokens_optional")) {
                         TextField(getMaxTokensPlaceholder(), text: $maxTokens)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 150)
-                        Text("Maximum length of generated response")
+                        Text(LocalizedStringKey("provider.help.max_tokens"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
 
-                    FormField(title: "Temperature (Optional)") {
+                    FormField(title: LocalizedStringKey("provider.field.temperature_optional")) {
                         TextField(getTemperaturePlaceholder(), text: $temperature)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 150)
@@ -333,22 +333,22 @@ struct ProviderEditPanel: View {
                     }
 
                     // Top-P (all providers except Ollama uses it optionally)
-                    FormField(title: "Top-P (Optional)") {
-                        TextField("0.0-1.0, leave empty for default", text: $topP)
+                    FormField(title: LocalizedStringKey("provider.field.top_p_optional")) {
+                        TextField(LocalizedStringKey("provider.placeholder.top_p"), text: $topP)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 150)
-                        Text("Nucleus sampling threshold (higher = more diverse)")
+                        Text(LocalizedStringKey("provider.help.top_p"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
 
                     // Top-K (Claude, Gemini, Ollama)
                     if providerType == "claude" || providerType == "gemini" || providerType == "ollama" {
-                        FormField(title: "Top-K (Optional)") {
-                            TextField(providerType == "ollama" ? "e.g., 40" : "Leave empty for default", text: $topK)
+                        FormField(title: LocalizedStringKey("provider.field.top_k_optional")) {
+                            TextField(providerType == "ollama" ? LocalizedStringKey("provider.placeholder.top_k_ollama") : LocalizedStringKey("provider.placeholder.top_k_default"), text: $topK)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 150)
-                            Text("Consider only top K tokens (integer > 0)")
+                            Text(LocalizedStringKey("provider.help.top_k"))
                                 .font(DesignTokens.Typography.caption)
                                 .foregroundColor(DesignTokens.Colors.textSecondary)
                         }
@@ -469,7 +469,7 @@ struct ProviderEditPanel: View {
                 // Left side: Test Connection button with inline result
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                     ActionButton(
-                        isTesting ? "Testing..." : "Test Connection",
+                        isTesting ? LocalizedStringKey("provider.button.testing") : LocalizedStringKey("common.test_connection"),
                         icon: "network",
                         style: .secondary,
                         action: testConnection
@@ -486,7 +486,7 @@ struct ProviderEditPanel: View {
 
                 // Right side: Save button only
                 ActionButton(
-                    isSaving ? "Saving..." : "Save",
+                    isSaving ? LocalizedStringKey("provider.button.saving") : LocalizedStringKey("common.save"),
                     icon: "checkmark",
                     style: .primary,
                     action: saveProvider
@@ -508,11 +508,11 @@ struct ProviderEditPanel: View {
                 .font(.system(size: 60))
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
-            Text("No Provider Selected")
+            Text(LocalizedStringKey("provider.empty_state.title"))
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text("Select a provider from the list or add a new one")
+            Text(LocalizedStringKey("provider.empty_state.message"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
         }

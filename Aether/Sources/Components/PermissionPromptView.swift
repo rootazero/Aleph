@@ -16,18 +16,18 @@ enum PermissionType {
     var title: String {
         switch self {
         case .accessibility:
-            return "需要辅助功能权限"
+            return NSLocalizedString("permission.accessibility.title", comment: "")
         case .inputMonitoring:
-            return "需要输入监控权限"
+            return NSLocalizedString("permission.input_monitoring.title", comment: "")
         }
     }
 
     var message: String {
         switch self {
         case .accessibility:
-            return "Aether 需要辅助功能权限来监听全局热键和捕获窗口上下文。"
+            return NSLocalizedString("permission.accessibility.description", comment: "")
         case .inputMonitoring:
-            return "Aether 需要输入监控权限来监听键盘事件。"
+            return NSLocalizedString("permission.input_monitoring.description", comment: "")
         }
     }
 
@@ -79,17 +79,17 @@ struct PermissionPromptView: View {
 
             // Instructions
             VStack(alignment: .leading, spacing: 12) {
-                instructionRow(number: 1, text: "点击下方「打开系统设置」按钮")
-                instructionRow(number: 2, text: "找到「隐私与安全性」→「辅助功能」")
-                instructionRow(number: 3, text: "在列表中找到 Aether 并勾选")
-                instructionRow(number: 4, text: "返回 Aether，热键将自动生效")
+                instructionRow(number: 1, text: NSLocalizedString("permission.instruction.step1", comment: ""))
+                instructionRow(number: 2, text: NSLocalizedString("permission.instruction.step2", comment: ""))
+                instructionRow(number: 3, text: NSLocalizedString("permission.instruction.step3", comment: ""))
+                instructionRow(number: 4, text: NSLocalizedString("permission.instruction.step4", comment: ""))
             }
             .padding(.horizontal, 8)
 
             // Action buttons
             HStack(spacing: 12) {
                 Button(action: onDismiss) {
-                    Text("稍后设置")
+                    Text(LocalizedStringKey("permission.button.later"))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                 }
@@ -100,7 +100,7 @@ struct PermissionPromptView: View {
                 Button(action: onOpenSettings) {
                     HStack(spacing: 6) {
                         Image(systemName: "gear")
-                        Text("打开系统设置")
+                        Text(LocalizedStringKey("permission.open_settings"))
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)

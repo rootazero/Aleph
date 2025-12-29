@@ -50,27 +50,55 @@
 "provider.field.api_key" = "API Key";
 "provider.field.model" = "Model";
 "provider.field.base_url" = "Base URL";
+"provider.field.base_url_optional" = "Base URL (Optional)";
 "provider.field.temperature" = "Temperature";
+"provider.field.temperature_optional" = "Temperature (Optional)";
 "provider.field.max_tokens" = "Max Tokens";
+"provider.field.max_tokens_optional" = "Max Tokens (Optional)";
 "provider.field.top_p" = "Top P";
+"provider.field.top_p_optional" = "Top-P (Optional)";
 "provider.field.top_k" = "Top K";
+"provider.field.top_k_optional" = "Top-K (Optional)";
 "provider.field.timeout" = "Timeout (seconds)";
 
-"provider.placeholder.provider_name" = "e.g., My Custom Provider";
+"provider.placeholder.provider_name" = "Enter a unique identifier";
 "provider.placeholder.api_key" = "Enter your API key";
-"provider.placeholder.model" = "e.g., gpt-4o";
+"provider.placeholder.model" = "e.g., gpt-4o, claude-3-5-sonnet-20241022";
 "provider.placeholder.base_url" = "e.g., https://api.openai.com/v1";
+"provider.placeholder.base_url_custom" = "https://api.example.com/v1";
+"provider.placeholder.base_url_official" = "Leave empty for official API";
+"provider.placeholder.top_p" = "0.0-1.0, leave empty for default";
+"provider.placeholder.top_k_default" = "Leave empty for default";
+"provider.placeholder.top_k_ollama" = "e.g., 40";
 
+"provider.help.provider_name" = "This name is used to reference the provider in routing rules";
+"provider.help.theme_color" = "Used in Halo overlay";
+"provider.help.api_key" = "Stored securely in macOS Keychain";
 "provider.help.base_url" = "Optional custom API endpoint";
+"provider.help.base_url_custom" = "OpenAI-compatible API endpoint";
+"provider.help.base_url_official" = "For custom OpenAI-compatible endpoints";
 "provider.help.temperature" = "Controls randomness (0-2)";
-"provider.help.max_tokens" = "Maximum response length";
-"provider.help.top_p" = "Nucleus sampling (0-1)";
-"provider.help.top_k" = "Top-k sampling";
+"provider.help.max_tokens" = "Maximum length of generated response";
+"provider.help.top_p" = "Nucleus sampling threshold (higher = more diverse)";
+"provider.help.top_k" = "Consider only top K tokens (integer > 0)";
 "provider.help.timeout" = "Request timeout in seconds";
 
 "provider.section.basic_settings" = "Basic Settings";
 "provider.section.generation_params" = "Generation Parameters";
 "provider.section.advanced_settings" = "Advanced Settings";
+
+"provider.custom_provider" = "Custom Provider";
+"provider.custom_api_endpoint" = "OpenAI-compatible API: %@";
+"provider.custom_compatible" = "Custom OpenAI-compatible provider";
+
+"provider.delete.title" = "Delete Provider";
+"provider.delete.message" = "Are you sure you want to delete \"%@\"? This will also remove the API key from Keychain.";
+
+"provider.button.testing" = "Testing...";
+"provider.button.saving" = "Saving...";
+
+"provider.empty_state.title" = "No Provider Selected";
+"provider.empty_state.message" = "Select a provider from the list or add a new one";
 
 // MARK: - Settings Window - Routing Tab
 "settings.routing.title" = "Routing";
@@ -88,14 +116,37 @@
 
 // MARK: - Settings Window - Behavior Tab
 "settings.behavior.title" = "Behavior";
+"settings.behavior.description" = "Configure how Aether captures input and delivers output.";
 "settings.behavior.input_mode" = "Input Mode";
+"settings.behavior.input_mode_description" = "How should Aether capture your selected text?";
 "settings.behavior.output_mode" = "Output Mode";
+"settings.behavior.output_mode_description" = "How should Aether deliver AI responses?";
 "settings.behavior.typing_speed" = "Typing Speed";
-"settings.behavior.pii_scrubbing" = "PII Scrubbing";
-"settings.behavior.input_mode_cut" = "Cut (Cmd+X)";
-"settings.behavior.input_mode_copy" = "Copy (Cmd+C)";
-"settings.behavior.output_mode_typewriter" = "Typewriter Effect";
-"settings.behavior.output_mode_instant" = "Instant Paste";
+"settings.behavior.typing_speed_label" = "Speed:";
+"settings.behavior.speed_slow" = "Slow";
+"settings.behavior.speed_fast" = "Fast";
+"settings.behavior.preview_button" = "Preview Typing Effect";
+"settings.behavior.pii_scrubbing" = "Privacy & Security";
+"settings.behavior.pii_scrubbing_enable" = "Enable PII Scrubbing";
+"settings.behavior.pii_scrubbing_description" = "Automatically remove personally identifiable information (PII) before sending to AI providers.";
+"settings.behavior.pii_types_label" = "Select types of PII to scrub:";
+"settings.behavior.save_confirmation" = "Settings saved successfully!";
+"settings.behavior.input_mode_cut" = "Cut";
+"settings.behavior.input_mode_copy" = "Copy";
+"settings.behavior.input_mode_cut_description" = "Text disappears (⌘X), providing physical feedback. Original content is removed.";
+"settings.behavior.input_mode_copy_description" = "Text remains visible (⌘C). Original content is preserved.";
+"settings.behavior.output_mode_typewriter" = "Typewriter";
+"settings.behavior.output_mode_instant" = "Instant";
+"settings.behavior.output_mode_typewriter_description" = "AI response is typed character-by-character at configurable speed (cinematic effect).";
+"settings.behavior.output_mode_instant_description" = "AI response is pasted immediately (⌘V). Fastest delivery.";
+"settings.behavior.pii_type_email" = "Email Addresses";
+"settings.behavior.pii_type_phone" = "Phone Numbers";
+"settings.behavior.pii_type_ssn" = "Social Security Numbers";
+"settings.behavior.pii_type_credit_card" = "Credit Card Numbers";
+"settings.behavior.pii_example_email" = "e.g., user@example.com";
+"settings.behavior.pii_example_phone" = "e.g., (555) 123-4567";
+"settings.behavior.pii_example_ssn" = "e.g., 123-45-6789";
+"settings.behavior.pii_example_credit_card" = "e.g., 1234-5678-9012-3456";
 
 // MARK: - Settings Window - Memory Tab
 "settings.memory.title" = "Memory";
@@ -117,6 +168,11 @@
 "permission.input_monitoring.description" = "Aether needs Input Monitoring permission to capture keyboard events.";
 "permission.open_settings" = "Open System Settings";
 "permission.grant_instruction" = "Please grant permission in System Settings and return to this app.";
+"permission.button.later" = "Set Up Later";
+"permission.instruction.step1" = "Click the \"Open System Settings\" button below";
+"permission.instruction.step2" = "Find \"Privacy & Security\" → \"Accessibility\"";
+"permission.instruction.step3" = "Find Aether in the list and check it";
+"permission.instruction.step4" = "Return to Aether, hotkey will automatically work";
 
 // MARK: - Error Messages
 "error.provider.invalid_api_key" = "Invalid API key. Please check your credentials.";

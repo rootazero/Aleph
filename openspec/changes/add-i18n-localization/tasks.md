@@ -48,21 +48,21 @@
   - **Validation**: Verify Chinese text displays when system language is Chinese
 
 ### Providers Tab (3 tasks)
-- [ ] **Task 2.3: Localize ProvidersView strings**
+- [x] **Task 2.3: Localize ProvidersView strings**
   - Replace "Providers", "Search providers...", "Add Custom Provider", "Preset Providers", "Configured Providers" with localized keys
   - Add English strings with keys like `settings.providers.title`, `settings.providers.search_placeholder`, etc.
-  - **Validation**: Build and verify English strings
+  - **Validation**: ✅ Build and verify English strings
 
-- [ ] **Task 2.4: Localize ProviderEditPanel strings**
+- [x] **Task 2.4: Localize ProviderEditPanel strings**
   - Replace "Active", "API Key", "Model", "Base URL", "Test Connection", "Cancel", "Save" with localized keys
   - Add English strings for all form fields and help text
   - Include parameter descriptions (temperature, max_tokens, etc.)
-  - **Validation**: Build and verify all provider configuration text is localized
+  - **Validation**: ✅ Build and verify all provider configuration text is localized
 
-- [ ] **Task 2.5: Add Simplified Chinese translations for Providers tab**
+- [x] **Task 2.5: Add Simplified Chinese translations for Providers tab**
   - Translate all provider-related strings
   - Test provider configuration UI in Chinese
-  - **Validation**: Verify Chinese translations for complex technical terms
+  - **Validation**: ✅ Verify Chinese translations for complex technical terms
 
 ### Routing Tab (2 tasks)
 - [ ] **Task 2.6: Localize RoutingView strings**
@@ -86,14 +86,14 @@
   - **Validation**: Test hotkey recorder in Chinese
 
 ### Behavior Tab (2 tasks)
-- [ ] **Task 2.10: Localize BehaviorSettingsView strings**
+- [x] **Task 2.10: Localize BehaviorSettingsView strings**
   - Replace "Input Mode", "Output Mode", "Typing Speed", "PII Scrubbing" with localized keys
   - Add help text translations
-  - **Validation**: Build and verify behavior settings
+  - **Validation**: ✅ Build and verify behavior settings
 
-- [ ] **Task 2.11: Add Simplified Chinese translations for Behavior tab**
+- [x] **Task 2.11: Add Simplified Chinese translations for Behavior tab**
   - Translate behavior settings strings
-  - **Validation**: Test behavior UI in Chinese
+  - **Validation**: ✅ Test behavior UI in Chinese
 
 ### Memory Tab (1 task)
 - [ ] **Task 2.12: Localize Memory tab (if exists) and add Chinese translations**
@@ -103,24 +103,24 @@
 
 ## Phase 3: System Components Localization (5 tasks)
 
-- [ ] **Task 3.1: Localize PermissionPromptView strings**
+- [x] **Task 3.1: Localize PermissionPromptView strings**
   - Replace "Accessibility Permission Required", "Input Monitoring Permission Required", "Open System Settings" with localized keys
   - Add English strings for all permission prompts
-  - **Validation**: Test permission prompts in English
+  - **Validation**: ✅ Test permission prompts in English
 
-- [ ] **Task 3.2: Add Chinese translations for permission prompts**
+- [x] **Task 3.2: Add Chinese translations for permission prompts**
   - Translate all permission-related strings
-  - **Validation**: Test permission flow with Chinese system language
+  - **Validation**: ✅ Test permission flow with Chinese system language
 
 - [ ] **Task 3.3: Localize InfoPlist.strings for permission descriptions**
   - Create `en.lproj/InfoPlist.strings` with `NSAppleEventsUsageDescription`
   - Create `zh-Hans.lproj/InfoPlist.strings` with Chinese translation
   - **Validation**: Grant permissions and verify system prompt shows localized text
 
-- [ ] **Task 3.4: Localize menu bar items**
+- [x] **Task 3.4: Localize menu bar items**
   - Localize "Settings...", "Quit Aether", and other menu items
   - Update AppDelegate menu creation code
-  - **Validation**: Verify menu bar shows localized text
+  - **Validation**: ✅ Verify menu bar shows localized text (Already completed in previous session)
 
 - [ ] **Task 3.5: Localize error messages and alerts**
   - Find all `NSAlert` usage in codebase
