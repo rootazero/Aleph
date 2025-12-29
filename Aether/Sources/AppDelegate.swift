@@ -101,20 +101,38 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     @objc private func showSettings() {
-        // Find existing settings window or activate app to show WindowGroup
-        let settingsWindows = NSApp.windows.filter { window in
-            // Look for windows without title (WindowGroup) or with Settings in title
-            window.title.isEmpty || window.title.contains("Settings") || window.title.contains("Aether")
-        }
-
-        if let window = settingsWindows.first {
-            // Window exists, bring to front
+        // Check if settings window already exists
+        if let window = settingsWindow, window.isVisible {
+            // Window exists and is visible, bring to front
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
-        } else {
-            // No window found, activate app to trigger WindowGroup creation
-            NSApp.activate(ignoringOtherApps: true)
+            return
         }
+
+        // Create new settings window with RootContentView
+        let settingsView = RootContentView(
+            core: core,
+            keychainManager: keychainManager
+        )
+        .environmentObject(self)
+        .frame(minWidth: 980, minHeight: 750)
+
+        let hostingController = NSHostingController(rootView: settingsView)
+
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = "Settings"
+        window.setContentSize(NSSize(width: 980, height: 750))
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.center()
+
+        // Store window reference
+        settingsWindow = window
+
+        // Show window
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func quit() {
