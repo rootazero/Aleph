@@ -116,8 +116,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     @objc private func showAbout() {
         let alert = NSAlert()
-        alert.messageText = "Aether"
-        alert.informativeText = "AI Middleware for macOS\nVersion 0.1.0 (Phase 2)\n\nBrings AI intelligence to your cursor."
+        alert.messageText = NSLocalizedString("alert.about.title", comment: "")
+        alert.informativeText = String(format: NSLocalizedString("alert.about.message", comment: ""), "0.1.0 (Phase 2)")
         alert.alertStyle = .informational
         alert.addButton(withTitle: NSLocalizedString("common.ok", comment: "OK button"))
         alert.runModal()
@@ -276,10 +276,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     private func showErrorAlert(message: String) {
         let alert = NSAlert()
-        alert.messageText = "Aether Error"
+        alert.messageText = NSLocalizedString("error.aether", comment: "")
         alert.informativeText = message
         alert.alertStyle = .critical
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
         alert.runModal()
     }
 

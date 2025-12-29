@@ -18,6 +18,12 @@
 "common.test_connection" = "Test Connection";
 "common.close" = "Close";
 "common.done" = "Done";
+"common.error" = "Error";
+"common.success" = "Success";
+"common.warning" = "Warning";
+"common.info" = "Information";
+"common.append" = "Append";
+"common.replace" = "Replace";
 
 // MARK: - Settings Window - Sidebar
 "settings.sidebar.title" = "Aether";
@@ -243,11 +249,40 @@
 "error.permission.accessibility_denied" = "Accessibility permission denied.";
 "error.permission.input_monitoring_denied" = "Input Monitoring permission denied.";
 "error.general.unknown" = "An unknown error occurred.";
+"error.title" = "Error";
+"error.aether" = "Aether Error";
 
 // MARK: - Alerts
 "alert.confirm_delete" = "Are you sure you want to delete this item?";
 "alert.confirm_reset" = "This will reset all settings to defaults. Continue?";
 "alert.unsaved_changes" = "You have unsaved changes. Do you want to save them?";
+
+// MARK: - Log Viewer Alerts
+"alert.logs.clear_title" = "Clear All Logs?";
+"alert.logs.clear_button" = "Clear";
+"alert.logs.cleared_title" = "Logs Cleared";
+"alert.logs.cleared_message" = "Deleted %d log file(s).";
+"alert.logs.exported_title" = "Logs Exported";
+"alert.logs.exported_message" = "Logs saved to: %@";
+
+// MARK: - Routing Alerts
+"alert.routing.export_title" = "Export Successful";
+"alert.routing.export_message" = "Routing rules exported to %@";
+"alert.routing.import_title" = "Import Routing Rules";
+"alert.routing.import_message" = "Found %d rule(s). How would you like to import them?";
+"alert.routing.import_success_append" = "Import Successful";
+"alert.routing.import_success_append_message" = "Added %d rule(s) to existing rules";
+"alert.routing.import_success_replace" = "Import Successful";
+"alert.routing.import_success_replace_message" = "Replaced all rules with %d imported rule(s)";
+
+// MARK: - About Dialog
+"alert.about.title" = "Aether";
+"alert.about.message" = "AI Middleware for macOS\nVersion %@\n\nBrings AI intelligence to your cursor.";
+
+// MARK: - Context Capture Alerts
+"alert.context.accessibility_title" = "Accessibility Permission Required";
+"alert.context.accessibility_message" = "Aether needs Accessibility permission to capture window context for memory features.\n\nPlease grant permission in:\nSystem Settings → Privacy & Security → Accessibility";
+"alert.context.open_settings" = "Open Settings";
 
 // MARK: - Halo Overlay
 "halo.state.idle" = "Idle";

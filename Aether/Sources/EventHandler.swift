@@ -387,7 +387,7 @@ class EventHandler: AetherEventHandler {
 
     private func showErrorNotification(message: String, suggestion: String?) {
         let alert = NSAlert()
-        alert.messageText = "Aether Error"
+        alert.messageText = NSLocalizedString("error.aether", comment: "")
 
         // Combine message and suggestion
         var fullMessage = message
@@ -397,7 +397,7 @@ class EventHandler: AetherEventHandler {
 
         alert.informativeText = fullMessage
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
         alert.runModal()
     }
 

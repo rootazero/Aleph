@@ -17,6 +17,12 @@
 "common.test_connection" = "测试连接";
 "common.close" = "关闭";
 "common.done" = "完成";
+"common.error" = "错误";
+"common.success" = "成功";
+"common.warning" = "警告";
+"common.info" = "信息";
+"common.append" = "追加";
+"common.replace" = "替换";
 
 // MARK: - Settings Window - Sidebar
 "settings.sidebar.title" = "Aether";
@@ -242,11 +248,40 @@
 "error.permission.accessibility_denied" = "辅助功能权限被拒绝。";
 "error.permission.input_monitoring_denied" = "输入监控权限被拒绝。";
 "error.general.unknown" = "发生未知错误。";
+"error.title" = "错误";
+"error.aether" = "Aether 错误";
 
 // MARK: - Alerts
 "alert.confirm_delete" = "您确定要删除此项吗？";
 "alert.confirm_reset" = "这将把所有设置重置为默认值。是否继续？";
 "alert.unsaved_changes" = "您有未保存的更改。是否要保存它们？";
+
+// MARK: - Log Viewer Alerts
+"alert.logs.clear_title" = "清除所有日志？";
+"alert.logs.clear_button" = "清除";
+"alert.logs.cleared_title" = "日志已清除";
+"alert.logs.cleared_message" = "已删除 %d 个日志文件。";
+"alert.logs.exported_title" = "日志已导出";
+"alert.logs.exported_message" = "日志已保存到：%@";
+
+// MARK: - Routing Alerts
+"alert.routing.export_title" = "导出成功";
+"alert.routing.export_message" = "路由规则已导出到 %@";
+"alert.routing.import_title" = "导入路由规则";
+"alert.routing.import_message" = "找到 %d 条规则。您希望如何导入它们？";
+"alert.routing.import_success_append" = "导入成功";
+"alert.routing.import_success_append_message" = "已将 %d 条规则添加到现有规则";
+"alert.routing.import_success_replace" = "导入成功";
+"alert.routing.import_success_replace_message" = "已用 %d 条导入的规则替换所有规则";
+
+// MARK: - About Dialog
+"alert.about.title" = "Aether";
+"alert.about.message" = "macOS AI 中间件\n版本 %@\n\n将 AI 智能带到您的光标。";
+
+// MARK: - Context Capture Alerts
+"alert.context.accessibility_title" = "需要辅助功能权限";
+"alert.context.accessibility_message" = "Aether 需要辅助功能权限以捕获窗口上下文用于记忆功能。\n\n请在以下位置授予权限：\n系统设置 → 隐私与安全性 → 辅助功能";
+"alert.context.open_settings" = "打开设置";
 
 // MARK: - Halo Overlay
 "halo.state.idle" = "空闲";

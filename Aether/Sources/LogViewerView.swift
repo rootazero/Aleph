@@ -142,13 +142,13 @@ struct LogViewerView: View {
             loadLogs()
             loadCurrentLogLevel()
         }
-        .alert("Clear All Logs?", isPresented: $showingClearConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Clear", role: .destructive) {
+        .alert(NSLocalizedString("alert.logs.clear_title", comment: ""), isPresented: $showingClearConfirmation) {
+            Button(NSLocalizedString("common.cancel", comment: ""), role: .cancel) {}
+            Button(NSLocalizedString("alert.logs.clear_button", comment: ""), role: .destructive) {
                 clearLogs()
             }
         } message: {
-            Text("This will permanently delete all log files. This action cannot be undone.")
+            Text(NSLocalizedString("settings.memory.clear_all_message", comment: ""))
         }
     }
 
@@ -244,10 +244,10 @@ struct LogViewerView: View {
 
                                 // Show success notification
                                 let alert = NSAlert()
-                                alert.messageText = "Logs Exported"
-                                alert.informativeText = "Logs saved to: \(url.path)"
+                                alert.messageText = NSLocalizedString("alert.logs.exported_title", comment: "")
+                                alert.informativeText = String(format: NSLocalizedString("alert.logs.exported_message", comment: ""), url.path)
                                 alert.alertStyle = .informational
-                                alert.addButton(withTitle: "OK")
+                                alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
                                 alert.runModal()
                             } catch {
                                 showError("Failed to save logs: \(error.localizedDescription)")
@@ -289,10 +289,10 @@ struct LogViewerView: View {
 
                     // Show success alert
                     let alert = NSAlert()
-                    alert.messageText = "Logs Cleared"
-                    alert.informativeText = "Deleted \(logFiles.count) log file(s)."
+                    alert.messageText = NSLocalizedString("alert.logs.cleared_title", comment: "")
+                    alert.informativeText = String(format: NSLocalizedString("alert.logs.cleared_message", comment: ""), logFiles.count)
                     alert.alertStyle = .informational
-                    alert.addButton(withTitle: "OK")
+                    alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
                     alert.runModal()
                 }
             } catch {
@@ -305,10 +305,10 @@ struct LogViewerView: View {
 
     private func showError(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "Error"
+        alert.messageText = NSLocalizedString("error.title", comment: "")
         alert.informativeText = message
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
         alert.runModal()
     }
 

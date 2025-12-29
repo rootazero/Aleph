@@ -262,10 +262,10 @@ struct RoutingView: View {
                 // Show success notification
                 DispatchQueue.main.async {
                     let alert = NSAlert()
-                    alert.messageText = "Export Successful"
-                    alert.informativeText = "Routing rules exported to \(url.lastPathComponent)"
+                    alert.messageText = NSLocalizedString("alert.routing.export_title", comment: "")
+                    alert.informativeText = String(format: NSLocalizedString("alert.routing.export_message", comment: ""), url.lastPathComponent)
                     alert.alertStyle = .informational
-                    alert.addButton(withTitle: "OK")
+                    alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
                     alert.runModal()
                 }
             } catch {
@@ -308,13 +308,13 @@ struct RoutingView: View {
 
     private func showImportOptions(importedRules: [RoutingRuleConfig]) {
         let alert = NSAlert()
-        alert.messageText = "Import Routing Rules"
-        alert.informativeText = "Found \(importedRules.count) rule(s). How would you like to import them?"
+        alert.messageText = NSLocalizedString("alert.routing.import_title", comment: "")
+        alert.informativeText = String(format: NSLocalizedString("alert.routing.import_message", comment: ""), importedRules.count)
         alert.alertStyle = .informational
 
-        alert.addButton(withTitle: "Append")
-        alert.addButton(withTitle: "Replace All")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: NSLocalizedString("common.append", comment: ""))
+        alert.addButton(withTitle: NSLocalizedString("common.replace", comment: ""))
+        alert.addButton(withTitle: NSLocalizedString("common.cancel", comment: ""))
 
         let response = alert.runModal()
 
@@ -344,10 +344,10 @@ struct RoutingView: View {
 
                     // Show success message
                     let alert = NSAlert()
-                    alert.messageText = "Import Successful"
-                    alert.informativeText = "Added \(importedRules.count) rule(s) to existing rules"
+                    alert.messageText = NSLocalizedString("alert.routing.import_success_append", comment: "")
+                    alert.informativeText = String(format: NSLocalizedString("alert.routing.import_success_append_message", comment: ""), importedRules.count)
                     alert.alertStyle = .informational
-                    alert.addButton(withTitle: "OK")
+                    alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
                     alert.runModal()
                 }
             } catch {
@@ -371,10 +371,10 @@ struct RoutingView: View {
 
                     // Show success message
                     let alert = NSAlert()
-                    alert.messageText = "Import Successful"
-                    alert.informativeText = "Replaced all rules with \(importedRules.count) imported rule(s)"
+                    alert.messageText = NSLocalizedString("alert.routing.import_success_replace", comment: "")
+                    alert.informativeText = String(format: NSLocalizedString("alert.routing.import_success_replace_message", comment: ""), importedRules.count)
                     alert.alertStyle = .informational
-                    alert.addButton(withTitle: "OK")
+                    alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
                     alert.runModal()
                 }
             } catch {

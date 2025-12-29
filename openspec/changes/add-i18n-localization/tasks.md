@@ -123,15 +123,15 @@
   - Update AppDelegate menu creation code
   - **Validation**: ✅ Verify menu bar shows localized text (Already completed in previous session)
 
-- [ ] **Task 3.5: Localize error messages and alerts**
+- [x] **Task 3.5: Localize error messages and alerts**
   - Find all `NSAlert` usage in codebase
   - Replace hardcoded alert messages with localized strings
   - Add error message keys to `Localizable.strings`
-  - **Validation**: Trigger various errors and verify localized messages
+  - **Validation**: ✅ Localized NSAlert in LogViewerView, RoutingView, AppDelegate, EventHandler, ContextCapture
 
 ## Phase 4: Common UI Elements (3 tasks)
 
-- [ ] **Task 4.1: Localize common button labels**
+- [x] **Task 4.1: Localize common button labels**
   - Create `common.*` keys for reusable strings: "Save", "Cancel", "OK", "Apply", "Reset", "Delete", "Add", "Edit"
   - Add to both English and Chinese `Localizable.strings`
   - **Validation**: Verify all buttons use common keys

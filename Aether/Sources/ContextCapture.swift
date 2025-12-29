@@ -110,18 +110,11 @@ class ContextCapture {
         // but this should be migrated to use EventHandler in the next refactor
         DispatchQueue.main.async {
             let alert = NSAlert()
-            alert.messageText = "Accessibility Permission Required"
-            alert.informativeText = """
-            Aether needs Accessibility permission to capture window context for memory features.
-
-            Please grant permission in:
-            System Settings → Privacy & Security → Accessibility
-
-            Add Aether to the list and enable the checkbox.
-            """
+            alert.messageText = NSLocalizedString("alert.context.accessibility_title", comment: "")
+            alert.informativeText = NSLocalizedString("alert.context.accessibility_message", comment: "")
             alert.alertStyle = .informational
-            alert.addButton(withTitle: "Open System Settings")
-            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: NSLocalizedString("alert.context.open_settings", comment: ""))
+            alert.addButton(withTitle: NSLocalizedString("common.cancel", comment: ""))
 
             let response = alert.runModal()
             if response == .alertFirstButtonReturn {
