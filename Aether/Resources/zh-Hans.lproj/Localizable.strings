@@ -294,6 +294,10 @@
 "alert.context.accessibility_message" = "Aether 需要辅助功能权限以捕获窗口上下文用于记忆功能。\n\n请在以下位置授予权限：\n系统设置 → 隐私与安全性 → 辅助功能";
 "alert.context.open_settings" = "打开设置";
 
+// MARK: - 重启提醒
+"alert.restart.failed_title" = "应用重启失败";
+"alert.restart.failed_message" = "在授予权限后 Aether 无法自动重启。\n\n错误：%@\n\n请从应用程序文件夹手动重新启动 Aether。";
+
 // MARK: - Halo Overlay
 "halo.state.idle" = "空闲";
 "halo.state.listening" = "监听中...";

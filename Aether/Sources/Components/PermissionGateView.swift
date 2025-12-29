@@ -349,24 +349,56 @@ struct PermissionGateView: View {
 
         // Get the path to the current executable
         let bundlePath = Bundle.main.bundlePath
+        print("[PermissionGateView] Bundle path: \(bundlePath)")
 
         // Use 'open' command to relaunch the app
+        // -n: Open a new instance even if one is already running
+        // -a: Specify app by path
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        task.arguments = [bundlePath]
+        task.arguments = ["-n", bundlePath]
+
+        // Capture output for debugging
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        task.standardOutput = outputPipe
+        task.standardError = errorPipe
 
         do {
             try task.run()
+            print("[PermissionGateView] Restart command executed successfully")
 
-            // Terminate current instance after a brief delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            // Read output
+            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+
+            if let output = String(data: outputData, encoding: .utf8), !output.isEmpty {
+                print("[PermissionGateView] Restart output: \(output)")
+            }
+            if let error = String(data: errorData, encoding: .utf8), !error.isEmpty {
+                print("[PermissionGateView] Restart error output: \(error)")
+            }
+
+            // Terminate current instance after a slightly longer delay to ensure new instance starts
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                print("[PermissionGateView] Terminating current instance")
                 NSApplication.shared.terminate(nil)
             }
         } catch {
-            print("[PermissionGateView] Error restarting application: \(error)")
+            print("[PermissionGateView] ❌ Error restarting application: \(error)")
+            print("[PermissionGateView] Error details: \(error.localizedDescription)")
 
-            // If restart fails, just continue (macOS might handle it)
-            print("[PermissionGateView] Failed to restart, app may be terminated by macOS")
+            // If restart fails, show alert to user
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = NSLocalizedString("alert.restart.failed_title", comment: "Restart failed alert title")
+                alert.informativeText = String(format: NSLocalizedString("alert.restart.failed_message", comment: "Restart failed message"), error.localizedDescription)
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: NSLocalizedString("common.ok", comment: "OK button"))
+                alert.runModal()
+
+                print("[PermissionGateView] App may be terminated by macOS automatically")
+            }
         }
     }
 }

@@ -295,6 +295,10 @@
 "alert.context.accessibility_message" = "Aether needs Accessibility permission to capture window context for memory features.\n\nPlease grant permission in:\nSystem Settings → Privacy & Security → Accessibility";
 "alert.context.open_settings" = "Open Settings";
 
+// MARK: - Restart Alerts
+"alert.restart.failed_title" = "Application Restart Failed";
+"alert.restart.failed_message" = "Aether could not restart automatically after permission was granted.\n\nError: %@\n\nPlease manually relaunch Aether from Applications folder.";
+
 // MARK: - Halo Overlay
 "halo.state.idle" = "Idle";
 "halo.state.listening" = "Listening...";
