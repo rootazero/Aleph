@@ -231,11 +231,12 @@ struct PermissionGateView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
+                    .background(Color.blue.gradient)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
                 }
                 .buttonStyle(.plain)
-                .background(Color.blue.gradient)
-                .foregroundColor(.white)
-                .cornerRadius(10)
+                .contentShape(Rectangle())  // Make entire button area clickable
             }
 
             // Show "Continue" button if current step permission is granted
@@ -256,11 +257,12 @@ struct PermissionGateView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
+                    .background(Color.green.gradient)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
                 }
                 .buttonStyle(.plain)
-                .background(Color.green.gradient)
-                .foregroundColor(.white)
-                .cornerRadius(10)
+                .contentShape(Rectangle())  // Make entire button area clickable
             }
         }
     }
