@@ -140,6 +140,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         window.titleVisibility = .hidden
         window.center()
 
+        // Prevent window from hiding when losing focus
+        window.hidesOnDeactivate = false
+        window.isReleasedWhenClosed = false
+
         // Store window reference
         settingsWindow = window
 
@@ -287,6 +291,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         window.titleVisibility = .hidden
         window.center()
 
+        // CRITICAL: Prevent window from hiding when losing focus
+        // This ensures the permission gate stays visible even when user switches to System Settings
+        window.hidesOnDeactivate = false
+        window.isReleasedWhenClosed = false
+
+        // Set window level to floating so it stays on top
+        window.level = .floating
+
+        // Keep window in front of other apps' windows
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
         // Make window non-closable by overriding close button behavior
         window.standardWindowButton(.closeButton)?.isEnabled = false
 
@@ -296,6 +311,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Show window and bring to front
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+
+        print("[Aether] Permission gate window shown with floating level")
     }
 
     /// Called when permission gate is dismissed (all permissions granted)
