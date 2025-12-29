@@ -171,6 +171,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
+        // CRITICAL: Re-verify permissions before initializing Core
+        // This prevents crashes if permissions were revoked or not fully applied
+        let hasAccessibility = PermissionChecker.hasAccessibilityPermission()
+        let hasInputMonitoring = PermissionChecker.hasInputMonitoringPermission()
+
+        print("[Aether] Pre-Core init permission check - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
+
+        if !hasAccessibility || !hasInputMonitoring {
+            print("[Aether] ERROR: Permissions not fully granted, cannot initialize Core")
+            print("[Aether] This should not happen - showing permission gate again")
+
+            // Show permission gate again
+            DispatchQueue.main.async { [weak self] in
+                self?.showPermissionGate()
+            }
+            return
+        }
+
         do {
             // Create AetherCore with event handler
             core = try AetherCore(handler: eventHandler)
@@ -205,7 +223,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             } else {
                 // Max retries exceeded, show error to user
                 print("[Aether] Max retry attempts exceeded, giving up")
-                showErrorAlert(message: "Failed to initialize Aether core after \(maxRetryAttempts) attempts.\n\nError: \(error)\n\nPlease check:\n1. Accessibility permissions are granted\n2. libaethecore.dylib is properly bundled\n3. Rust core is built correctly")
+                showErrorAlert(message: "Failed to initialize Aether core after \(maxRetryAttempts) attempts.\n\nError: \(error)\n\nPlease check:\n1. Accessibility permissions are granted\n2. Input Monitoring permissions are granted\n3. libaethecore.dylib is properly bundled\n4. Rust core is built correctly\n\nYou may need to restart your Mac for permissions to take full effect.")
             }
         }
     }
