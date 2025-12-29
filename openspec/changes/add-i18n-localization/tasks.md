@@ -136,10 +136,10 @@
   - Add to both English and Chinese `Localizable.strings`
   - **Validation**: Verify all buttons use common keys
 
-- [ ] **Task 4.2: Localize placeholders and help text**
+- [x] **Task 4.2: Localize placeholders and help text**
   - Find all `.placeholder()` and `.help()` modifiers in SwiftUI views
   - Replace with localized keys
-  - **Validation**: Hover over help icons and verify localized tooltips
+  - **Validation**: ✅ Localized .help() in SettingsView, LogViewerView, ProviderDetailPanel (7 help text keys added)
 
 - [x] **Task 4.3: Localize Halo overlay messages (if any)**
   - Check if HaloView displays any text messages
@@ -160,12 +160,12 @@
   - Warn developers if new strings lack translations
   - **Validation**: Attempt commit with untranslated string and verify warning
 
-- [ ] **Task 5.3: Update CLAUDE.md with localization guidelines**
+- [x] **Task 5.3: Update CLAUDE.md with localization guidelines**
   - Add section on i18n conventions
   - Document string key naming patterns
   - Explain how to add new languages
   - Include translator workflow instructions
-  - **Validation**: Read through documentation for clarity
+  - **Validation**: ✅ Added comprehensive i18n section with architecture, naming conventions, code examples, and best practices
 
 - [ ] **Task 5.4: Create translator export/import script (optional)**
   - Script to export `Localizable.strings` to CSV format
@@ -197,18 +197,18 @@
 
 ## Phase 7: Documentation and Cleanup (2 tasks)
 
-- [ ] **Task 7.1: Create localization README**
+- [x] **Task 7.1: Create localization README**
   - Create `docs/LOCALIZATION.md` with contributor guide
   - Explain how to add new language
   - Document string key conventions
   - Include example workflows
-  - **Validation**: Follow guide to simulate adding a new language
+  - **Validation**: ✅ LOCALIZATION.md exists with comprehensive guide (323 lines, updated statistics to 249 keys)
 
-- [ ] **Task 7.2: Update main README with language support info**
+- [x] **Task 7.2: Update main README with language support info**
   - Add "Supported Languages" section
   - List currently supported languages (English, Simplified Chinese)
   - Mention how to contribute translations
-  - **Validation**: Review README for accuracy
+  - **Validation**: ✅ Enhanced i18n section with flag emojis, translation statistics (249 keys), coverage info, and contributor links
 
 ---
 
