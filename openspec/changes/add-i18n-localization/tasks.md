@@ -112,10 +112,11 @@
   - Translate all permission-related strings
   - **Validation**: ✅ Test permission flow with Chinese system language
 
-- [ ] **Task 3.3: Localize InfoPlist.strings for permission descriptions**
+- [x] **Task 3.3: Localize InfoPlist.strings for permission descriptions**
   - Create `en.lproj/InfoPlist.strings` with `NSAppleEventsUsageDescription`
   - Create `zh-Hans.lproj/InfoPlist.strings` with Chinese translation
-  - **Validation**: Grant permissions and verify system prompt shows localized text
+  - Add `NSInputMonitoringUsageDescription` for Input Monitoring permission
+  - **Validation**: ✅ Permission descriptions localized for system prompts
 
 - [x] **Task 3.4: Localize menu bar items**
   - Localize "Settings...", "Quit Aether", and other menu items
