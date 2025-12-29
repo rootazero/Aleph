@@ -47,7 +47,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSMinimumSystemVersion: "15.0"
         LSUIElement: true
-        NSAppleEventsUsageDescription: "Aether needs to simulate keyboard input to paste AI responses into your applications."
+        NSAppleEventsUsageDescription: "Aether needs to simulate keyboard input to paste AI responses into your applications and monitor global hotkeys for seamless AI integration."
         NSHumanReadableCopyright: "Copyright © 2025 Aether. All rights reserved."
         NSPrincipalClass: NSApplication
     entitlements:

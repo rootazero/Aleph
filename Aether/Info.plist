@@ -18,23 +18,12 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleURLName</key>
-			<string>com.aether.url</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>aether</string>
-			</array>
-		</dict>
-	</array>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Aether needs to simulate keyboard input to paste AI responses into your applications.</string>
+	<string>Aether needs to simulate keyboard input to paste AI responses into your applications and monitor global hotkeys for seamless AI integration.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2025 Aether. All rights reserved.</string>
 	<key>NSPrincipalClass</key>

@@ -13,6 +13,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Menu bar status item
     private var statusItem: NSStatusItem?
 
+    // Menu item for Settings (stored separately for enable/disable)
+    private var settingsMenuItem: NSMenuItem?
+
     // Rust core instance (internal for access from AetherApp)
     // Published to trigger UI updates when initialized
     @Published internal var core: AetherCore?
@@ -29,6 +32,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Settings window (used by legacy Settings scene and WindowGroup)
     private var settingsWindow: NSWindow?
 
+    // Permission gate window
+    private var permissionGateWindow: NSWindow?
+
+    // Permission gate active state
+    private var isPermissionGateActive: Bool = false
+
     // Theme engine
     private var themeEngine: ThemeEngine?
 
@@ -39,23 +48,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Set up menu bar
         setupMenuBar()
 
-        // Check and request Accessibility permission for context capture
-        checkAccessibilityPermission()
-
-        // Initialize theme engine
-        themeEngine = ThemeEngine()
-
-        // Create Halo window with theme engine
-        haloWindow = HaloWindow(themeEngine: themeEngine!)
-
-        // Initialize event handler
-        eventHandler = EventHandler(haloWindow: haloWindow)
-
-        // Connect event handler to halo window for error action callbacks
-        haloWindow?.setEventHandler(eventHandler!)
-
-        // Initialize Rust core
-        initializeRustCore()
+        // Check all required permissions (Accessibility + Input Monitoring)
+        if !checkAllRequiredPermissions() {
+            // Show mandatory permission gate if any permission is missing
+            showPermissionGate()
+        } else {
+            // All permissions granted, proceed with normal initialization
+            initializeAppComponents()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -84,11 +84,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         menu.addItem(NSMenuItem(title: "About Aether", action: #selector(showAbout), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ","))
+
+        // Create and store Settings menu item for enable/disable control
+        settingsMenuItem = NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ",")
+        menu.addItem(settingsMenuItem!)
+
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit Aether", action: #selector(quit), keyEquivalent: "q"))
 
         statusItem?.menu = menu
+
+        // Initially disable Settings menu if permissions not granted
+        settingsMenuItem?.isEnabled = !isPermissionGateActive
     }
 
     @objc private func showAbout() {
@@ -101,6 +108,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     @objc private func showSettings() {
+        // Block settings access if permission gate is active
+        if isPermissionGateActive {
+            print("[Aether] Settings blocked - permission gate is active")
+            return
+        }
+
         // Check if settings window already exists
         if let window = settingsWindow, window.isVisible {
             // Window exists and is visible, bring to front
@@ -215,6 +228,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
 
+    /// Update menu bar icon with custom symbol (for permission gate states)
+    private func updateMenuBarIcon(systemSymbol: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let button = self?.statusItem?.button else { return }
+            button.image = NSImage(systemSymbolName: systemSymbol, accessibilityDescription: "Aether")
+        }
+    }
+
     private func showErrorAlert(message: String) {
         let alert = NSAlert()
         alert.messageText = "Aether Error"
@@ -224,9 +245,103 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         alert.runModal()
     }
 
-    // MARK: - Accessibility Permission Check
+    // MARK: - Permission Gate Management
+
+    /// Check if all required permissions are granted
+    /// - Returns: true if both Accessibility and Input Monitoring permissions are granted
+    private func checkAllRequiredPermissions() -> Bool {
+        let hasAccessibility = PermissionChecker.hasAccessibilityPermission()
+        let hasInputMonitoring = PermissionChecker.hasInputMonitoringPermission()
+
+        print("[Aether] Permission status - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
+
+        return hasAccessibility && hasInputMonitoring
+    }
+
+    /// Show mandatory permission gate window
+    private func showPermissionGate() {
+        print("[Aether] Showing permission gate - permissions not granted")
+
+        isPermissionGateActive = true
+
+        // Disable settings menu item
+        settingsMenuItem?.isEnabled = false
+
+        // Update menu bar icon to show "waiting" state
+        updateMenuBarIcon(systemSymbol: "exclamationmark.triangle")
+
+        // Create permission gate view
+        let permissionGateView = PermissionGateView {
+            // Callback when all permissions are granted
+            self.onPermissionGateDismissed()
+        }
+
+        let hostingController = NSHostingController(rootView: permissionGateView)
+
+        // Create window for permission gate
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = "Aether 需要权限"
+        window.setContentSize(NSSize(width: 600, height: 600))
+        window.styleMask = [.titled, .closable, .miniaturizable]
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.center()
+
+        // Make window non-closable by overriding close button behavior
+        window.standardWindowButton(.closeButton)?.isEnabled = false
+
+        // Store window reference
+        permissionGateWindow = window
+
+        // Show window and bring to front
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Called when permission gate is dismissed (all permissions granted)
+    private func onPermissionGateDismissed() {
+        print("[Aether] Permission gate dismissed - all permissions granted")
+
+        isPermissionGateActive = false
+
+        // Enable settings menu item
+        settingsMenuItem?.isEnabled = true
+
+        // Close permission gate window
+        permissionGateWindow?.close()
+        permissionGateWindow = nil
+
+        // Initialize app components now that permissions are granted
+        initializeAppComponents()
+    }
+
+    /// Initialize all app components (theme, halo, event handler, core)
+    /// This is called either directly on launch (if permissions already granted)
+    /// or after permission gate is dismissed
+    private func initializeAppComponents() {
+        print("[Aether] Initializing app components")
+
+        // Initialize theme engine
+        themeEngine = ThemeEngine()
+
+        // Create Halo window with theme engine
+        haloWindow = HaloWindow(themeEngine: themeEngine!)
+
+        // Initialize event handler
+        eventHandler = EventHandler(haloWindow: haloWindow)
+
+        // Connect event handler to halo window for error action callbacks
+        haloWindow?.setEventHandler(eventHandler!)
+
+        // Initialize Rust core
+        initializeRustCore()
+    }
+
+    // MARK: - Accessibility Permission Check (Legacy - now using PermissionGate)
 
     private func checkAccessibilityPermission() {
+        // This method is now deprecated in favor of the permission gate
+        // Kept for backward compatibility but not used in current flow
         if !ContextCapture.hasAccessibilityPermission() {
             print("[Aether] Accessibility permission not granted, showing prompt...")
 

@@ -348,23 +348,18 @@ class EventHandler: AetherEventHandler {
     }
 
     /// Show permission prompt in Halo window
+    /// DEPRECATED: Now using PermissionGateView instead of Halo for permission prompts
+    /// Kept for backward compatibility but does not show any UI
     func showPermissionPrompt(type: PermissionType) {
-        print("[EventHandler] Showing permission prompt: \(type)")
-        // Show halo window centered on screen
-        if let screen = NSScreen.main {
-            let screenRect = screen.frame
-            let position = CGPoint(
-                x: screenRect.midX,
-                y: screenRect.midY
-            )
-            haloWindow?.show(at: position)
-        } else {
-            // Fallback to center of primary screen
-            haloWindow?.show(at: CGPoint(x: 960, y: 540))
-        }
+        print("[EventHandler] showPermissionPrompt called (DEPRECATED) - Permission gate should be used instead")
+        print("[EventHandler] Permission type: \(type)")
 
-        // Set permission required state
-        haloWindow?.setState(.permissionRequired(type: type))
+        // NOTE: This method is now deprecated in favor of the PermissionGateView
+        // which is shown automatically on app launch if permissions are missing.
+        // The old implementation that showed permission prompts in the Halo window
+        // has been removed because it's incompatible with the mandatory permission gate approach.
+
+        // No-op: Permission prompts are now handled by PermissionGateView in AppDelegate
     }
 
     // MARK: - Hotkey Handling
