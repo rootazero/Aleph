@@ -1,73 +1,73 @@
 # Implementation Tasks
 
 ## 1. Input Monitoring Permission Detection
-- [ ] 1.1 Research macOS Input Monitoring permission check API (IOHIDRequestAccess)
-- [ ] 1.2 Add Info.plist entry for Input Monitoring usage description
-- [ ] 1.3 Create `PermissionChecker` utility class in Swift
-- [ ] 1.4 Implement `checkInputMonitoringPermission()` method
-- [ ] 1.5 Add unit tests for permission checker
-- [ ] 1.6 Test permission detection on macOS 13+
+- [x] 1.1 Research macOS Input Monitoring permission check API (IOHIDRequestAccess)
+- [x] 1.2 Add Info.plist entry for Input Monitoring usage description
+- [x] 1.3 Create `PermissionChecker` utility class in Swift
+- [x] 1.4 Implement `checkInputMonitoringPermission()` method
+- [x] 1.5 Add unit tests for permission checker
+- [x] 1.6 Test permission detection on macOS 13+
 
 ## 2. Permission Status Monitor
-- [ ] 2.1 Create `Aether/Sources/Utils/PermissionStatusMonitor.swift`
-- [ ] 2.2 Implement timer-based polling (1 second interval)
-- [ ] 2.3 Add methods: `startMonitoring()`, `stopMonitoring()`
-- [ ] 2.4 Implement callback for permission status changes
-- [ ] 2.5 Add property to track current permission state
-- [ ] 2.6 Write unit tests for monitor lifecycle
-- [ ] 2.7 Test memory management (no retain cycles)
+- [x] 2.1 Create `Aether/Sources/Utils/PermissionStatusMonitor.swift`
+- [x] 2.2 Implement timer-based polling (1 second interval)
+- [x] 2.3 Add methods: `startMonitoring()`, `stopMonitoring()`
+- [x] 2.4 Implement callback for permission status changes
+- [x] 2.5 Add property to track current permission state
+- [x] 2.6 Write unit tests for monitor lifecycle
+- [x] 2.7 Test memory management (no retain cycles)
 
 ## 3. Permission Gate View Component
-- [ ] 3.1 Create `Aether/Sources/Components/PermissionGateView.swift`
-- [ ] 3.2 Design two-step UI layout (Accessibility → Input Monitoring)
-- [ ] 3.3 Implement step indicator (Step 1 of 2, Step 2 of 2)
-- [ ] 3.4 Add visual status indicators (pending vs granted)
-- [ ] 3.5 Integrate PermissionPromptView for each step
-- [ ] 3.6 Add "Open System Settings" buttons per step
-- [ ] 3.7 Implement automatic progression when permission granted
-- [ ] 3.8 Make view non-dismissible (no close button, no Escape key)
-- [ ] 3.9 Add animations for state transitions
-- [ ] 3.10 Write SwiftUI Previews for each state
+- [x] 3.1 Create `Aether/Sources/Components/PermissionGateView.swift`
+- [x] 3.2 Design two-step UI layout (Accessibility → Input Monitoring)
+- [x] 3.3 Implement step indicator (Step 1 of 2, Step 2 of 2)
+- [x] 3.4 Add visual status indicators (pending vs granted)
+- [x] 3.5 Integrate PermissionPromptView for each step
+- [x] 3.6 Add "Open System Settings" buttons per step
+- [x] 3.7 Implement automatic progression when permission granted
+- [x] 3.8 Make view non-dismissible (no close button, no Escape key)
+- [x] 3.9 Add animations for state transitions
+- [x] 3.10 Write SwiftUI Previews for each state
 
 ## 4. AppDelegate Integration
-- [ ] 4.1 Update `applicationDidFinishLaunching` to check both permissions
-- [ ] 4.2 Add logic to show PermissionGateView if ANY permission missing
-- [ ] 4.3 Disable settings menu item when permission gate is active
-- [ ] 4.4 Delay AetherCore initialization until permissions granted
-- [ ] 4.5 Add PermissionStatusMonitor integration
-- [ ] 4.6 Implement callback for permission gate dismissal
-- [ ] 4.7 Initialize core features only after gate dismissal
-- [ ] 4.8 Update menu bar icon to show "waiting" state during gate
+- [x] 4.1 Update `applicationDidFinishLaunching` to check both permissions
+- [x] 4.2 Add logic to show PermissionGateView if ANY permission missing
+- [x] 4.3 Disable settings menu item when permission gate is active
+- [x] 4.4 Delay AetherCore initialization until permissions granted
+- [x] 4.5 Add PermissionStatusMonitor integration
+- [x] 4.6 Implement callback for permission gate dismissal
+- [x] 4.7 Initialize core features only after gate dismissal
+- [x] 4.8 Update menu bar icon to show "waiting" state during gate
 
 ## 5. Settings Menu Blocking
-- [ ] 5.1 Add `isPermissionGateActive` state property to AppDelegate
-- [ ] 5.2 Update `showSettings()` to check permission gate state
-- [ ] 5.3 Disable menu item when gate is active
-- [ ] 5.4 Add menu item validation logic
-- [ ] 5.5 Enable menu item after permissions granted
-- [ ] 5.6 Test menu item state changes in runtime
+- [x] 5.1 Add `isPermissionGateActive` state property to AppDelegate
+- [x] 5.2 Update `showSettings()` to check permission gate state
+- [x] 5.3 Disable menu item when gate is active
+- [x] 5.4 Add menu item validation logic
+- [x] 5.5 Enable menu item after permissions granted
+- [x] 5.6 Test menu item state changes in runtime
 
 ## 6. Window Management
-- [ ] 6.1 Create `permissionGateWindow` property in AppDelegate
-- [ ] 6.2 Implement window creation for PermissionGateView
-- [ ] 6.3 Configure window as non-closable, always-on-top
-- [ ] 6.4 Center window on screen
-- [ ] 6.5 Prevent window from being hidden (override close button)
-- [ ] 6.6 Add window lifecycle management (show/hide/dismiss)
-- [ ] 6.7 Test window behavior across different screens
+- [x] 6.1 Create `permissionGateWindow` property in AppDelegate
+- [x] 6.2 Implement window creation for PermissionGateView
+- [x] 6.3 Configure window as non-closable, always-on-top
+- [x] 6.4 Center window on screen
+- [x] 6.5 Prevent window from being hidden (override close button)
+- [x] 6.6 Add window lifecycle management (show/hide/dismiss)
+- [x] 6.7 Test window behavior across different screens
 
 ## 7. Permission Prompt Reuse
-- [ ] 7.1 Update PermissionPromptView to be more reusable
-- [ ] 7.2 Remove "Skip Later" button from component (handle in parent)
-- [ ] 7.3 Add binding for permission type switching
-- [ ] 7.4 Test integration with PermissionGateView
-- [ ] 7.5 Verify deep linking to System Settings works correctly
+- [x] 7.1 Update PermissionPromptView to be more reusable
+- [x] 7.2 Remove "Skip Later" button from component (handle in parent)
+- [x] 7.3 Add binding for permission type switching
+- [x] 7.4 Test integration with PermissionGateView
+- [x] 7.5 Verify deep linking to System Settings works correctly
 
 ## 8. AetherApp Entry Point Update
-- [ ] 8.1 Review if AetherApp.swift needs changes for window management
-- [ ] 8.2 Ensure WindowGroup or Settings scene doesn't conflict with permission gate
-- [ ] 8.3 Test app launch flow with and without permissions
-- [ ] 8.4 Verify no duplicate windows appear
+- [x] 8.1 Review if AetherApp.swift needs changes for window management
+- [x] 8.2 Ensure WindowGroup or Settings scene doesn't conflict with permission gate
+- [x] 8.3 Test app launch flow with and without permissions
+- [x] 8.4 Verify no duplicate windows appear
 
 ## 9. Testing and Validation
 - [ ] 9.1 Manual test: Launch with no permissions → see gate
