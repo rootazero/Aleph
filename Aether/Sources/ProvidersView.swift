@@ -164,14 +164,17 @@ struct ProvidersView: View {
     private var providerListToolbar: some View {
         HStack(spacing: DesignTokens.Spacing.md) {
             // Search bar
-            SearchBar(searchText: $searchText, placeholder: "Search providers...")
+            SearchBar(
+                searchText: $searchText,
+                placeholder: NSLocalizedString("settings.providers.search_placeholder", comment: "Search providers placeholder")
+            )
                 .frame(width: 240)
 
             Spacer()
 
             // Add Custom Provider button with background highlight
             Button(action: addCustomProvider) {
-                Text("Add Custom Provider")
+                Text("settings.providers.add_custom")
                     .font(DesignTokens.Typography.body)
                     .foregroundColor(.white)
             }
