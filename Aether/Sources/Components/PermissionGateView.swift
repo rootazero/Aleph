@@ -34,7 +34,7 @@ enum PermissionGateStep: Int {
     var description: String {
         switch self {
         case .accessibility:
-            return "Aether 需要辅助功能权限来捕获窗口上下文和模拟键盘输入,以便将 AI 响应粘贴到您的应用程序中。"
+            return "Aether 需要辅助功能权限来捕获窗口上下文和模拟键盘输入,以便将 AI 响应粘贴到您的应用程序中。\n\n授予权限后，Aether 会自动重启。"
         case .inputMonitoring:
             return "Aether 需要输入监控权限来检测全局热键 (⌘~),让您可以在任何应用中快速召唤 AI 助手。\n\n⚠️ 重要提示：授予此权限后，macOS 系统会弹出重启提示，请点击「重新打开」按钮。"
         }
@@ -302,9 +302,24 @@ struct PermissionGateView: View {
         monitor.startMonitoring { accessibility, inputMonitoring in
             print("[PermissionGateView] Permission status updated - Accessibility: \(accessibility), InputMonitoring: \(inputMonitoring)")
 
+            // Detect if Accessibility permission was just granted
+            let accessibilityJustGranted = !hasAccessibility && accessibility
+
             withAnimation(.easeInOut(duration: 0.3)) {
                 hasAccessibility = accessibility
                 hasInputMonitoring = inputMonitoring
+            }
+
+            // CRITICAL: When Accessibility permission is granted, macOS may silently terminate the app
+            // We need to restart the app ourselves (unlike Input Monitoring which shows system prompt)
+            if accessibilityJustGranted {
+                print("[PermissionGateView] Accessibility permission just granted - app may be terminated by macOS, restarting proactively")
+
+                // Give user brief moment to see the checkmark
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    self.restartApplication(reason: "Accessibility permission granted")
+                }
+                return  // Don't proceed with other logic
             }
 
             // Auto-progress from Accessibility to Input Monitoring when Accessibility is granted
@@ -316,7 +331,7 @@ struct PermissionGateView: View {
                 }
             }
 
-            // When both permissions are granted (after macOS system restart)
+            // When both permissions are granted (after macOS system restart from Input Monitoring)
             // This callback will be triggered on the next app launch
             if accessibility && inputMonitoring {
                 print("[PermissionGateView] All permissions granted - dismissing gate")
@@ -324,6 +339,34 @@ struct PermissionGateView: View {
                     onAllPermissionsGranted()
                 }
             }
+        }
+    }
+
+    /// Restart the application
+    /// - Parameter reason: Reason for restart (for logging)
+    private func restartApplication(reason: String) {
+        print("[PermissionGateView] Restarting application - Reason: \(reason)")
+
+        // Get the path to the current executable
+        let bundlePath = Bundle.main.bundlePath
+
+        // Use 'open' command to relaunch the app
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        task.arguments = [bundlePath]
+
+        do {
+            try task.run()
+
+            // Terminate current instance after a brief delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                NSApplication.shared.terminate(nil)
+            }
+        } catch {
+            print("[PermissionGateView] Error restarting application: \(error)")
+
+            // If restart fails, just continue (macOS might handle it)
+            print("[PermissionGateView] Failed to restart, app may be terminated by macOS")
         }
     }
 }
