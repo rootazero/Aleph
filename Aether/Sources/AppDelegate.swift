@@ -59,12 +59,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Clean up Rust core
-        do {
-            try core?.stopListening()
-            print("[Aether] Core stopped successfully")
-        } catch {
-            print("[Aether] Error stopping core: \(error)")
+        // Clean up Rust core (only if initialized)
+        if let core = core {
+            do {
+                try core.stopListening()
+                print("[Aether] Core stopped successfully")
+            } catch {
+                print("[Aether] Error stopping core: \(error)")
+            }
+        } else {
+            print("[Aether] Application terminating (Core was not initialized)")
         }
     }
 
