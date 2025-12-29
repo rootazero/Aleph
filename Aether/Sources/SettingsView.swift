@@ -56,14 +56,14 @@ struct GeneralSettingsView: View {
                         Button("settings.general.check_updates") {
                             checkForUpdates()
                         }
-                        .help("Check for Aether updates")
+                        .help(NSLocalizedString("settings.general.check_updates_help", comment: ""))
                     }
 
                     Section(header: Text("settings.general.logs")) {
                         Button("settings.general.view_logs") {
                             showingLogViewer = true
                         }
-                        .help("View application logs")
+                        .help(NSLocalizedString("settings.general.view_logs_help", comment: ""))
                         .disabled(core == nil)
                     }
 

@@ -33,8 +33,10 @@
 "settings.general.sound_effects" = "声音效果";
 "settings.general.updates" = "更新";
 "settings.general.check_updates" = "检查更新";
+"settings.general.check_updates_help" = "检查 Aether 更新";
 "settings.general.logs" = "日志";
 "settings.general.view_logs" = "查看日志";
+"settings.general.view_logs_help" = "查看应用程序日志";
 "settings.general.about" = "关于";
 "settings.general.version" = "版本：";
 "settings.general.coming_soon" = "即将推出";
@@ -104,6 +106,9 @@
 
 "provider.empty_state.title" = "未选择提供商";
 "provider.empty_state.message" = "从列表中选择提供商或添加新的提供商";
+
+// MARK: - Provider Help Text
+"provider.help.copy_to_clipboard" = "复制到剪贴板";
 
 // MARK: - Settings Window - Routing Tab
 "settings.routing.title" = "路由规则";
@@ -263,6 +268,12 @@
 "alert.logs.cleared_message" = "已删除 %d 个日志文件。";
 "alert.logs.exported_title" = "日志已导出";
 "alert.logs.exported_message" = "日志已保存到：%@";
+
+// MARK: - Log Viewer Help Text
+"logs.help.export" = "将日志导出为 ZIP 文件";
+"logs.help.clear" = "删除所有日志文件";
+"logs.help.reload" = "重新加载日志";
+"logs.help.close" = "关闭日志查看器";
 
 // MARK: - Routing Alerts
 "alert.routing.export_title" = "导出成功";

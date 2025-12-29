@@ -61,24 +61,24 @@ struct LogViewerView: View {
                 Button(action: exportLogs) {
                     Label("Export", systemImage: "square.and.arrow.up")
                 }
-                .help("Export logs as ZIP file")
+                .help(NSLocalizedString("logs.help.export", comment: ""))
 
                 Button(action: { showingClearConfirmation = true }) {
                     Label("Clear", systemImage: "trash")
                 }
-                .help("Delete all log files")
+                .help(NSLocalizedString("logs.help.clear", comment: ""))
 
                 Button(action: loadLogs) {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
-                .help("Reload logs")
+                .help(NSLocalizedString("logs.help.reload", comment: ""))
 
                 Button(action: { dismiss() }) {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help("Close log viewer")
+                .help(NSLocalizedString("logs.help.close", comment: ""))
             }
             .padding()
             .background(Color(NSColor.controlBackgroundColor))

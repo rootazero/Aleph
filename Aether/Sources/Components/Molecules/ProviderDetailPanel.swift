@@ -250,7 +250,7 @@ struct ProviderDetailPanel: View {
                     .foregroundColor(DesignTokens.Colors.accentBlue)
             }
             .buttonStyle(.plain)
-            .help("Copy to clipboard")
+            .help(NSLocalizedString("provider.help.copy_to_clipboard", comment: ""))
         }
     }
 
@@ -274,7 +274,7 @@ struct ProviderDetailPanel: View {
                     .foregroundColor(DesignTokens.Colors.accentBlue)
             }
             .buttonStyle(.plain)
-            .help("Copy to clipboard")
+            .help(NSLocalizedString("provider.help.copy_to_clipboard", comment: ""))
         }
     }
 

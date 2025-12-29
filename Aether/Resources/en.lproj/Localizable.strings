@@ -34,8 +34,10 @@
 "settings.general.sound_effects" = "Sound Effects";
 "settings.general.updates" = "Updates";
 "settings.general.check_updates" = "Check for Updates";
+"settings.general.check_updates_help" = "Check for Aether updates";
 "settings.general.logs" = "Logs";
 "settings.general.view_logs" = "View Logs";
+"settings.general.view_logs_help" = "View application logs";
 "settings.general.about" = "About";
 "settings.general.version" = "Version:";
 "settings.general.coming_soon" = "Coming Soon";
@@ -105,6 +107,9 @@
 
 "provider.empty_state.title" = "No Provider Selected";
 "provider.empty_state.message" = "Select a provider from the list or add a new one";
+
+// MARK: - Provider Help Text
+"provider.help.copy_to_clipboard" = "Copy to clipboard";
 
 // MARK: - Settings Window - Routing Tab
 "settings.routing.title" = "Routing Rules";
@@ -264,6 +269,12 @@
 "alert.logs.cleared_message" = "Deleted %d log file(s).";
 "alert.logs.exported_title" = "Logs Exported";
 "alert.logs.exported_message" = "Logs saved to: %@";
+
+// MARK: - Log Viewer Help Text
+"logs.help.export" = "Export logs as ZIP file";
+"logs.help.clear" = "Delete all log files";
+"logs.help.reload" = "Reload logs";
+"logs.help.close" = "Close log viewer";
 
 // MARK: - Routing Alerts
 "alert.routing.export_title" = "Export Successful";
