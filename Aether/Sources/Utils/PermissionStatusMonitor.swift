@@ -34,6 +34,12 @@ class PermissionStatusMonitor: ObservableObject {
     private var lastAccessibilityStatus: Bool = false
     private var lastInputMonitoringStatus: Bool = false
 
+    /// Debounce mechanism to avoid false positives
+    /// Requires N consecutive stable readings before reporting change
+    private let debounceCount: Int = 3
+    private var accessibilityDebounceBuffer: [Bool] = []
+    private var inputMonitoringDebounceBuffer: [Bool] = []
+
     /// Callback invoked when permission status changes
     private var onStatusChange: PermissionStatusChangeCallback?
 
@@ -69,6 +75,10 @@ class PermissionStatusMonitor: ObservableObject {
         lastAccessibilityStatus = PermissionChecker.hasAccessibilityPermission()
         lastInputMonitoringStatus = PermissionChecker.hasInputMonitoringPermission()
 
+        // Clear debounce buffers
+        accessibilityDebounceBuffer.removeAll()
+        inputMonitoringDebounceBuffer.removeAll()
+
         print("[PermissionStatusMonitor] Starting monitoring (interval: \(pollInterval)s)")
         print("[PermissionStatusMonitor] Initial state - Accessibility: \(lastAccessibilityStatus), InputMonitoring: \(lastInputMonitoringStatus)")
 
@@ -102,6 +112,10 @@ class PermissionStatusMonitor: ObservableObject {
         timer?.invalidate()
         timer = nil
         onStatusChange = nil
+
+        // Clear debounce buffers
+        accessibilityDebounceBuffer.removeAll()
+        inputMonitoringDebounceBuffer.removeAll()
     }
 
     /// Get current permission status without starting monitoring
@@ -115,31 +129,53 @@ class PermissionStatusMonitor: ObservableObject {
 
     // MARK: - Private Methods
 
-    /// Check permission status and invoke callback if changed
+    /// Check permission status and invoke callback if changed (with debouncing)
     private func checkPermissionStatus() {
         let currentAccessibilityStatus = PermissionChecker.hasAccessibilityPermission()
         let currentInputMonitoringStatus = PermissionChecker.hasInputMonitoringPermission()
 
-        // Check if status changed
-        let accessibilityChanged = currentAccessibilityStatus != lastAccessibilityStatus
-        let inputMonitoringChanged = currentInputMonitoringStatus != lastInputMonitoringStatus
+        // Add current readings to debounce buffers
+        accessibilityDebounceBuffer.append(currentAccessibilityStatus)
+        inputMonitoringDebounceBuffer.append(currentInputMonitoringStatus)
 
-        if accessibilityChanged || inputMonitoringChanged {
-            print("[PermissionStatusMonitor] Permission status changed:")
-            if accessibilityChanged {
-                print("  - Accessibility: \(lastAccessibilityStatus) → \(currentAccessibilityStatus)")
-            }
-            if inputMonitoringChanged {
-                print("  - Input Monitoring: \(lastInputMonitoringStatus) → \(currentInputMonitoringStatus)")
-            }
+        // Keep only last N readings
+        if accessibilityDebounceBuffer.count > debounceCount {
+            accessibilityDebounceBuffer.removeFirst()
+        }
+        if inputMonitoringDebounceBuffer.count > debounceCount {
+            inputMonitoringDebounceBuffer.removeFirst()
+        }
 
-            // Update last known status
+        // Only proceed if we have enough samples
+        guard accessibilityDebounceBuffer.count == debounceCount,
+              inputMonitoringDebounceBuffer.count == debounceCount else {
+            return
+        }
+
+        // Check if all readings in buffer are consistent
+        let accessibilityStable = accessibilityDebounceBuffer.allSatisfy { $0 == currentAccessibilityStatus }
+        let inputMonitoringStable = inputMonitoringDebounceBuffer.allSatisfy { $0 == currentInputMonitoringStatus }
+
+        // Only report change if readings are stable AND different from last known state
+        var hasChanges = false
+
+        if accessibilityStable && currentAccessibilityStatus != lastAccessibilityStatus {
+            print("[PermissionStatusMonitor] Accessibility permission changed (debounced): \(lastAccessibilityStatus) → \(currentAccessibilityStatus)")
             lastAccessibilityStatus = currentAccessibilityStatus
-            lastInputMonitoringStatus = currentInputMonitoringStatus
+            hasChanges = true
+        }
 
+        if inputMonitoringStable && currentInputMonitoringStatus != lastInputMonitoringStatus {
+            print("[PermissionStatusMonitor] Input Monitoring permission changed (debounced): \(lastInputMonitoringStatus) → \(currentInputMonitoringStatus)")
+            lastInputMonitoringStatus = currentInputMonitoringStatus
+            hasChanges = true
+        }
+
+        if hasChanges {
             // Notify observer on main thread
             DispatchQueue.main.async { [weak self] in
-                self?.onStatusChange?(currentAccessibilityStatus, currentInputMonitoringStatus)
+                guard let self = self else { return }
+                self.onStatusChange?(self.lastAccessibilityStatus, self.lastInputMonitoringStatus)
             }
         }
     }
