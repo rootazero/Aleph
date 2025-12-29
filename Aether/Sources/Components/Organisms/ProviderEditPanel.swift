@@ -735,11 +735,33 @@ struct ProviderEditPanel: View {
 
         Task {
             do {
-                // Temporarily save config (without persisting)
-                try await saveProviderConfig(persist: false)
+                // Build temporary provider config with actual API key (not keychain reference)
+                // This allows testing without persisting the configuration to disk
+                let testConfig = ProviderConfig(
+                    providerType: providerType,
+                    apiKey: providerType == "ollama" ? nil : apiKey,  // Use actual API key for testing
+                    model: model,
+                    baseUrl: baseURL.isEmpty ? nil : baseURL,
+                    color: color.toHex(),
+                    timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
+                    enabled: isProviderActive,
+                    maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
+                    temperature: temperature.isEmpty ? nil : Float(temperature),
+                    topP: topP.isEmpty ? nil : Float(topP),
+                    topK: topK.isEmpty ? nil : UInt32(topK),
+                    frequencyPenalty: frequencyPenalty.isEmpty ? nil : Float(frequencyPenalty),
+                    presencePenalty: presencePenalty.isEmpty ? nil : Float(presencePenalty),
+                    stopSequences: stopSequences.isEmpty ? nil : stopSequences,
+                    thinkingLevel: (providerType == "gemini" && !thinkingLevel.isEmpty) ? thinkingLevel : nil,
+                    mediaResolution: (providerType == "gemini" && !mediaResolution.isEmpty) ? mediaResolution : nil,
+                    repeatPenalty: repeatPenalty.isEmpty ? nil : Float(repeatPenalty)
+                )
 
-                // Test connection - returns TestConnectionResult
-                let result = core.testProviderConnection(providerName: providerName)
+                // Test connection with temporary config (does not persist to disk)
+                let result = core.testProviderConnectionWithConfig(
+                    providerName: providerName,
+                    providerConfig: testConfig
+                )
 
                 await MainActor.run {
                     if result.success {
