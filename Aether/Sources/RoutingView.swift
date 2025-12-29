@@ -29,11 +29,11 @@ struct RoutingView: View {
             // Header
             HStack {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                    Text("Routing Rules")
+                    Text(LocalizedStringKey("settings.routing.title"))
                         .font(DesignTokens.Typography.title)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
 
-                    Text("Define how clipboard content is routed to AI providers based on patterns.")
+                    Text(LocalizedStringKey("settings.routing.description"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
@@ -43,12 +43,12 @@ struct RoutingView: View {
                 // Import/Export menu
                 Menu {
                     Button(action: exportRules) {
-                        Label("Export Rules", systemImage: "square.and.arrow.up")
+                        Label(LocalizedStringKey("settings.routing.export_rules"), systemImage: "square.and.arrow.up")
                     }
                     .disabled(rules.isEmpty)
 
                     Button(action: importRules) {
-                        Label("Import Rules", systemImage: "square.and.arrow.down")
+                        Label(LocalizedStringKey("settings.routing.import_rules"), systemImage: "square.and.arrow.down")
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -56,10 +56,10 @@ struct RoutingView: View {
                         .foregroundColor(DesignTokens.Colors.textPrimary)
                 }
                 .buttonStyle(.plain)
-                .help("Import/Export Rules")
+                .help(LocalizedStringKey("settings.routing.import_export_help"))
 
                 // Add Rule button
-                ActionButton("Add Rule", icon: "plus.circle.fill", style: .primary) {
+                ActionButton(LocalizedStringKey("settings.routing.add_rule"), icon: "plus.circle.fill", style: .primary) {
                     addNewRule()
                 }
             }
@@ -80,7 +80,7 @@ struct RoutingView: View {
 
             // Rules List
             if isLoading {
-                ProgressView("Loading rules...")
+                ProgressView(LocalizedStringKey("settings.routing.loading"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if rules.isEmpty {
                 VStack(spacing: DesignTokens.Spacing.md) {
@@ -88,15 +88,15 @@ struct RoutingView: View {
                         .font(.system(size: 48))
                         .foregroundColor(DesignTokens.Colors.textSecondary)
 
-                    Text("No routing rules configured")
+                    Text(LocalizedStringKey("settings.routing.no_rules"))
                         .font(DesignTokens.Typography.heading)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
 
-                    Text("Add your first rule to start routing clipboard content")
+                    Text(LocalizedStringKey("settings.routing.no_rules_message"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
 
-                    ActionButton("Add Rule", icon: "plus.circle.fill", style: .secondary) {
+                    ActionButton(LocalizedStringKey("settings.routing.add_rule"), icon: "plus.circle.fill", style: .secondary) {
                         addNewRule()
                     }
                     .padding(.top, DesignTokens.Spacing.sm)
@@ -122,7 +122,7 @@ struct RoutingView: View {
                 HStack(spacing: DesignTokens.Spacing.sm) {
                     Image(systemName: "info.circle")
                         .foregroundColor(DesignTokens.Colors.textSecondary)
-                    Text("Rules are evaluated top-to-bottom. Drag to reorder priority.")
+                    Text(LocalizedStringKey("settings.routing.footer_info"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
@@ -140,16 +140,16 @@ struct RoutingView: View {
                 RuleEditorView(rules: $rules, core: core, providers: providers)
             }
         }
-        .alert("Delete Rule", isPresented: $showingDeleteConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Delete", role: .destructive) {
+        .alert(NSLocalizedString("settings.routing.delete_rule", comment: ""), isPresented: $showingDeleteConfirmation) {
+            Button(NSLocalizedString("common.cancel", comment: ""), role: .cancel) {}
+            Button(NSLocalizedString("common.delete", comment: ""), role: .destructive) {
                 if let index = deletingRuleIndex {
                     deleteRule(at: index)
                 }
             }
         } message: {
             if let index = deletingRuleIndex {
-                Text("Are you sure you want to delete the rule with pattern '\(rules[index].regex)'?")
+                Text(String(format: NSLocalizedString("settings.routing.delete_rule_message", comment: ""), rules[index].regex))
             }
         }
     }
@@ -416,7 +416,7 @@ struct RuleCard: View {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                 // Pattern
                 HStack(spacing: DesignTokens.Spacing.xs) {
-                    Text("Pattern:")
+                    Text(LocalizedStringKey("settings.routing.pattern"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                     Text(rule.regex)
@@ -426,7 +426,7 @@ struct RuleCard: View {
 
                 // Provider
                 HStack(spacing: DesignTokens.Spacing.xs) {
-                    Text("Provider:")
+                    Text(LocalizedStringKey("settings.routing.provider"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
 
@@ -443,7 +443,7 @@ struct RuleCard: View {
                         Text(rule.provider)
                             .font(DesignTokens.Typography.body)
                             .foregroundColor(DesignTokens.Colors.warning)
-                        Text("(not configured)")
+                        Text(LocalizedStringKey("settings.routing.not_configured"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.warning)
                     }
@@ -452,7 +452,7 @@ struct RuleCard: View {
                 // System prompt preview (if exists)
                 if let prompt = rule.systemPrompt, !prompt.isEmpty {
                     HStack(spacing: DesignTokens.Spacing.xs) {
-                        Text("Prompt:")
+                        Text(LocalizedStringKey("settings.routing.prompt"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                         Text(prompt.prefix(50) + (prompt.count > 50 ? "..." : ""))
@@ -473,7 +473,7 @@ struct RuleCard: View {
                         .font(DesignTokens.Typography.body)
                 }
                 .buttonStyle(.plain)
-                .help("Edit rule")
+                .help(LocalizedStringKey("settings.routing.edit_rule_help"))
 
                 Button(action: onDelete) {
                     Image(systemName: "trash")
@@ -481,7 +481,7 @@ struct RuleCard: View {
                         .font(DesignTokens.Typography.body)
                 }
                 .buttonStyle(.plain)
-                .help("Delete rule")
+                .help(LocalizedStringKey("settings.routing.delete_rule_help"))
             }
         }
         .padding(DesignTokens.Spacing.md)

@@ -19,24 +19,24 @@ struct ShortcutsView: View {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
                 // Header
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                    Text("Keyboard Shortcuts")
+                    Text(LocalizedStringKey("settings.shortcuts.title"))
                         .font(DesignTokens.Typography.title)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
 
-                    Text("Configure global keyboard shortcuts for Aether.")
+                    Text(LocalizedStringKey("settings.shortcuts.description"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
 
                 // Global Hotkey Card
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                    Label("Global Hotkey", systemImage: "keyboard")
+                    Label(LocalizedStringKey("settings.shortcuts.global_hotkey"), systemImage: "keyboard")
                         .font(DesignTokens.Typography.heading)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
 
                     VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                         HStack {
-                            Text("Summon Aether:")
+                            Text(LocalizedStringKey("settings.shortcuts.summon_label"))
                                 .font(DesignTokens.Typography.body)
                                 .frame(width: 120, alignment: .leading)
                             Spacer()
@@ -63,18 +63,18 @@ struct ShortcutsView: View {
 
                         // Action buttons
                         HStack(spacing: DesignTokens.Spacing.md) {
-                            ActionButton("Reset to Default", style: .secondary) {
+                            ActionButton(LocalizedStringKey("settings.shortcuts.reset_button"), style: .secondary) {
                                 resetToDefault()
                             }
 
-                            ActionButton("Choose Preset...", style: .secondary) {
+                            ActionButton(LocalizedStringKey("settings.shortcuts.preset_button"), style: .secondary) {
                                 showingPresets = true
                             }
 
                             Spacer()
 
                             if showingSaveConfirmation {
-                                Label("Saved!", systemImage: "checkmark.circle.fill")
+                                Label(LocalizedStringKey("settings.shortcuts.saved"), systemImage: "checkmark.circle.fill")
                                     .foregroundColor(DesignTokens.Colors.providerActive)
                                     .font(DesignTokens.Typography.caption)
                             }
@@ -88,33 +88,33 @@ struct ShortcutsView: View {
 
                 // Permission Card
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                    Label("Permission Required", systemImage: "lock.shield")
+                    Label(LocalizedStringKey("settings.shortcuts.permission_required"), systemImage: "lock.shield")
                         .font(DesignTokens.Typography.heading)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
 
                     VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                        Text("Aether requires **Accessibility** permission to detect global hotkeys.")
+                        Text(LocalizedStringKey("settings.shortcuts.permission_description"))
                             .font(DesignTokens.Typography.body)
                             .foregroundColor(DesignTokens.Colors.textPrimary)
 
-                        Text("Why this is needed:")
+                        Text(LocalizedStringKey("settings.shortcuts.why_needed"))
                             .font(DesignTokens.Typography.caption)
                             .fontWeight(.semibold)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
 
                         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                            Label("Detect ⌘~ hotkey in any app", systemImage: "checkmark.circle")
+                            Label(LocalizedStringKey("settings.shortcuts.permission_detect"), systemImage: "checkmark.circle")
                                 .font(DesignTokens.Typography.caption)
                                 .foregroundColor(DesignTokens.Colors.textSecondary)
-                            Label("Read clipboard content", systemImage: "checkmark.circle")
+                            Label(LocalizedStringKey("settings.shortcuts.permission_read"), systemImage: "checkmark.circle")
                                 .font(DesignTokens.Typography.caption)
                                 .foregroundColor(DesignTokens.Colors.textSecondary)
-                            Label("Simulate keyboard input for paste", systemImage: "checkmark.circle")
+                            Label(LocalizedStringKey("settings.shortcuts.permission_simulate"), systemImage: "checkmark.circle")
                                 .font(DesignTokens.Typography.caption)
                                 .foregroundColor(DesignTokens.Colors.textSecondary)
                         }
 
-                        ActionButton("Open System Settings", icon: "gear", style: .primary) {
+                        ActionButton(LocalizedStringKey("settings.shortcuts.open_settings_button"), icon: "gear", style: .primary) {
                             openAccessibilitySettings()
                         }
                         .padding(.top, DesignTokens.Spacing.sm)
@@ -193,16 +193,16 @@ struct PresetShortcutsSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
             HStack {
-                Text("Choose a Preset Shortcut")
+                Text(LocalizedStringKey("settings.shortcuts.preset_sheet_title"))
                     .font(DesignTokens.Typography.title)
                     .foregroundColor(DesignTokens.Colors.textPrimary)
                 Spacer()
-                Button("Close") {
+                Button(LocalizedStringKey("common.close")) {
                     dismiss()
                 }
             }
 
-            Text("Select a common keyboard shortcut combination:")
+            Text(LocalizedStringKey("settings.shortcuts.preset_sheet_description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
@@ -262,7 +262,7 @@ struct PresetShortcutRow: View {
 
             Spacer()
 
-            ActionButton("Use This", style: .primary, isDisabled: isSelected) {
+            ActionButton(LocalizedStringKey("settings.shortcuts.use_this_button"), style: .primary, isDisabled: isSelected) {
                 onSelect()
             }
         }

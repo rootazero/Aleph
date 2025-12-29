@@ -101,18 +101,47 @@
 "provider.empty_state.message" = "Select a provider from the list or add a new one";
 
 // MARK: - Settings Window - Routing Tab
-"settings.routing.title" = "Routing";
+"settings.routing.title" = "Routing Rules";
+"settings.routing.description" = "Define how clipboard content is routed to AI providers based on patterns.";
 "settings.routing.add_rule" = "Add Rule";
 "settings.routing.edit_rule" = "Edit Rule";
 "settings.routing.delete_rule" = "Delete Rule";
+"settings.routing.export_rules" = "Export Rules";
+"settings.routing.import_rules" = "Import Rules";
+"settings.routing.import_export_help" = "Import/Export Rules";
+"settings.routing.loading" = "Loading rules...";
 "settings.routing.no_rules" = "No routing rules configured";
+"settings.routing.no_rules_message" = "Add your first rule to start routing clipboard content";
+"settings.routing.footer_info" = "Rules are evaluated top-to-bottom. Drag to reorder priority.";
+"settings.routing.delete_rule_message" = "Are you sure you want to delete the rule with pattern '%@'?";
+"settings.routing.pattern" = "Pattern:";
+"settings.routing.provider" = "Provider:";
+"settings.routing.prompt" = "Prompt:";
+"settings.routing.not_configured" = "(not configured)";
+"settings.routing.edit_rule_help" = "Edit rule";
+"settings.routing.delete_rule_help" = "Delete rule";
 
 // MARK: - Settings Window - Shortcuts Tab
-"settings.shortcuts.title" = "Shortcuts";
+"settings.shortcuts.title" = "Keyboard Shortcuts";
+"settings.shortcuts.description" = "Configure global keyboard shortcuts for Aether.";
 "settings.shortcuts.global_hotkey" = "Global Hotkey";
+"settings.shortcuts.summon_label" = "Summon Aether:";
 "settings.shortcuts.cancel_hotkey" = "Cancel Hotkey";
 "settings.shortcuts.record_instruction" = "Press any key combination to record...";
 "settings.shortcuts.press_escape" = "Press Escape to cancel";
+"settings.shortcuts.reset_button" = "Reset to Default";
+"settings.shortcuts.preset_button" = "Choose Preset...";
+"settings.shortcuts.saved" = "Saved!";
+"settings.shortcuts.permission_required" = "Permission Required";
+"settings.shortcuts.permission_description" = "Aether requires **Accessibility** permission to detect global hotkeys.";
+"settings.shortcuts.why_needed" = "Why this is needed:";
+"settings.shortcuts.permission_detect" = "Detect ⌘~ hotkey in any app";
+"settings.shortcuts.permission_read" = "Read clipboard content";
+"settings.shortcuts.permission_simulate" = "Simulate keyboard input for paste";
+"settings.shortcuts.open_settings_button" = "Open System Settings";
+"settings.shortcuts.preset_sheet_title" = "Choose a Preset Shortcut";
+"settings.shortcuts.preset_sheet_description" = "Select a common keyboard shortcut combination:";
+"settings.shortcuts.use_this_button" = "Use This";
 
 // MARK: - Settings Window - Behavior Tab
 "settings.behavior.title" = "Behavior";

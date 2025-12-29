@@ -65,25 +65,25 @@
   - **Validation**: ✅ Verify Chinese translations for complex technical terms
 
 ### Routing Tab (2 tasks)
-- [ ] **Task 2.6: Localize RoutingView strings**
+- [x] **Task 2.6: Localize RoutingView strings**
   - Replace "Routing Rules", "Add Rule", "Edit Rule", "Delete Rule" with localized keys
   - Add English strings for rule editor labels
-  - **Validation**: Build and verify routing UI
+  - **Validation**: ✅ Build and verify routing UI
 
-- [ ] **Task 2.7: Add Simplified Chinese translations for Routing tab**
+- [x] **Task 2.7: Add Simplified Chinese translations for Routing tab**
   - Translate routing-related strings
   - Test rule editor in Chinese
-  - **Validation**: Verify Chinese routing UI
+  - **Validation**: ✅ Verify Chinese routing UI
 
 ### Shortcuts Tab (2 tasks)
-- [ ] **Task 2.8: Localize ShortcutsView strings**
+- [x] **Task 2.8: Localize ShortcutsView strings**
   - Replace "Shortcuts", "Global Hotkey", "Cancel Hotkey" with localized keys
   - Localize hotkey recorder instructions
-  - **Validation**: Build and verify shortcuts UI
+  - **Validation**: ✅ Build and verify shortcuts UI
 
-- [ ] **Task 2.9: Add Simplified Chinese translations for Shortcuts tab**
+- [x] **Task 2.9: Add Simplified Chinese translations for Shortcuts tab**
   - Translate shortcut-related strings
-  - **Validation**: Test hotkey recorder in Chinese
+  - **Validation**: ✅ Test hotkey recorder in Chinese
 
 ### Behavior Tab (2 tasks)
 - [x] **Task 2.10: Localize BehaviorSettingsView strings**

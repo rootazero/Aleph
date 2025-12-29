@@ -100,18 +100,47 @@
 "provider.empty_state.message" = "从列表中选择提供商或添加新的提供商";
 
 // MARK: - Settings Window - Routing Tab
-"settings.routing.title" = "路由";
+"settings.routing.title" = "路由规则";
+"settings.routing.description" = "定义剪贴板内容如何基于模式路由到 AI 提供商。";
 "settings.routing.add_rule" = "添加规则";
 "settings.routing.edit_rule" = "编辑规则";
 "settings.routing.delete_rule" = "删除规则";
+"settings.routing.export_rules" = "导出规则";
+"settings.routing.import_rules" = "导入规则";
+"settings.routing.import_export_help" = "导入/导出规则";
+"settings.routing.loading" = "加载规则中...";
 "settings.routing.no_rules" = "未配置路由规则";
+"settings.routing.no_rules_message" = "添加您的第一条规则以开始路由剪贴板内容";
+"settings.routing.footer_info" = "规则从上到下评估。拖动以重新排序优先级。";
+"settings.routing.delete_rule_message" = "您确定要删除模式为「%@」的规则吗？";
+"settings.routing.pattern" = "模式：";
+"settings.routing.provider" = "提供商：";
+"settings.routing.prompt" = "提示：";
+"settings.routing.not_configured" = "（未配置）";
+"settings.routing.edit_rule_help" = "编辑规则";
+"settings.routing.delete_rule_help" = "删除规则";
 
 // MARK: - Settings Window - Shortcuts Tab
-"settings.shortcuts.title" = "快捷键";
+"settings.shortcuts.title" = "键盘快捷键";
+"settings.shortcuts.description" = "配置 Aether 的全局键盘快捷键。";
 "settings.shortcuts.global_hotkey" = "全局快捷键";
+"settings.shortcuts.summon_label" = "召唤 Aether：";
 "settings.shortcuts.cancel_hotkey" = "取消快捷键";
 "settings.shortcuts.record_instruction" = "按任意组合键进行录制...";
 "settings.shortcuts.press_escape" = "按 Escape 键取消";
+"settings.shortcuts.reset_button" = "重置为默认";
+"settings.shortcuts.preset_button" = "选择预设...";
+"settings.shortcuts.saved" = "已保存！";
+"settings.shortcuts.permission_required" = "需要权限";
+"settings.shortcuts.permission_description" = "Aether 需要**辅助功能**权限来检测全局快捷键。";
+"settings.shortcuts.why_needed" = "为什么需要此权限：";
+"settings.shortcuts.permission_detect" = "在任何应用中检测 ⌘~ 快捷键";
+"settings.shortcuts.permission_read" = "读取剪贴板内容";
+"settings.shortcuts.permission_simulate" = "模拟键盘输入以进行粘贴";
+"settings.shortcuts.open_settings_button" = "打开系统设置";
+"settings.shortcuts.preset_sheet_title" = "选择预设快捷键";
+"settings.shortcuts.preset_sheet_description" = "选择常用的键盘快捷键组合：";
+"settings.shortcuts.use_this_button" = "使用此快捷键";
 
 // MARK: - Settings Window - Behavior Tab
 "settings.behavior.title" = "行为";
