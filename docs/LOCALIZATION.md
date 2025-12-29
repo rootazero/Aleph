@@ -320,3 +320,5 @@ open -a Aether --args -AppleLanguages '(ja)'
 **Maintained by**: Aether Development Team
 **Last Updated**: 2025-12-29
 **Status**: ✅ Active (English + Simplified Chinese)
+**Translation Keys**: 249 keys (100% coverage)
+**Translation Files**: Localizable.strings + InfoPlist.strings

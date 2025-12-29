@@ -1095,6 +1095,104 @@ statusItem.menu = createMenu()
 **Problem**: Rust objects passed to Swift might be deallocated prematurely
 **Solution**: UniFFI uses Arc<> internally; ensure Swift retains strong references
 
+## Internationalization (i18n)
+
+Aether supports multiple languages through SwiftUI's localization system. Currently supported languages:
+- English (en) - Base language
+- Simplified Chinese (zh-Hans)
+
+### Localization Architecture
+
+**File Structure:**
+```
+Aether/Resources/
+├── en.lproj/
+│   ├── Localizable.strings    # All UI text keys
+│   └── InfoPlist.strings       # System permission descriptions
+└── zh-Hans.lproj/
+    ├── Localizable.strings
+    └── InfoPlist.strings
+```
+
+**Key Naming Conventions:**
+```
+common.*               # Reusable UI elements (save, cancel, ok, etc.)
+settings.section.*     # Settings window sections
+provider.*             # AI provider configuration
+error.*                # Error messages
+alert.*                # Alert dialogs
+halo.state.*           # Halo overlay states
+```
+
+### How to Localize New UI Text
+
+1. **For SwiftUI Views (Declarative):**
+   ```swift
+   // Use LocalizedStringKey directly
+   Text(LocalizedStringKey("settings.general.title"))
+   Button(LocalizedStringKey("common.save")) { ... }
+   ```
+
+2. **For Programmatic Strings:**
+   ```swift
+   // Use NSLocalizedString
+   alert.messageText = NSLocalizedString("error.title", comment: "")
+   let message = String(format: NSLocalizedString("alert.about.message", comment: ""), version)
+   ```
+
+3. **Add Keys to Localizable.strings:**
+   ```swift
+   // en.lproj/Localizable.strings
+   "settings.general.title" = "General";
+   "alert.about.message" = "AI Middleware for macOS\nVersion %@\n\nBrings AI intelligence to your cursor.";
+
+   // zh-Hans.lproj/Localizable.strings
+   "settings.general.title" = "通用";
+   "alert.about.message" = "macOS AI 中间件\n版本 %@\n\n将 AI 智能带到您的光标。";
+   ```
+
+### Validation
+
+**Before Committing:**
+```bash
+# Run translation validation script
+./Scripts/validate_translations.sh
+
+# Expected output:
+# ✅ All translations are complete!
+# 📊 Coverage: 100.0%
+```
+
+**The script checks:**
+- All English keys have corresponding translations
+- No missing keys in any language
+- No extra unused keys
+
+### Adding a New Language
+
+1. Create new `.lproj` directory: `Aether/Resources/fr.lproj/`
+2. Copy `en.lproj/Localizable.strings` to new directory
+3. Translate all values (keep keys unchanged)
+4. Update XcodeGen configuration in `project.yml`
+5. Run `Scripts/validate_translations.sh` to verify
+
+### Best Practices
+
+- **Never hardcode UI text** - Always use localization keys
+- **Keep keys descriptive** - Use hierarchical naming (`section.subsection.key`)
+- **Add comments** - Use `comment` parameter to explain context
+- **Test both languages** - Switch system language to verify
+- **Use MARK comments** - Organize `.strings` files with `// MARK: - Section`
+- **String formatting** - Use `%@` for dynamic content, `%d` for integers
+- **Validate before commit** - Run translation script to ensure 100% coverage
+
+### Common Pitfalls
+
+- ❌ DO NOT use String literal interpolation in LocalizedStringKey: `Text("Welcome \(name)")`
+- ✅ DO use String(format:) for dynamic content: `Text(String(format: NSLocalizedString("welcome.message", comment: ""), name))`
+- ❌ DO NOT localize technical IDs (API keys, model names, regex patterns)
+- ✅ DO localize all user-facing text (labels, buttons, help text, error messages)
+
 ## Anti-Patterns to Avoid
 
 - DO NOT use webviews (violates native-first principle)
