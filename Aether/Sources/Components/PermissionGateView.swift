@@ -36,7 +36,7 @@ enum PermissionGateStep: Int {
         case .accessibility:
             return "Aether 需要辅助功能权限来捕获窗口上下文和模拟键盘输入,以便将 AI 响应粘贴到您的应用程序中。"
         case .inputMonitoring:
-            return "Aether 需要输入监控权限来检测全局热键 (⌘~),让您可以在任何应用中快速召唤 AI 助手。\n\n⚠️ 重要提示：授予此权限后，macOS 会自动重启 Aether。请在重启后从启动台或应用程序文件夹重新打开 Aether。"
+            return "Aether 需要输入监控权限来检测全局热键 (⌘~),让您可以在任何应用中快速召唤 AI 助手。\n\n⚠️ 重要提示：授予此权限后，macOS 系统会弹出重启提示，请点击「重新打开」按钮。"
         }
     }
 
@@ -68,20 +68,22 @@ struct PermissionGateView: View {
     /// Callback when all permissions are granted
     let onAllPermissionsGranted: () -> Void
 
-    /// Whether app is preparing to restart
-    @State private var isPreparingRestart: Bool = false
-
     // MARK: - Body
 
     var body: some View {
         VStack(spacing: 0) {
-            if isPreparingRestart {
-                // Show restart message
-                restartMessageView
-            } else {
-                // Show normal permission gate
-                permissionGateContent
-            }
+            // Progress indicator
+            progressIndicator
+
+            Divider()
+                .padding(.vertical, 20)
+
+            // Current step content
+            stepContent
+
+            // Action buttons
+            actionButtons
+                .padding(.top, 30)
         }
         .padding(40)
         .frame(width: 600)
@@ -100,55 +102,6 @@ struct PermissionGateView: View {
         }
         .onDisappear {
             monitor.stopMonitoring()
-        }
-    }
-
-    // MARK: - Restart Message View
-
-    private var restartMessageView: some View {
-        VStack(spacing: 24) {
-            // Success icon with animation
-            ZStack {
-                Circle()
-                    .fill(Color.green.opacity(0.2))
-                    .frame(width: 100, height: 100)
-
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 60))
-                    .foregroundStyle(Color.green.gradient)
-            }
-
-            Text("权限已全部授予！")
-                .font(.title2.weight(.semibold))
-
-            Text("Aether 正在自动重启以应用新权限...\n\n请稍候片刻，应用将自动重新打开。")
-                .font(.body)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .lineSpacing(4)
-
-            // Progress indicator
-            ProgressView()
-                .scaleEffect(0.8)
-        }
-    }
-
-    // MARK: - Permission Gate Content
-
-    private var permissionGateContent: some View {
-        VStack(spacing: 0) {
-            // Progress indicator
-            progressIndicator
-
-            Divider()
-                .padding(.vertical, 20)
-
-            // Current step content
-            stepContent
-
-            // Action buttons
-            actionButtons
-                .padding(.top, 30)
         }
     }
 
@@ -363,47 +316,14 @@ struct PermissionGateView: View {
                 }
             }
 
-            // When Input Monitoring permission is granted, prepare for restart
+            // When both permissions are granted (after macOS system restart)
+            // This callback will be triggered on the next app launch
             if accessibility && inputMonitoring {
-                print("[PermissionGateView] All permissions granted - preparing for automatic restart")
-
-                // Show restart message
-                withAnimation(.easeInOut(duration: 0.5)) {
-                    isPreparingRestart = true
-                }
-
-                // Restart after brief delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    self.restartApplication()
+                print("[PermissionGateView] All permissions granted - dismissing gate")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    onAllPermissionsGranted()
                 }
             }
-        }
-    }
-
-    /// Restart the application to apply Input Monitoring permissions
-    private func restartApplication() {
-        print("[PermissionGateView] Restarting application to apply Input Monitoring permissions")
-
-        // Get the path to the current executable
-        let bundlePath = Bundle.main.bundlePath
-
-        // Use 'open' command to relaunch the app
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        task.arguments = [bundlePath]
-
-        do {
-            try task.run()
-
-            // Terminate current instance after a brief delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                NSApplication.shared.terminate(nil)
-            }
-        } catch {
-            print("[PermissionGateView] Error restarting application: \(error)")
-
-            // Fallback: just notify user and call the completion callback
-            onAllPermissionsGranted()
         }
     }
 }
