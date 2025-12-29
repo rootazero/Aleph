@@ -305,12 +305,12 @@ struct MemoryView: View {
                     Spacer()
 
                     // Refresh button
-                    ActionButton(LocalizedStringKey("settings.memory.refresh"), icon: "arrow.clockwise", style: .secondary) {
+                    ActionButton(NSLocalizedString("settings.memory.refresh", comment: ""), icon: "arrow.clockwise", style: .secondary) {
                         refreshData()
                     }
 
                     // Clear all button
-                    ActionButton(LocalizedStringKey("settings.memory.clear_all_button"), icon: "trash.fill", style: .danger) {
+                    ActionButton(NSLocalizedString("settings.memory.clear_all_button", comment: ""), icon: "trash.fill", style: .danger) {
                         showClearAllConfirmation = true
                     }
                 }

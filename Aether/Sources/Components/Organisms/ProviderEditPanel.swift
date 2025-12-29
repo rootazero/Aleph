@@ -247,7 +247,7 @@ struct ProviderEditPanel: View {
             // Form fields
             // Provider Name (only for custom providers)
             if isCustomProvider {
-                FormField(title: LocalizedStringKey("provider.field.provider_name")) {
+                FormField(title: NSLocalizedString("provider.field.provider_name", comment: "")) {
                     TextField(LocalizedStringKey("provider.placeholder.provider_name"), text: $providerName)
                         .textFieldStyle(.roundedBorder)
                     Text(LocalizedStringKey("provider.help.provider_name"))
@@ -258,7 +258,7 @@ struct ProviderEditPanel: View {
 
             // Theme Color (only for custom providers)
             if isCustomProvider {
-                FormField(title: LocalizedStringKey("provider.field.theme_color")) {
+                FormField(title: NSLocalizedString("provider.field.theme_color", comment: "")) {
                     HStack(spacing: DesignTokens.Spacing.sm) {
                         ColorPicker("", selection: $color, supportsOpacity: false)
                             .labelsHidden()
@@ -279,7 +279,7 @@ struct ProviderEditPanel: View {
 
             // API Key (not required for Ollama)
             if providerType != "ollama" {
-                FormField(title: LocalizedStringKey("provider.field.api_key")) {
+                FormField(title: NSLocalizedString("provider.field.api_key", comment: "")) {
                     SecureField(LocalizedStringKey("provider.placeholder.api_key"), text: $apiKey)
                         .textFieldStyle(.roundedBorder)
                         .onChange(of: apiKey) {
@@ -291,7 +291,7 @@ struct ProviderEditPanel: View {
                 }
             }
 
-            FormField(title: LocalizedStringKey("provider.field.model")) {
+            FormField(title: NSLocalizedString("provider.field.model", comment: "")) {
                 TextField(LocalizedStringKey("provider.placeholder.model"), text: $model)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: model) {
@@ -299,7 +299,7 @@ struct ProviderEditPanel: View {
                     }
             }
 
-            FormField(title: isCustomProvider ? LocalizedStringKey("provider.field.base_url") : LocalizedStringKey("provider.field.base_url_optional")) {
+            FormField(title: isCustomProvider ? NSLocalizedString("provider.field.base_url", comment: "") : NSLocalizedString("provider.field.base_url_optional", comment: "")) {
                 TextField(isCustomProvider ? LocalizedStringKey("provider.placeholder.base_url_custom") : LocalizedStringKey("provider.placeholder.base_url_official"), text: $baseURL)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: baseURL) {
@@ -314,7 +314,7 @@ struct ProviderEditPanel: View {
             DisclosureGroup(LocalizedStringKey("provider.section.generation_params"), isExpanded: $isAdvancedExpanded) {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                     // Common parameters (all providers)
-                    FormField(title: LocalizedStringKey("provider.field.max_tokens_optional")) {
+                    FormField(title: NSLocalizedString("provider.field.max_tokens_optional", comment: "")) {
                         TextField(getMaxTokensPlaceholder(), text: $maxTokens)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 150)
@@ -323,7 +323,7 @@ struct ProviderEditPanel: View {
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
 
-                    FormField(title: LocalizedStringKey("provider.field.temperature_optional")) {
+                    FormField(title: NSLocalizedString("provider.field.temperature_optional", comment: "")) {
                         TextField(getTemperaturePlaceholder(), text: $temperature)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 150)
@@ -333,7 +333,7 @@ struct ProviderEditPanel: View {
                     }
 
                     // Top-P (all providers except Ollama uses it optionally)
-                    FormField(title: LocalizedStringKey("provider.field.top_p_optional")) {
+                    FormField(title: NSLocalizedString("provider.field.top_p_optional", comment: "")) {
                         TextField(LocalizedStringKey("provider.placeholder.top_p"), text: $topP)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 150)
@@ -344,7 +344,7 @@ struct ProviderEditPanel: View {
 
                     // Top-K (Claude, Gemini, Ollama)
                     if providerType == "claude" || providerType == "gemini" || providerType == "ollama" {
-                        FormField(title: LocalizedStringKey("provider.field.top_k_optional")) {
+                        FormField(title: NSLocalizedString("provider.field.top_k_optional", comment: "")) {
                             TextField(providerType == "ollama" ? LocalizedStringKey("provider.placeholder.top_k_ollama") : LocalizedStringKey("provider.placeholder.top_k_default"), text: $topK)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 150)
@@ -469,7 +469,7 @@ struct ProviderEditPanel: View {
                 // Left side: Test Connection button with inline result
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                     ActionButton(
-                        isTesting ? LocalizedStringKey("provider.button.testing") : LocalizedStringKey("common.test_connection"),
+                        isTesting ? NSLocalizedString("provider.button.testing", comment: "") : NSLocalizedString("common.test_connection", comment: ""),
                         icon: "network",
                         style: .secondary,
                         action: testConnection
@@ -486,7 +486,7 @@ struct ProviderEditPanel: View {
 
                 // Right side: Save button only
                 ActionButton(
-                    isSaving ? LocalizedStringKey("provider.button.saving") : LocalizedStringKey("common.save"),
+                    isSaving ? NSLocalizedString("provider.button.saving", comment: "") : NSLocalizedString("common.save", comment: ""),
                     icon: "checkmark",
                     style: .primary,
                     action: saveProvider

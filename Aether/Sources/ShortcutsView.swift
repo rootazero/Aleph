@@ -63,11 +63,11 @@ struct ShortcutsView: View {
 
                         // Action buttons
                         HStack(spacing: DesignTokens.Spacing.md) {
-                            ActionButton(LocalizedStringKey("settings.shortcuts.reset_button"), style: .secondary) {
+                            ActionButton(NSLocalizedString("settings.shortcuts.reset_button", comment: ""), style: .secondary) {
                                 resetToDefault()
                             }
 
-                            ActionButton(LocalizedStringKey("settings.shortcuts.preset_button"), style: .secondary) {
+                            ActionButton(NSLocalizedString("settings.shortcuts.preset_button", comment: ""), style: .secondary) {
                                 showingPresets = true
                             }
 
@@ -114,7 +114,7 @@ struct ShortcutsView: View {
                                 .foregroundColor(DesignTokens.Colors.textSecondary)
                         }
 
-                        ActionButton(LocalizedStringKey("settings.shortcuts.open_settings_button"), icon: "gear", style: .primary) {
+                        ActionButton(NSLocalizedString("settings.shortcuts.open_settings_button", comment: ""), icon: "gear", style: .primary) {
                             openAccessibilitySettings()
                         }
                         .padding(.top, DesignTokens.Spacing.sm)
@@ -262,7 +262,7 @@ struct PresetShortcutRow: View {
 
             Spacer()
 
-            ActionButton(LocalizedStringKey("settings.shortcuts.use_this_button"), style: .primary, isDisabled: isSelected) {
+            ActionButton(NSLocalizedString("settings.shortcuts.use_this_button", comment: ""), style: .primary, isDisabled: isSelected) {
                 onSelect()
             }
         }

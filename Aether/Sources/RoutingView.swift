@@ -59,7 +59,7 @@ struct RoutingView: View {
                 .help(LocalizedStringKey("settings.routing.import_export_help"))
 
                 // Add Rule button
-                ActionButton(LocalizedStringKey("settings.routing.add_rule"), icon: "plus.circle.fill", style: .primary) {
+                ActionButton(NSLocalizedString("settings.routing.add_rule", comment: ""), icon: "plus.circle.fill", style: .primary) {
                     addNewRule()
                 }
             }
@@ -96,7 +96,7 @@ struct RoutingView: View {
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
 
-                    ActionButton(LocalizedStringKey("settings.routing.add_rule"), icon: "plus.circle.fill", style: .secondary) {
+                    ActionButton(NSLocalizedString("settings.routing.add_rule", comment: ""), icon: "plus.circle.fill", style: .secondary) {
                         addNewRule()
                     }
                     .padding(.top, DesignTokens.Spacing.sm)

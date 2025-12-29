@@ -22,18 +22,53 @@ struct BehaviorSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                // Header
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                    Text(LocalizedStringKey("settings.behavior.title"))
-                        .font(DesignTokens.Typography.title)
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
+                headerSection
+                inputModeCard
+                outputModeCard
 
-                    Text(LocalizedStringKey("settings.behavior.description"))
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                if outputMode == .typewriter {
+                    typingSpeedCard
                 }
 
-                // Input Mode Card
+                piiScrubbingCard
+
+                if showingSaveConfirmation {
+                    saveConfirmationBanner
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(DesignTokens.Spacing.lg)
+            .onChange(of: inputMode) { saveSettings() }
+            .onChange(of: outputMode) { saveSettings() }
+            .onChange(of: typingSpeed) { saveSettings() }
+            .onChange(of: piiScrubbingEnabled) { saveSettings() }
+            .onChange(of: piiTypes) { saveSettings() }
+        }
+        .scrollEdge(edges: [.top, .bottom], style: .hard())
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $showingPreview) {
+            TypingSpeedPreviewSheet(speed: typingSpeed)
+        }
+        .onAppear {
+            loadSettings()
+        }
+    }
+
+    // MARK: - View Components
+
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+            Text(LocalizedStringKey("settings.behavior.title"))
+                .font(DesignTokens.Typography.title)
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+            Text(LocalizedStringKey("settings.behavior.description"))
+                .font(DesignTokens.Typography.caption)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
+        }
+    }
+
+    private var inputModeCard: some View {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                     Label(LocalizedStringKey("settings.behavior.input_mode"), systemImage: "arrow.down.doc")
                         .font(DesignTokens.Typography.heading)
@@ -69,8 +104,9 @@ struct BehaviorSettingsView: View {
                 .padding(DesignTokens.Spacing.md)
                 .background(DesignTokens.Colors.cardBackground)
                 .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
+    }
 
-                // Output Mode Card
+    private var outputModeCard: some View {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                     Label(LocalizedStringKey("settings.behavior.output_mode"), systemImage: "arrow.up.doc")
                         .font(DesignTokens.Typography.heading)
@@ -106,9 +142,9 @@ struct BehaviorSettingsView: View {
                 .padding(DesignTokens.Spacing.md)
                 .background(DesignTokens.Colors.cardBackground)
                 .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
+    }
 
-                // Typing Speed Card (only shown when typewriter mode is selected)
-                if outputMode == .typewriter {
+    private var typingSpeedCard: some View {
                     VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                         Label(LocalizedStringKey("settings.behavior.typing_speed"), systemImage: "speedometer")
                             .font(DesignTokens.Typography.heading)
@@ -155,7 +191,7 @@ struct BehaviorSettingsView: View {
                             }
 
                             // Preview button
-                            ActionButton(LocalizedStringKey("settings.behavior.preview_button"), icon: "play.circle", style: .secondary) {
+                            ActionButton(NSLocalizedString("settings.behavior.preview_button", comment: ""), icon: "play.circle", style: .secondary) {
                                 showingPreview = true
                             }
                         }
@@ -163,9 +199,9 @@ struct BehaviorSettingsView: View {
                     .padding(DesignTokens.Spacing.md)
                     .background(DesignTokens.Colors.cardBackground)
                     .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
-                }
+    }
 
-                // PII Scrubbing Card
+    private var piiScrubbingCard: some View {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                     Label(LocalizedStringKey("settings.behavior.pii_scrubbing"), systemImage: "lock.shield")
                         .font(DesignTokens.Typography.heading)
@@ -224,38 +260,22 @@ struct BehaviorSettingsView: View {
                 .padding(DesignTokens.Spacing.md)
                 .background(DesignTokens.Colors.cardBackground)
                 .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
-
-                // Save Confirmation
-                if showingSaveConfirmation {
-                    HStack {
-                        Spacer()
-                        Label(LocalizedStringKey("settings.behavior.save_confirmation"), systemImage: "checkmark.circle.fill")
-                            .foregroundColor(DesignTokens.Colors.providerActive)
-                            .font(DesignTokens.Typography.body)
-                        Spacer()
-                    }
-                    .padding(DesignTokens.Spacing.md)
-                    .background(DesignTokens.Colors.providerActive.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(DesignTokens.Spacing.lg)
-            .onChange(of: inputMode) { saveSettings() }
-            .onChange(of: outputMode) { saveSettings() }
-            .onChange(of: typingSpeed) { saveSettings() }
-            .onChange(of: piiScrubbingEnabled) { saveSettings() }
-            .onChange(of: piiTypes) { saveSettings() }
-        }
-        .scrollEdge(edges: [.top, .bottom], style: .hard())
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .sheet(isPresented: $showingPreview) {
-            TypingSpeedPreviewSheet(speed: typingSpeed)
-        }
-        .onAppear {
-            loadSettings()
-        }
     }
+
+    private var saveConfirmationBanner: some View {
+        HStack {
+            Spacer()
+            Label(LocalizedStringKey("settings.behavior.save_confirmation"), systemImage: "checkmark.circle.fill")
+                .foregroundColor(DesignTokens.Colors.providerActive)
+                .font(DesignTokens.Typography.body)
+            Spacer()
+        }
+        .padding(DesignTokens.Spacing.md)
+        .background(DesignTokens.Colors.providerActive.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
+    }
+
+    // MARK: - Helpers
 
     private var speedColor: Color {
         switch typingSpeed {
