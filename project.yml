@@ -6,6 +6,10 @@ options:
   createIntermediateGroups: true
   groupSortPosition: top
   generateEmptyDirectories: false
+  # Known regions for localization (XcodeGen will search for .lproj folders)
+  knownRegions:
+    - en
+    - zh-Hans
 
 settings:
   base:
@@ -30,10 +34,8 @@ targets:
         name: Sources
         type: group
     resources:
-      - path: Aether/Assets.xcassets
-        name: Assets
-      - path: Aether/Resources
-        name: Resources
+      - Aether/Assets.xcassets
+      - Aether/Resources/**/*.strings
     info:
       path: Aether/Info.plist
       properties:
@@ -129,6 +131,24 @@ targets:
             --out-dir "${PROJECT_DIR}/Aether/Sources/Generated/"
 
           echo "UniFFI bindings generated successfully"
+        basedOnDependencyAnalysis: false
+      - name: "Copy Localization Resources"
+        script: |
+          # Copy .lproj folders to app bundle Resources directory
+          RESOURCES_DIR="${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources"
+          mkdir -p "${RESOURCES_DIR}"
+
+          # Copy English localization
+          if [ -d "${PROJECT_DIR}/Aether/Resources/en.lproj" ]; then
+            cp -R "${PROJECT_DIR}/Aether/Resources/en.lproj" "${RESOURCES_DIR}/"
+            echo "Copied en.lproj to app bundle"
+          fi
+
+          # Copy Simplified Chinese localization
+          if [ -d "${PROJECT_DIR}/Aether/Resources/zh-Hans.lproj" ]; then
+            cp -R "${PROJECT_DIR}/Aether/Resources/zh-Hans.lproj" "${RESOURCES_DIR}/"
+            echo "Copied zh-Hans.lproj to app bundle"
+          fi
         basedOnDependencyAnalysis: false
 
   AetherTests:

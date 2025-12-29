@@ -45,31 +45,31 @@ struct GeneralSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Form {
-                    Section(header: Text("settings.general.sound")) {
-                        Toggle("settings.general.sound_effects", isOn: $soundEnabled)
+                    Section(header: Text(LocalizedStringKey("settings.general.sound"))) {
+                        Toggle(LocalizedStringKey("settings.general.sound_effects"), isOn: $soundEnabled)
                             .onChange(of: soundEnabled) { _, newValue in
                                 showComingSoonAlert(feature: NSLocalizedString("settings.general.sound_effects", comment: "Sound effects feature"))
                             }
                     }
 
-                    Section(header: Text("settings.general.updates")) {
-                        Button("settings.general.check_updates") {
+                    Section(header: Text(LocalizedStringKey("settings.general.updates"))) {
+                        Button(LocalizedStringKey("settings.general.check_updates")) {
                             checkForUpdates()
                         }
                         .help(NSLocalizedString("settings.general.check_updates_help", comment: ""))
                     }
 
-                    Section(header: Text("settings.general.logs")) {
-                        Button("settings.general.view_logs") {
+                    Section(header: Text(LocalizedStringKey("settings.general.logs"))) {
+                        Button(LocalizedStringKey("settings.general.view_logs")) {
                             showingLogViewer = true
                         }
                         .help(NSLocalizedString("settings.general.view_logs_help", comment: ""))
                         .disabled(core == nil)
                     }
 
-                    Section(header: Text("settings.general.about")) {
+                    Section(header: Text(LocalizedStringKey("settings.general.about"))) {
                         HStack {
-                            Text("settings.general.version")
+                            Text(LocalizedStringKey("settings.general.version"))
                             Spacer()
                             Text(appVersion)
                                 .foregroundColor(.secondary)

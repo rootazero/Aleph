@@ -174,7 +174,7 @@ struct ProvidersView: View {
 
             // Add Custom Provider button with background highlight
             Button(action: addCustomProvider) {
-                Text("settings.providers.add_custom")
+                Text(LocalizedStringKey("settings.providers.add_custom"))
                     .font(DesignTokens.Typography.body)
                     .foregroundColor(.white)
             }
