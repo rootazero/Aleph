@@ -9,7 +9,7 @@ options:
   # Known regions for localization (XcodeGen will search for .lproj folders)
   knownRegions:
     - en
-    - zh-Hans
+    - zh_CN
 
 settings:
   base:
@@ -49,7 +49,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleLocalizations:
           - en
-          - zh-Hans
+          - zh_CN
         LSMinimumSystemVersion: "15.0"
         LSUIElement: true
         NSAppleEventsUsageDescription: "Aether needs to simulate keyboard input to paste AI responses into your applications and monitor global hotkeys for seamless AI integration."
@@ -144,10 +144,10 @@ targets:
             echo "Copied en.lproj to app bundle"
           fi
 
-          # Copy Simplified Chinese localization
-          if [ -d "${PROJECT_DIR}/Aether/Resources/zh-Hans.lproj" ]; then
-            cp -R "${PROJECT_DIR}/Aether/Resources/zh-Hans.lproj" "${RESOURCES_DIR}/"
-            echo "Copied zh-Hans.lproj to app bundle"
+          # Copy Simplified Chinese localization (zh_CN)
+          if [ -d "${PROJECT_DIR}/Aether/Resources/zh_CN.lproj" ]; then
+            cp -R "${PROJECT_DIR}/Aether/Resources/zh_CN.lproj" "${RESOURCES_DIR}/"
+            echo "Copied zh_CN.lproj to app bundle"
           fi
         basedOnDependencyAnalysis: false
 

@@ -1099,7 +1099,7 @@ statusItem.menu = createMenu()
 
 Aether supports multiple languages through SwiftUI's localization system. Currently supported languages:
 - English (en) - Base language
-- Simplified Chinese (zh-Hans)
+- Simplified Chinese (zh_CN)
 
 ### Localization Architecture
 
@@ -1109,7 +1109,7 @@ Aether/Resources/
 ├── en.lproj/
 │   ├── Localizable.strings    # All UI text keys
 │   └── InfoPlist.strings       # System permission descriptions
-└── zh-Hans.lproj/
+└── zh_CN.lproj/
     ├── Localizable.strings
     └── InfoPlist.strings
 ```
@@ -1146,7 +1146,7 @@ halo.state.*           # Halo overlay states
    "settings.general.title" = "General";
    "alert.about.message" = "AI Middleware for macOS\nVersion %@\n\nBrings AI intelligence to your cursor.";
 
-   // zh-Hans.lproj/Localizable.strings
+   // zh_CN.lproj/Localizable.strings
    "settings.general.title" = "通用";
    "alert.about.message" = "macOS AI 中间件\n版本 %@\n\n将 AI 智能带到您的光标。";
    ```
