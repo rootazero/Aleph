@@ -117,6 +117,8 @@ void uniffi_aethecore_fn_method_aethercore_store_request_context(void*_Nonnull p
 );
 RustBuffer uniffi_aethecore_fn_method_aethercore_test_provider_connection(void*_Nonnull ptr, RustBuffer provider_name, RustCallStatus *_Nonnull out_status
 );
+RustBuffer uniffi_aethecore_fn_method_aethercore_test_provider_connection_with_config(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer provider_config, RustCallStatus *_Nonnull out_status
+);
 void uniffi_aethecore_fn_method_aethercore_test_streaming_response(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 void uniffi_aethecore_fn_method_aethercore_test_typed_error(void*_Nonnull ptr, RustBuffer error_type, RustBuffer message, RustCallStatus *_Nonnull out_status
@@ -326,6 +328,9 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_store_request_context(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_test_provider_connection(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethercore_test_provider_connection_with_config(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_test_streaming_response(void

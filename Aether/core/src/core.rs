@@ -1418,6 +1418,71 @@ impl AetherCore {
             },
         }
     }
+
+    /// Test provider connection with temporary configuration
+    ///
+    /// This method tests a provider without persisting the configuration to disk.
+    /// Useful for "Test Connection" feature in UI before saving the provider.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider_name` - Name of the provider (for logging and error messages)
+    /// * `provider_config` - Temporary provider configuration to test
+    ///
+    /// # Returns
+    ///
+    /// TestConnectionResult with success status and message
+    pub fn test_provider_connection_with_config(
+        &self,
+        provider_name: String,
+        provider_config: crate::config::ProviderConfig,
+    ) -> TestConnectionResult {
+        use crate::providers::create_provider;
+
+        // Create provider instance directly from config
+        let provider = match create_provider(&provider_name, provider_config) {
+            Ok(p) => p,
+            Err(e) => {
+                return TestConnectionResult {
+                    success: false,
+                    message: format!("Failed to create provider: {}", e.user_friendly_message()),
+                };
+            }
+        };
+
+        // Send test request (block on async operation)
+        let test_prompt = "Say 'OK' if you can read this.";
+        let runtime = match Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                return TestConnectionResult {
+                    success: false,
+                    message: format!("Failed to create runtime: {}", e),
+                };
+            }
+        };
+
+        let result = runtime.block_on(async {
+            provider
+                .process(test_prompt, None)
+                .await
+                .map_err(|e| e.user_friendly_message())
+        });
+
+        match result {
+            Ok(response) => TestConnectionResult {
+                success: true,
+                message: format!(
+                    "✓ Connection successful! Provider responded: {}",
+                    response.chars().take(50).collect::<String>()
+                ),
+            },
+            Err(err_msg) => TestConnectionResult {
+                success: false,
+                message: err_msg,
+            },
+        }
+    }
 }
 
 /// Helper struct for async memory storage operations

@@ -358,11 +358,32 @@ struct ProviderConfigView: View {
 
         Task {
             do {
-                // First, temporarily save the provider config (without persisting)
-                try await saveProviderConfig(persist: false)
+                // Build temporary provider config with actual API key (not keychain reference)
+                let testConfig = ProviderConfig(
+                    providerType: providerType,
+                    apiKey: providerType == "ollama" ? nil : apiKey,  // Use actual API key for testing
+                    model: model,
+                    baseUrl: baseURL.isEmpty ? nil : baseURL,
+                    color: color.toHex(),
+                    timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
+                    enabled: false,
+                    maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
+                    temperature: temperature.isEmpty ? nil : Float(temperature),
+                    topP: nil,
+                    topK: nil,
+                    frequencyPenalty: nil,
+                    presencePenalty: nil,
+                    stopSequences: nil,
+                    thinkingLevel: nil,
+                    mediaResolution: nil,
+                    repeatPenalty: nil
+                )
 
-                // Test connection - returns TestConnectionResult
-                let result = core.testProviderConnection(providerName: providerName)
+                // Test connection with temporary config (does not persist to disk)
+                let result = core.testProviderConnectionWithConfig(
+                    providerName: providerName,
+                    providerConfig: testConfig
+                )
 
                 await MainActor.run {
                     if result.success {
@@ -389,9 +410,39 @@ struct ProviderConfigView: View {
 
         Task {
             do {
-                try await saveProviderConfig(persist: true)
+                // Save API key to Keychain (if not Ollama)
+                if providerType != "ollama" && !apiKey.isEmpty {
+                    try keychainManager.setApiKey(provider: providerName, key: apiKey)
+                }
 
+                // Build provider config with keychain reference
+                let config = ProviderConfig(
+                    providerType: providerType,
+                    apiKey: providerType == "ollama" ? nil : "keychain:\(providerName)",
+                    model: model,
+                    baseUrl: baseURL.isEmpty ? nil : baseURL,
+                    color: color.toHex(),
+                    timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
+                    enabled: false,  // Providers are disabled by default, user must explicitly enable
+                    maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
+                    temperature: temperature.isEmpty ? nil : Float(temperature),
+                    topP: nil,
+                    topK: nil,
+                    frequencyPenalty: nil,
+                    presencePenalty: nil,
+                    stopSequences: nil,
+                    thinkingLevel: nil,
+                    mediaResolution: nil,
+                    repeatPenalty: nil
+                )
+
+                // Save to Rust core and persist to config.toml
+                try core.updateProvider(name: providerName, provider: config)
+
+                // Reload config to update UI
+                let fullConfig = try core.loadConfig()
                 await MainActor.run {
+                    providers = fullConfig.providers
                     dismiss()
                 }
             } catch {
@@ -399,45 +450,6 @@ struct ProviderConfigView: View {
                     errorMessage = "Failed to save provider: \(error.localizedDescription)"
                     isSaving = false
                 }
-            }
-        }
-    }
-
-    private func saveProviderConfig(persist: Bool) async throws {
-        // Save API key to Keychain (if not Ollama)
-        if providerType != "ollama" && !apiKey.isEmpty {
-            try keychainManager.setApiKey(provider: providerName, key: apiKey)
-        }
-
-        // Build provider config
-        let config = ProviderConfig(
-            providerType: providerType,
-            apiKey: providerType == "ollama" ? nil : "keychain:\(providerName)", // Reference to Keychain
-            model: model,
-            baseUrl: baseURL.isEmpty ? nil : baseURL,
-            color: color.toHex(),
-            timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
-            enabled: false,  // Providers are disabled by default, user must explicitly enable
-            maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
-            temperature: temperature.isEmpty ? nil : Float(temperature),
-            topP: nil,
-            topK: nil,
-            frequencyPenalty: nil,
-            presencePenalty: nil,
-            stopSequences: nil,
-            thinkingLevel: nil,
-            mediaResolution: nil,
-            repeatPenalty: nil
-        )
-
-        // Update via Rust core (will validate and persist to config.toml)
-        if persist {
-            try core.updateProvider(name: providerName, provider: config)
-
-            // Reload config to update UI
-            let fullConfig = try core.loadConfig()
-            await MainActor.run {
-                providers = fullConfig.providers
             }
         }
     }

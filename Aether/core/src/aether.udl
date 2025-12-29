@@ -168,6 +168,9 @@ interface AetherCore {
   // Test provider connection
   TestConnectionResult test_provider_connection(string provider_name);
 
+  // Test provider connection with temporary configuration (without persisting to disk)
+  TestConnectionResult test_provider_connection_with_config(string provider_name, ProviderConfig provider_config);
+
   // IMAGE CLIPBOARD METHODS (Phase 7.1 - Image Clipboard Support)
 
   // Check if clipboard contains image data

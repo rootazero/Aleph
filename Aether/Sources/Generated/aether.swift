@@ -461,6 +461,7 @@ public protocol AetherCoreProtocol {
     func storeInteractionMemory(userInput: String, aiOutput: String)  throws -> String
     func storeRequestContext(clipboardContent: String, provider: String)  
     func testProviderConnection(providerName: String)   -> TestConnectionResult
+    func testProviderConnectionWithConfig(providerName: String, providerConfig: ProviderConfig)   -> TestConnectionResult
     func testStreamingResponse()  
     func testTypedError(errorType: ErrorType, message: String)  
     func updateBehavior(behavior: BehaviorConfig)  throws
@@ -751,6 +752,19 @@ public class AetherCore: AetherCoreProtocol {
     
     uniffi_aethecore_fn_method_aethercore_test_provider_connection(self.pointer, 
         FfiConverterString.lower(providerName),$0
+    )
+}
+        )
+    }
+
+    public func testProviderConnectionWithConfig(providerName: String, providerConfig: ProviderConfig)  -> TestConnectionResult {
+        return try!  FfiConverterTypeTestConnectionResult.lift(
+            try! 
+    rustCall() {
+    
+    uniffi_aethecore_fn_method_aethercore_test_provider_connection_with_config(self.pointer, 
+        FfiConverterString.lower(providerName),
+        FfiConverterTypeProviderConfig.lower(providerConfig),$0
     )
 }
         )
@@ -3236,6 +3250,9 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_test_provider_connection() != 10890) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_test_provider_connection_with_config() != 49406) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_test_streaming_response() != 24597) {
