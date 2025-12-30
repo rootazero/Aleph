@@ -23,7 +23,11 @@ class PermissionManager: ObservableObject {
     // MARK: - Private Properties
 
     private var statusCheckTimer: Timer?
-    private let pollingInterval: TimeInterval = 1.0
+    private let pollingInterval: TimeInterval = 2.0  // Reduced frequency to 2 seconds to minimize TCC calls
+
+    // Cache for Input Monitoring check to avoid excessive IOHIDManagerOpen calls
+    private var lastInputMonitoringCheck: (result: Bool, timestamp: Date)?
+    private let inputMonitoringCacheDuration: TimeInterval = 1.5  // Cache result for 1.5 seconds
 
     // MARK: - Lifecycle
 
@@ -113,8 +117,20 @@ class PermissionManager: ObservableObject {
     /// Check Input Monitoring permission via IOHIDManager
     /// This method is more accurate than IOHIDRequestAccess because it
     /// actually attempts to open a keyboard device stream
+    ///
+    /// OPTIMIZATION: Uses caching to avoid excessive IOHIDManagerOpen calls
+    /// which generate "TCC deny IOHIDDeviceOpen" logs when permission is not granted
     private func checkInputMonitoringViaHID() -> Bool {
-        // Create HID manager
+        // Check cache first to avoid excessive TCC calls
+        if let cached = lastInputMonitoringCheck {
+            let age = Date().timeIntervalSince(cached.timestamp)
+            if age < inputMonitoringCacheDuration {
+                // Return cached result if still fresh
+                return cached.result
+            }
+        }
+
+        // Cache expired or doesn't exist, perform actual check
         let manager = IOHIDManagerCreate(
             kCFAllocatorDefault,
             IOOptionBits(kIOHIDOptionsTypeNone)
@@ -131,17 +147,26 @@ class PermissionManager: ObservableObject {
         let result = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
 
         // Clean up
+        let granted: Bool
         if result == kIOReturnSuccess {
             IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
-            return true
+            granted = true
         } else {
             // kIOReturnNotPermitted (-536870174) indicates permission denied
             if result == kIOReturnNotPermitted {
-                print("PermissionManager: Input Monitoring permission not granted (kIOReturnNotPermitted)")
+                // Only log once per cache period to avoid log spam
+                if lastInputMonitoringCheck == nil || Date().timeIntervalSince(lastInputMonitoringCheck!.timestamp) >= inputMonitoringCacheDuration {
+                    print("PermissionManager: Input Monitoring permission not granted (kIOReturnNotPermitted)")
+                }
             } else {
                 print("PermissionManager: IOHIDManagerOpen failed with error: \(result)")
             }
-            return false
+            granted = false
         }
+
+        // Update cache
+        lastInputMonitoringCheck = (result: granted, timestamp: Date())
+
+        return granted
     }
 }
