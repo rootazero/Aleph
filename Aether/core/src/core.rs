@@ -12,7 +12,7 @@
 /// - Memory retrieval and storage
 /// - Configuration management
 use crate::config::{Config, ConfigWatcher, MemoryConfig, TestConnectionResult};
-use crate::error::{AetherError, Result};
+use crate::error::{AetherError, AetherException, Result};
 use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 use crate::memory::cleanup::CleanupService;
 use crate::memory::database::{MemoryStats, VectorDatabase};
@@ -861,7 +861,7 @@ impl AetherCore {
     /// // Swift handles output
     /// KeyboardSimulator.typeText(response)
     /// ```
-    pub fn process_input(&self, user_input: String, context: CapturedContext) -> Result<String> {
+    pub fn process_input(&self, user_input: String, context: CapturedContext) -> std::result::Result<String, AetherException> {
         use std::time::Instant;
         let start_time = Instant::now();
 
@@ -875,8 +875,24 @@ impl AetherCore {
         // Store context for memory operations
         self.set_current_context(context.clone());
 
-        // Delegate to existing internal implementation
-        self.process_with_ai_internal(user_input, context, start_time)
+        // Call internal implementation and handle errors
+        match self.process_with_ai_internal(user_input, context, start_time) {
+            Ok(response) => Ok(response),
+            Err(e) => {
+                // Send user-friendly error message via callback BEFORE throwing exception
+                let friendly_message = e.user_friendly_message();
+                let suggestion = e.suggestion().map(|s| s.to_string());
+
+                error!(error = ?e, user_message = %friendly_message, "AI processing failed");
+
+                // Notify Swift layer with detailed error
+                self.event_handler.on_error(friendly_message.clone(), suggestion.clone());
+                self.event_handler.on_state_changed(ProcessingState::Error);
+
+                // Throw generic exception (Swift will use the message from callback)
+                Err(AetherException::Error)
+            }
+        }
     }
 
     /// DEPRECATED: Old entry point for AI processing (kept for backward compatibility)

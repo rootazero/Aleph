@@ -37,8 +37,8 @@ enum ErrorType {
   "Unknown"
 };
 
-// Simple error enum for UniFFI 0.25 compatibility (unit variant, no associated data)
-// This avoids the flat_error derivation bug. UniFFI uses the Display trait for error messages.
+// Error enum for UniFFI with message support
+// UniFFI [Error] attribute will use the Display trait for error messages
 [Error]
 enum AetherException {
   "Error"

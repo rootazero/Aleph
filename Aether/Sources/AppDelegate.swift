@@ -526,21 +526,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 }
             } catch {
                 print("[AppDelegate] ❌ Error processing input: \(error)")
-                // Forward error to event handler for proper UI display
-                let errorMessage = error.localizedDescription
-                let suggestion: String? = {
-                    // Try to extract suggestion from error if available
-                    if let nsError = error as? NSError {
-                        return nsError.userInfo["suggestion"] as? String
-                    }
-                    return nil
-                }()
 
-                DispatchQueue.main.async { [weak self] in
-                    self?.eventHandler?.onError(
-                        message: errorMessage,
-                        suggestion: suggestion ?? NSLocalizedString("error.check_connection", comment: "Please check network and API config")
-                    )
+                // For AetherException, the error details have already been sent via callback
+                // in Rust before throwing the exception. We just need to log it here.
+                if error is AetherException {
+                    print("[AppDelegate] AetherException caught - error details already sent via callback")
+                    // Error already displayed via EventHandler.onError callback from Rust
+                    // No need to show alert again
+                } else {
+                    // For non-Rust errors (e.g., Swift KeyboardSimulator errors)
+                    let errorMessage = error.localizedDescription
+                    let suggestion: String? = {
+                        if let nsError = error as? NSError {
+                            return nsError.userInfo["suggestion"] as? String
+                        }
+                        return nil
+                    }()
+
+                    DispatchQueue.main.async { [weak self] in
+                        self?.eventHandler?.onError(
+                            message: errorMessage,
+                            suggestion: suggestion ?? NSLocalizedString("error.check_connection", comment: "Please check network and API config")
+                        )
+                    }
                 }
             }
         }
