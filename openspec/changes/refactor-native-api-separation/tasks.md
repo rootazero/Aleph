@@ -1,0 +1,580 @@
+# Tasks: Refactor to Native API Separation Architecture
+
+## Overview
+
+本文档定义了将 Aether 从 "Rust 统一系统 API" 架构重构到 "原生 API + Rust 纯计算核心" 架构的详细任务列表。
+
+## Task Breakdown
+
+### Phase 1: Swift 层实现 (Week 1)
+
+#### Task 1.1: 实现 ClipboardManager.swift
+**估时**: 1 day
+**依赖**: 无
+**负责人**: Frontend developer
+
+**子任务**:
+- [x] 创建 `Aether/Sources/Utils/ClipboardManager.swift`
+- [ ] 实现文本操作 (`getText()`, `setText()`)
+- [ ] 实现图片操作 (`getImage()`, `setImage()`, `hasImage()`)
+- [ ] 实现 `changeCount()` 用于检测剪贴板变化
+- [ ] 添加 RTF 支持（可选）
+- [ ] 编写单元测试（`ClipboardManagerTests.swift`）
+
+**验收标准**:
+- [ ] 所有测试通过
+- [ ] 支持 String, NSImage 类型
+- [ ] 可检测剪贴板外部变化
+
+---
+
+#### Task 1.2: 实现 KeyboardSimulator.swift
+**估时**: 2 days
+**依赖**: 无
+**负责人**: Frontend developer
+
+**子任务**:
+- [ ] 创建 `Aether/Sources/Utils/KeyboardSimulator.swift`
+- [ ] 实现 `simulateCut()` (Cmd+X)
+- [ ] 实现 `simulateCopy()` (Cmd+C)
+- [ ] 实现 `simulatePaste()` (Cmd+V)
+- [ ] 实现 `typeText()` with async/await
+- [ ] 添加 CancellationToken 支持（允许 Esc 取消）
+- [ ] 处理特殊字符（换行符、Tab、emoji）
+- [ ] 编写单元测试
+
+**验收标准**:
+- [ ] 快捷键模拟在 macOS 系统级别工作
+- [ ] 打字机效果流畅（可配置速度）
+- [ ] 可通过 Esc 取消打字
+
+---
+
+#### Task 1.3: 为 GlobalHotkeyMonitor 添加测试
+**估时**: 0.5 day
+**依赖**: 无
+**负责人**: Frontend developer
+
+**子任务**:
+- [ ] 创建 `GlobalHotkeyMonitorTests.swift`
+- [ ] 测试 `startMonitoring()` 成功场景
+- [ ] 测试权限不足场景（模拟）
+- [ ] 测试 `stopMonitoring()` 清理逻辑
+- [ ] 手动测试 ` 键是否被正确拦截
+
+**验收标准**:
+- [ ] 单元测试通过
+- [ ] 手动测试确认 ` 字符不会输入
+
+---
+
+#### Task 1.4: 兼容性测试
+**估时**: 1 day
+**依赖**: Task 1.2
+**负责人**: QA
+
+**子任务**:
+- [ ] 在以下应用中测试键盘模拟:
+  - [ ] VSCode
+  - [ ] Xcode
+  - [ ] Sublime Text
+  - [ ] Safari
+  - [ ] Chrome
+  - [ ] Firefox
+  - [ ] WeChat
+  - [ ] Slack
+  - [ ] Discord
+  - [ ] Notes
+  - [ ] Pages
+  - [ ] Microsoft Word
+  - [ ] iTerm2
+  - [ ] Terminal.app
+  - [ ] Notion
+  - [ ] Obsidian
+  - [ ] 1Password (可能不兼容)
+  - [ ] Bitwarden
+  - [ ] Zoom
+  - [ ] Teams
+- [ ] 记录不兼容应用及原因
+- [ ] 更新文档（`docs/COMPATIBILITY.md`）
+
+**验收标准**:
+- [ ] >= 95% 常用应用正常工作
+- [ ] 不兼容应用已文档化
+
+---
+
+### Phase 2: Rust 层重构 (Week 2)
+
+#### Task 2.1: 简化 UniFFI 接口定义
+**估时**: 1 day
+**依赖**: 无
+**负责人**: Backend developer
+
+**子任务**:
+- [ ] 修改 `Aether/core/src/aether.udl`:
+  - [ ] 删除 `start_listening()` / `stop_listening()`
+  - [ ] 删除 `is_listening()`
+  - [ ] 删除 `get_clipboard_text()`
+  - [ ] 删除 `has_clipboard_image()` / `read_clipboard_image()` / `write_clipboard_image()`
+  - [ ] 删除 `ImageData` dictionary 和 `ImageFormat` enum
+  - [ ] 删除 `on_hotkey_detected()` 回调
+  - [ ] 添加新接口 `process_input(string, CapturedContext)`
+- [ ] 运行 `uniffi-bindgen` 重新生成 Swift bindings
+- [ ] 验证生成的 `aether.swift` 正确
+
+**验收标准**:
+- [ ] UniFFI 验证通过（无错误）
+- [ ] 生成的 Swift 代码可编译
+
+---
+
+#### Task 2.2: 实现简化的 AetherCore.process_input()
+**估时**: 2 days
+**依赖**: Task 2.1
+**负责人**: Backend developer
+
+**子任务**:
+- [ ] 创建新方法 `AetherCore::process_input(user_input, context)`
+- [ ] 集成现有管线:
+  - [ ] PII 过滤
+  - [ ] 记忆检索（如果启用）
+  - [ ] AI 路由
+  - [ ] Provider 调用
+  - [ ] 记忆存储
+- [ ] 添加适当的回调:
+  - [ ] `on_state_changed(RetrievingMemory)`
+  - [ ] `on_ai_processing_started(provider, color)`
+  - [ ] `on_response_chunk(text)` (流式)
+- [ ] 编写单元测试
+- [ ] 编写集成测试（mock AI provider）
+
+**验收标准**:
+- [ ] 所有测试通过
+- [ ] E2E 测试通过（mock provider）
+- [ ] 日志输出完整（可观测性）
+
+---
+
+#### Task 2.3: 删除 Rust 系统 API 模块
+**估时**: 0.5 day
+**依赖**: Task 2.2, Task 3.1 (Swift 集成完成)
+**负责人**: Backend developer
+
+**子任务**:
+- [ ] 删除 `Aether/core/src/hotkey/rdev_listener.rs`
+- [ ] 删除 `Aether/core/src/clipboard/arboard_manager.rs`
+- [ ] 删除 `Aether/core/src/input/enigo_simulator.rs`
+- [ ] 删除 `Aether/core/src/hotkey/mod.rs` 中的 trait 定义
+- [ ] 删除 `Aether/core/src/clipboard/mod.rs` 中的 trait 定义
+- [ ] 删除 `Aether/core/src/input/mod.rs` 中的 trait 定义
+- [ ] 修改 `Aether/core/src/core.rs` 移除相关字段
+
+**验收标准**:
+- [ ] `cargo build` 通过
+- [ ] `cargo test` 通过
+- [ ] 无 dead code 警告
+
+---
+
+#### Task 2.4: 清理 Cargo 依赖
+**估时**: 0.5 day
+**依赖**: Task 2.3
+**负责人**: Backend developer
+
+**子任务**:
+- [ ] 从 `Cargo.toml` 移除:
+  - [ ] `rdev`
+  - [ ] `arboard`
+  - [ ] `enigo`
+  - [ ] `core-foundation` (如果仅用于 rdev)
+  - [ ] `core-graphics` (如果仅用于 rdev)
+- [ ] 运行 `cargo clean`
+- [ ] 运行 `cargo build --release`
+- [ ] 验证 binary size 减少
+
+**验收标准**:
+- [ ] `cargo build` 通过
+- [ ] Binary size 减少 >= 2MB
+- [ ] `cargo tree` 不再包含已删除依赖
+
+---
+
+### Phase 3: Swift 集成 (Week 3)
+
+#### Task 3.1: 更新 EventHandler.swift
+**估时**: 2 days
+**依赖**: Task 1.1, Task 1.2, Task 2.1
+**负责人**: Frontend developer
+
+**子任务**:
+- [ ] 重写 `onHotkeyPressed()` 方法:
+  - [ ] 调用 `ClipboardManager.getText()` 获取输入
+  - [ ] 调用 `ContextCapture.getCurrentContext()`
+  - [ ] 调用 `core.process_input(text, context)`
+  - [ ] 处理 async 响应
+- [ ] 重写 `onAIResponseReceived()`:
+  - [ ] 使用 `KeyboardSimulator.typeText()` 输出
+  - [ ] 支持 Esc 取消
+- [ ] 移除旧的热键监听逻辑（如果还有）
+- [ ] 添加错误处理和用户友好的错误消息
+
+**验收标准**:
+- [ ] 完整的 E2E 流程正常工作
+- [ ] 错误处理健壮
+- [ ] UI 状态更新及时
+
+---
+
+#### Task 3.2: 更新 AppDelegate.swift
+**估时**: 1 day
+**依赖**: Task 3.1
+**负责人**: Frontend developer
+
+**子任务**:
+- [ ] 移除旧的 `core.start_listening()` 调用
+- [ ] 确保 `GlobalHotkeyMonitor` 正确初始化
+- [ ] 集成权限检查逻辑（与 `redesign-permission-authorization` 协调）
+- [ ] 确保 AetherCore 在权限授予后初始化
+
+**验收标准**:
+- [ ] 应用启动流程正常
+- [ ] 权限检查正常
+- [ ] 热键监听正常启动
+
+---
+
+#### Task 3.3: 添加 Feature Flag (可选)
+**估时**: 0.5 day
+**依赖**: Task 3.1
+**负责人**: Frontend developer
+
+**子任务**:
+- [ ] 添加 `Settings.useNativeAPIs` flag (默认 true)
+- [ ] 保留 Rust 实现的调用路径（用于回滚）
+- [ ] 添加日志记录当前使用的实现
+- [ ] 添加 UI 开关（Settings 页面）
+
+**验收标准**:
+- [ ] 可通过 flag 切换实现
+- [ ] 两种实现都可正常工作
+
+---
+
+### Phase 4: 测试与验证 (Week 3-4)
+
+#### Task 4.1: 单元测试
+**估时**: 2 days
+**依赖**: Phase 1, Phase 2, Phase 3
+**负责人**: All developers
+
+**子任务**:
+- [ ] Swift 层测试:
+  - [ ] ClipboardManagerTests
+  - [ ] KeyboardSimulatorTests
+  - [ ] GlobalHotkeyMonitorTests
+  - [ ] EventHandlerTests
+- [ ] Rust 层测试:
+  - [ ] AetherCore::process_input() tests
+  - [ ] 确保现有测试仍通过
+- [ ] 运行 `cargo test`
+- [ ] 运行 `xcodebuild test`
+
+**验收标准**:
+- [ ] 所有单元测试通过
+- [ ] 代码覆盖率 >= 80%
+
+---
+
+#### Task 4.2: 集成测试
+**估时**: 1 day
+**依赖**: Task 4.1
+**负责人**: QA
+
+**子任务**:
+- [ ] E2E 测试完整流程:
+  - [ ] 选择文本 + 热键 → AI 响应 → 打字机输出
+  - [ ] 剪贴板无文本场景（fallback 逻辑）
+  - [ ] 网络错误场景
+  - [ ] 权限不足场景
+- [ ] 性能测试:
+  - [ ] 测量热键响应延迟（p50, p95, p99）
+  - [ ] 测量剪贴板操作延迟
+  - [ ] 测量内存占用
+
+**验收标准**:
+- [ ] 所有 E2E 场景通过
+- [ ] 性能指标达标:
+  - [ ] 热键延迟 < 100ms (p95)
+  - [ ] 剪贴板延迟 < 50ms (p95)
+  - [ ] 内存减少 >= 1MB
+
+---
+
+#### Task 4.3: 手动回归测试
+**估时**: 1 day
+**依赖**: Task 4.2
+**负责人**: QA
+
+**子任务**:
+- [ ] 使用测试清单（`docs/manual-testing-checklist.md`）
+- [ ] 在 macOS 13/14/15 上测试
+- [ ] 测试所有 AI providers (OpenAI, Claude, Gemini, Ollama)
+- [ ] 测试记忆系统集成
+- [ ] 测试错误处理和恢复
+
+**验收标准**:
+- [ ] 所有手动测试通过
+- [ ] 无 P0/P1 bug
+- [ ] 无回归问题
+
+---
+
+#### Task 4.4: Beta 测试
+**估时**: 3-5 days
+**依赖**: Task 4.3
+**负责人**: QA + 社区
+
+**子任务**:
+- [ ] 发布 Beta 版本
+- [ ] 收集用户反馈（通过 GitHub Issues）
+- [ ] 监控崩溃报告（如有 crash reporting）
+- [ ] 分析性能数据
+- [ ] 修复发现的 bug
+
+**验收标准**:
+- [ ] >= 20 用户参与测试
+- [ ] 满意度 >= 4.5/5
+- [ ] 崩溃率无上升
+- [ ] 所有 P0/P1 bug 已修复
+
+---
+
+### Phase 5: 清理与发布 (Week 4)
+
+#### Task 5.1: 代码清理
+**估时**: 1 day
+**依赖**: Task 4.4
+**负责人**: All developers
+
+**子任务**:
+- [ ] 删除 feature flag（如果不再需要）
+- [ ] 删除 Rust 旧实现的死代码
+- [ ] 运行 `cargo clippy` 并修复警告
+- [ ] 运行 SwiftLint 并修复警告
+- [ ] 清理注释和 TODO 标记
+- [ ] 代码格式化（`cargo fmt`, SwiftFormat）
+
+**验收标准**:
+- [ ] `cargo clippy` 无警告
+- [ ] SwiftLint 无警告
+- [ ] 无死代码
+
+---
+
+#### Task 5.2: 文档更新
+**估时**: 1 day
+**依赖**: Task 5.1
+**负责人**: Technical writer
+
+**子任务**:
+- [ ] 更新 `CLAUDE.md`:
+  - [ ] 更新技术栈说明
+  - [ ] 更新架构图
+  - [ ] 更新 FFI 边界说明
+- [ ] 更新 `docs/PLATFORM_NOTES.md`:
+  - [ ] 删除 Rust 系统 API 说明
+  - [ ] 添加 Swift 原生 API 使用指南
+- [ ] 更新 `docs/DEBUGGING_GUIDE.md`:
+  - [ ] 添加 Swift 层调试技巧
+  - [ ] 更新 Rust 层调试范围
+- [ ] 更新 `README.md`:
+  - [ ] 更新技术栈列表
+  - [ ] 更新依赖说明
+- [ ] 创建 `docs/COMPATIBILITY.md`:
+  - [ ] 列出已测试应用
+  - [ ] 列出不兼容应用和原因
+- [ ] 更新 `CHANGELOG.md`:
+  - [ ] 记录架构变更
+  - [ ] 记录性能提升
+  - [ ] 记录破坏性变更（如果有）
+
+**验收标准**:
+- [ ] 所有文档准确反映新架构
+- [ ] 无过时信息
+- [ ] 示例代码可运行
+
+---
+
+#### Task 5.3: OpenSpec 归档
+**估时**: 0.5 day
+**依赖**: Task 5.2
+**负责人**: Project lead
+
+**子任务**:
+- [ ] 更新所有受影响的 specs (见 Phase 6)
+- [ ] 运行 `openspec validate refactor-native-api-separation --strict`
+- [ ] 修复所有验证错误
+- [ ] 归档变更: `openspec archive refactor-native-api-separation`
+
+**验收标准**:
+- [ ] `openspec validate` 通过
+- [ ] Specs 与代码同步
+
+---
+
+#### Task 5.4: 发布准备
+**估时**: 0.5 day
+**依赖**: Task 5.3
+**负责人**: Release manager
+
+**子任务**:
+- [ ] 更新版本号（遵循 Semantic Versioning）
+- [ ] 创建 Git tag
+- [ ] 编写 Release Notes
+- [ ] 准备迁移指南（如果是破坏性变更）
+- [ ] 发布到 GitHub Releases
+
+**验收标准**:
+- [ ] Release notes 完整
+- [ ] Tag 已推送
+- [ ] 二进制文件可下载
+
+---
+
+### Phase 6: Spec 更新
+
+#### Task 6.1: 更新 hotkey-detection spec
+**估时**: 0.5 day
+**依赖**: 无
+**负责人**: Spec author
+
+见 `specs/hotkey-detection/spec.md`
+
+---
+
+#### Task 6.2: 更新 clipboard-management spec
+**估时**: 0.5 day
+**依赖**: 无
+**负责人**: Spec author
+
+见 `specs/clipboard-management/spec.md`
+
+---
+
+#### Task 6.3: 更新 core-library spec
+**估时**: 0.5 day
+**依赖**: 无
+**负责人**: Spec author
+
+见 `specs/core-library/spec.md`
+
+---
+
+#### Task 6.4: 更新 uniffi-bridge spec
+**估时**: 0.5 day
+**依赖**: 无
+**负责人**: Spec author
+
+见 `specs/uniffi-bridge/spec.md`
+
+---
+
+#### Task 6.5: 更新 macos-client spec
+**估时**: 0.5 day
+**依赖**: 无
+**负责人**: Spec author
+
+见 `specs/macos-client/spec.md`
+
+---
+
+## Task Dependencies Graph
+
+```
+Phase 1 (Swift 实现)
+├── Task 1.1 (ClipboardManager) ────┐
+├── Task 1.2 (KeyboardSimulator) ───┼─→ Task 1.4 (兼容性测试)
+└── Task 1.3 (HotkeyMonitor 测试) ──┘
+
+Phase 2 (Rust 重构)
+├── Task 2.1 (UniFFI 简化) ──→ Task 2.2 (process_input)
+│                                  ↓
+└──────────────────────────────→ Task 2.3 (删除模块) → Task 2.4 (清理依赖)
+
+Phase 3 (Swift 集成)
+Task 1.1 + Task 1.2 + Task 2.1 ──→ Task 3.1 (EventHandler)
+                                     ↓
+                                   Task 3.2 (AppDelegate)
+                                     ↓
+                                   Task 3.3 (Feature Flag)
+
+Phase 4 (测试)
+Phase 1 + Phase 2 + Phase 3 ──→ Task 4.1 (单元测试)
+                                  ↓
+                                Task 4.2 (集成测试)
+                                  ↓
+                                Task 4.3 (回归测试)
+                                  ↓
+                                Task 4.4 (Beta 测试)
+
+Phase 5 (清理)
+Task 4.4 ──→ Task 5.1 (代码清理)
+              ↓
+            Task 5.2 (文档更新)
+              ↓
+            Task 5.3 (OpenSpec 归档)
+              ↓
+            Task 5.4 (发布)
+
+Phase 6 (Spec 更新) - 可与 Phase 1-5 并行
+└── Task 6.1-6.5 (更新各个 specs)
+```
+
+## Risk Mitigation Tasks
+
+### Contingency Task A: 回滚到 Rust 实现
+**触发条件**: Beta 测试崩溃率上升 > 5%
+
+**子任务**:
+- [ ] 设置 `use_native_apis = false`
+- [ ] 验证 Rust 实现仍可用
+- [ ] 发布 hotfix 版本
+- [ ] 分析失败原因
+- [ ] 修复问题后重新尝试
+
+---
+
+### Contingency Task B: 添加兼容模式
+**触发条件**: 发现 >= 3 个重要应用不兼容 CGEvent
+
+**子任务**:
+- [ ] 实现 Accessibility API fallback (AXUIElement)
+- [ ] 添加 UI 开关（Settings → 兼容模式）
+- [ ] 文档说明兼容模式使用场景
+
+---
+
+## Task Status Tracking
+
+### Summary (0/67 completed)
+
+- **Phase 1**: 0/8 tasks
+- **Phase 2**: 0/4 tasks
+- **Phase 3**: 0/4 tasks
+- **Phase 4**: 0/4 tasks
+- **Phase 5**: 0/4 tasks
+- **Phase 6**: 0/5 tasks
+- **Contingency**: 0/2 tasks (如果需要)
+
+### Timeline Estimate
+
+- **乐观**: 3 周（如果一切顺利）
+- **现实**: 4 周（包含 bug 修复时间）
+- **悲观**: 6 周（如果遇到重大兼容性问题）
+
+---
+
+**文档版本**: 1.0
+**最后更新**: 2025-12-30
+**状态**: Draft

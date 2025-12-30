@@ -1,31 +1,26 @@
 //! Hotkey detection trait and implementations
 //!
-//! This module provides global hotkey listening using:
-//! - EventTapListener: CGEventTap-based (intercepts events, prevents default behavior)
-//! - RdevListener: rdev-based (passive monitoring, cannot prevent input)
+//! DEPRECATED: Hotkey listening is now handled by Swift layer (GlobalHotkeyMonitor.swift)
+//! to avoid thread conflicts with macOS event system.
 //!
-//! For single-key hotkeys like `, EventTapListener is required to prevent character input.
+//! This module is kept for backward compatibility but is no longer actively used.
 mod event_tap_listener;
 mod rdev_listener;
 
 use crate::error::Result;
-pub use event_tap_listener::EventTapListener;
+
+#[allow(dead_code)]
 pub use rdev_listener::RdevListener;
 
-/// Trait for hotkey listening operations
+/// Trait for hotkey listening operations (DEPRECATED)
 ///
-/// This trait allows for swappable hotkey listener implementations
-/// and enables easy mocking in tests.
+/// This trait is no longer used as hotkey listening has been moved to Swift layer.
+/// It's kept for backward compatibility only.
 pub trait HotkeyListener: Send + Sync {
     /// Start listening for hotkey events
-    ///
-    /// Spawns a background thread to monitor keyboard events.
-    /// Returns error if listener cannot start (e.g., missing permissions).
     fn start_listening(&self) -> Result<()>;
 
     /// Stop listening for hotkey events
-    ///
-    /// Terminates the background thread and releases resources.
     fn stop_listening(&self) -> Result<()>;
 
     /// Check if currently listening

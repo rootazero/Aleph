@@ -1,4 +1,4 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Mandatory Permission Gate at Launch
 The system SHALL enforce a blocking permission setup flow on app launch that prevents access to any features until both Accessibility and Input Monitoring permissions are granted, **without automatically restarting the application**.
@@ -134,8 +134,6 @@ The system SHALL prevent access to settings window and all app features until pe
 - **AND** clipboard monitoring is disabled
 - **AND** menu bar shows "waiting for permissions" state
 
-## ADDED Requirements
-
 ### Requirement: Passive Permission Monitoring without Auto-Restart
 The system SHALL implement a passive permission monitoring mechanism using timer-based polling that updates UI state without triggering application restart.
 
@@ -221,29 +219,3 @@ The system SHALL simplify initial permission check at app launch by removing com
 - **THEN** the system calls `onAllPermissionsGranted()` callback
 - **AND** dismisses PermissionGateView
 - **AND** proceeds to normal app operation
-
-## REMOVED Requirements
-
-### Requirement: Debounced Permission Detection (DEPRECATED)
-~~The system previously used a 3-reading debounce mechanism to prevent false positives from macOS permission cache lag. This requirement is REMOVED because:~~
-- ~~Modern macOS APIs (`AXIsProcessTrusted`, `IOHIDManagerOpen`) provide stable results~~
-- ~~Debounce delays (3-6+ seconds) caused poor UX~~
-- ~~Debounce could not reliably distinguish "newly granted" vs "cached permission"~~
-
-### Requirement: Automatic Restart on Accessibility Permission Grant (DEPRECATED)
-~~The system previously attempted to restart the app when Accessibility permission was detected as granted. This requirement is REMOVED because:~~
-- ~~Accessibility permission takes effect immediately without restart~~
-- ~~Automatic restart caused unnecessary app termination and user confusion~~
-- ~~macOS does NOT require app restart for Accessibility permission~~
-
-### Requirement: Automatic Restart on Input Monitoring Permission Grant (DEPRECATED)
-~~The system previously attempted to restart the app when Input Monitoring permission was detected as granted. This requirement is REMOVED because:~~
-- ~~macOS system already shows its own restart prompt for Input Monitoring~~
-- ~~Automatic restart conflicted with system prompt, causing restart loops~~
-- ~~User should control restart timing (may want to finish current work)~~
-
-### Requirement: Initialization Phase Detection (DEPRECATED)
-~~The system previously used app startup timing to distinguish "newly granted permission" from "cache lag detection". This requirement is REMOVED because:~~
-- ~~Debounce delays were unpredictable (3-6+ seconds), making timing unreliable~~
-- ~~False positives still occurred when app started with existing permissions~~
-- ~~Simplified design uses fixed 0.3s delay instead~~

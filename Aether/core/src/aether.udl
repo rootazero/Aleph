@@ -55,23 +55,19 @@ interface AetherCore {
   [Throws=AetherException]
   constructor(AetherEventHandler handler);
 
-  // Start listening for hotkey events
+  // Start listening for hotkey events (DEPRECATED - handled by Swift layer)
   [Throws=AetherException]
   void start_listening();
 
-  // Stop listening for hotkey events
+  // Stop listening for hotkey events (DEPRECATED - handled by Swift layer)
   [Throws=AetherException]
   void stop_listening();
-
-  // Set Input Monitoring permission status (called by Swift layer)
-  // Swift should call this after checking permission via IOHIDManager
-  void set_input_monitoring_permission(boolean granted);
 
   // Get current clipboard text
   [Throws=AetherException]
   string get_clipboard_text();
 
-  // Check if currently listening
+  // Check if currently listening (DEPRECATED - always returns false)
   boolean is_listening();
 
   // TEST METHODS (debug only - for Phase 3 development)

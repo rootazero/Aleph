@@ -1,11 +1,12 @@
 /// AetherCore - Main entry point for the Aether library
 ///
-/// Orchestrates hotkey listening, clipboard management, and event callbacks.
+/// Orchestrates clipboard management, AI routing, and event callbacks.
+/// NOTE: Hotkey listening is now handled by Swift layer (GlobalHotkeyMonitor)
+/// to avoid thread conflicts with macOS event system.
 use crate::clipboard::{ArboardManager, ClipboardManager};
 use crate::config::{Config, ConfigWatcher, MemoryConfig, TestConnectionResult};
 use crate::error::{AetherError, Result};
 use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
-use crate::hotkey::{EventTapListener, HotkeyListener};
 use crate::input::{EnigoSimulator, InputSimulator};
 use crate::memory::cleanup::CleanupService;
 use crate::memory::database::{MemoryStats, VectorDatabase};
@@ -34,11 +35,11 @@ pub struct CapturedContext {
 
 /// Main core struct for Aether
 ///
-/// Manages lifecycle of all core components and coordinates
-/// between hotkey detection, clipboard operations, and client callbacks.
+/// Manages lifecycle of core components and coordinates
+/// between clipboard operations and client callbacks.
+/// NOTE: Hotkey listening is now handled by Swift layer via GlobalHotkeyMonitor.
 pub struct AetherCore {
     event_handler: Arc<dyn AetherEventHandler>,
-    hotkey_listener: Arc<dyn HotkeyListener>,
     clipboard_manager: Arc<dyn ClipboardManager>,
     input_simulator: Arc<EnigoSimulator>,
     #[allow(dead_code)]
@@ -60,8 +61,6 @@ pub struct AetherCore {
     cancellation_token: CancellationToken,
     // Track if typewriter is currently active
     is_typewriting: Arc<Mutex<bool>>,
-    // Permission status (set by Swift layer via UniFFI)
-    has_input_monitoring_permission: Arc<Mutex<bool>>,
 }
 
 impl AetherCore {
@@ -72,6 +71,10 @@ impl AetherCore {
     ///
     /// # Returns
     /// * `Result<Self>` - New AetherCore instance or error
+    ///
+    /// # Note
+    /// Hotkey listening is now handled by Swift layer (GlobalHotkeyMonitor).
+    /// This core focuses on AI routing, clipboard, and memory management.
     pub fn new(event_handler: Box<dyn AetherEventHandler>) -> Result<Self> {
         let event_handler: Arc<dyn AetherEventHandler> = Arc::from(event_handler);
 
@@ -85,28 +88,8 @@ impl AetherCore {
             .build()
             .map_err(|e| AetherError::other(format!("Failed to create tokio runtime: {}", e)))?;
 
-        // Clone event handler for the hotkey callback
-        let handler_clone = Arc::clone(&event_handler);
+        // Initialize managers
         let clipboard_manager: Arc<dyn ClipboardManager> = Arc::new(ArboardManager::new());
-        let clipboard_clone = Arc::clone(&clipboard_manager);
-
-        // Create hotkey listener with callback
-        // Use EventTapListener for single-key hotkey support (intercepts events)
-        let hotkey_listener: Arc<dyn HotkeyListener> = Arc::new(EventTapListener::new(move || {
-            // When hotkey is detected, read clipboard and invoke callback
-            handler_clone.on_state_changed(ProcessingState::Listening);
-
-            match clipboard_clone.read_text() {
-                Ok(content) => {
-                    handler_clone.on_hotkey_detected(content);
-                }
-                Err(e) => {
-                    let friendly_message = e.user_friendly_message();
-                    let suggestion = e.suggestion().map(|s| s.to_string());
-                    handler_clone.on_error(friendly_message, suggestion);
-                }
-            }
-        }));
 
         // Initialize configuration
         let config = Arc::new(Mutex::new(Config::default()));
@@ -229,7 +212,6 @@ impl AetherCore {
 
         Ok(Self {
             event_handler,
-            hotkey_listener,
             clipboard_manager,
             input_simulator,
             runtime: Arc::new(runtime),
@@ -243,7 +225,6 @@ impl AetherCore {
             config_watcher,
             cancellation_token: CancellationToken::new(),
             is_typewriting: Arc::new(Mutex::new(false)),
-            has_input_monitoring_permission: Arc::new(Mutex::new(true)), // Default: assume permission granted
         })
     }
 
@@ -274,58 +255,28 @@ impl AetherCore {
         Ok(model_dir)
     }
 
-    /// Start listening for hotkey events
+    /// Start listening for hotkey events (DEPRECATED - now handled by Swift layer)
     ///
-    /// Spawns background thread to monitor keyboard events.
+    /// # IMPORTANT
+    /// As of the latest refactor, hotkey listening is handled by Swift's GlobalHotkeyMonitor
+    /// to avoid thread conflicts with macOS event system. This method is kept for API compatibility
+    /// but does nothing.
+    ///
+    /// The actual hotkey detection happens in Swift (GlobalHotkeyMonitor.swift) and triggers
+    /// EventHandler.onHotkeyDetected() which processes clipboard content.
     pub fn start_listening(&self) -> Result<()> {
-        // CRITICAL: Check Input Monitoring permission before starting listener
-        // This prevents rdev::listen() from panicking due to missing permissions
-        let has_permission = self
-            .has_input_monitoring_permission
-            .lock()
-            .unwrap_or_else(|e| {
-                warn!("Permission lock poisoned: {}", e);
-                e.into_inner()
-            });
-
-        if !*has_permission {
-            let error_msg = "Input Monitoring permission not granted. Cannot start hotkey listener.";
-            warn!("{}", error_msg);
-
-            // Notify Swift layer via callback
-            self.event_handler.on_error(
-                error_msg.to_string(),
-                Some("Grant Input Monitoring permission in System Settings → Privacy & Security → Input Monitoring".to_string()),
-            );
-
-            return Err(AetherError::permission_denied(error_msg));
-        }
-
-        self.event_handler
-            .on_state_changed(ProcessingState::Listening);
-
-        self.hotkey_listener.start_listening()?;
+        info!("[AetherCore] start_listening() called - hotkey monitoring now handled by Swift layer");
+        info!("[AetherCore] See GlobalHotkeyMonitor.swift for implementation details");
         Ok(())
     }
 
-    /// Set Input Monitoring permission status (called by Swift layer)
+    /// Stop listening for hotkey events (DEPRECATED - now handled by Swift layer)
     ///
-    /// Swift layer should call this method after checking macOS permission status
-    /// via IOHIDManager or IOHIDRequestAccess.
-    ///
-    /// # Arguments
-    /// * `granted` - true if Input Monitoring permission is granted, false otherwise
-    pub fn set_input_monitoring_permission(&self, granted: bool) {
-        info!("Input Monitoring permission status updated: {}", granted);
-        *self.has_input_monitoring_permission.lock().unwrap() = granted;
-    }
-
-    /// Stop listening for hotkey events
-    ///
-    /// Terminates background thread and releases resources.
+    /// # IMPORTANT
+    /// This method is kept for API compatibility but does nothing.
+    /// Hotkey monitoring lifecycle is managed by Swift's GlobalHotkeyMonitor.
     pub fn stop_listening(&self) -> Result<()> {
-        self.hotkey_listener.stop_listening()?;
-        self.event_handler.on_state_changed(ProcessingState::Idle);
+        info!("[AetherCore] stop_listening() called - hotkey monitoring handled by Swift layer");
         Ok(())
     }
 
@@ -411,9 +362,13 @@ impl AetherCore {
         Ok(log_dir.to_string_lossy().to_string())
     }
 
-    /// Check if currently listening for hotkeys
+    /// Check if hotkey listener is active (DEPRECATED - always returns false)
+    ///
+    /// # Note
+    /// Hotkey monitoring is now handled by Swift layer (GlobalHotkeyMonitor).
+    /// This method always returns false for backward compatibility.
     pub fn is_listening(&self) -> bool {
-        self.hotkey_listener.is_listening()
+        false // Hotkey listening is now in Swift layer
     }
 
     /// Test method: Simulate streaming AI response (for development/testing only)

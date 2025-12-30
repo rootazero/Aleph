@@ -41,6 +41,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Theme engine
     private var themeEngine: ThemeEngine?
 
+    // Global hotkey monitor (Swift layer)
+    private var hotkeyMonitor: GlobalHotkeyMonitor?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hide from Dock (menu bar only)
         NSApp.setActivationPolicy(.accessory)
@@ -70,17 +73,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Stop hotkey monitoring
+        hotkeyMonitor?.stopMonitoring()
+
         // Clean up Rust core (only if initialized)
-        if let core = core {
-            do {
-                try core.stopListening()
-                print("[Aether] Core stopped successfully")
-            } catch {
-                print("[Aether] Error stopping core: \(error)")
-            }
-        } else {
-            print("[Aether] Application terminating (Core was not initialized)")
-        }
+        // Note: No need to call stopListening() as hotkey monitoring is now in Swift
+        print("[Aether] Application terminating")
     }
 
     // MARK: - Menu Bar Setup
@@ -208,11 +206,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 print("[Aether]   - Accessibility: REQUIRED for global hotkey detection")
             }
             if !hasInputMonitoring {
-                print("[Aether]   - Input Monitoring: REQUIRED to prevent rdev crashes")
+                print("[Aether]   - Input Monitoring: REQUIRED for full functionality")
             }
-
-            // CRITICAL: DO NOT initialize Core or call start_listening() without permissions
-            // This will cause rdev::listen() to crash the entire application
 
             // Show permission gate again
             DispatchQueue.main.async { [weak self] in
@@ -223,17 +218,32 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         do {
             // Create AetherCore with event handler
+            // NOTE: Core no longer handles hotkey listening - that's now in Swift layer
             core = try AetherCore(handler: eventHandler)
             print("[Aether] AetherCore initialized successfully")
 
             // Set core reference in event handler for retry functionality
             eventHandler.setCore(core!)
 
-            // IMPORTANT: Only start listening if permissions are confirmed
-            // start_listening() will call rdev::listen() which REQUIRES Input Monitoring permission
-            print("[Aether] Starting hotkey listener (this requires Input Monitoring permission)...")
-            try core?.startListening()
-            print("[Aether] ✅ Hotkey listening started successfully (default: ` key)")
+            // IMPORTANT: Initialize Swift-based global hotkey monitor
+            // This replaces the Rust-based EventTapListener to avoid thread conflicts
+            print("[Aether] Initializing Swift-based global hotkey monitor...")
+            hotkeyMonitor = GlobalHotkeyMonitor { [weak self] in
+                // When ` key is detected, trigger the same flow as before
+                self?.eventHandler?.onHotkeyDetected("")
+            }
+
+            // Start monitoring for hotkey
+            if hotkeyMonitor?.startMonitoring() == true {
+                print("[Aether] ✅ Global hotkey monitoring started successfully (` key)")
+            } else {
+                print("[Aether] ❌ Failed to start global hotkey monitoring")
+                // Fall back to showing permission gate
+                DispatchQueue.main.async { [weak self] in
+                    self?.showPermissionGate()
+                }
+                return
+            }
 
             // Reset retry count on success
             coreInitRetryCount = 0

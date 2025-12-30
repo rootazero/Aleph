@@ -105,8 +105,6 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_search_memories(void*_Nonnull p
 );
 void uniffi_aethecore_fn_method_aethercore_set_current_context(void*_Nonnull ptr, RustBuffer context, RustCallStatus *_Nonnull out_status
 );
-void uniffi_aethecore_fn_method_aethercore_set_input_monitoring_permission(void*_Nonnull ptr, int8_t granted, RustCallStatus *_Nonnull out_status
-);
 void uniffi_aethecore_fn_method_aethercore_set_log_level(void*_Nonnull ptr, RustBuffer level, RustCallStatus *_Nonnull out_status
 );
 void uniffi_aethecore_fn_method_aethercore_start_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -312,9 +310,6 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_search_memories(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_set_current_context(void
-    
-);
-uint16_t uniffi_aethecore_checksum_method_aethercore_set_input_monitoring_permission(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_set_log_level(void

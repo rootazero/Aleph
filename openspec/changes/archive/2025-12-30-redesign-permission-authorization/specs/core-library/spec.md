@@ -85,49 +85,57 @@ The hotkey listener thread SHALL be designed to be panic-safe, ensuring that pan
 
 ## MODIFIED Requirements
 
-### Requirement: Hotkey Listener Initialization (Updated)
-The core library SHALL initialize the hotkey listener only when Input Monitoring permission is confirmed granted, with robust error handling for permission issues.
+### Requirement: Core Lifecycle Management
+The system SHALL provide an `AetherCore` struct that manages the lifecycle of all core components with robust permission handling and error recovery.
 
-#### Scenario: Initialize listener with permission granted (Updated)
-- **WHEN** `start_listening()` is called with Input Monitoring permission granted
+#### Scenario: Start listening for system events (MODIFIED)
+- **WHEN** client calls `core.start_listening()`
 - **THEN** the system performs permission pre-check (new step)
-- **AND** wraps `rdev::listen()` in `catch_unwind()` (new protection)
-- **AND** starts the listener thread
-- **AND** returns `Ok(())` on success or `Err(HotkeyError)` on failure
+- **AND** if permission is NOT granted, returns `Err(AetherError::PermissionDenied)` immediately
+- **AND** if permission IS granted, wraps `rdev::listen()` in `catch_unwind()` (new protection)
+- **AND** the hotkey listener spawns a background thread
+- **AND** begins monitoring for global hotkey events
+- **AND** returns success if no errors occur
 
-#### Scenario: Initialize listener without permission (New)
-- **WHEN** `start_listening()` is called without Input Monitoring permission
-- **THEN** the system skips calling `rdev::listen()` entirely (new behavior)
-- **AND** returns `Err(AetherError::PermissionDenied)` immediately
-- **AND** does NOT create any threads or resources
-- **AND** notifies Swift layer via `on_error()` callback
+#### Scenario: Handle initialization error (MODIFIED)
+- **WHEN** core initialization fails (e.g., hotkey listener cannot start or panics)
+- **THEN** the constructor catches any panics via `catch_unwind()`
+- **AND** returns an `AetherError` with descriptive message
+- **AND** provides actionable guidance (e.g., "Input Monitoring permission required")
+- **AND** does NOT crash the application
 
-### Requirement: Error Handling and Logging (Updated)
-The core library SHALL provide comprehensive error handling and logging for all permission-related failures, enabling effective troubleshooting.
+### Requirement: Error Handling
+The system SHALL provide comprehensive error handling and logging for all permission-related failures, enabling effective troubleshooting.
 
-#### Scenario: Log permission check failures (New)
+#### Scenario: Hotkey listener error (MODIFIED)
+- **WHEN** hotkey listener fails to start (e.g., permissions denied or rdev panic)
+- **THEN** catches panic via `catch_unwind()` if rdev panics
+- **AND** returns `AetherError::HotkeyError` or `AetherError::PermissionDenied` with descriptive message
+- **AND** error can be propagated through Result<T, E>
+- **AND** logs detailed error information for debugging
+
+#### Scenario: No panics in library code (ENHANCED)
+- **WHEN** any error occurs during operation, including rdev panics
+- **THEN** the library catches panics from external dependencies via `catch_unwind()`
+- **AND** returns a Result type instead of crashing
+- **AND** never allows panics to propagate to client code
+- **AND** client can handle errors gracefully
+
+#### Scenario: Log permission check failures (NEW)
 - **WHEN** permission pre-check fails
 - **THEN** the system logs at WARN level:
   - "Input Monitoring permission not granted. Cannot start hotkey listener."
 - **AND** logs the current permission status for debugging
 - **AND** returns structured error to Swift layer
 
-#### Scenario: Log rdev panic details (New)
+#### Scenario: Log rdev panic details (NEW)
 - **WHEN** `rdev::listen()` panics
 - **THEN** the system logs at ERROR level:
-  - "❌ rdev listener panicked: [panic message]"
+  - "rdev listener panicked: [panic message]"
   - "This usually means Input Monitoring permission is not granted."
   - "Please grant permission in: System Settings > Privacy & Security > Input Monitoring"
 - **AND** extracts panic payload (String or &str)
 - **AND** logs full error context for debugging
-
-#### Scenario: Log listener lifecycle events (Enhanced)
-- **WHEN** listener starts successfully
-- **THEN** the system logs at INFO level: "Hotkey listener started successfully"
-- **WHEN** listener stops gracefully
-- **THEN** the system logs at INFO level: "rdev listener stopped gracefully"
-- **WHEN** listener fails
-- **THEN** the system logs at ERROR level with error details
 
 ## UniFFI Interface Changes
 
