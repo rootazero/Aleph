@@ -10,12 +10,12 @@ name = "aethecore"
 
 [dependencies]
 uniffi = { version = "0.25", features = ["cli"] }
-# Use rdev from git main branch - contains fixes for macOS main thread issues
-# Original rdev 0.5.x has a bug where it calls TSMGetInputSourceProperty on background thread
-# causing _dispatch_assert_queue_fail crash when typing in other apps
-rdev = { git = "https://github.com/Narsil/rdev.git", branch = "main" }
-arboard = "3.3"
-enigo = "0.2.1"
+# REMOVED: System API dependencies (rdev, arboard, enigo) - now handled by Swift layer
+# See: refactor-native-api-separation proposal
+# - rdev → Swift GlobalHotkeyMonitor (CGEventTap)
+# - arboard → Swift ClipboardManager (NSPasteboard)
+# - enigo → Swift KeyboardSimulator (CGEvent)
+# - core-foundation/core-graphics → no longer needed
 tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "process"] }
 tokio-util = "0.7"
 serde = { version = "1.0", features = ["derive"] }
@@ -41,13 +41,10 @@ tracing-appender = "0.2"
 # For config file watching
 notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
 notify-debouncer-full = "0.3"
-# For image dimension parsing
+# For image dimension parsing (still used in AI provider integration)
 image = { version = "0.24", default-features = false, features = ["png", "jpeg", "gif"] }
-# For Base64 encoding of images
+# For Base64 encoding of images (still used in AI provider integration)
 base64 = "0.21"
-# For macOS CGEventTap (single-key global hotkeys)
-core-foundation = "0.10"
-core-graphics = "0.24"
 
 [build-dependencies]
 uniffi = { version = "0.25", features = ["build"] }

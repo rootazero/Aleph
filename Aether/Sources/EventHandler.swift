@@ -51,26 +51,9 @@ class EventHandler: AetherEventHandler {
         }
     }
 
-    func onHotkeyDetected(clipboardContent: String) {
-        print("[EventHandler] Hotkey detected, clipboard: \(clipboardContent.prefix(50))...")
-
-        // Capture context when hotkey is detected
-        let context = ContextCapture.captureContext()
-        print("[EventHandler] Captured context: app=\(context.bundleId ?? "nil"), window=\(context.windowTitle ?? "nil")")
-
-        // Send context to Rust core
-        if let bundleId = context.bundleId {
-            let capturedContext = CapturedContext(
-                appBundleId: bundleId,
-                windowTitle: context.windowTitle
-            )
-            core?.setCurrentContext(context: capturedContext)
-        }
-
-        DispatchQueue.main.async { [weak self] in
-            self?.handleHotkeyDetected(clipboardContent: clipboardContent)
-        }
-    }
+    // REMOVED: onHotkeyDetected() - hotkey handling now in Swift layer (AppDelegate.handleHotkeyPressed)
+    // The new architecture uses GlobalHotkeyMonitor → AppDelegate → Core.processInput()
+    // instead of Rust rdev → EventHandler callback
 
     func onError(message: String, suggestion: String?) {
         print("[EventHandler] Error: \(message)")
@@ -362,26 +345,8 @@ class EventHandler: AetherEventHandler {
         // No-op: Permission prompts are now handled by PermissionGateView in AppDelegate
     }
 
-    // MARK: - Hotkey Handling
-
-    private func handleHotkeyDetected(clipboardContent: String) {
-        // Get current mouse position
-        let mouseLocation = NSEvent.mouseLocation
-
-        // Show Halo at cursor
-        haloWindow?.show(at: mouseLocation)
-        haloWindow?.updateState(.listening)
-
-        // Simulate AI processing (placeholder for Phase 2)
-        // In Phase 4, this will trigger actual AI routing
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.haloWindow?.updateState(.processing(providerColor: .green))
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            self?.haloWindow?.updateState(.success(finalText: nil))
-        }
-    }
+    // REMOVED: handleHotkeyDetected() - hotkey handling now in Swift layer (AppDelegate.handleHotkeyPressed)
+    // The entire hotkey flow is now: GlobalHotkeyMonitor → AppDelegate → Core.processInput() → KeyboardSimulator
 
     // MARK: - Error Notification
 

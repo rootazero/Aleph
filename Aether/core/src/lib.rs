@@ -69,13 +69,13 @@
 #![allow(unpredictable_function_pointer_comparisons)]
 
 // Module declarations
+// NOTE: clipboard module retained for ImageData/ImageFormat types (used by AI providers)
+// Clipboard operations are handled by Swift ClipboardManager
 mod clipboard;
 mod config;
 mod core;
 mod error;
 mod event_handler;
-mod hotkey;
-pub mod input; // Make input module public for integration tests
 pub mod logging;
 pub mod memory;
 pub mod metrics;
@@ -84,7 +84,8 @@ pub mod router;
 pub mod utils;
 
 // Re-export public types
-pub use crate::clipboard::{ArboardManager, ClipboardManager, ImageData, ImageFormat};
+// NOTE: ImageData/ImageFormat still exported for AI provider image encoding
+pub use crate::clipboard::{ImageData, ImageFormat};
 pub use crate::config::{
     BehaviorConfig, Config, FullConfig, GeneralConfig, KeychainManager, MemoryConfig,
     ProviderConfig, ProviderConfigEntry, RoutingRuleConfig, ShortcutsConfig,
@@ -93,8 +94,6 @@ pub use crate::config::{
 pub use crate::core::{AetherCore, CapturedContext, MemoryEntryFFI as MemoryEntry};
 pub use crate::error::{AetherError, AetherException, Result};
 pub use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
-pub use crate::hotkey::{HotkeyListener, RdevListener};
-pub use crate::input::InputSimulator;
 pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer};
 pub use crate::memory::database::MemoryStats;
 pub use crate::metrics::StageTimer;

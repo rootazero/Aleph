@@ -35,7 +35,7 @@ class KeyboardSimulator {
     /// - Returns: True if successful, false otherwise
     @discardableResult
     func simulateCut() -> Bool {
-        return simulateShortcut(key: kVK_ANSI_X)
+        return simulateShortcut(key: CGKeyCode(kVK_ANSI_X))
     }
 
     /// Simulate Cmd+C (Copy)
@@ -43,7 +43,7 @@ class KeyboardSimulator {
     /// - Returns: True if successful, false otherwise
     @discardableResult
     func simulateCopy() -> Bool {
-        return simulateShortcut(key: kVK_ANSI_C)
+        return simulateShortcut(key: CGKeyCode(kVK_ANSI_C))
     }
 
     /// Simulate Cmd+V (Paste)
@@ -51,7 +51,7 @@ class KeyboardSimulator {
     /// - Returns: True if successful, false otherwise
     @discardableResult
     func simulatePaste() -> Bool {
-        return simulateShortcut(key: kVK_ANSI_V)
+        return simulateShortcut(key: CGKeyCode(kVK_ANSI_V))
     }
 
     /// Simulate Cmd+A (Select All)
@@ -59,7 +59,7 @@ class KeyboardSimulator {
     /// - Returns: True if successful, false otherwise
     @discardableResult
     func simulateSelectAll() -> Bool {
-        return simulateShortcut(key: kVK_ANSI_A)
+        return simulateShortcut(key: CGKeyCode(kVK_ANSI_A))
     }
 
     // MARK: - Typewriter Effect

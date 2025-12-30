@@ -1,13 +1,19 @@
 /// AetherCore - Main entry point for the Aether library
 ///
-/// Orchestrates clipboard management, AI routing, and event callbacks.
-/// NOTE: Hotkey listening is now handled by Swift layer (GlobalHotkeyMonitor)
-/// to avoid thread conflicts with macOS event system.
-use crate::clipboard::{ArboardManager, ClipboardManager};
+/// Orchestrates AI routing, memory management, and event callbacks.
+///
+/// NEW ARCHITECTURE (Phase 2: Native API Separation):
+/// - Hotkey listening → Swift GlobalHotkeyMonitor
+/// - Clipboard operations → Swift ClipboardManager
+/// - Keyboard simulation → Swift KeyboardSimulator
+///
+/// Rust core focuses on:
+/// - AI routing and provider calls
+/// - Memory retrieval and storage
+/// - Configuration management
 use crate::config::{Config, ConfigWatcher, MemoryConfig, TestConnectionResult};
 use crate::error::{AetherError, Result};
 use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
-use crate::input::{EnigoSimulator, InputSimulator};
 use crate::memory::cleanup::CleanupService;
 use crate::memory::database::{MemoryStats, VectorDatabase};
 use crate::metrics::{StageTimer, TARGET_CLIPBOARD_TO_MEMORY_MS, TARGET_MEMORY_TO_AI_MS};
@@ -35,13 +41,11 @@ pub struct CapturedContext {
 
 /// Main core struct for Aether
 ///
-/// Manages lifecycle of core components and coordinates
-/// between clipboard operations and client callbacks.
-/// NOTE: Hotkey listening is now handled by Swift layer via GlobalHotkeyMonitor.
+/// NEW ARCHITECTURE (Phase 2):
+/// - System interactions (hotkeys, clipboard, keyboard) → Swift layer
+/// - Core focuses on AI processing, routing, memory, and config
 pub struct AetherCore {
     event_handler: Arc<dyn AetherEventHandler>,
-    clipboard_manager: Arc<dyn ClipboardManager>,
-    input_simulator: Arc<EnigoSimulator>,
     #[allow(dead_code)]
     runtime: Arc<Runtime>,
     last_request: Arc<Mutex<Option<RequestContext>>>,
@@ -57,9 +61,9 @@ pub struct AetherCore {
     // Config hot-reload (must be kept alive for file watching)
     #[allow(dead_code)]
     config_watcher: Option<Arc<ConfigWatcher>>,
-    // Typewriter cancellation
+    // Typewriter cancellation (NOTE: Typewriter is now in Swift, but kept for legacy)
     cancellation_token: CancellationToken,
-    // Track if typewriter is currently active
+    // Track if typewriter is currently active (NOTE: Kept for API compatibility)
     is_typewriting: Arc<Mutex<bool>>,
 }
 
@@ -72,9 +76,13 @@ impl AetherCore {
     /// # Returns
     /// * `Result<Self>` - New AetherCore instance or error
     ///
-    /// # Note
-    /// Hotkey listening is now handled by Swift layer (GlobalHotkeyMonitor).
-    /// This core focuses on AI routing, clipboard, and memory management.
+    /// # NEW ARCHITECTURE (Phase 2)
+    /// System interactions are handled by Swift layer:
+    /// - Hotkey listening: GlobalHotkeyMonitor.swift
+    /// - Clipboard operations: ClipboardManager.swift
+    /// - Keyboard simulation: KeyboardSimulator.swift
+    ///
+    /// Rust core focuses on AI processing, memory, and config.
     pub fn new(event_handler: Box<dyn AetherEventHandler>) -> Result<Self> {
         let event_handler: Arc<dyn AetherEventHandler> = Arc::from(event_handler);
 
@@ -87,9 +95,6 @@ impl AetherCore {
             .enable_all()
             .build()
             .map_err(|e| AetherError::other(format!("Failed to create tokio runtime: {}", e)))?;
-
-        // Initialize managers
-        let clipboard_manager: Arc<dyn ClipboardManager> = Arc::new(ArboardManager::new());
 
         // Initialize configuration
         let config = Arc::new(Mutex::new(Config::default()));
@@ -207,13 +212,8 @@ impl AetherCore {
             Some(watcher)
         };
 
-        // Create input simulator
-        let input_simulator: Arc<EnigoSimulator> = Arc::new(EnigoSimulator::new());
-
         Ok(Self {
             event_handler,
-            clipboard_manager,
-            input_simulator,
             runtime: Arc::new(runtime),
             last_request: Arc::new(Mutex::new(None)),
             config,
@@ -280,44 +280,15 @@ impl AetherCore {
         Ok(())
     }
 
-    /// Get current clipboard text content
-    ///
-    /// # Returns
-    /// * `Result<String>` - Clipboard text or error
-    pub fn get_clipboard_text(&self) -> Result<String> {
-        self.clipboard_manager.read_text()
-    }
-
-    /// Check if clipboard contains image data
-    ///
-    /// # Returns
-    /// * `true` if clipboard contains an image
-    /// * `false` if clipboard does not contain an image
-    pub fn has_clipboard_image(&self) -> bool {
-        self.clipboard_manager.has_image()
-    }
-
-    /// Read image from clipboard
-    ///
-    /// # Returns
-    /// * `Ok(Some(ImageData))` if image is successfully read
-    /// * `Ok(None)` if clipboard contains no image
-    /// * `Err(AetherError)` if an error occurs
-    pub fn read_clipboard_image(&self) -> Result<Option<crate::clipboard::ImageData>> {
-        self.clipboard_manager.read_image()
-    }
-
-    /// Write image to clipboard
-    ///
-    /// # Arguments
-    /// * `image` - The image data to write
-    ///
-    /// # Returns
-    /// * `Ok(())` if image is successfully written
-    /// * `Err(AetherError)` if an error occurs
-    pub fn write_clipboard_image(&self, image: crate::clipboard::ImageData) -> Result<()> {
-        self.clipboard_manager.write_image(image)
-    }
+    // ========================================
+    // REMOVED: Clipboard API methods (行 283-320)
+    // 剪贴板操作已迁移到 Swift ClipboardManager.swift
+    // See: refactor-native-api-separation proposal
+    // - get_clipboard_text() → ClipboardManager.getText()
+    // - has_clipboard_image() → ClipboardManager.hasImage()
+    // - read_clipboard_image() → ClipboardManager.getImage()
+    // - write_clipboard_image() → ClipboardManager.setImage()
+    // ========================================
 
     // ========================================
     // LOGGING CONTROL METHODS (Phase 7.3)
@@ -850,39 +821,72 @@ impl AetherCore {
 
     /// Process input with AI using the complete pipeline: Memory → Router → Provider → Storage
     ///
-    /// This is the main entry point for AI processing that integrates all Phase 5 & 6 components:
-    /// 1. Retrieve relevant memories based on context
-    /// 2. Augment prompt with memory context
-    /// 3. Route to appropriate AI provider
-    /// 4. Call provider.process() with augmented input
-    /// 5. Store interaction for future retrieval (async, non-blocking)
+    /// This is the NEW entry point for the refactored architecture (Phase 2: Native API Separation).
+    /// Swift layer handles system interactions (clipboard, hotkeys, keyboard simulation),
+    /// and calls this method with pre-processed user input and captured context.
+    ///
+    /// Pipeline:
+    /// 1. Set current context (for memory retrieval)
+    /// 2. Retrieve relevant memories based on context
+    /// 3. Augment prompt with memory context
+    /// 4. Route to appropriate AI provider
+    /// 5. Call provider.process() with augmented input
+    /// 6. Store interaction for future retrieval (async, non-blocking)
     ///
     /// # Arguments
     ///
-    /// * `input` - User input text from clipboard
-    /// * `context` - Captured context (app bundle ID + window title)
+    /// * `user_input` - User input text (from Swift ClipboardManager)
+    /// * `context` - Captured context (app bundle ID + window title from Swift ContextCapture)
     ///
     /// # Returns
     ///
-    /// * `Ok(String)` - AI-generated response
+    /// * `Ok(String)` - AI-generated response (Swift will use KeyboardSimulator to output)
     /// * `Err(AetherError)` - Various errors:
     ///   - `NoProviderAvailable` - No router configured
     ///   - `NetworkError`, `AuthenticationError`, etc. - From provider
     ///
-    /// # Example
+    /// # Example (Swift → Rust)
     ///
-    /// ```rust,no_run
-    /// # use aethecore::core::{AetherCore, CapturedContext};
-    /// # fn example(core: &AetherCore) {
-    /// let context = CapturedContext {
-    ///     app_bundle_id: "com.apple.Notes".to_string(),
-    ///     window_title: Some("Document.txt".to_string()),
-    /// };
+    /// ```swift
+    /// // Swift layer captures context and input
+    /// let context = CapturedContext(
+    ///     app_bundle_id: "com.apple.Notes",
+    ///     window_title: "Document.txt"
+    /// )
+    /// let input = ClipboardManager.getText()
     ///
-    /// // This will be called from Swift when user presses Cmd+~
-    /// // let response = core.process_with_ai("Explain Rust ownership", &context).await?;
-    /// # }
+    /// // Call Rust core
+    /// let response = try core.process_input(user_input: input, context: context)
+    ///
+    /// // Swift handles output
+    /// KeyboardSimulator.typeText(response)
     /// ```
+    pub fn process_input(&self, user_input: String, context: CapturedContext) -> Result<String> {
+        use std::time::Instant;
+        let start_time = Instant::now();
+
+        info!(
+            input_length = user_input.len(),
+            app = %context.app_bundle_id,
+            window = ?context.window_title,
+            "Processing input via new architecture (Swift → Rust)"
+        );
+
+        // Store context for memory operations
+        self.set_current_context(context.clone());
+
+        // Delegate to existing internal implementation
+        self.process_with_ai_internal(user_input, context, start_time)
+    }
+
+    /// DEPRECATED: Old entry point for AI processing (kept for backward compatibility)
+    ///
+    /// This method is kept to avoid breaking existing tests and Swift code during migration.
+    /// New code should use `process_input()` instead.
+    ///
+    /// # Migration Note
+    /// This will be removed in Phase 2 cleanup after all Swift code is updated.
+    #[deprecated(since = "0.2.0", note = "Use process_input() instead")]
     pub fn process_with_ai(&self, input: String, _context: CapturedContext) -> Result<String> {
         use std::time::Instant;
 
@@ -907,7 +911,15 @@ impl AetherCore {
         result
     }
 
-    /// Internal implementation of AI processing pipeline
+    /// Internal implementation of AI processing pipeline (NEW ARCHITECTURE)
+    ///
+    /// This method now focuses ONLY on AI processing:
+    /// - Memory retrieval and prompt augmentation
+    /// - AI routing and provider calls
+    /// - Memory storage (async)
+    ///
+    /// OUTPUT HANDLING (Typewriter/Paste) is now handled by Swift KeyboardSimulator.
+    /// This simplifies the Rust layer and aligns with the "Native First" principle.
     fn process_with_ai_internal(
         &self,
         input: String,
@@ -1079,177 +1091,11 @@ impl AetherCore {
         };
         self.event_handler.on_ai_response_received(response_preview);
 
-        // Step 5: Output the response using configured mode (instant or typewriter)
-        let output_mode = {
-            let config = self.config.lock().unwrap();
-            config.behavior.as_ref().map(|b| b.output_mode.clone())
-        };
+        // NEW ARCHITECTURE: Return response to Swift layer for output handling
+        // Swift will use KeyboardSimulator.typeText() or .paste() based on config
+        // This removes dependency on Rust clipboard/input modules
 
-        match output_mode.as_deref() {
-            Some("typewriter") => {
-                // Typewriter mode: character-by-character typing
-                let typing_speed = {
-                    let config = self.config.lock().unwrap();
-                    config.behavior.as_ref().map(|b| b.typing_speed).unwrap_or(50)
-                };
-
-                info!(
-                    typing_speed = typing_speed,
-                    response_length = response.len(),
-                    "Starting typewriter output"
-                );
-
-                // Notify UI that we're typing
-                self.event_handler.on_state_changed(ProcessingState::Typewriting);
-
-                // Mark typewriter as active
-                *self.is_typewriting.lock().unwrap() = true;
-
-                // Create a new cancellation token for this typing operation
-                // (reset from previous uses)
-                let typing_token = if self.cancellation_token.is_cancelled() {
-                    // Create new token if previous one was cancelled
-                    
-                    // Note: Can't replace self.cancellation_token directly due to ownership
-                    // Instead, we'll use a local token and check both
-                    CancellationToken::new()
-                } else {
-                    self.cancellation_token.clone()
-                };
-
-                // Type the response character by character with progress tracking
-                let response_clone = response.clone();
-                let handler = Arc::clone(&self.event_handler);
-                let total_chars = response.chars().count();
-                let clipboard_mgr = Arc::clone(&self.clipboard_manager);
-
-                let typing_result = self.runtime.block_on(async move {
-                    use std::time::Duration;
-                    use tokio::time::sleep;
-
-                    // Calculate delay per character
-                    let delay_per_char = Duration::from_millis(1000 / typing_speed as u64);
-                    let mut typed_chars = 0;
-
-                    // Type character by character with progress callbacks
-                    for (idx, ch) in response_clone.chars().enumerate() {
-                        // Check cancellation
-                        if typing_token.is_cancelled() {
-                            warn!("Typewriter cancelled at {} of {} chars", typed_chars, total_chars);
-
-                            // Paste remaining text instantly using spawn_blocking
-                            let remaining = response_clone.chars().skip(idx).collect::<String>();
-                            if !remaining.is_empty() {
-                                info!("Pasting remaining {} chars instantly", remaining.len());
-                                clipboard_mgr.write_text(&remaining)?;
-
-                                // Use spawn_blocking for paste operation
-                                // This runs in a dedicated blocking thread pool
-                                tokio::task::spawn_blocking(move || {
-                                    use enigo::Keyboard;
-                                    let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
-                                        .map_err(|e| AetherError::input_simulation(format!("Failed to create Enigo: {:?}", e)))?;
-
-                                    // Simulate Cmd+V (macOS) or Ctrl+V (Windows/Linux)
-                                    #[cfg(target_os = "macos")]
-                                    {
-                                        enigo.key(enigo::Key::Meta, enigo::Direction::Press)
-                                            .map_err(|e| AetherError::input_simulation(format!("Failed to press Meta: {:?}", e)))?;
-                                        enigo.key(enigo::Key::Unicode('v'), enigo::Direction::Click)
-                                            .map_err(|e| AetherError::input_simulation(format!("Failed to click v: {:?}", e)))?;
-                                        enigo.key(enigo::Key::Meta, enigo::Direction::Release)
-                                            .map_err(|e| AetherError::input_simulation(format!("Failed to release Meta: {:?}", e)))?;
-                                    }
-
-                                    #[cfg(not(target_os = "macos"))]
-                                    {
-                                        enigo.key(enigo::Key::Control, enigo::Direction::Press)
-                                            .map_err(|e| AetherError::input_simulation(format!("Failed to press Ctrl: {:?}", e)))?;
-                                        enigo.key(enigo::Key::Unicode('v'), enigo::Direction::Click)
-                                            .map_err(|e| AetherError::input_simulation(format!("Failed to click v: {:?}", e)))?;
-                                        enigo.key(enigo::Key::Control, enigo::Direction::Release)
-                                            .map_err(|e| AetherError::input_simulation(format!("Failed to release Ctrl: {:?}", e)))?;
-                                    }
-
-                                    Ok::<(), AetherError>(())
-                                })
-                                .await
-                                .map_err(|e| AetherError::input_simulation(format!("Spawn blocking failed: {:?}", e)))??;
-                            }
-
-                            handler.on_typewriter_cancelled();
-                            return Ok::<(), AetherError>(());
-                        }
-
-                        // Type single character using spawn_blocking
-                        // This runs Enigo in a dedicated blocking thread pool, avoiding Send issues
-                        // Performance: spawn_blocking reuses threads, much faster than creating new threads
-                        tokio::task::spawn_blocking(move || {
-                            use enigo::Keyboard;
-                            let mut enigo = enigo::Enigo::new(&enigo::Settings::default())
-                                .map_err(|e| AetherError::input_simulation(format!("Failed to create Enigo: {:?}", e)))?;
-
-                            match ch {
-                                '\n' => {
-                                    enigo.key(enigo::Key::Return, enigo::Direction::Click)
-                                        .map_err(|e| AetherError::input_simulation(format!("Failed to type newline: {:?}", e)))?;
-                                }
-                                '\t' => {
-                                    enigo.key(enigo::Key::Tab, enigo::Direction::Click)
-                                        .map_err(|e| AetherError::input_simulation(format!("Failed to type tab: {:?}", e)))?;
-                                }
-                                _ => {
-                                    enigo.text(&ch.to_string())
-                                        .map_err(|e| AetherError::input_simulation(format!("Failed to type char: {:?}", e)))?;
-                                }
-                            }
-
-                            Ok::<(), AetherError>(())
-                        })
-                        .await
-                        .map_err(|e| AetherError::input_simulation(format!("Spawn blocking join failed: {:?}", e)))??;
-
-                        typed_chars += 1;
-
-                        // Send progress update every 10 chars or at completion
-                        if typed_chars % 10 == 0 || typed_chars == total_chars {
-                            let progress = typed_chars as f32 / total_chars as f32;
-                            handler.on_typewriter_progress(progress);
-                        }
-
-                        // Delay before next character
-                        sleep(delay_per_char).await;
-                    }
-
-                    // Send final 100% progress
-                    handler.on_typewriter_progress(1.0);
-                    Ok(())
-                });
-
-                // Mark typewriter as inactive
-                *self.is_typewriting.lock().unwrap() = false;
-
-                match typing_result {
-                    Ok(_) => {
-                        info!("Typewriter output completed successfully");
-                    }
-                    Err(e) => {
-                        warn!(error = ?e, "Typewriter output failed, falling back to instant paste");
-                        // Fallback to instant paste on error
-                        self.clipboard_manager.write_text(&response)?;
-                        self.input_simulator.simulate_paste()?;
-                    }
-                }
-            }
-            _ => {
-                // Instant mode (default): paste immediately
-                info!("Using instant paste mode");
-                self.clipboard_manager.write_text(&response)?;
-                self.input_simulator.simulate_paste()?;
-            }
-        }
-
-        // Step 6: Store interaction asynchronously (non-blocking)
+        // Step 5: Store interaction asynchronously (non-blocking)
         if self.memory_db.is_some() {
             let user_input = input.clone();
             let ai_output = response.clone();
@@ -1269,7 +1115,10 @@ impl AetherCore {
         }
 
         let total_time = start_time.elapsed();
-        log::info!("[AI Pipeline] Total processing time: {:?}", total_time);
+        info!(
+            total_duration_ms = total_time.as_millis(),
+            "AI processing complete, returning response to Swift layer"
+        );
 
         Ok(response)
     }

@@ -77,8 +77,6 @@ void uniffi_aethecore_fn_method_aethercore_delete_memory(void*_Nonnull ptr, Rust
 );
 void uniffi_aethecore_fn_method_aethercore_delete_provider(void*_Nonnull ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_aethecore_fn_method_aethercore_get_clipboard_text(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
-);
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_log_directory(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_log_level(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -87,15 +85,9 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_config(void*_Nonnull
 );
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_stats(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
-int8_t uniffi_aethecore_fn_method_aethercore_has_clipboard_image(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
-);
-int8_t uniffi_aethecore_fn_method_aethercore_is_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
-);
 RustBuffer uniffi_aethecore_fn_method_aethercore_load_config(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
-RustBuffer uniffi_aethecore_fn_method_aethercore_process_with_ai(void*_Nonnull ptr, RustBuffer input, RustBuffer context, RustCallStatus *_Nonnull out_status
-);
-RustBuffer uniffi_aethecore_fn_method_aethercore_read_clipboard_image(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_process_input(void*_Nonnull ptr, RustBuffer user_input, RustBuffer context, RustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_aethecore_fn_method_aethercore_retrieve_and_augment_prompt(void*_Nonnull ptr, RustBuffer base_prompt, RustBuffer user_input, RustCallStatus *_Nonnull out_status
 );
@@ -106,10 +98,6 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_search_memories(void*_Nonnull p
 void uniffi_aethecore_fn_method_aethercore_set_current_context(void*_Nonnull ptr, RustBuffer context, RustCallStatus *_Nonnull out_status
 );
 void uniffi_aethecore_fn_method_aethercore_set_log_level(void*_Nonnull ptr, RustBuffer level, RustCallStatus *_Nonnull out_status
-);
-void uniffi_aethecore_fn_method_aethercore_start_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
-);
-void uniffi_aethecore_fn_method_aethercore_stop_listening(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_aethecore_fn_method_aethercore_store_interaction_memory(void*_Nonnull ptr, RustBuffer user_input, RustBuffer ai_output, RustCallStatus *_Nonnull out_status
 );
@@ -134,8 +122,6 @@ void uniffi_aethecore_fn_method_aethercore_update_routing_rules(void*_Nonnull pt
 void uniffi_aethecore_fn_method_aethercore_update_shortcuts(void*_Nonnull ptr, RustBuffer shortcuts, RustCallStatus *_Nonnull out_status
 );
 int8_t uniffi_aethecore_fn_method_aethercore_validate_regex(void*_Nonnull ptr, RustBuffer pattern, RustCallStatus *_Nonnull out_status
-);
-void uniffi_aethecore_fn_method_aethercore_write_clipboard_image(void*_Nonnull ptr, RustBuffer image, RustCallStatus *_Nonnull out_status
 );
 void uniffi_aethecore_fn_init_callback_aethereventhandler(ForeignCallback _Nonnull callback_stub, RustCallStatus *_Nonnull out_status
 );
@@ -270,9 +256,6 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_delete_memory(void
 uint16_t uniffi_aethecore_checksum_method_aethercore_delete_provider(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_get_clipboard_text(void
-    
-);
 uint16_t uniffi_aethecore_checksum_method_aethercore_get_log_directory(void
     
 );
@@ -285,19 +268,10 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_get_memory_config(void
 uint16_t uniffi_aethecore_checksum_method_aethercore_get_memory_stats(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_has_clipboard_image(void
-    
-);
-uint16_t uniffi_aethecore_checksum_method_aethercore_is_listening(void
-    
-);
 uint16_t uniffi_aethecore_checksum_method_aethercore_load_config(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_process_with_ai(void
-    
-);
-uint16_t uniffi_aethecore_checksum_method_aethercore_read_clipboard_image(void
+uint16_t uniffi_aethecore_checksum_method_aethercore_process_input(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_retrieve_and_augment_prompt(void
@@ -313,12 +287,6 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_set_current_context(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_set_log_level(void
-    
-);
-uint16_t uniffi_aethecore_checksum_method_aethercore_start_listening(void
-    
-);
-uint16_t uniffi_aethecore_checksum_method_aethercore_stop_listening(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_store_interaction_memory(void
@@ -357,16 +325,10 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_update_shortcuts(void
 uint16_t uniffi_aethecore_checksum_method_aethercore_validate_regex(void
     
 );
-uint16_t uniffi_aethecore_checksum_method_aethercore_write_clipboard_image(void
-    
-);
 uint16_t uniffi_aethecore_checksum_constructor_aethercore_new(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_state_changed(void
-    
-);
-uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_hotkey_detected(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_error(void

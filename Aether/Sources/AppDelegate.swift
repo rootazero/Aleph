@@ -438,8 +438,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 self?.haloWindow?.show(at: NSEvent.mouseLocation)
                 self?.haloWindow?.updateState(.error(
                     type: .unknown,
-                    message: "剪贴板中没有文本",
-                    suggestion: "请先选择要处理的文本"
+                    message: NSLocalizedString("error.no_clipboard_text", comment: "No text in clipboard"),
+                    suggestion: NSLocalizedString("error.no_clipboard_text.suggestion", comment: "Please select text first")
                 ))
                 // Auto-hide after 2 seconds
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
@@ -453,7 +453,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Capture current context
         let context = ContextCapture.captureContext()
-        print("[AppDelegate] Context: app=\(context.bundleId ?? "nil"), window=\(context.windowTitle ?? "nil")")
+        print("[AppDelegate] Context: app=\(context.bundleId ?? "unknown"), window=\(context.windowTitle ?? "nil")")
 
         // Show Halo at cursor position
         DispatchQueue.main.async { [weak self] in
@@ -462,39 +462,88 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             self?.haloWindow?.updateState(.listening)
         }
 
-        // TODO: Call Rust core's process_input() method (to be implemented)
-        // For now, just simulate the old flow by calling onHotkeyDetected
-        // This will be replaced in Phase 2 with:
-        //
-        // guard let core = core else {
-        //     print("[AppDelegate] Error: Core not initialized")
-        //     return
-        // }
-        //
-        // Task {
-        //     do {
-        //         let capturedContext = CapturedContext(
-        //             appBundleId: context.bundleId ?? "",
-        //             windowTitle: context.windowTitle
-        //         )
-        //         let response = try await core.processInput(
-        //             userInput: clipboardText,
-        //             context: capturedContext
-        //         )
-        //
-        //         // Type response using KeyboardSimulator
-        //         await KeyboardSimulator.shared.typeText(response, speed: 50)
-        //     } catch {
-        //         print("[AppDelegate] Error processing input: \(error)")
-        //         self.eventHandler?.onError(
-        //             message: "处理失败: \(error.localizedDescription)",
-        //             suggestion: "请检查网络连接和API配置"
-        //         )
-        //     }
-        // }
+        // NEW ARCHITECTURE: Call Rust core's process_input() method
+        guard let core = core else {
+            print("[AppDelegate] ERROR: Core not initialized")
+            DispatchQueue.main.async { [weak self] in
+                self?.haloWindow?.updateState(.error(
+                    type: .unknown,
+                    message: NSLocalizedString("error.core_not_initialized", comment: "Core not initialized"),
+                    suggestion: NSLocalizedString("error.core_not_initialized.suggestion", comment: "Please restart the app")
+                ))
+            }
+            return
+        }
 
-        // Temporary: Use old callback flow until Rust core is updated
-        eventHandler?.onHotkeyDetected(clipboardContent: clipboardText)
+        // Process input asynchronously to avoid blocking UI
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+
+            do {
+                // Create captured context for Rust
+                let capturedContext = CapturedContext(
+                    appBundleId: context.bundleId ?? "unknown",
+                    windowTitle: context.windowTitle
+                )
+
+                // Call Rust core's process_input() - this replaces the old onHotkeyDetected flow
+                // The method will handle: Memory retrieval → AI routing → Provider call → Memory storage
+                // It returns the AI response text which we need to output using KeyboardSimulator
+                let response = try core.processInput(
+                    userInput: clipboardText,
+                    context: capturedContext
+                )
+
+                print("[AppDelegate] Received AI response (\(response.count) chars)")
+
+                // Type response using Swift KeyboardSimulator
+                // This replaces Rust's typewriter implementation
+                DispatchQueue.main.async {
+                    // Get typing speed from config (default to 50 chars/sec)
+                    let typingSpeed = 50 // TODO: Read from config when available
+
+                    // Type the response
+                    Task {
+                        do {
+                            try await KeyboardSimulator.shared.typeText(response, speed: typingSpeed)
+                            print("[AppDelegate] ✅ Response typed successfully")
+
+                            // Update Halo to success state
+                            DispatchQueue.main.async { [weak self] in
+                                self?.haloWindow?.updateState(.success(finalText: String(response.prefix(100))))
+                                // Auto-hide after 2 seconds
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                                    self?.haloWindow?.hide()
+                                }
+                            }
+                        } catch {
+                            print("[AppDelegate] ❌ Error during typewriter: \(error)")
+                            // Fall back to instant paste if typewriter fails
+                            ClipboardManager.shared.setText(response)
+                            KeyboardSimulator.shared.simulatePaste()
+                        }
+                    }
+                }
+            } catch {
+                print("[AppDelegate] ❌ Error processing input: \(error)")
+                // Forward error to event handler for proper UI display
+                let errorMessage = error.localizedDescription
+                let suggestion: String? = {
+                    // Try to extract suggestion from error if available
+                    if let nsError = error as? NSError {
+                        return nsError.userInfo["suggestion"] as? String
+                    }
+                    return nil
+                }()
+
+                DispatchQueue.main.async { [weak self] in
+                    self?.eventHandler?.onError(
+                        message: errorMessage,
+                        suggestion: suggestion ?? NSLocalizedString("error.check_connection", comment: "Please check network and API config")
+                    )
+                }
+            }
+        }
     }
 
     // MARK: - Accessibility Permission Check (Legacy - now using PermissionGate)

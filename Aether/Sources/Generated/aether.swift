@@ -297,19 +297,6 @@ private func uniffiCheckCallStatus(
 // Public interface members begin here.
 
 
-fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
-    typealias FfiType = UInt8
-    typealias SwiftType = UInt8
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt8 {
-        return try lift(readInt(&buf))
-    }
-
-    public static func write(_ value: UInt8, into buf: inout [UInt8]) {
-        writeInt(&buf, lower(value))
-    }
-}
-
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
@@ -441,23 +428,17 @@ public protocol AetherCoreProtocol {
     func clearRequestContext()  
     func deleteMemory(id: String)  throws
     func deleteProvider(name: String)  throws
-    func getClipboardText()  throws -> String
     func getLogDirectory()  throws -> String
     func getLogLevel()   -> LogLevel
     func getMemoryConfig()   -> MemoryConfig
     func getMemoryStats()  throws -> MemoryStats
-    func hasClipboardImage()   -> Bool
-    func isListening()   -> Bool
     func loadConfig()  throws -> FullConfig
-    func processWithAi(input: String, context: CapturedContext)  throws -> String
-    func readClipboardImage()  throws -> ImageData?
+    func processInput(userInput: String, context: CapturedContext)  throws -> String
     func retrieveAndAugmentPrompt(basePrompt: String, userInput: String)  throws -> String
     func retryLastRequest()  throws
     func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32)  throws -> [MemoryEntry]
     func setCurrentContext(context: CapturedContext)  
     func setLogLevel(level: LogLevel)  throws
-    func startListening()  throws
-    func stopListening()  throws
     func storeInteractionMemory(userInput: String, aiOutput: String)  throws -> String
     func storeRequestContext(clipboardContent: String, provider: String)  
     func testProviderConnection(providerName: String)   -> TestConnectionResult
@@ -470,7 +451,6 @@ public protocol AetherCoreProtocol {
     func updateRoutingRules(rules: [RoutingRuleConfig])  throws
     func updateShortcuts(shortcuts: ShortcutsConfig)  throws
     func validateRegex(pattern: String)  throws -> Bool
-    func writeClipboardImage(image: ImageData)  throws
     
 }
 
@@ -548,16 +528,6 @@ public class AetherCore: AetherCoreProtocol {
 }
     }
 
-    public func getClipboardText() throws -> String {
-        return try  FfiConverterString.lift(
-            try 
-    rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_get_clipboard_text(self.pointer, $0
-    )
-}
-        )
-    }
-
     public func getLogDirectory() throws -> String {
         return try  FfiConverterString.lift(
             try 
@@ -600,28 +570,6 @@ public class AetherCore: AetherCoreProtocol {
         )
     }
 
-    public func hasClipboardImage()  -> Bool {
-        return try!  FfiConverterBool.lift(
-            try! 
-    rustCall() {
-    
-    uniffi_aethecore_fn_method_aethercore_has_clipboard_image(self.pointer, $0
-    )
-}
-        )
-    }
-
-    public func isListening()  -> Bool {
-        return try!  FfiConverterBool.lift(
-            try! 
-    rustCall() {
-    
-    uniffi_aethecore_fn_method_aethercore_is_listening(self.pointer, $0
-    )
-}
-        )
-    }
-
     public func loadConfig() throws -> FullConfig {
         return try  FfiConverterTypeFullConfig.lift(
             try 
@@ -632,23 +580,13 @@ public class AetherCore: AetherCoreProtocol {
         )
     }
 
-    public func processWithAi(input: String, context: CapturedContext) throws -> String {
+    public func processInput(userInput: String, context: CapturedContext) throws -> String {
         return try  FfiConverterString.lift(
             try 
     rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_process_with_ai(self.pointer, 
-        FfiConverterString.lower(input),
+    uniffi_aethecore_fn_method_aethercore_process_input(self.pointer, 
+        FfiConverterString.lower(userInput),
         FfiConverterTypeCapturedContext.lower(context),$0
-    )
-}
-        )
-    }
-
-    public func readClipboardImage() throws -> ImageData? {
-        return try  FfiConverterOptionTypeImageData.lift(
-            try 
-    rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_read_clipboard_image(self.pointer, $0
     )
 }
         )
@@ -702,22 +640,6 @@ public class AetherCore: AetherCoreProtocol {
     rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_set_log_level(self.pointer, 
         FfiConverterTypeLogLevel.lower(level),$0
-    )
-}
-    }
-
-    public func startListening() throws {
-        try 
-    rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_start_listening(self.pointer, $0
-    )
-}
-    }
-
-    public func stopListening() throws {
-        try 
-    rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_stop_listening(self.pointer, $0
     )
 }
     }
@@ -845,15 +767,6 @@ public class AetherCore: AetherCoreProtocol {
     )
 }
         )
-    }
-
-    public func writeClipboardImage(image: ImageData) throws {
-        try 
-    rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_write_clipboard_image(self.pointer, 
-        FfiConverterTypeImageData.lower(image),$0
-    )
-}
     }
 }
 
@@ -1178,61 +1091,6 @@ public func FfiConverterTypeGeneralConfig_lift(_ buf: RustBuffer) throws -> Gene
 
 public func FfiConverterTypeGeneralConfig_lower(_ value: GeneralConfig) -> RustBuffer {
     return FfiConverterTypeGeneralConfig.lower(value)
-}
-
-
-public struct ImageData {
-    public var data: [UInt8]
-    public var format: ImageFormat
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(data: [UInt8], format: ImageFormat) {
-        self.data = data
-        self.format = format
-    }
-}
-
-
-extension ImageData: Equatable, Hashable {
-    public static func ==(lhs: ImageData, rhs: ImageData) -> Bool {
-        if lhs.data != rhs.data {
-            return false
-        }
-        if lhs.format != rhs.format {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(data)
-        hasher.combine(format)
-    }
-}
-
-
-public struct FfiConverterTypeImageData: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ImageData {
-        return try ImageData(
-            data: FfiConverterSequenceUInt8.read(from: &buf), 
-            format: FfiConverterTypeImageFormat.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: ImageData, into buf: inout [UInt8]) {
-        FfiConverterSequenceUInt8.write(value.data, into: &buf)
-        FfiConverterTypeImageFormat.write(value.format, into: &buf)
-    }
-}
-
-
-public func FfiConverterTypeImageData_lift(_ buf: RustBuffer) throws -> ImageData {
-    return try FfiConverterTypeImageData.lift(buf)
-}
-
-public func FfiConverterTypeImageData_lower(_ value: ImageData) -> RustBuffer {
-    return FfiConverterTypeImageData.lower(value)
 }
 
 
@@ -2034,65 +1892,6 @@ extension ErrorType: Equatable, Hashable {}
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
-public enum ImageFormat {
-    
-    case png
-    case jpeg
-    case gif
-}
-
-public struct FfiConverterTypeImageFormat: FfiConverterRustBuffer {
-    typealias SwiftType = ImageFormat
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ImageFormat {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-        
-        case 1: return .png
-        
-        case 2: return .jpeg
-        
-        case 3: return .gif
-        
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: ImageFormat, into buf: inout [UInt8]) {
-        switch value {
-        
-        
-        case .png:
-            writeInt(&buf, Int32(1))
-        
-        
-        case .jpeg:
-            writeInt(&buf, Int32(2))
-        
-        
-        case .gif:
-            writeInt(&buf, Int32(3))
-        
-        }
-    }
-}
-
-
-public func FfiConverterTypeImageFormat_lift(_ buf: RustBuffer) throws -> ImageFormat {
-    return try FfiConverterTypeImageFormat.lift(buf)
-}
-
-public func FfiConverterTypeImageFormat_lower(_ value: ImageFormat) -> RustBuffer {
-    return FfiConverterTypeImageFormat.lower(value)
-}
-
-
-extension ImageFormat: Equatable, Hashable {}
-
-
-
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 public enum LogLevel {
     
     case error
@@ -2327,7 +2126,6 @@ private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 
 public protocol AetherEventHandler : AnyObject {
     func onStateChanged(state: ProcessingState) 
-    func onHotkeyDetected(clipboardContent: String) 
     func onError(message: String, suggestion: String?) 
     func onResponseChunk(text: String) 
     func onErrorTyped(errorType: ErrorType, message: String) 
@@ -2351,17 +2149,6 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
         func makeCall() throws -> Int32 {
             try swiftCallbackInterface.onStateChanged(
                     state:  try FfiConverterTypeProcessingState.read(from: &reader)
-                    )
-            return UNIFFI_CALLBACK_SUCCESS
-        }
-        return try makeCall()
-    }
-
-    func invokeOnHotkeyDetected(_ swiftCallbackInterface: AetherEventHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
-        var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
-        func makeCall() throws -> Int32 {
-            try swiftCallbackInterface.onHotkeyDetected(
-                    clipboardContent:  try FfiConverterString.read(from: &reader)
                     )
             return UNIFFI_CALLBACK_SUCCESS
         }
@@ -2508,7 +2295,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
             do {
-                return try invokeOnHotkeyDetected(cb, argsData, argsLen, out_buf)
+                return try invokeOnError(cb, argsData, argsLen, out_buf)
             } catch let error {
                 out_buf.pointee = FfiConverterString.lower(String(describing: error))
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
@@ -2522,7 +2309,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
             do {
-                return try invokeOnError(cb, argsData, argsLen, out_buf)
+                return try invokeOnResponseChunk(cb, argsData, argsLen, out_buf)
             } catch let error {
                 out_buf.pointee = FfiConverterString.lower(String(describing: error))
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
@@ -2536,7 +2323,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
             do {
-                return try invokeOnResponseChunk(cb, argsData, argsLen, out_buf)
+                return try invokeOnErrorTyped(cb, argsData, argsLen, out_buf)
             } catch let error {
                 out_buf.pointee = FfiConverterString.lower(String(describing: error))
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
@@ -2550,7 +2337,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
             do {
-                return try invokeOnErrorTyped(cb, argsData, argsLen, out_buf)
+                return try invokeOnProgress(cb, argsData, argsLen, out_buf)
             } catch let error {
                 out_buf.pointee = FfiConverterString.lower(String(describing: error))
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
@@ -2564,7 +2351,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
             do {
-                return try invokeOnProgress(cb, argsData, argsLen, out_buf)
+                return try invokeOnAiProcessingStarted(cb, argsData, argsLen, out_buf)
             } catch let error {
                 out_buf.pointee = FfiConverterString.lower(String(describing: error))
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
@@ -2578,7 +2365,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
             do {
-                return try invokeOnAiProcessingStarted(cb, argsData, argsLen, out_buf)
+                return try invokeOnAiResponseReceived(cb, argsData, argsLen, out_buf)
             } catch let error {
                 out_buf.pointee = FfiConverterString.lower(String(describing: error))
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
@@ -2592,7 +2379,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
             do {
-                return try invokeOnAiResponseReceived(cb, argsData, argsLen, out_buf)
+                return try invokeOnProviderFallback(cb, argsData, argsLen, out_buf)
             } catch let error {
                 out_buf.pointee = FfiConverterString.lower(String(describing: error))
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
@@ -2606,7 +2393,7 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
             do {
-                return try invokeOnProviderFallback(cb, argsData, argsLen, out_buf)
+                return try invokeOnConfigChanged(cb, argsData, argsLen, out_buf)
             } catch let error {
                 out_buf.pointee = FfiConverterString.lower(String(describing: error))
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
@@ -2620,26 +2407,12 @@ fileprivate let foreignCallbackCallbackInterfaceAetherEventHandler : ForeignCall
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
             do {
-                return try invokeOnConfigChanged(cb, argsData, argsLen, out_buf)
-            } catch let error {
-                out_buf.pointee = FfiConverterString.lower(String(describing: error))
-                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
-            }
-        case 11:
-            let cb: AetherEventHandler
-            do {
-                cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
-            } catch {
-                out_buf.pointee = FfiConverterString.lower("AetherEventHandler: Invalid handle")
-                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
-            }
-            do {
                 return try invokeOnTypewriterProgress(cb, argsData, argsLen, out_buf)
             } catch let error {
                 out_buf.pointee = FfiConverterString.lower(String(describing: error))
                 return UNIFFI_CALLBACK_UNEXPECTED_ERROR
             }
-        case 12:
+        case 11:
             let cb: AetherEventHandler
             do {
                 cb = try FfiConverterCallbackInterfaceAetherEventHandler.lift(handle)
@@ -3010,27 +2783,6 @@ fileprivate struct FfiConverterOptionTypeBehaviorConfig: FfiConverterRustBuffer 
     }
 }
 
-fileprivate struct FfiConverterOptionTypeImageData: FfiConverterRustBuffer {
-    typealias SwiftType = ImageData?
-
-    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
-        guard let value = value else {
-            writeInt(&buf, Int8(0))
-            return
-        }
-        writeInt(&buf, Int8(1))
-        FfiConverterTypeImageData.write(value, into: &buf)
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
-        switch try readInt(&buf) as Int8 {
-        case 0: return nil
-        case 1: return try FfiConverterTypeImageData.read(from: &buf)
-        default: throw UniffiInternalError.unexpectedOptionalTag
-        }
-    }
-}
-
 fileprivate struct FfiConverterOptionTypeShortcutsConfig: FfiConverterRustBuffer {
     typealias SwiftType = ShortcutsConfig?
 
@@ -3049,28 +2801,6 @@ fileprivate struct FfiConverterOptionTypeShortcutsConfig: FfiConverterRustBuffer
         case 1: return try FfiConverterTypeShortcutsConfig.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
-    }
-}
-
-fileprivate struct FfiConverterSequenceUInt8: FfiConverterRustBuffer {
-    typealias SwiftType = [UInt8]
-
-    public static func write(_ value: [UInt8], into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        for item in value {
-            FfiConverterUInt8.write(item, into: &buf)
-        }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UInt8] {
-        let len: Int32 = try readInt(&buf)
-        var seq = [UInt8]()
-        seq.reserveCapacity(Int(len))
-        for _ in 0 ..< len {
-            seq.append(try FfiConverterUInt8.read(from: &buf))
-        }
-        return seq
     }
 }
 
@@ -3192,9 +2922,6 @@ private var initializationResult: InitializationResult {
     if (uniffi_aethecore_checksum_method_aethercore_delete_provider() != 54495) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_get_clipboard_text() != 62323) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_aethecore_checksum_method_aethercore_get_log_directory() != 19967) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3207,19 +2934,10 @@ private var initializationResult: InitializationResult {
     if (uniffi_aethecore_checksum_method_aethercore_get_memory_stats() != 27898) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_has_clipboard_image() != 63485) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_is_listening() != 51411) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_aethecore_checksum_method_aethercore_load_config() != 47002) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_process_with_ai() != 16909) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_read_clipboard_image() != 24584) {
+    if (uniffi_aethecore_checksum_method_aethercore_process_input() != 60826) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_retrieve_and_augment_prompt() != 9356) {
@@ -3235,12 +2953,6 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_set_log_level() != 50110) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_start_listening() != 63093) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_stop_listening() != 31357) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_store_interaction_memory() != 61598) {
@@ -3279,16 +2991,10 @@ private var initializationResult: InitializationResult {
     if (uniffi_aethecore_checksum_method_aethercore_validate_regex() != 94) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_write_clipboard_image() != 45656) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_aethecore_checksum_constructor_aethercore_new() != 12942) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_state_changed() != 21139) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_hotkey_detected() != 5637) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_error() != 13669) {

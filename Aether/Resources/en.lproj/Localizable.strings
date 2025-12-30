@@ -268,6 +268,11 @@
 "error.general.unknown" = "An unknown error occurred.";
 "error.title" = "Error";
 "error.aether" = "Aether Error";
+"error.no_clipboard_text" = "No text in clipboard";
+"error.no_clipboard_text.suggestion" = "Please select text first";
+"error.core_not_initialized" = "Core not initialized";
+"error.core_not_initialized.suggestion" = "Please restart the app";
+"error.check_connection" = "Please check network connection and API configuration";
 
 // MARK: - Alerts
 "alert.confirm_delete" = "Are you sure you want to delete this item?";

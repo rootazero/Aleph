@@ -267,6 +267,11 @@
 "error.general.unknown" = "发生未知错误。";
 "error.title" = "错误";
 "error.aether" = "Aether 错误";
+"error.no_clipboard_text" = "剪贴板中没有文本";
+"error.no_clipboard_text.suggestion" = "请先选择要处理的文本";
+"error.core_not_initialized" = "核心未初始化";
+"error.core_not_initialized.suggestion" = "请重启应用";
+"error.check_connection" = "请检查网络连接和API配置";
 
 // MARK: - Alerts
 "alert.confirm_delete" = "您确定要删除此项吗？";
