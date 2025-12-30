@@ -1244,7 +1244,11 @@ impl AetherCore {
             provider
                 .process(test_prompt, None)
                 .await
-                .map_err(|e| e.user_friendly_message())
+                .map_err(|e| {
+                    // During testing, show detailed error for debugging
+                    // (unlike production where we show user-friendly messages)
+                    format!("{}", e)
+                })
         });
 
         match result {
@@ -1309,7 +1313,11 @@ impl AetherCore {
             provider
                 .process(test_prompt, None)
                 .await
-                .map_err(|e| e.user_friendly_message())
+                .map_err(|e| {
+                    // During testing, show detailed error for debugging
+                    // (unlike production where we show user-friendly messages)
+                    format!("{}", e)
+                })
         });
 
         match result {
