@@ -229,8 +229,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // This replaces the Rust-based EventTapListener to avoid thread conflicts
             print("[Aether] Initializing Swift-based global hotkey monitor...")
             hotkeyMonitor = GlobalHotkeyMonitor { [weak self] in
-                // When ` key is detected, trigger the same flow as before
-                self?.eventHandler?.onHotkeyDetected("")
+                // When ` key is detected, handle it in Swift layer
+                self?.handleHotkeyPressed()
             }
 
             // Start monitoring for hotkey
@@ -419,6 +419,82 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Initialize Rust core
         initializeRustCore()
+    }
+
+    // MARK: - Hotkey Handling
+
+    /// Handle hotkey press in Swift layer (new architecture)
+    ///
+    /// This replaces the old flow where Rust detected the hotkey via rdev.
+    /// Now Swift's GlobalHotkeyMonitor detects the key, and we handle everything here.
+    private func handleHotkeyPressed() {
+        print("[AppDelegate] Hotkey pressed - handling in Swift layer")
+
+        // Get clipboard content using Swift ClipboardManager
+        guard let clipboardText = ClipboardManager.shared.getText() else {
+            print("[AppDelegate] No text in clipboard, ignoring hotkey")
+            // Show brief error indication
+            DispatchQueue.main.async { [weak self] in
+                self?.haloWindow?.show(at: NSEvent.mouseLocation)
+                self?.haloWindow?.updateState(.error(
+                    type: .unknown,
+                    message: "剪贴板中没有文本",
+                    suggestion: "请先选择要处理的文本"
+                ))
+                // Auto-hide after 2 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                    self?.haloWindow?.hide()
+                }
+            }
+            return
+        }
+
+        print("[AppDelegate] Clipboard text: \(clipboardText.prefix(50))...")
+
+        // Capture current context
+        let context = ContextCapture.captureContext()
+        print("[AppDelegate] Context: app=\(context.bundleId ?? "nil"), window=\(context.windowTitle ?? "nil")")
+
+        // Show Halo at cursor position
+        DispatchQueue.main.async { [weak self] in
+            let mouseLocation = NSEvent.mouseLocation
+            self?.haloWindow?.show(at: mouseLocation)
+            self?.haloWindow?.updateState(.listening)
+        }
+
+        // TODO: Call Rust core's process_input() method (to be implemented)
+        // For now, just simulate the old flow by calling onHotkeyDetected
+        // This will be replaced in Phase 2 with:
+        //
+        // guard let core = core else {
+        //     print("[AppDelegate] Error: Core not initialized")
+        //     return
+        // }
+        //
+        // Task {
+        //     do {
+        //         let capturedContext = CapturedContext(
+        //             appBundleId: context.bundleId ?? "",
+        //             windowTitle: context.windowTitle
+        //         )
+        //         let response = try await core.processInput(
+        //             userInput: clipboardText,
+        //             context: capturedContext
+        //         )
+        //
+        //         // Type response using KeyboardSimulator
+        //         await KeyboardSimulator.shared.typeText(response, speed: 50)
+        //     } catch {
+        //         print("[AppDelegate] Error processing input: \(error)")
+        //         self.eventHandler?.onError(
+        //             message: "处理失败: \(error.localizedDescription)",
+        //             suggestion: "请检查网络连接和API配置"
+        //         )
+        //     }
+        // }
+
+        // Temporary: Use old callback flow until Rust core is updated
+        eventHandler?.onHotkeyDetected(clipboardContent: clipboardText)
     }
 
     // MARK: - Accessibility Permission Check (Legacy - now using PermissionGate)
