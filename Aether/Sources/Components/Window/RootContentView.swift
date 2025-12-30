@@ -54,12 +54,13 @@ struct RootContentView: View {
                 onExportSettings: exportSettings,
                 onResetSettings: resetSettings
             )
+            .frame(width: 220)  // Fixed width for sidebar
 
             // Right: Content area
             contentArea
         }
         .background(.windowBackground)
-        .edgesIgnoringSafeArea(.top)  // Ensure content extends to window top edge
+        .edgesIgnoringSafeArea(.all)  // Changed from .top to .all to ensure full-window layout
         .hideNativeTrafficLights()
         .onAppear {
             loadProviders()
@@ -105,6 +106,7 @@ struct RootContentView: View {
             }
             .frame(height: 52)
             .background(DesignTokens.Materials.titlebar)
+            .padding(.top, 0)  // Explicitly set to 0 to ensure no top spacing
 
             // Tab content (main scrollable area)
             tabContent
@@ -126,6 +128,7 @@ struct RootContentView: View {
             )
         }
         .frame(maxHeight: .infinity)
+        .padding(.top, 0)  // Ensure content area starts at top edge
         // No maxWidth - let content area fill remaining space in HStack naturally
     }
 

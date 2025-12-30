@@ -53,8 +53,7 @@ struct SidebarWithTrafficLights: View {
                     TrafficLightButton(color: .yellow, action: WindowController.shared.minimize)
                     TrafficLightButton(color: .green, action: WindowController.shared.toggleFullscreen)
                 }
-                .padding(.top, 14)
-                .padding(.leading, 18)
+                .padding(.leading, 10)  // Reduced from 18 to account for outer padding
 
                 // Logo section
                 VStack(spacing: 6) {
@@ -89,7 +88,7 @@ struct SidebarWithTrafficLights: View {
                         )
                     }
                 }
-                .padding(.horizontal, 18)
+                .padding(.horizontal, 10)  // Reduced from 18 to account for outer padding
                 .padding(.top, 8)
 
                 Spacer()
@@ -97,10 +96,11 @@ struct SidebarWithTrafficLights: View {
                 // Action buttons at the bottom
                 if onImportSettings != nil || onExportSettings != nil || onResetSettings != nil {
                     actionButtonsSection
-                        .padding(.horizontal, 18)
-                        .padding(.bottom, 18)
+                        .padding(.horizontal, 10)  // Reduced from 18 to account for outer padding
+                        .padding(.bottom, 10)  // Reduced from 18 to account for outer padding
                 }
             }
+            .padding(8)  // Match outer RoundedRectangle padding for perfect alignment
         }
         .frame(width: 220)
     }
