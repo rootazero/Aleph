@@ -7,6 +7,7 @@
 
 // MARK: - Common UI Elements
 "common.save" = "保存";
+"common.saving" = "保存中...";
 "common.cancel" = "取消";
 "common.ok" = "确定";
 "common.apply" = "应用";
@@ -321,3 +322,11 @@
 "halo.state.processing" = "处理中...";
 "halo.state.success" = "成功";
 "halo.state.error" = "错误";
+
+// MARK: - Settings Window - Unsaved Changes
+"settings.unsaved_changes.title" = "未保存的修改";
+"settings.unsaved_changes.message" = "你有未保存的修改。是否在离开前保存？";
+"settings.unsaved_changes.save" = "保存";
+"settings.unsaved_changes.dont_save" = "不保存";
+"settings.unsaved_changes.close_title" = "未保存的修改";
+"settings.unsaved_changes.close_message" = "你有未保存的修改。是否在关闭前保存？";

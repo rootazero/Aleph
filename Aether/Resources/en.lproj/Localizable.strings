@@ -8,6 +8,7 @@
 
 // MARK: - Common UI Elements
 "common.save" = "Save";
+"common.saving" = "Saving...";
 "common.cancel" = "Cancel";
 "common.ok" = "OK";
 "common.apply" = "Apply";
@@ -322,3 +323,11 @@
 "halo.state.processing" = "Processing...";
 "halo.state.success" = "Success";
 "halo.state.error" = "Error";
+
+// MARK: - Settings Window - Unsaved Changes
+"settings.unsaved_changes.title" = "Unsaved Changes";
+"settings.unsaved_changes.message" = "You have unsaved changes. Do you want to save them before leaving?";
+"settings.unsaved_changes.save" = "Save";
+"settings.unsaved_changes.dont_save" = "Don't Save";
+"settings.unsaved_changes.close_title" = "Unsaved Changes";
+"settings.unsaved_changes.close_message" = "You have unsaved changes. Do you want to save them before closing?";
