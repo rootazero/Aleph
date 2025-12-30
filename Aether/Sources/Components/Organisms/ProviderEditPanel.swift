@@ -823,6 +823,13 @@ struct ProviderEditPanel: View {
                     isAddingNew = false
 
                     isSaving = false
+
+                    // Notify that configuration was saved internally
+                    // This prevents ConfigWatcher from triggering a full view rebuild
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("AetherConfigSavedInternally"),
+                        object: savedProviderName  // Pass the saved provider name
+                    )
                 }
             } catch {
                 await MainActor.run {

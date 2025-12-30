@@ -29,10 +29,12 @@ class EventHandler: AetherEventHandler {
     init(haloWindow: HaloWindow?) {
         self.haloWindow = haloWindow
         setupEscapeKeyMonitor()
+        setupInternalConfigSaveObserver()
     }
 
     deinit {
         removeEscapeKeyMonitor()
+        NotificationCenter.default.removeObserver(self)
     }
 
     // Set AetherCore reference after initialization
@@ -113,8 +115,20 @@ class EventHandler: AetherEventHandler {
         }
     }
 
+    // MARK: - Internal State for Config Change Debouncing
+
+    private var lastInternalSaveTime: Date?
+    private let internalSaveDebounceInterval: TimeInterval = 2.0  // 2 seconds
+
     // Config Hot-Reload Callback (Phase 6 - Section 6.2)
     func onConfigChanged() {
+        // Check if this change was triggered by an internal save (within debounce window)
+        if let lastSave = lastInternalSaveTime,
+           Date().timeIntervalSince(lastSave) < internalSaveDebounceInterval {
+            print("[EventHandler] Config changed by internal save, skipping external change notification")
+            return
+        }
+
         print("[EventHandler] Config file changed externally")
 
         DispatchQueue.main.async {
@@ -127,6 +141,12 @@ class EventHandler: AetherEventHandler {
             // Optional: Show toast notification to user
             self.showConfigReloadedToast()
         }
+    }
+
+    // Called when configuration is saved internally from UI
+    func recordInternalConfigSave() {
+        lastInternalSaveTime = Date()
+        print("[EventHandler] Recorded internal config save at \(Date())")
     }
 
     // Provider Fallback Callback
@@ -421,6 +441,20 @@ class EventHandler: AetherEventHandler {
         DispatchQueue.main.async { [weak self] in
             self?.haloWindow?.hide()
         }
+    }
+
+    // MARK: - Internal Config Save Observer
+
+    /// Setup observer for internal config save notifications
+    private func setupInternalConfigSaveObserver() {
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("AetherConfigSavedInternally"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.recordInternalConfigSave()
+        }
+        print("[EventHandler] Internal config save observer installed")
     }
 
     // MARK: - VoiceOver Support

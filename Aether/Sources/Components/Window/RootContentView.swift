@@ -30,6 +30,7 @@ struct RootContentView: View {
     @State private var selectedTab: SettingsTab = .general
     @State private var providers: [ProviderConfigEntry] = []
     @State private var configReloadTrigger: Int = 0
+    @State private var lastSavedProviderName: String? = nil  // Track last saved provider
 
     // Theme management
     @StateObject private var themeManager = ThemeManager()
@@ -70,7 +71,10 @@ struct RootContentView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("AetherConfigDidChange"))) { _ in
-            handleConfigChange()
+            handleExternalConfigChange()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("AetherConfigSavedInternally"))) { notification in
+            handleInternalConfigSave(providerName: notification.object as? String)
         }
     }
 
@@ -181,11 +185,23 @@ struct RootContentView: View {
         }
     }
 
-    /// Handle config file change notification
-    private func handleConfigChange() {
+    /// Handle config file change notification from external modification
+    private func handleExternalConfigChange() {
+        print("[RootContentView] External config change detected, triggering full reload")
         loadProviders()
-        configReloadTrigger += 1
-        print("[RootContentView] Configuration reloaded from file")
+        configReloadTrigger += 1  // Force complete view rebuild for external changes
+    }
+
+    /// Handle internal config save from UI (should NOT trigger view rebuild)
+    private func handleInternalConfigSave(providerName: String?) {
+        print("[RootContentView] Internal config save detected for provider: \(providerName ?? "unknown")")
+
+        // Only reload providers data, do NOT increment configReloadTrigger
+        // This prevents ProvidersView from rebuilding and resetting selection
+        loadProviders()
+
+        // Remember the provider name for ProvidersView to restore selection
+        lastSavedProviderName = providerName
     }
 
     // MARK: - Import/Export/Reset Actions
@@ -225,7 +241,7 @@ struct RootContentView: View {
                 _ = try core.loadConfig()
 
                 await MainActor.run {
-                    handleConfigChange()
+                    handleExternalConfigChange()
                     showAlert(
                         title: "Success",
                         message: "Settings imported successfully!",
@@ -320,7 +336,7 @@ struct RootContentView: View {
                 _ = try core.loadConfig()
 
                 await MainActor.run {
-                    handleConfigChange()
+                    handleExternalConfigChange()
                     showAlert(
                         title: "Success",
                         message: "Settings have been reset to defaults!",
