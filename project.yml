@@ -24,6 +24,9 @@ settings:
     SWIFT_EMIT_LOC_STRINGS: YES
     SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
     STRING_CATALOG_GENERATE_SYMBOLS: YES
+    # Limit to arm64 only to match Rust library architecture
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: NO
 
 targets:
   Aether:
@@ -75,7 +78,6 @@ targets:
         LIBRARY_SEARCH_PATHS:
           - $(inherited)
           - $(PROJECT_DIR)/Aether/Frameworks
-          - $(PROJECT_DIR)/Aether/core/target/debug
         FRAMEWORK_SEARCH_PATHS:
           - $(inherited)
           - $(PROJECT_DIR)/Aether/Frameworks
