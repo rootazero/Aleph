@@ -5,7 +5,7 @@ use crate::clipboard::{ArboardManager, ClipboardManager};
 use crate::config::{Config, ConfigWatcher, MemoryConfig, TestConnectionResult};
 use crate::error::{AetherError, Result};
 use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
-use crate::hotkey::{HotkeyListener, RdevListener};
+use crate::hotkey::{EventTapListener, HotkeyListener};
 use crate::input::{EnigoSimulator, InputSimulator};
 use crate::memory::cleanup::CleanupService;
 use crate::memory::database::{MemoryStats, VectorDatabase};
@@ -91,7 +91,8 @@ impl AetherCore {
         let clipboard_clone = Arc::clone(&clipboard_manager);
 
         // Create hotkey listener with callback
-        let hotkey_listener: Arc<dyn HotkeyListener> = Arc::new(RdevListener::new(move || {
+        // Use EventTapListener for single-key hotkey support (intercepts events)
+        let hotkey_listener: Arc<dyn HotkeyListener> = Arc::new(EventTapListener::new(move || {
             // When hotkey is detected, read clipboard and invoke callback
             handler_clone.on_state_changed(ProcessingState::Listening);
 

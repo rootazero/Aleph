@@ -1,10 +1,15 @@
 //! Hotkey detection trait and implementations
 //!
-//! This module provides global hotkey listening using the rdev crate.
-//! Phase 1 hardcodes Cmd+~ (Command+Grave) detection.
+//! This module provides global hotkey listening using:
+//! - EventTapListener: CGEventTap-based (intercepts events, prevents default behavior)
+//! - RdevListener: rdev-based (passive monitoring, cannot prevent input)
+//!
+//! For single-key hotkeys like `, EventTapListener is required to prevent character input.
+mod event_tap_listener;
 mod rdev_listener;
 
 use crate::error::Result;
+pub use event_tap_listener::EventTapListener;
 pub use rdev_listener::RdevListener;
 
 /// Trait for hotkey listening operations

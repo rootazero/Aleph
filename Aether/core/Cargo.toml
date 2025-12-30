@@ -45,6 +45,9 @@ notify-debouncer-full = "0.3"
 image = { version = "0.24", default-features = false, features = ["png", "jpeg", "gif"] }
 # For Base64 encoding of images
 base64 = "0.21"
+# For macOS CGEventTap (single-key global hotkeys)
+core-foundation = "0.10"
+core-graphics = "0.24"
 
 [build-dependencies]
 uniffi = { version = "0.25", features = ["build"] }
