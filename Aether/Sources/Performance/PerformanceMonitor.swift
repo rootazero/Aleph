@@ -13,6 +13,7 @@
 import Foundation
 import QuartzCore
 import AppKit
+import Combine
 
 /// Notification posted when FPS drops below threshold
 extension Notification.Name {

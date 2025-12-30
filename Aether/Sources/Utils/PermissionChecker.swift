@@ -10,6 +10,7 @@ import Cocoa
 import ApplicationServices
 import IOKit
 import IOKit.hid
+import Combine
 
 /// Centralized permission checker for all system permissions required by Aether
 class PermissionChecker {
@@ -54,13 +55,10 @@ class PermissionChecker {
     /// - Returns: true if permission granted, false otherwise
     static func hasInputMonitoringViaHID() -> Bool {
         // Create HID manager
-        guard let manager = IOHIDManagerCreate(
+        let manager = IOHIDManagerCreate(
             kCFAllocatorDefault,
             IOOptionBits(kIOHIDOptionsTypeNone)
-        ) else {
-            print("[PermissionChecker] Failed to create IOHIDManager")
-            return false
-        }
+        )
 
         // Set device matching criteria (keyboard)
         let deviceMatching: [String: Any] = [

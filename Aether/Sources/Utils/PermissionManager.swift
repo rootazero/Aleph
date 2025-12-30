@@ -10,6 +10,7 @@ import Foundation
 import SwiftUI
 import ApplicationServices
 import IOKit.hid
+import Combine
 
 /// Permission manager that passively monitors permission status
 /// without triggering automatic app restarts
@@ -114,13 +115,10 @@ class PermissionManager: ObservableObject {
     /// actually attempts to open a keyboard device stream
     private func checkInputMonitoringViaHID() -> Bool {
         // Create HID manager
-        guard let manager = IOHIDManagerCreate(
+        let manager = IOHIDManagerCreate(
             kCFAllocatorDefault,
             IOOptionBits(kIOHIDOptionsTypeNone)
-        ) else {
-            print("PermissionManager: Failed to create IOHIDManager")
-            return false
-        }
+        )
 
         // Set device matching criteria (keyboard)
         let deviceMatching: [String: Any] = [
