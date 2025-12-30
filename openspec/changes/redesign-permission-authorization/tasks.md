@@ -22,7 +22,7 @@
 - ✅ `inputMonitoringGranted` updates when IOHIDManagerOpen() changes
 - ✅ NO calls to `exit()`, `NSApp.terminate()`, or restart methods
 
-### Task 1.2: Rewrite PermissionGateView with waterfall design
+### Task 1.2: rewrite PermissionGateView with waterfall design
 - [x] Backup existing `Aether/Sources/Components/PermissionGateView.swift`
 - [x] Replace `@StateObject var monitor: PermissionStatusMonitor` with `PermissionManager`
 - [x] Implement waterfall flow: Step 1 (Accessibility) → Step 2 (Input Monitoring)
@@ -31,8 +31,8 @@
 - [x] Add "进入 Aether" button (shown when both permissions granted)
 - [x] Implement user-triggered `restartApp()` method
 - [x] Simplify `checkInitialPermissions()` (0.3s delay, no debounce)
-- [x] **FIX**: Call `manager.startMonitoring()` to activate timer polling
-- [x] **FIX**: Request permissions before opening System Settings
+- [x] **FIX #1**: Call `manager.startMonitoring()` to activate timer polling
+- [x] **FIX #2**: Remove system permission prompts for unified UX
 - [ ] Validation: Manual test permission grant flow
 
 **Files modified:**
