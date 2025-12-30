@@ -99,6 +99,13 @@ pub enum AetherError {
         message: String,
         suggestion: Option<String>,
     },
+
+    /// Permission denied error (for Accessibility and Input Monitoring)
+    #[error("Permission denied: {message}")]
+    PermissionDenied {
+        message: String,
+        suggestion: Option<String>,
+    },
 }
 
 impl AetherError {
@@ -203,6 +210,14 @@ impl AetherError {
         }
     }
 
+    /// Create a permission denied error with a message
+    pub fn permission_denied<S: Into<String>>(msg: S) -> Self {
+        AetherError::PermissionDenied {
+            message: msg.into(),
+            suggestion: Some("Grant required permissions in System Settings → Privacy & Security → Accessibility and Input Monitoring".to_string()),
+        }
+    }
+
     /// Get the suggestion for this error, if available
     ///
     /// Returns a user-friendly actionable suggestion for how to resolve the error.
@@ -221,7 +236,8 @@ impl AetherError {
             | AetherError::NoProviderAvailable { suggestion }
             | AetherError::InvalidConfig { suggestion, .. }
             | AetherError::KeychainError { suggestion, .. }
-            | AetherError::Other { suggestion, .. } => suggestion.as_deref(),
+            | AetherError::Other { suggestion, .. }
+            | AetherError::PermissionDenied { suggestion, .. } => suggestion.as_deref(),
         }
     }
 
@@ -310,6 +326,12 @@ impl AetherError {
             }
             AetherError::Other { message, .. } => {
                 format!("An error occurred: {}. Please try again.", message)
+            }
+            AetherError::PermissionDenied { message, .. } => {
+                format!(
+                    "Permission denied: {}. Please grant required permissions in System Settings.",
+                    message
+                )
             }
         }
     }

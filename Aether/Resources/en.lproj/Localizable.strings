@@ -256,6 +256,7 @@
 "permission.gate.status_granted" = "Granted ✓";
 "permission.gate.status_waiting" = "Waiting for authorization...";
 "permission.gate.button.continue" = "Continue";
+"permission.gate.button.enter_aether" = "Enter Aether";
 
 // MARK: - Error Messages
 "error.provider.invalid_api_key" = "Invalid API key. Please check your credentials.";

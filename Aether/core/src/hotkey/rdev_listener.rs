@@ -112,12 +112,23 @@ impl HotkeyListener for RdevListener {
                     eprintln!("[RdevListener] This usually means Input Monitoring permission is not granted.");
                     eprintln!("[RdevListener] Please grant permission in System Settings → Privacy & Security → Input Monitoring");
                 }
-                Err(panic_err) => {
-                    eprintln!("[RdevListener] FATAL: rdev listen panicked!");
-                    eprintln!("[RdevListener] Panic error: {:?}", panic_err);
+                Err(panic_payload) => {
+                    // Extract panic message
+                    let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "Unknown panic".to_string()
+                    };
+
+                    eprintln!("[RdevListener] FATAL: rdev listen panicked: {}", panic_msg);
                     eprintln!("[RdevListener] This is likely due to missing macOS permissions:");
                     eprintln!("[RdevListener]   1. Accessibility: System Settings → Privacy & Security → Accessibility");
                     eprintln!("[RdevListener]   2. Input Monitoring: System Settings → Privacy & Security → Input Monitoring");
+
+                    // Note: We cannot propagate this error back to caller since we're in a spawned thread
+                    // The error should be caught by permission pre-check in AetherCore.start_listening()
                 }
             }
         });

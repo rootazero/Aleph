@@ -9,41 +9,21 @@
 import Cocoa
 import ApplicationServices
 import IOKit
+import IOKit.hid
 
 /// Centralized permission checker for all system permissions required by Aether
 class PermissionChecker {
 
     // MARK: - Accessibility Permission
 
-    /// Check if Accessibility permission is granted with retry mechanism
+    /// Check if Accessibility permission is granted
     ///
-    /// macOS may return stale cached values immediately after app launch.
-    /// This method retries up to 3 times with 100ms intervals to get accurate status.
+    /// NOTE: Removed retry mechanism - Apple's AXIsProcessTrusted() API is stable enough
+    /// and retries were causing unnecessary delays.
     ///
     /// - Returns: true if permission granted, false otherwise
     static func hasAccessibilityPermission() -> Bool {
-        // Try multiple times to handle macOS permission cache lag
-        let maxAttempts = 3
-        let retryDelay: UInt32 = 100_000 // 100ms in microseconds
-
-        for attempt in 1...maxAttempts {
-            let result = AXIsProcessTrusted()
-
-            // If permission granted, return immediately
-            if result {
-                if attempt > 1 {
-                    print("[PermissionChecker] Accessibility permission detected on attempt \(attempt)")
-                }
-                return true
-            }
-
-            // If not last attempt, wait before retrying
-            if attempt < maxAttempts {
-                usleep(retryDelay)
-            }
-        }
-
-        return false
+        return AXIsProcessTrusted()
     }
 
     /// Request Accessibility permission (shows system prompt if not granted)
@@ -55,46 +35,56 @@ class PermissionChecker {
 
     // MARK: - Input Monitoring Permission
 
-    /// Check if Input Monitoring permission is granted with retry mechanism
+    /// Check if Input Monitoring permission is granted using IOHIDManager
     ///
-    /// This permission is required for global hotkey detection using rdev.
-    /// On macOS 10.15+, apps need explicit permission to monitor keyboard and mouse events.
-    ///
-    /// macOS may return stale cached values immediately after app launch.
-    /// This method retries up to 3 times with 100ms intervals to get accurate status.
+    /// This method is more accurate than IOHIDRequestAccess because it actually
+    /// attempts to open a keyboard device stream, which reflects the true permission state.
     ///
     /// - Returns: true if permission granted, false otherwise
     static func hasInputMonitoringPermission() -> Bool {
-        // Method 1: Try to use IOHIDRequestAccess (macOS 10.15+)
-        // This is the official API for checking Input Monitoring permission
-        if #available(macOS 10.15, *) {
-            // Try multiple times to handle macOS permission cache lag
-            let maxAttempts = 3
-            let retryDelay: UInt32 = 100_000 // 100ms in microseconds
+        return hasInputMonitoringViaHID()
+    }
 
-            for attempt in 1...maxAttempts {
-                let result = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
-
-                // If permission granted, return immediately
-                if result {
-                    if attempt > 1 {
-                        print("[PermissionChecker] Input Monitoring permission detected on attempt \(attempt)")
-                    }
-                    return true
-                }
-
-                // If not last attempt, wait before retrying
-                if attempt < maxAttempts {
-                    usleep(retryDelay)
-                }
-            }
-
+    /// Check Input Monitoring permission via IOHIDManager (more accurate)
+    ///
+    /// This method creates an IOHIDManager and attempts to open a keyboard device stream.
+    /// If the open succeeds, Input Monitoring permission is granted.
+    /// If it fails with kIOReturnNotPermitted, permission is denied.
+    ///
+    /// - Returns: true if permission granted, false otherwise
+    static func hasInputMonitoringViaHID() -> Bool {
+        // Create HID manager
+        guard let manager = IOHIDManagerCreate(
+            kCFAllocatorDefault,
+            IOOptionBits(kIOHIDOptionsTypeNone)
+        ) else {
+            print("[PermissionChecker] Failed to create IOHIDManager")
             return false
         }
 
-        // Fallback for older macOS versions (should not reach here due to minimum version requirement)
-        // Assume permission is granted on older systems
-        return true
+        // Set device matching criteria (keyboard)
+        let deviceMatching: [String: Any] = [
+            kIOHIDDeviceUsagePageKey as String: kHIDPage_GenericDesktop,
+            kIOHIDDeviceUsageKey as String: kHIDUsage_GD_Keyboard
+        ]
+        IOHIDManagerSetDeviceMatching(manager, deviceMatching as CFDictionary)
+
+        // Try to open the manager
+        let result = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+
+        // Clean up
+        if result == kIOReturnSuccess {
+            IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+            return true
+        } else {
+            // kIOReturnNotPermitted (-536870174) indicates permission denied
+            if result == kIOReturnNotPermitted {
+                print("[PermissionChecker] Input Monitoring permission not granted (kIOReturnNotPermitted)")
+            } else {
+                print("[PermissionChecker] IOHIDManagerOpen failed with error: \(result)")
+            }
+            return false
+        }
     }
 
     /// Request Input Monitoring permission (shows system prompt if not granted)
@@ -125,5 +115,28 @@ class PermissionChecker {
             "Accessibility": hasAccessibilityPermission(),
             "InputMonitoring": hasInputMonitoringPermission()
         ]
+    }
+
+    // MARK: - System Settings Deep Links
+
+    /// Open System Settings to a specific permission page
+    /// - Parameter permissionType: The permission type to open settings for
+    static func openSystemSettings(for permissionType: PermissionType) {
+        let urlString: String
+
+        switch permissionType {
+        case .accessibility:
+            // Deep link to Accessibility privacy pane
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        case .inputMonitoring:
+            // Deep link to Input Monitoring privacy pane
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
+        }
+
+        if let url = URL(string: urlString) {
+            NSWorkspace.shared.open(url)
+        } else {
+            print("[PermissionChecker] ❌ Failed to create URL for permission type: \(permissionType)")
+        }
     }
 }

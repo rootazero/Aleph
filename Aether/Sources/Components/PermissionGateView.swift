@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import Combine
 
 /// Permission gate step in the two-step flow
 enum PermissionGateStep: Int {
@@ -58,12 +59,11 @@ struct PermissionGateView: View {
     /// Current step in the permission flow
     @State private var currentStep: PermissionGateStep = .accessibility
 
-    /// Permission status
-    @State private var hasAccessibility: Bool = false
-    @State private var hasInputMonitoring: Bool = false
+    /// Permission manager (replaces PermissionStatusMonitor)
+    @StateObject private var manager = PermissionManager()
 
-    /// Permission status monitor
-    @StateObject private var monitor = PermissionStatusMonitor()
+    /// Combine cancellables
+    @State private var cancellables = Set<AnyCancellable>()
 
     /// Callback when all permissions are granted
     let onAllPermissionsGranted: () -> Void
@@ -101,7 +101,7 @@ struct PermissionGateView: View {
             startMonitoring()
         }
         .onDisappear {
-            monitor.stopMonitoring()
+            manager.stopMonitoring()
         }
     }
 
@@ -114,12 +114,12 @@ struct PermissionGateView: View {
                 step: 1,
                 title: NSLocalizedString("permission.gate.accessibility_short", comment: ""),
                 isActive: currentStep == .accessibility,
-                isComplete: hasAccessibility
+                isComplete: manager.accessibilityGranted
             )
 
             // Connector line
             Rectangle()
-                .fill(hasAccessibility ? Color.green : Color.gray.opacity(0.3))
+                .fill(manager.accessibilityGranted ? Color.green : Color.gray.opacity(0.3))
                 .frame(height: 2)
                 .frame(maxWidth: .infinity)
 
@@ -128,7 +128,7 @@ struct PermissionGateView: View {
                 step: 2,
                 title: NSLocalizedString("permission.gate.input_monitoring_short", comment: ""),
                 isActive: currentStep == .inputMonitoring,
-                isComplete: hasInputMonitoring
+                isComplete: manager.inputMonitoringGranted
             )
         }
         .padding(.horizontal, 20)
@@ -198,7 +198,7 @@ struct PermissionGateView: View {
 
     private var permissionStatusIndicator: some View {
         HStack(spacing: 12) {
-            let isGranted = currentStep == .accessibility ? hasAccessibility : hasInputMonitoring
+            let isGranted = currentStep == .accessibility ? manager.accessibilityGranted : manager.inputMonitoringGranted
 
             Circle()
                 .fill(isGranted ? Color.green : Color.orange)
@@ -212,17 +212,17 @@ struct PermissionGateView: View {
         .padding(.horizontal, 16)
         .background(
             Capsule()
-                .fill((currentStep == .accessibility ? hasAccessibility : hasInputMonitoring) ? Color.green.opacity(0.1) : Color.orange.opacity(0.1))
+                .fill((currentStep == .accessibility ? manager.accessibilityGranted : manager.inputMonitoringGranted) ? Color.green.opacity(0.1) : Color.orange.opacity(0.1))
         )
     }
 
     // MARK: - Action Buttons
 
     private var actionButtons: some View {
-        HStack(spacing: 12) {
-            // Only show "Open System Settings" button if permission not granted
-            if (currentStep == .accessibility && !hasAccessibility) ||
-               (currentStep == .inputMonitoring && !hasInputMonitoring) {
+        VStack(spacing: 12) {
+            // "Open System Settings" button - shown when current step permission not granted
+            if (currentStep == .accessibility && !manager.accessibilityGranted) ||
+               (currentStep == .inputMonitoring && !manager.inputMonitoringGranted) {
 
                 Button(action: openSystemSettings) {
                     HStack(spacing: 8) {
@@ -236,19 +236,14 @@ struct PermissionGateView: View {
                     .cornerRadius(10)
                 }
                 .buttonStyle(.plain)
-                .contentShape(Rectangle())  // Make entire button area clickable
+                .contentShape(Rectangle())
             }
 
-            // Show "Continue" button if current step permission is granted
-            if (currentStep == .accessibility && hasAccessibility) ||
-               (currentStep == .inputMonitoring && hasInputMonitoring) {
-
+            // "Continue" button - shown when Accessibility granted (to progress to step 2)
+            if currentStep == .accessibility && manager.accessibilityGranted && !manager.inputMonitoringGranted {
                 Button(action: {
-                    if currentStep == .accessibility && hasAccessibility {
-                        // Progress to next step
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            currentStep = .inputMonitoring
-                        }
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        currentStep = .inputMonitoring
                     }
                 }) {
                     HStack(spacing: 8) {
@@ -262,7 +257,25 @@ struct PermissionGateView: View {
                     .cornerRadius(10)
                 }
                 .buttonStyle(.plain)
-                .contentShape(Rectangle())  // Make entire button area clickable
+                .contentShape(Rectangle())
+            }
+
+            // "进入 Aether" button - shown when BOTH permissions are granted
+            // User manually clicks this button to restart the app (not automatic)
+            if manager.accessibilityGranted && manager.inputMonitoringGranted {
+                Button(action: restartApp) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                        Text(LocalizedStringKey("permission.gate.button.enter_aether"))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.green.gradient)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                }
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
             }
         }
     }
@@ -278,24 +291,17 @@ struct PermissionGateView: View {
 
     // MARK: - Permission Monitoring
 
+    /// Check initial permissions with a short delay to ensure accurate macOS permission cache
     private func checkInitialPermissions() {
-        // CRITICAL FIX: Delay initial permission check to ensure we get accurate values
-        // This prevents false negatives due to macOS permission cache lag at app startup
-        // Without this delay, hasAccessibility/hasInputMonitoring would start as false,
-        // then change to true 1 second later, incorrectly triggering the "just granted" restart logic
+        // Short delay (0.3s) to ensure macOS permission API returns accurate cached values
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            self.hasAccessibility = PermissionChecker.hasAccessibilityPermission()
-            self.hasInputMonitoring = PermissionChecker.hasInputMonitoringPermission()
-
-            print("[PermissionGateView] Initial permissions (after delay) - Accessibility: \(self.hasAccessibility), InputMonitoring: \(self.hasInputMonitoring)")
-
             // If Accessibility is already granted, skip to Input Monitoring step
-            if self.hasAccessibility && !self.hasInputMonitoring {
+            if self.manager.accessibilityGranted && !self.manager.inputMonitoringGranted {
                 self.currentStep = .inputMonitoring
             }
 
             // If both permissions already granted, dismiss gate immediately
-            if self.hasAccessibility && self.hasInputMonitoring {
+            if self.manager.accessibilityGranted && self.manager.inputMonitoringGranted {
                 print("[PermissionGateView] All permissions already granted, dismissing gate")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     self.onAllPermissionsGranted()
@@ -304,112 +310,46 @@ struct PermissionGateView: View {
         }
     }
 
+    /// Start monitoring permission status changes
+    /// CRITICAL: This method ONLY updates UI state, NO automatic restart logic
     private func startMonitoring() {
-        monitor.startMonitoring { accessibility, inputMonitoring in
-            print("[PermissionGateView] Permission status updated - Accessibility: \(accessibility), InputMonitoring: \(inputMonitoring)")
+        // No custom monitoring logic needed - PermissionManager handles everything
+        // UI automatically updates via @Published properties from PermissionManager
 
-            // Update permission status with animation
-            withAnimation(.easeInOut(duration: 0.3)) {
-                hasAccessibility = accessibility
-                hasInputMonitoring = inputMonitoring
-            }
-
-            // CRITICAL FIX: DO NOT trigger automatic restart for Accessibility permission
-            //
-            // Previous problematic logic:
-            // - Tried to detect "user just granted" vs "cache lag detection"
-            // - Used initialization phase timing to distinguish the two
-            // - Failed because debounce delays are unpredictable (3-6+ seconds)
-            //
-            // Reality check:
-            // 1. macOS does NOT require app restart after Accessibility permission granted
-            // 2. Accessibility permission takes effect immediately
-            // 3. If macOS needs to terminate the app, it will do so automatically
-            // 4. We cannot reliably distinguish "existing permission" vs "newly granted"
-            //
-            // Solution:
-            // - Remove automatic restart logic entirely
-            // - Let macOS system handle app termination if needed (rare)
-            // - Input Monitoring permission will show macOS system prompt for restart
-            // - This eliminates all restart loop issues
-
-            // Auto-progress from Accessibility to Input Monitoring when Accessibility is granted
-            if currentStep == .accessibility && accessibility {
+        // Auto-progress from Accessibility to Input Monitoring when Accessibility is granted
+        // Use Combine to observe permission changes
+        manager.$accessibilityGranted
+            .dropFirst() // Ignore initial value
+            .filter { $0 == true && self.currentStep == .accessibility }
+            .sink { _ in
                 print("[PermissionGateView] Accessibility permission granted - progressing to Input Monitoring")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     withAnimation(.easeInOut(duration: 0.3)) {
-                        currentStep = .inputMonitoring
+                        self.currentStep = .inputMonitoring
                     }
                 }
             }
+            .store(in: &cancellables)
 
-            // When both permissions are granted (after macOS system restart from Input Monitoring)
-            // This callback will be triggered on the next app launch
-            if accessibility && inputMonitoring {
-                print("[PermissionGateView] All permissions granted - dismissing gate")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    onAllPermissionsGranted()
-                }
-            }
-        }
+        // When both permissions are granted, the user will see "进入 Aether" button
+        // User manually clicks the button to restart (NO automatic restart)
     }
 
-    /// Restart the application
-    /// - Parameter reason: Reason for restart (for logging)
-    private func restartApplication(reason: String) {
-        print("[PermissionGateView] Restarting application - Reason: \(reason)")
+    /// Restart the application (user-triggered only, not automatic)
+    private func restartApp() {
+        print("[PermissionGateView] User clicked '进入 Aether' - restarting application")
 
-        // Get the path to the current executable
-        let bundlePath = Bundle.main.bundlePath
-        print("[PermissionGateView] Bundle path: \(bundlePath)")
+        let url = URL(fileURLWithPath: Bundle.main.bundlePath)
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
 
-        // Use 'open' command to relaunch the app
-        // -n: Open a new instance even if one is already running
-        // -a: Specify app by path
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        task.arguments = ["-n", bundlePath]
-
-        // Capture output for debugging
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        task.standardOutput = outputPipe
-        task.standardError = errorPipe
-
-        do {
-            try task.run()
-            print("[PermissionGateView] Restart command executed successfully")
-
-            // Read output
-            let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-
-            if let output = String(data: outputData, encoding: .utf8), !output.isEmpty {
-                print("[PermissionGateView] Restart output: \(output)")
-            }
-            if let error = String(data: errorData, encoding: .utf8), !error.isEmpty {
-                print("[PermissionGateView] Restart error output: \(error)")
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
+            if let error = error {
+                print("[PermissionGateView] ❌ Error restarting application: \(error)")
             }
 
-            // Terminate current instance after a slightly longer delay to ensure new instance starts
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                print("[PermissionGateView] Terminating current instance")
-                NSApplication.shared.terminate(nil)
-            }
-        } catch {
-            print("[PermissionGateView] ❌ Error restarting application: \(error)")
-            print("[PermissionGateView] Error details: \(error.localizedDescription)")
-
-            // If restart fails, show alert to user
             DispatchQueue.main.async {
-                let alert = NSAlert()
-                alert.messageText = NSLocalizedString("alert.restart.failed_title", comment: "Restart failed alert title")
-                alert.informativeText = String(format: NSLocalizedString("alert.restart.failed_message", comment: "Restart failed message"), error.localizedDescription)
-                alert.alertStyle = .warning
-                alert.addButton(withTitle: NSLocalizedString("common.ok", comment: "OK button"))
-                alert.runModal()
-
-                print("[PermissionGateView] App may be terminated by macOS automatically")
+                NSApp.terminate(nil)
             }
         }
     }
