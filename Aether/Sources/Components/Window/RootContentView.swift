@@ -110,22 +110,20 @@ struct RootContentView: View {
             tabContent
                 .frame(maxHeight: .infinity)  // Allow content to expand
 
-            // Unified Save Bar at bottom of content area (shown when any tab has unsaved changes)
-            if saveBarState.hasUnsavedChanges {
-                UnifiedSaveBar(
-                    hasUnsavedChanges: saveBarState.hasUnsavedChanges,
-                    isSaving: saveBarState.isSaving,
-                    statusMessage: saveBarState.statusMessage,
-                    onSave: {
-                        Task {
-                            await saveBarState.onSave?()
-                        }
-                    },
-                    onCancel: {
-                        saveBarState.onCancel?()
+            // Unified Save Bar at bottom of content area (always visible for design consistency)
+            UnifiedSaveBar(
+                hasUnsavedChanges: saveBarState.hasUnsavedChanges,
+                isSaving: saveBarState.isSaving,
+                statusMessage: saveBarState.statusMessage,
+                onSave: {
+                    Task {
+                        await saveBarState.onSave?()
                     }
-                )
-            }
+                },
+                onCancel: {
+                    saveBarState.onCancel?()
+                }
+            )
         }
         .frame(maxHeight: .infinity)
         // No maxWidth - let content area fill remaining space in HStack naturally
@@ -136,7 +134,7 @@ struct RootContentView: View {
     private var tabContent: some View {
         switch selectedTab {
         case .general:
-            GeneralSettingsView(core: appDelegate.core)
+            GeneralSettingsView(core: appDelegate.core, saveBarState: saveBarState)
 
         case .providers:
             if let core = appDelegate.core {
@@ -148,14 +146,14 @@ struct RootContentView: View {
 
         case .routing:
             if let core = appDelegate.core {
-                RoutingView(core: core, providers: providers)
+                RoutingView(core: core, providers: providers, saveBarState: saveBarState)
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Routing management requires AetherCore initialization")
             }
 
         case .shortcuts:
-            ShortcutsView()
+            ShortcutsView(saveBarState: saveBarState)
 
         case .behavior:
             BehaviorSettingsView(core: appDelegate.core, saveBarState: saveBarState)
@@ -163,7 +161,7 @@ struct RootContentView: View {
 
         case .memory:
             if let core = appDelegate.core {
-                MemoryView(core: core)
+                MemoryView(core: core, saveBarState: saveBarState)
             } else {
                 placeholderView("Memory management requires AetherCore initialization")
             }

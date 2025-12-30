@@ -11,6 +11,9 @@ import SwiftUI
 // MARK: - Memory View
 
 struct MemoryView: View {
+    let core: AetherCore
+    @ObservedObject var saveBarState: SettingsSaveBarState
+
     @State private var memoryConfig: MemoryConfig
     @State private var memoryStats: MemoryStats?
     @State private var memories: [MemoryEntry] = []
@@ -21,10 +24,9 @@ struct MemoryView: View {
     @State private var memoryToDelete: MemoryEntry?
     @State private var showClearAllConfirmation = false
 
-    let core: AetherCore
-
-    init(core: AetherCore) {
+    init(core: AetherCore, saveBarState: SettingsSaveBarState) {
         self.core = core
+        self._saveBarState = ObservedObject(wrappedValue: saveBarState)
         // Load initial config
         _memoryConfig = State(initialValue: core.getMemoryConfig())
     }
@@ -52,6 +54,14 @@ struct MemoryView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             refreshData()
+            // Set save bar to disabled state for instant-save view
+            saveBarState.update(
+                hasUnsavedChanges: false,
+                isSaving: false,
+                statusMessage: nil,
+                onSave: nil,
+                onCancel: nil
+            )
         }
         .alert(NSLocalizedString("common.error", comment: ""), isPresented: .constant(errorMessage != nil)) {
             Button(NSLocalizedString("common.ok", comment: "")) {

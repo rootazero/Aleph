@@ -9,6 +9,8 @@ import SwiftUI
 import AppKit
 
 struct ShortcutsView: View {
+    @ObservedObject var saveBarState: SettingsSaveBarState
+
     @State private var currentHotkey: Hotkey?
     @State private var showingPresets = false
     @State private var conflictWarning: String?
@@ -136,6 +138,14 @@ struct ShortcutsView: View {
         }
         .onAppear {
             loadCurrentHotkey()
+            // Set save bar to disabled state for instant-save view
+            saveBarState.update(
+                hasUnsavedChanges: false,
+                isSaving: false,
+                statusMessage: nil,
+                onSave: nil,
+                onCancel: nil
+            )
         }
     }
 

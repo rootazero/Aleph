@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 struct RoutingView: View {
     let core: AetherCore
     let providers: [ProviderConfigEntry]
+    @ObservedObject var saveBarState: SettingsSaveBarState
 
     // Rules state
     @State private var rules: [RoutingRuleConfig] = []
@@ -132,6 +133,14 @@ struct RoutingView: View {
         .padding(DesignTokens.Spacing.lg)
         .onAppear {
             loadRules()
+            // Set save bar to disabled state for instant-save view
+            saveBarState.update(
+                hasUnsavedChanges: false,
+                isSaving: false,
+                statusMessage: nil,
+                onSave: nil,
+                onCancel: nil
+            )
         }
         .sheet(isPresented: $showingRuleEditor) {
             if let index = editingRuleIndex {

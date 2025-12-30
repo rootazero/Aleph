@@ -31,9 +31,11 @@ extension UTType {
 // MARK: - General Settings View
 
 struct GeneralSettingsView: View {
+    let core: AetherCore?
+    @ObservedObject var saveBarState: SettingsSaveBarState
+
     @State private var soundEnabled = false
     @State private var showingLogViewer = false
-    let core: AetherCore?
 
     private var appVersion: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
@@ -86,6 +88,16 @@ struct GeneralSettingsView: View {
             if let core = core {
                 LogViewerView(core: core)
             }
+        }
+        .onAppear {
+            // Set save bar to disabled state for instant-save view
+            saveBarState.update(
+                hasUnsavedChanges: false,
+                isSaving: false,
+                statusMessage: nil,
+                onSave: nil,
+                onCancel: nil
+            )
         }
     }
 
