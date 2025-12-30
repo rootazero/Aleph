@@ -140,7 +140,7 @@ struct RootContentView: View {
 
         case .providers:
             if let core = appDelegate.core {
-                ProvidersView(core: core)
+                ProvidersView(core: core, saveBarState: saveBarState)
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Provider management requires AetherCore initialization")

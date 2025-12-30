@@ -7,6 +7,7 @@ struct ProviderEditPanel: View {
     // MARK: - Dependencies
 
     let core: AetherCore
+    @ObservedObject var saveBarState: SettingsSaveBarState
 
     // MARK: - Bindings
 
@@ -97,25 +98,18 @@ struct ProviderEditPanel: View {
     // MARK: - Body
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Scrollable content
-            ScrollView {
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                    if selectedProvider != nil || selectedPreset != nil {
-                        // Always show edit form when a provider is selected
-                        editModeFormContent
-                    } else {
-                        // No provider selected
-                        emptyStateView
-                    }
+        // Scrollable content only (no internal footer)
+        ScrollView {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                if selectedProvider != nil || selectedPreset != nil {
+                    // Always show edit form when a provider is selected
+                    editModeFormContent
+                } else {
+                    // No provider selected
+                    emptyStateView
                 }
-                .padding(DesignTokens.Spacing.lg)
             }
-
-            // Fixed footer for action buttons (always shown when provider selected)
-            if selectedProvider != nil || selectedPreset != nil {
-                editModeFooter
-            }
+            .padding(DesignTokens.Spacing.lg)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(DesignTokens.Colors.contentBackground)
@@ -123,6 +117,7 @@ struct ProviderEditPanel: View {
             if newValue {
                 startNewProviderFromPreset()
             }
+            updateSaveBarState()
         }
         .onChange(of: selectedPreset) { _, newPreset in
             // When preset changes, load provider data
@@ -130,6 +125,7 @@ struct ProviderEditPanel: View {
             if newPreset != nil && !isSaving {
                 loadProviderData()
             }
+            updateSaveBarState()
         }
         .onChange(of: selectedProvider) { _, newProvider in
             // When selected provider changes, load provider data
@@ -137,6 +133,12 @@ struct ProviderEditPanel: View {
             if newProvider != nil && !isSaving {
                 loadProviderData()
             }
+            updateSaveBarState()
+        }
+        .onChange(of: isSaving) { _, _ in updateSaveBarState() }
+        .onChange(of: errorMessage) { _, _ in updateSaveBarState() }
+        .onAppear {
+            updateSaveBarState()
         }
     }
 
@@ -452,20 +454,6 @@ struct ProviderEditPanel: View {
         }
     }
 
-    @ViewBuilder
-    private var editModeFooter: some View {
-        // Unified Save Bar replaces old footer
-        UnifiedSaveBar(
-            hasUnsavedChanges: hasUnsavedFormChanges,
-            isSaving: isSaving,
-            statusMessage: statusMessage,
-            onSave: {
-                saveProvider()
-            },
-            onCancel: cancelEditing
-        )
-    }
-
     // MARK: - Computed Properties for Save Bar
 
     /// Check if form has unsaved changes (simplified version)
@@ -489,6 +477,27 @@ struct ProviderEditPanel: View {
             return "Unsaved changes"  // Simplified message without localization for now
         }
         return nil
+    }
+
+    /// Update saveBarState to reflect current provider editing state
+    private func updateSaveBarState() {
+        // Only show save bar when a provider is selected
+        let hasChanges = (selectedProvider != nil || selectedPreset != nil) && hasUnsavedFormChanges
+
+        saveBarState.update(
+            hasUnsavedChanges: hasChanges,
+            isSaving: isSaving,
+            statusMessage: statusMessage,
+            onSave: { await self.saveProviderAsync() },
+            onCancel: cancelEditing
+        )
+    }
+
+    /// Async wrapper for saveProvider
+    private func saveProviderAsync() async {
+        await MainActor.run {
+            saveProvider()
+        }
     }
 
 

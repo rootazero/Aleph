@@ -12,6 +12,7 @@ struct ProvidersView: View {
     // MARK: - Dependencies
 
     let core: AetherCore
+    @ObservedObject var saveBarState: SettingsSaveBarState
 
     // MARK: - State
 
@@ -126,6 +127,7 @@ struct ProvidersView: View {
                 // Right: Edit panel with auto-expanding width
                 ProviderEditPanel(
                     core: core,
+                    saveBarState: saveBarState,
                     providers: $configuredProviders,
                     selectedProvider: $selectedProviderId,
                     isAddingNew: $isAddingNew,
