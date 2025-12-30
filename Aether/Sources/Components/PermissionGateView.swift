@@ -282,21 +282,16 @@ struct PermissionGateView: View {
 
     // MARK: - Actions
 
-    /// Open System Settings and request permission
-    /// This method first requests the permission (which may trigger system prompt)
-    /// then opens System Settings for manual granting
+    /// Open System Settings for manual permission granting
+    ///
+    /// NOTE: We do NOT call requestAccessibilityPermission() or requestInputMonitoringPermission()
+    /// here because they trigger system alert dialogs that conflict with our custom PermissionGateView.
+    /// Instead, we only open System Settings and let the user grant permissions manually.
+    /// The PermissionManager timer will automatically detect permission changes and update the UI.
     private func openSystemSettings() {
         let permissionType = currentStep.permissionType
 
-        // Request permission first (may show system prompt)
-        switch permissionType {
-        case .accessibility:
-            PermissionChecker.requestAccessibilityPermission()
-        case .inputMonitoring:
-            PermissionChecker.requestInputMonitoringPermission()
-        }
-
-        // Then open System Settings for manual granting
+        // Open System Settings to the specific permission page
         if let url = URL(string: permissionType.systemSettingsURL) {
             NSWorkspace.shared.open(url)
         }
