@@ -313,8 +313,8 @@ struct PermissionGateView: View {
     /// Start monitoring permission status changes
     /// CRITICAL: This method ONLY updates UI state, NO automatic restart logic
     private func startMonitoring() {
-        // No custom monitoring logic needed - PermissionManager handles everything
-        // UI automatically updates via @Published properties from PermissionManager
+        // Start the PermissionManager's timer-based polling
+        manager.startMonitoring()
 
         // Auto-progress from Accessibility to Input Monitoring when Accessibility is granted
         // Use Combine to observe permission changes
