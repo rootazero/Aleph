@@ -75,13 +75,16 @@ impl HotkeyListener for RdevListener {
         let listening = Arc::clone(&self.listening);
         let cmd_pressed = Arc::clone(&self.cmd_pressed);
 
-        // CRITICAL FIX: Check if we have permission to listen to global events
-        // On macOS, this requires both Accessibility and Input Monitoring permissions
-        // If permissions are not granted, rdev::listen() will cause the app to crash
+        // CRITICAL FIX: Tell rdev we are NOT on main thread
+        // This prevents _dispatch_assert_queue_fail crash when typing in other apps
+        // rdev will use dispatch queue to execute TSMGetInputSourceProperty on main thread
         #[cfg(target_os = "macos")]
         {
-            // Try to verify permissions by checking if we can create a test listener
-            // If this fails immediately, it means permissions are not granted
+            // IMPORTANT: Set this BEFORE calling listen()
+            // This tells rdev to use QUEUE.exec_sync() for string_from_code()
+            // which properly dispatches to main queue for TSMGetInputSourceProperty
+            rdev::set_is_main_thread(false);
+            eprintln!("[RdevListener] Set is_main_thread=false for proper macOS main thread handling");
             eprintln!("[RdevListener] Starting global hotkey listener (requires Accessibility + Input Monitoring permissions)");
         }
 
