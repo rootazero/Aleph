@@ -130,7 +130,8 @@ struct SimpleProviderCard: View {
             color: "#10a37f",
             providerType: "openai",
             defaultModel: "gpt-4o",
-            description: "OpenAI GPT models"
+            description: "OpenAI GPT models",
+            baseUrl: nil
         ),
         isConfigured: false,
         isActive: false,
@@ -153,7 +154,8 @@ struct SimpleProviderCard: View {
             color: "#10a37f",
             providerType: "openai",
             defaultModel: "gpt-4o",
-            description: "OpenAI GPT models"
+            description: "OpenAI GPT models",
+            baseUrl: nil
         ),
         isConfigured: true,
         isActive: true,
@@ -176,7 +178,8 @@ struct SimpleProviderCard: View {
             color: "#10a37f",
             providerType: "openai",
             defaultModel: "gpt-4o",
-            description: "OpenAI GPT models"
+            description: "OpenAI GPT models",
+            baseUrl: nil
         ),
         isConfigured: true,
         isActive: true,
@@ -199,7 +202,8 @@ struct SimpleProviderCard: View {
             color: "#10a37f",
             providerType: "openai",
             defaultModel: "gpt-4o",
-            description: "OpenAI GPT models"
+            description: "OpenAI GPT models",
+            baseUrl: nil
         ),
         isConfigured: true,
         isActive: true,
@@ -222,7 +226,8 @@ struct SimpleProviderCard: View {
             color: "#10a37f",
             providerType: "openai",
             defaultModel: "gpt-4o",
-            description: "OpenAI GPT models"
+            description: "OpenAI GPT models",
+            baseUrl: nil
         ),
         isConfigured: true,
         isActive: true,

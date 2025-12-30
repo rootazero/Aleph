@@ -7,44 +7,58 @@
 
 import SwiftUI
 
-/// Behavior settings view
+/// Behavior settings view with UnifiedSaveBar pattern (example implementation)
 struct BehaviorSettingsView: View {
+    // Working copy (editable state)
     @State private var inputMode: InputMode = .cut
     @State private var outputMode: OutputMode = .typewriter
     @State private var typingSpeed: Double = 50.0
     @State private var piiScrubbingEnabled: Bool = false
     @State private var piiTypes: Set<PIIType> = []
+
+    // Saved state (for comparison)
+    @State private var savedInputMode: InputMode = .cut
+    @State private var savedOutputMode: OutputMode = .typewriter
+    @State private var savedTypingSpeed: Double = 50.0
+    @State private var savedPiiScrubbingEnabled: Bool = false
+    @State private var savedPiiTypes: Set<PIIType> = []
+
+    // UI state
     @State private var showingPreview = false
-    @State private var showingSaveConfirmation = false
+    @State private var isSaving = false
+    @State private var errorMessage: String?
 
     let core: AetherCore?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                headerSection
-                inputModeCard
-                outputModeCard
+        VStack(spacing: 0) {
+            // Scrollable content
+            ScrollView {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                    headerSection
+                    inputModeCard
+                    outputModeCard
 
-                if outputMode == .typewriter {
-                    typingSpeedCard
+                    if outputMode == .typewriter {
+                        typingSpeedCard
+                    }
+
+                    piiScrubbingCard
                 }
-
-                piiScrubbingCard
-
-                if showingSaveConfirmation {
-                    saveConfirmationBanner
-                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(DesignTokens.Spacing.lg)
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(DesignTokens.Spacing.lg)
-            .onChange(of: inputMode) { saveSettings() }
-            .onChange(of: outputMode) { saveSettings() }
-            .onChange(of: typingSpeed) { saveSettings() }
-            .onChange(of: piiScrubbingEnabled) { saveSettings() }
-            .onChange(of: piiTypes) { saveSettings() }
+            .scrollEdge(edges: [.top, .bottom], style: .hard())
+
+            // Fixed save bar at bottom
+            UnifiedSaveBar(
+                hasUnsavedChanges: hasUnsavedChanges,
+                isSaving: isSaving,
+                statusMessage: statusMessage,
+                onSave: saveSettings,
+                onCancel: cancelEditing
+            )
         }
-        .scrollEdge(edges: [.top, .bottom], style: .hard())
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showingPreview) {
             TypingSpeedPreviewSheet(speed: typingSpeed)
@@ -262,17 +276,26 @@ struct BehaviorSettingsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
     }
 
-    private var saveConfirmationBanner: some View {
-        HStack {
-            Spacer()
-            Label(LocalizedStringKey("settings.behavior.save_confirmation"), systemImage: "checkmark.circle.fill")
-                .foregroundColor(DesignTokens.Colors.providerActive)
-                .font(DesignTokens.Typography.body)
-            Spacer()
+    // MARK: - Computed Properties
+
+    /// Check if current state differs from saved state
+    private var hasUnsavedChanges: Bool {
+        return inputMode != savedInputMode ||
+               outputMode != savedOutputMode ||
+               abs(typingSpeed - savedTypingSpeed) > 0.1 ||
+               piiScrubbingEnabled != savedPiiScrubbingEnabled ||
+               piiTypes != savedPiiTypes
+    }
+
+    /// Status message for UnifiedSaveBar
+    private var statusMessage: String? {
+        if let error = errorMessage {
+            return error
         }
-        .padding(DesignTokens.Spacing.md)
-        .background(DesignTokens.Colors.providerActive.opacity(0.1))
-        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
+        if hasUnsavedChanges {
+            return NSLocalizedString("settings.unsaved_changes.title", comment: "")
+        }
+        return nil
     }
 
     // MARK: - Helpers
@@ -304,15 +327,23 @@ struct BehaviorSettingsView: View {
                     await MainActor.run {
                         // Load input mode
                         inputMode = InputMode.from(string: behavior.inputMode)
+                        savedInputMode = inputMode
 
                         // Load output mode
                         outputMode = OutputMode.from(string: behavior.outputMode)
+                        savedOutputMode = outputMode
 
                         // Load typing speed
                         typingSpeed = Double(behavior.typingSpeed)
+                        savedTypingSpeed = typingSpeed
 
                         // Load PII scrubbing settings
                         piiScrubbingEnabled = behavior.piiScrubbingEnabled
+                        savedPiiScrubbingEnabled = piiScrubbingEnabled
+
+                        // Note: PII types are not stored in config yet
+                        // For now, just sync the saved state
+                        savedPiiTypes = piiTypes
                     }
                 }
             } catch {
@@ -321,44 +352,65 @@ struct BehaviorSettingsView: View {
         }
     }
 
-    private func saveSettings() {
+    private func saveSettings() async {
         guard let core = core else {
-            print("Cannot save settings: AetherCore not available")
+            await MainActor.run {
+                errorMessage = NSLocalizedString("error.core_not_initialized", comment: "")
+            }
             return
         }
 
-        Task {
-            do {
-                // Create BehaviorConfig from current settings
-                let behaviorConfig = BehaviorConfig(
-                    inputMode: inputMode.rawValue,
-                    outputMode: outputMode.rawValue,
-                    typingSpeed: UInt32(typingSpeed),
-                    piiScrubbingEnabled: piiScrubbingEnabled
-                )
+        await MainActor.run {
+            isSaving = true
+            errorMessage = nil
+        }
 
-                // Update via Rust core
-                try core.updateBehavior(behavior: behaviorConfig)
+        do {
+            // Create BehaviorConfig from current settings
+            let behaviorConfig = BehaviorConfig(
+                inputMode: inputMode.rawValue,
+                outputMode: outputMode.rawValue,
+                typingSpeed: UInt32(typingSpeed),
+                piiScrubbingEnabled: piiScrubbingEnabled
+            )
 
-                print("Behavior settings saved successfully:")
-                print("  Input Mode: \(inputMode.rawValue)")
-                print("  Output Mode: \(outputMode.rawValue)")
-                print("  Typing Speed: \(Int(typingSpeed))")
-                print("  PII Scrubbing: \(piiScrubbingEnabled)")
+            // Update via Rust core
+            try core.updateBehavior(behavior: behaviorConfig)
 
-                await MainActor.run {
-                    showingSaveConfirmation = true
-                }
+            print("Behavior settings saved successfully:")
+            print("  Input Mode: \(inputMode.rawValue)")
+            print("  Output Mode: \(outputMode.rawValue)")
+            print("  Typing Speed: \(Int(typingSpeed))")
+            print("  PII Scrubbing: \(piiScrubbingEnabled)")
 
-                try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+            await MainActor.run {
+                // Update saved state to match current state
+                savedInputMode = inputMode
+                savedOutputMode = outputMode
+                savedTypingSpeed = typingSpeed
+                savedPiiScrubbingEnabled = piiScrubbingEnabled
+                savedPiiTypes = piiTypes
 
-                await MainActor.run {
-                    showingSaveConfirmation = false
-                }
-            } catch {
-                print("Failed to save behavior settings: \(error)")
+                isSaving = false
+                errorMessage = nil
+            }
+        } catch {
+            print("Failed to save behavior settings: \(error)")
+            await MainActor.run {
+                errorMessage = "Failed to save: \(error.localizedDescription)"
+                isSaving = false
             }
         }
+    }
+
+    /// Cancel editing and revert to saved state
+    private func cancelEditing() {
+        inputMode = savedInputMode
+        outputMode = savedOutputMode
+        typingSpeed = savedTypingSpeed
+        piiScrubbingEnabled = savedPiiScrubbingEnabled
+        piiTypes = savedPiiTypes
+        errorMessage = nil
     }
 }
 
