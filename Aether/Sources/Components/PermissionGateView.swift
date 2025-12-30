@@ -34,9 +34,9 @@ enum PermissionGateStep: Int {
     var description: String {
         switch self {
         case .accessibility:
-            return "Aether 需要辅助功能权限来捕获窗口上下文和模拟键盘输入,以便将 AI 响应粘贴到您的应用程序中。\n\n授予权限后，Aether 会自动重启。"
+            return "Aether 需要辅助功能权限来捕获窗口上下文和模拟键盘输入，以便将 AI 响应粘贴到您的应用程序中。"
         case .inputMonitoring:
-            return "Aether 需要输入监控权限来检测全局热键 (⌘~),让您可以在任何应用中快速召唤 AI 助手。\n\n⚠️ 重要提示：授予此权限后，macOS 系统会弹出重启提示，请点击「重新打开」按钮。"
+            return "Aether 需要输入监控权限来检测全局热键 (⌘~)，让您可以在任何应用中快速召唤 AI 助手。\n\n⚠️ 重要提示：授予此权限后，macOS 系统会弹出重启提示，请点击「重新打开」按钮。"
         }
     }
 
@@ -64,12 +64,6 @@ struct PermissionGateView: View {
 
     /// Permission status monitor
     @StateObject private var monitor = PermissionStatusMonitor()
-
-    /// CRITICAL FIX: Track if we are still in initialization phase
-    /// During initialization (first 3 seconds), permission changes from false → true
-    /// should NOT trigger automatic restart, as they are likely due to macOS cache lag
-    /// Only after initialization, real user-granted permissions should trigger restart
-    @State private var isInitializing: Bool = true
 
     /// Callback when all permissions are granted
     let onAllPermissionsGranted: () -> Void
@@ -105,22 +99,6 @@ struct PermissionGateView: View {
         .onAppear {
             checkInitialPermissions()
             startMonitoring()
-
-            // CRITICAL FIX: Mark initialization as complete after 5 seconds
-            // This prevents false positive "just granted" detection during app startup
-            // When macOS permission APIs have cache lag, permissions may appear as false
-            // initially, then change to true after 1-2 seconds. This is NOT a "user grant"
-            // event and should NOT trigger automatic restart.
-            //
-            // Timing considerations:
-            // - PermissionStatusMonitor uses 3-reading debounce (3 seconds total delay)
-            // - Plus 1-2 seconds for macOS cache sync
-            // - Total: up to 5 seconds before debounced callback triggers
-            // - Therefore: initialization phase must last longer than 5 seconds
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                self.isInitializing = false
-                print("[PermissionGateView] Initialization phase complete (5s) - now detecting real permission changes")
-            }
         }
         .onDisappear {
             monitor.stopMonitoring()
@@ -319,12 +297,6 @@ struct PermissionGateView: View {
             // If both permissions already granted, dismiss gate immediately
             if self.hasAccessibility && self.hasInputMonitoring {
                 print("[PermissionGateView] All permissions already granted, dismissing gate")
-
-                // OPTIMIZATION: Mark initialization as complete immediately
-                // Since we found all permissions granted, no need to wait 5 seconds
-                self.isInitializing = false
-                print("[PermissionGateView] Initialization phase completed early (all permissions granted)")
-
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     self.onAllPermissionsGranted()
                 }
@@ -336,35 +308,34 @@ struct PermissionGateView: View {
         monitor.startMonitoring { accessibility, inputMonitoring in
             print("[PermissionGateView] Permission status updated - Accessibility: \(accessibility), InputMonitoring: \(inputMonitoring)")
 
-            // Detect if Accessibility permission was just granted
-            let accessibilityJustGranted = !hasAccessibility && accessibility
-
+            // Update permission status with animation
             withAnimation(.easeInOut(duration: 0.3)) {
                 hasAccessibility = accessibility
                 hasInputMonitoring = inputMonitoring
             }
 
-            // CRITICAL FIX: Only trigger automatic restart if we are NOT in initialization phase
-            // During initialization (first 3 seconds), permission changes from false → true
-            // are likely due to macOS permission cache lag, NOT real user grant events
-            // Only after initialization, real user-granted permissions should trigger restart
-            if accessibilityJustGranted {
-                if isInitializing {
-                    print("[PermissionGateView] ⚠️ Accessibility permission detected during initialization - SKIPPING auto-restart (likely cache lag)")
-                    print("[PermissionGateView] This is expected behavior when permissions were already granted before app launch")
-                } else {
-                    print("[PermissionGateView] Accessibility permission just granted by user - app may be terminated by macOS, restarting proactively")
-
-                    // Give user brief moment to see the checkmark
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                        self.restartApplication(reason: "Accessibility permission granted")
-                    }
-                    return  // Don't proceed with other logic
-                }
-            }
+            // CRITICAL FIX: DO NOT trigger automatic restart for Accessibility permission
+            //
+            // Previous problematic logic:
+            // - Tried to detect "user just granted" vs "cache lag detection"
+            // - Used initialization phase timing to distinguish the two
+            // - Failed because debounce delays are unpredictable (3-6+ seconds)
+            //
+            // Reality check:
+            // 1. macOS does NOT require app restart after Accessibility permission granted
+            // 2. Accessibility permission takes effect immediately
+            // 3. If macOS needs to terminate the app, it will do so automatically
+            // 4. We cannot reliably distinguish "existing permission" vs "newly granted"
+            //
+            // Solution:
+            // - Remove automatic restart logic entirely
+            // - Let macOS system handle app termination if needed (rare)
+            // - Input Monitoring permission will show macOS system prompt for restart
+            // - This eliminates all restart loop issues
 
             // Auto-progress from Accessibility to Input Monitoring when Accessibility is granted
             if currentStep == .accessibility && accessibility {
+                print("[PermissionGateView] Accessibility permission granted - progressing to Input Monitoring")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     withAnimation(.easeInOut(duration: 0.3)) {
                         currentStep = .inputMonitoring
@@ -376,14 +347,6 @@ struct PermissionGateView: View {
             // This callback will be triggered on the next app launch
             if accessibility && inputMonitoring {
                 print("[PermissionGateView] All permissions granted - dismissing gate")
-
-                // OPTIMIZATION: Mark initialization as complete immediately
-                // Since all permissions are now granted, no need to wait 5 seconds
-                if isInitializing {
-                    isInitializing = false
-                    print("[PermissionGateView] Initialization phase completed early (all permissions granted)")
-                }
-
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     onAllPermissionsGranted()
                 }
