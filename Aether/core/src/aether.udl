@@ -63,6 +63,10 @@ interface AetherCore {
   [Throws=AetherException]
   void stop_listening();
 
+  // Set Input Monitoring permission status (called by Swift layer)
+  // Swift should call this after checking permission via IOHIDManager
+  void set_input_monitoring_permission(boolean granted);
+
   // Get current clipboard text
   [Throws=AetherException]
   string get_clipboard_text();

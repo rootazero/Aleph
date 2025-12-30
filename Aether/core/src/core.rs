@@ -60,6 +60,8 @@ pub struct AetherCore {
     cancellation_token: CancellationToken,
     // Track if typewriter is currently active
     is_typewriting: Arc<Mutex<bool>>,
+    // Permission status (set by Swift layer via UniFFI)
+    has_input_monitoring_permission: Arc<Mutex<bool>>,
 }
 
 impl AetherCore {
@@ -240,6 +242,7 @@ impl AetherCore {
             config_watcher,
             cancellation_token: CancellationToken::new(),
             is_typewriting: Arc::new(Mutex::new(false)),
+            has_input_monitoring_permission: Arc::new(Mutex::new(true)), // Default: assume permission granted
         })
     }
 
@@ -274,11 +277,46 @@ impl AetherCore {
     ///
     /// Spawns background thread to monitor keyboard events.
     pub fn start_listening(&self) -> Result<()> {
+        // CRITICAL: Check Input Monitoring permission before starting listener
+        // This prevents rdev::listen() from panicking due to missing permissions
+        let has_permission = self
+            .has_input_monitoring_permission
+            .lock()
+            .unwrap_or_else(|e| {
+                warn!("Permission lock poisoned: {}", e);
+                e.into_inner()
+            });
+
+        if !*has_permission {
+            let error_msg = "Input Monitoring permission not granted. Cannot start hotkey listener.";
+            warn!("{}", error_msg);
+
+            // Notify Swift layer via callback
+            self.event_handler.on_error(
+                error_msg.to_string(),
+                Some("Grant Input Monitoring permission in System Settings → Privacy & Security → Input Monitoring".to_string()),
+            );
+
+            return Err(AetherError::permission_denied(error_msg));
+        }
+
         self.event_handler
             .on_state_changed(ProcessingState::Listening);
 
         self.hotkey_listener.start_listening()?;
         Ok(())
+    }
+
+    /// Set Input Monitoring permission status (called by Swift layer)
+    ///
+    /// Swift layer should call this method after checking macOS permission status
+    /// via IOHIDManager or IOHIDRequestAccess.
+    ///
+    /// # Arguments
+    /// * `granted` - true if Input Monitoring permission is granted, false otherwise
+    pub fn set_input_monitoring_permission(&self, granted: bool) {
+        info!("Input Monitoring permission status updated: {}", granted);
+        *self.has_input_monitoring_permission.lock().unwrap() = granted;
     }
 
     /// Stop listening for hotkey events

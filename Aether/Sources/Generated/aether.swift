@@ -455,6 +455,7 @@ public protocol AetherCoreProtocol {
     func retryLastRequest()  throws
     func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32)  throws -> [MemoryEntry]
     func setCurrentContext(context: CapturedContext)  
+    func setInputMonitoringPermission(granted: Bool)  
     func setLogLevel(level: LogLevel)  throws
     func startListening()  throws
     func stopListening()  throws
@@ -693,6 +694,16 @@ public class AetherCore: AetherCoreProtocol {
     
     uniffi_aethecore_fn_method_aethercore_set_current_context(self.pointer, 
         FfiConverterTypeCapturedContext.lower(context),$0
+    )
+}
+    }
+
+    public func setInputMonitoringPermission(granted: Bool)  {
+        try! 
+    rustCall() {
+    
+    uniffi_aethecore_fn_method_aethercore_set_input_monitoring_permission(self.pointer, 
+        FfiConverterBool.lower(granted),$0
     )
 }
     }
@@ -3232,6 +3243,9 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_set_current_context() != 13853) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_set_input_monitoring_permission() != 3457) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_set_log_level() != 50110) {
