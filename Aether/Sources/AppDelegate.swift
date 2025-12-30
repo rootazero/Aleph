@@ -20,9 +20,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Published to trigger UI updates when initialized
     @Published internal var core: AetherCore?
 
-    // Keychain manager for secure API key storage (internal for access from AetherApp)
-    internal var keychainManager: KeychainManagerImpl = KeychainManagerImpl()
-
     // Event handler for Rust callbacks
     private var eventHandler: EventHandler?
 
@@ -148,10 +145,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
 
         // Create new settings window with RootContentView
-        let settingsView = RootContentView(
-            core: core,
-            keychainManager: keychainManager
-        )
+        let settingsView = RootContentView(core: core)
         .environmentObject(self)
         .frame(minWidth: 980, minHeight: 750)
 

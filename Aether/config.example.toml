@@ -397,11 +397,12 @@ excluded_apps = [
 #     - Typewriter mode: Character-by-character (cinematic feel)
 #     - Instant mode: Immediate paste (fastest, no animation)
 #
-# 11. API Key Security (Phase 6):
-#     - API keys are stored in macOS Keychain, NOT in this file
-#     - Never commit config.toml with API keys to version control
-#     - Keychain entries: "Aether:<provider-name>"
-#     - Keys are encrypted and protected by macOS security
+# 11. API Key Security:
+#     - API keys are stored directly in this config file
+#     - File permissions are automatically set to 600 (owner read/write only)
+#     - NEVER commit config.toml with API keys to version control
+#     - Add config.toml to .gitignore for repositories
+#     - Keep API keys in a secure location (e.g., password manager)
 #
 # 12. Config Hot-Reload (Phase 6):
 #     - Changes to this file take effect within 1 second
@@ -468,7 +469,7 @@ excluded_apps = [
 # - Use Settings UI to test and detect conflicts
 #
 # "Config not saving" (Phase 6):
-# - Check file permissions: chmod 644 ~/.config/aether/config.toml
+# - File permissions are automatically set to 600 on save
 # - Verify config directory exists: mkdir -p ~/.config/aether
 # - Check for TOML syntax errors (use Settings UI validation)
 #

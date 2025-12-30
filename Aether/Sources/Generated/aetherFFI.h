@@ -125,8 +125,6 @@ int8_t uniffi_aethecore_fn_method_aethercore_validate_regex(void*_Nonnull ptr, R
 );
 void uniffi_aethecore_fn_init_callback_aethereventhandler(ForeignCallback _Nonnull callback_stub, RustCallStatus *_Nonnull out_status
 );
-void uniffi_aethecore_fn_init_callback_keychainmanager(ForeignCallback _Nonnull callback_stub, RustCallStatus *_Nonnull out_status
-);
 RustBuffer ffi_aethecore_rustbuffer_alloc(int32_t size, RustCallStatus *_Nonnull out_status
 );
 RustBuffer ffi_aethecore_rustbuffer_from_bytes(ForeignBytes bytes, RustCallStatus *_Nonnull out_status
@@ -359,18 +357,6 @@ uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_typewriter_progr
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_typewriter_cancelled(void
-    
-);
-uint16_t uniffi_aethecore_checksum_method_keychainmanager_set_api_key(void
-    
-);
-uint16_t uniffi_aethecore_checksum_method_keychainmanager_get_api_key(void
-    
-);
-uint16_t uniffi_aethecore_checksum_method_keychainmanager_delete_api_key(void
-    
-);
-uint16_t uniffi_aethecore_checksum_method_keychainmanager_has_api_key(void
     
 );
 uint32_t ffi_aethecore_uniffi_contract_version(void

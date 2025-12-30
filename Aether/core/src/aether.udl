@@ -220,26 +220,6 @@ callback interface AetherEventHandler {
   void on_typewriter_cancelled();
 };
 
-// Keychain manager for secure API key storage (Phase 6 - Task 1.2)
-// Implemented in Swift using Security.framework
-callback interface KeychainManager {
-  // Store API key securely in Keychain
-  [Throws=AetherException]
-  void set_api_key(string provider, string key);
-
-  // Retrieve API key from Keychain
-  [Throws=AetherException]
-  string? get_api_key(string provider);
-
-  // Delete API key from Keychain
-  [Throws=AetherException]
-  void delete_api_key(string provider);
-
-  // Check if API key exists
-  [Throws=AetherException]
-  boolean has_api_key(string provider);
-};
-
 // Configuration dictionaries
 // Note: Config is not exposed as dictionary due to HashMap field
 // Use AetherCore methods to access config instead

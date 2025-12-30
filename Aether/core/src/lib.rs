@@ -87,7 +87,7 @@ pub mod utils;
 // NOTE: ImageData/ImageFormat still exported for AI provider image encoding
 pub use crate::clipboard::{ImageData, ImageFormat};
 pub use crate::config::{
-    BehaviorConfig, Config, FullConfig, GeneralConfig, KeychainManager, MemoryConfig,
+    BehaviorConfig, Config, FullConfig, GeneralConfig, MemoryConfig,
     ProviderConfig, ProviderConfigEntry, RoutingRuleConfig, ShortcutsConfig,
     TestConnectionResult,
 };

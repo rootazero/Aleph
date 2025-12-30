@@ -13,9 +13,7 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, error, info};
 
 // Submodules
-pub mod keychain;
 pub mod watcher;
-pub use keychain::KeychainManager;
 #[allow(unused_imports)]
 pub use watcher::ConfigWatcher;
 
@@ -869,6 +867,25 @@ impl Config {
                 e
             ))
         })?;
+
+        // Set file permissions to 600 (owner read/write only) for security
+        // This protects API keys stored in the config file
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(path)
+                .map_err(|e| {
+                    error!(path = %path.display(), error = %e, "Failed to get file metadata");
+                    AetherError::invalid_config(format!("Failed to get file metadata: {}", e))
+                })?
+                .permissions();
+            perms.set_mode(0o600); // Owner read/write only
+            fs::set_permissions(path, perms).map_err(|e| {
+                error!(path = %path.display(), error = %e, "Failed to set file permissions to 600");
+                AetherError::invalid_config(format!("Failed to set file permissions: {}", e))
+            })?;
+            debug!(path = %path.display(), "Set file permissions to 600 (owner read/write only)");
+        }
 
         info!(
             path = %path.display(),

@@ -7,7 +7,6 @@ struct ProviderEditPanel: View {
     // MARK: - Dependencies
 
     let core: AetherCore
-    let keychainManager: KeychainManagerImpl
 
     // MARK: - Bindings
 
@@ -92,13 +91,6 @@ struct ProviderEditPanel: View {
     /// Check if provider has API key configured
     private var hasApiKey: Bool {
         guard let provider = currentProvider else { return false }
-        if let apiKey = provider.config.apiKey, apiKey.starts(with: "keychain:") {
-            do {
-                return try keychainManager.hasApiKey(provider: provider.name)
-            } catch {
-                return false
-            }
-        }
         return provider.config.apiKey != nil || provider.config.providerType == "ollama"
     }
 
@@ -618,18 +610,8 @@ struct ProviderEditPanel: View {
         // Load active state from config
         isProviderActive = provider.config.enabled
 
-        // Load API key from Keychain
-        Task {
-            do {
-                if let key = try keychainManager.getApiKey(provider: provider.name) {
-                    await MainActor.run {
-                        apiKey = key
-                    }
-                }
-            } catch {
-                print("Failed to load API key: \(error)")
-            }
-        }
+        // Load API key from config
+        apiKey = provider.config.apiKey ?? ""
     }
 
     /// Load preset defaults for unconfigured provider
@@ -841,15 +823,10 @@ struct ProviderEditPanel: View {
     }
 
     private func saveProviderConfig(persist: Bool) async throws {
-        // Save API key to Keychain
-        if providerType != "ollama" && !apiKey.isEmpty {
-            try keychainManager.setApiKey(provider: providerName, key: apiKey)
-        }
-
-        // Build config with all parameters
+        // Build config with all parameters (API key stored directly in config)
         let config = ProviderConfig(
             providerType: providerType,
-            apiKey: providerType == "ollama" ? nil : "keychain:\(providerName)",
+            apiKey: providerType == "ollama" ? nil : (apiKey.isEmpty ? nil : apiKey),
             model: model,
             baseUrl: baseURL.isEmpty ? nil : baseURL,
             color: color.toHex(),
@@ -878,7 +855,6 @@ struct ProviderEditPanel: View {
         Task {
             do {
                 try core.deleteProvider(name: provider.name)
-                try? keychainManager.deleteApiKey(provider: provider.name)
 
                 await MainActor.run {
                     let config = try! core.loadConfig()

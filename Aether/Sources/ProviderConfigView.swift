@@ -14,7 +14,6 @@ struct ProviderConfigView: View {
 
     // Core reference for saving config
     let core: AetherCore
-    let keychainManager: KeychainManagerImpl
 
     // Edit mode: nil for new provider, provider name for editing
     let editingProvider: String?
@@ -53,18 +52,16 @@ struct ProviderConfigView: View {
     ]
 
     // Initialize for new provider
-    init(providers: Binding<[ProviderConfigEntry]>, core: AetherCore, keychainManager: KeychainManagerImpl) {
+    init(providers: Binding<[ProviderConfigEntry]>, core: AetherCore) {
         self._providers = providers
         self.core = core
-        self.keychainManager = keychainManager
         self.editingProvider = nil
     }
 
     // Initialize for editing existing provider
-    init(providers: Binding<[ProviderConfigEntry]>, core: AetherCore, keychainManager: KeychainManagerImpl, editing providerName: String) {
+    init(providers: Binding<[ProviderConfigEntry]>, core: AetherCore, editing providerName: String) {
         self._providers = providers
         self.core = core
-        self.keychainManager = keychainManager
         self.editingProvider = providerName
 
         // Load existing provider data
@@ -78,8 +75,8 @@ struct ProviderConfigView: View {
             _maxTokens = State(initialValue: provider.config.maxTokens.map { String($0) } ?? "")
             _temperature = State(initialValue: provider.config.temperature.map { String($0) } ?? "")
 
-            // API key will be loaded in onAppear
-            _apiKey = State(initialValue: "")
+            // Load API key from config
+            _apiKey = State(initialValue: provider.config.apiKey ?? "")
         }
     }
 
@@ -145,7 +142,7 @@ struct ProviderConfigView: View {
                         FormField(title: "API Key") {
                             SecureField("Enter your API key", text: $apiKey)
                                 .textFieldStyle(.roundedBorder)
-                            Text("Stored securely in macOS Keychain")
+                            Text("Stored in ~/.config/aether/config.toml")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -299,22 +296,6 @@ struct ProviderConfigView: View {
             .padding(20)
         }
         .frame(width: 600, height: 700)
-        .onAppear {
-            // Load API key from Keychain when editing
-            if let providerName = editingProvider {
-                Task {
-                    do {
-                        if let key = try keychainManager.getApiKey(provider: providerName) {
-                            await MainActor.run {
-                                apiKey = key
-                            }
-                        }
-                    } catch {
-                        print("Failed to load API key from Keychain: \(error)")
-                    }
-                }
-            }
-        }
     }
 
     // MARK: - Form Validation
@@ -403,15 +384,10 @@ struct ProviderConfigView: View {
 
         Task {
             do {
-                // Save API key to Keychain (if not Ollama)
-                if providerType != "ollama" && !apiKey.isEmpty {
-                    try keychainManager.setApiKey(provider: providerName, key: apiKey)
-                }
-
-                // Build provider config with keychain reference
+                // Build provider config with API key stored directly
                 let config = ProviderConfig(
                     providerType: providerType,
-                    apiKey: providerType == "ollama" ? nil : "keychain:\(providerName)",
+                    apiKey: providerType == "ollama" ? nil : (apiKey.isEmpty ? nil : apiKey),
                     model: model,
                     baseUrl: baseURL.isEmpty ? nil : baseURL,
                     color: color.toHex(),

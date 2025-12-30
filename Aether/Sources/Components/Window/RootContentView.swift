@@ -20,7 +20,6 @@ struct RootContentView: View {
     // MARK: - Dependencies
 
     let core: AetherCore?
-    let keychainManager: KeychainManagerImpl
 
     // Observe AppDelegate for core updates
     @EnvironmentObject private var appDelegate: AppDelegate
@@ -37,9 +36,8 @@ struct RootContentView: View {
 
     // MARK: - Initialization
 
-    init(core: AetherCore? = nil, keychainManager: KeychainManagerImpl? = nil) {
+    init(core: AetherCore? = nil) {
         self.core = core
-        self.keychainManager = keychainManager ?? KeychainManagerImpl()
     }
 
     // MARK: - Body
@@ -117,7 +115,7 @@ struct RootContentView: View {
 
         case .providers:
             if let core = appDelegate.core {
-                ProvidersView(core: core, keychainManager: keychainManager)
+                ProvidersView(core: core)
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Provider management requires AetherCore initialization")

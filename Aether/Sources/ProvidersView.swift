@@ -12,7 +12,6 @@ struct ProvidersView: View {
     // MARK: - Dependencies
 
     let core: AetherCore
-    let keychainManager: KeychainManagerImpl
 
     // MARK: - State
 
@@ -122,7 +121,6 @@ struct ProvidersView: View {
                 // Right: Edit panel with auto-expanding width
                 ProviderEditPanel(
                     core: core,
-                    keychainManager: keychainManager,
                     providers: $configuredProviders,
                     selectedProvider: $selectedProviderId,
                     isAddingNew: $isAddingNew,
