@@ -66,6 +66,8 @@ use tracing::{debug, error, info, warn};
 
 /// Ollama local provider
 pub struct OllamaProvider {
+    /// Provider name (e.g., "ollama", "ollama-llama3")
+    name: String,
     /// Model name (e.g., "llama3.2")
     model: String,
     /// Command execution timeout
@@ -91,7 +93,7 @@ impl OllamaProvider {
     /// Returns `InvalidConfig` if:
     /// - Model name is empty
     /// - Timeout is zero
-    pub fn new(config: ProviderConfig) -> Result<Self> {
+    pub fn new(name: String, config: ProviderConfig) -> Result<Self> {
         if config.model.is_empty() {
             return Err(AetherError::invalid_config(
                 "Model name cannot be empty",
@@ -111,6 +113,7 @@ impl OllamaProvider {
         );
 
         Ok(Self {
+            name,
             model: config.model,
             timeout: Duration::from_secs(config.timeout_seconds),
             color: config.color,
@@ -268,7 +271,7 @@ impl AiProvider for OllamaProvider {
     }
 
     fn name(&self) -> &str {
-        "ollama"
+        &self.name
     }
 
     fn color(&self) -> &str {

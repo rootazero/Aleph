@@ -50,6 +50,8 @@ use tracing::{debug, error, info};
 
 /// OpenAI API provider
 pub struct OpenAiProvider {
+    /// Provider name (e.g., "openai", "deepseek", "t8star")
+    name: String,
     /// HTTP client with configured timeout and TLS
     client: Client,
     /// Provider configuration
@@ -141,6 +143,7 @@ impl OpenAiProvider {
     ///
     /// # Arguments
     ///
+    /// * `name` - Provider name (e.g., "openai", "deepseek", "t8star")
     /// * `config` - Provider configuration with API key and model
     ///
     /// # Returns
@@ -154,7 +157,7 @@ impl OpenAiProvider {
     /// - API key is missing or empty
     /// - Model name is empty
     /// - Timeout is zero
-    pub fn new(config: ProviderConfig) -> Result<Self> {
+    pub fn new(name: String, config: ProviderConfig) -> Result<Self> {
         // Validate configuration
         let api_key = config
             .api_key
@@ -197,6 +200,7 @@ impl OpenAiProvider {
         let endpoint = format!("{}/chat/completions", base_url);
 
         Ok(Self {
+            name,
             client,
             config,
             endpoint,
@@ -299,28 +303,33 @@ impl OpenAiProvider {
             let error_msg = error_response.error.message;
 
             return match status.as_u16() {
-                401 => AetherError::authentication("OpenAI", &format!(
-                    "Invalid OpenAI API key: {}",
+                401 => AetherError::authentication(&self.name, &format!(
+                    "Invalid API key for {}: {}",
+                    self.name,
                     error_msg
                 )),
-                429 => AetherError::rate_limit(format!("OpenAI rate limit: {}", error_msg)),
+                429 => AetherError::rate_limit(format!("{} rate limit: {}", self.name, error_msg)),
                 500..=599 => AetherError::provider(format!(
-                    "OpenAI server error ({}): {}",
-                    status, error_msg
+                    "{} server error ({}): {}",
+                    self.name,
+                    status,
+                    error_msg
                 )),
                 _ => AetherError::provider(format!(
-                    "OpenAI API error ({}): {}",
-                    status, error_msg
+                    "{} API error ({}): {}",
+                    self.name,
+                    status,
+                    error_msg
                 )),
             };
         }
 
         // Fallback if we can't parse the error response
         match status.as_u16() {
-            401 => AetherError::authentication("OpenAI", "Invalid OpenAI API key"),
-            429 => AetherError::rate_limit("OpenAI rate limit exceeded"),
-            500..=599 => AetherError::provider(format!("OpenAI server error: {}", status)),
-            _ => AetherError::provider(format!("OpenAI API error: {}", status)),
+            401 => AetherError::authentication(&self.name, &format!("Invalid API key for {}", self.name)),
+            429 => AetherError::rate_limit(format!("{} rate limit exceeded", self.name)),
+            500..=599 => AetherError::provider(format!("{} server error: {}", self.name, status)),
+            _ => AetherError::provider(format!("{} API error: {}", self.name, status)),
         }
     }
 }
@@ -492,7 +501,7 @@ impl AiProvider for OpenAiProvider {
     }
 
     fn name(&self) -> &str {
-        "openai"
+        &self.name
     }
 
     fn color(&self) -> &str {

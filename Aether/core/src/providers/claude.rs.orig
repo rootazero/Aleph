@@ -175,7 +175,7 @@ impl ClaudeProvider {
     /// - API key is missing or empty
     /// - Model name is empty
     /// - Timeout is zero
-    pub fn new(name: String, config: ProviderConfig) -> Result<Self> {
+    pub fn new(config: ProviderConfig) -> Result<Self> {
         // Validate configuration
         let api_key = config
             .api_key
@@ -225,7 +225,6 @@ impl ClaudeProvider {
         );
 
         Ok(Self {
-            name,
             client,
             config,
             endpoint,
@@ -529,7 +528,7 @@ impl AiProvider for ClaudeProvider {
     }
 
     fn name(&self) -> &str {
-        &self.name
+        "claude"
     }
 
     fn color(&self) -> &str {

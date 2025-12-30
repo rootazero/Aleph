@@ -110,15 +110,15 @@ pub fn create_provider(name: &str, config: ProviderConfig) -> Result<Arc<dyn AiP
 
     match provider_type.as_str() {
         "openai" => {
-            let provider = OpenAiProvider::new(config)?;
+            let provider = OpenAiProvider::new(name.to_string(), config)?;
             Ok(Arc::new(provider))
         }
         "claude" => {
-            let provider = ClaudeProvider::new(config)?;
+            let provider = ClaudeProvider::new(name.to_string(), config)?;
             Ok(Arc::new(provider))
         }
         "ollama" => {
-            let provider = OllamaProvider::new(config)?;
+            let provider = OllamaProvider::new(name.to_string(), config)?;
             Ok(Arc::new(provider))
         }
         "mock" => {
