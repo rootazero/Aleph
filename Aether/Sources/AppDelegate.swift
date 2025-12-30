@@ -352,8 +352,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         window.hidesOnDeactivate = false
         window.isReleasedWhenClosed = false
 
-        // Set window level to floating so it stays on top
-        window.level = .floating
+        // Set window level to modal panel (less aggressive than floating)
+        // This keeps the window visible without conflicting with system windows
+        window.level = .modalPanel
 
         // Keep window in front of other apps' windows
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
