@@ -109,12 +109,12 @@ struct UnifiedSaveBar: View {
         .padding(.horizontal, DesignTokens.Spacing.lg)
         .padding(.vertical, DesignTokens.Spacing.md)
         .frame(height: 52)
-        .background(DesignTokens.Materials.titlebar)
+        // No background - transparent to show content area background
         .overlay(
             Rectangle()
                 .fill(DesignTokens.Colors.border)
                 .frame(height: 1),
-            alignment: .top
+            alignment: .top  // Top border line only
         )
     }
 }

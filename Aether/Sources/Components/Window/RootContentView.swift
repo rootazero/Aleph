@@ -90,22 +90,26 @@ struct RootContentView: View {
     @ViewBuilder
     private var contentArea: some View {
         VStack(spacing: 0) {
-            // Header with Settings title and ThemeSwitcher
-            HStack {
-                // Settings title on the left
-                Text("Settings")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundColor(.primary)
-                    .padding(.leading, DesignTokens.Spacing.lg)
+            // Header with Settings title and ThemeSwitcher (no background, bottom border only)
+            VStack(spacing: 0) {
+                HStack {
+                    // Settings title on the left
+                    Text("Settings")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundColor(.primary)
+                        .padding(.leading, DesignTokens.Spacing.lg)
 
-                Spacer()
+                    Spacer()
 
-                // ThemeSwitcher on the right
-                ThemeSwitcher(themeManager: themeManager)
-                    .padding(.trailing, DesignTokens.Spacing.lg)
+                    // ThemeSwitcher on the right
+                    ThemeSwitcher(themeManager: themeManager)
+                        .padding(.trailing, DesignTokens.Spacing.lg)
+                }
+                .frame(height: 52)
+
+                // Bottom border line
+                Divider()
             }
-            .frame(height: 52)
-            .background(DesignTokens.Materials.titlebar)
             .padding(.top, 0)  // Explicitly set to 0 to ensure no top spacing
 
             // Tab content (main scrollable area)
