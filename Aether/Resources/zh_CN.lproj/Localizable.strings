@@ -145,7 +145,7 @@
 "settings.shortcuts.permission_required" = "需要权限";
 "settings.shortcuts.permission_description" = "Aether 需要**辅助功能**权限来检测全局快捷键。";
 "settings.shortcuts.why_needed" = "为什么需要此权限：";
-"settings.shortcuts.permission_detect" = "在任何应用中检测 ⌘~ 快捷键";
+"settings.shortcuts.permission_detect" = "在任何应用中检测 ` 快捷键（默认）";
 "settings.shortcuts.permission_read" = "读取剪贴板内容";
 "settings.shortcuts.permission_simulate" = "模拟键盘输入以进行粘贴";
 "settings.shortcuts.open_settings_button" = "打开系统设置";

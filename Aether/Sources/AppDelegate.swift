@@ -233,7 +233,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // start_listening() will call rdev::listen() which REQUIRES Input Monitoring permission
             print("[Aether] Starting hotkey listener (this requires Input Monitoring permission)...")
             try core?.startListening()
-            print("[Aether] ✅ Hotkey listening started successfully (⌘~)")
+            print("[Aether] ✅ Hotkey listening started successfully (default: ` key)")
 
             // Reset retry count on success
             coreInitRetryCount = 0

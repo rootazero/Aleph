@@ -36,7 +36,7 @@ enum PermissionGateStep: Int {
         case .accessibility:
             return "Aether 需要辅助功能权限来捕获窗口上下文和模拟键盘输入，以便将 AI 响应粘贴到您的应用程序中。"
         case .inputMonitoring:
-            return "Aether 需要输入监控权限来检测全局热键 (⌘~)，让您可以在任何应用中快速召唤 AI 助手。\n\n⚠️ 重要提示：授予此权限后，macOS 系统会弹出重启提示，请点击「重新打开」按钮。"
+            return "Aether 需要输入监控权限来检测全局热键（默认: ` 键），让您可以在任何应用中快速召唤 AI 助手。\n\n⚠️ 重要提示：授予此权限后，macOS 系统会弹出重启提示，请点击「重新打开」按钮。"
         }
     }
 

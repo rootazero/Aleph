@@ -10,7 +10,8 @@ use std::thread::{self, JoinHandle};
 
 /// Hotkey listener using rdev
 ///
-/// Detects Cmd+~ (Command+Grave) key combination on macOS.
+/// Detects ` (grave/backtick) key press on macOS.
+/// By default, accepts both single ` key or Command+` combination.
 /// Uses a background thread to monitor keyboard events.
 pub struct RdevListener {
     callback: Arc<Mutex<Box<dyn Fn() + Send + 'static>>>,
@@ -23,7 +24,8 @@ pub struct RdevListener {
 impl RdevListener {
     /// Create a new rdev hotkey listener with a callback
     ///
-    /// The callback is invoked when Cmd+~ is detected.
+    /// The callback is invoked when ` (grave) key is detected.
+    /// By default, accepts both single ` or Command+` combination.
     pub fn new<F>(callback: F) -> Self
     where
         F: Fn() + Send + 'static,
@@ -92,7 +94,7 @@ impl HotkeyListener for RdevListener {
                     }
 
                     if Self::is_hotkey_event(&event, &cmd_pressed) {
-                        // Cmd+~ detected, invoke callback
+                        // ` key detected (with or without Command modifier), invoke callback
                         if let Ok(cb) = callback.lock() {
                             cb();
                         }

@@ -34,7 +34,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### User Interaction Flow ("Transmutation")
 
-1. User selects text/image in ANY app, presses global hotkey (Cmd/Ctrl + ~)
+1. User selects text/image in ANY app, presses global hotkey (default: ` key, customizable)
 2. Aether simulates Cut (Cmd+X) - content "disappears" for physical feedback
 3. Beautiful "Halo" appears at cursor location (native transparent overlay)
 4. Backend routes request to appropriate AI (OpenAI/Claude/Gemini/Local LLM)
