@@ -96,8 +96,28 @@ impl AetherCore {
             .build()
             .map_err(|e| AetherError::other(format!("Failed to create tokio runtime: {}", e)))?;
 
-        // Initialize configuration
-        let config = Arc::new(Mutex::new(Config::default()));
+        // Initialize configuration - load from file or use default
+        let config = Arc::new(Mutex::new(
+            Config::load().unwrap_or_else(|e| {
+                eprintln!("Warning: Failed to load config file: {}", e);
+                eprintln!("Using default configuration");
+                Config::default()
+            })
+        ));
+
+        info!("Configuration loaded successfully");
+
+        // Log configuration status for debugging
+        {
+            let cfg = config.lock().unwrap();
+            info!(
+                providers_count = cfg.providers.len(),
+                rules_count = cfg.rules.len(),
+                default_provider = ?cfg.general.default_provider,
+                memory_enabled = cfg.memory.enabled,
+                "Current configuration"
+            );
+        }
 
         // Initialize router (if providers are configured)
         let router = {
