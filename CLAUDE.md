@@ -40,6 +40,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 4. Backend routes request to appropriate AI (OpenAI/Claude/Gemini/Local LLM)
 5. Halo dissolves, result is pasted back (Cmd+V) or typed character-by-character
 
+---
+
 ## Technical Stack
 
 ### The New Architecture: "Rust Core + UniFFI + Native UI"
@@ -70,6 +72,8 @@ This is a library-based architecture optimized for performance and native integr
    - Swift implements `AetherEventHandler` protocol
    - Bidirectional callbacks for UI state updates
 
+---
+
 ## Project Structure
 
 **Note**: This project uses [XcodeGen](https://github.com/yonaskolb/XcodeGen) to manage the Xcode project. The `.xcodeproj` file is generated from `project.yml` and should not be edited directly.
@@ -85,27 +89,13 @@ aether/
 │   │   ├── AppDelegate.swift         # Menu bar lifecycle + Rust core integration
 │   │   ├── HaloWindow.swift          # Transparent overlay (NSWindow)
 │   │   ├── HaloView.swift            # SwiftUI Halo animation
-│   │   ├── HaloState.swift           # Halo state machine
-│   │   ├── SettingsView.swift        # Settings UI (SwiftUI, legacy)
-│   │   ├── ProvidersView.swift       # AI provider management
-│   │   ├── RoutingView.swift         # Routing rules editor
-│   │   ├── ShortcutsView.swift       # Shortcuts configuration
 │   │   ├── EventHandler.swift        # Implements AetherEventHandler
 │   │   ├── Components/
 │   │   │   └── Window/            # macOS 26 window design components
-│   │   │       ├── RootContentView.swift       # Settings window root layout
-│   │   │       ├── SidebarWithTrafficLights.swift  # Rounded sidebar + custom traffic lights
-│   │   │       ├── TrafficLightButton.swift    # Custom red/yellow/green buttons
-│   │   │       └── WindowController.swift      # AppKit window control bridge
 │   │   └── Generated/
 │   │       └── aether.swift          # UniFFI-generated bindings
-│   ├── Resources/
-│   │   └── Info.plist             # App metadata (copied to bundle)
 │   ├── Frameworks/
 │   │   └── libaethecore.dylib     # Rust library (embedded in app)
-│   ├── Assets.xcassets/           # App icons and assets
-│   ├── Info.plist                 # Main Info.plist (LSUIElement=YES)
-│   ├── Aether.entitlements        # Accessibility permissions
 │   └── core/                      # Rust core library (cdylib + staticlib)
 │       ├── Cargo.toml             # crate-type = ["cdylib", "staticlib"]
 │       ├── src/
@@ -119,19 +109,13 @@ aether/
 │       │   ├── providers/         # AI provider clients
 │       │   ├── config/            # TOML config parsing
 │       │   └── memory/            # Memory module (Local RAG)
-│       │       ├── mod.rs         # Memory module exports
-│       │       ├── database.rs    # Vector database wrapper (LanceDB/SQLite)
-│       │       ├── embedding.rs   # Embedding model inference (ORT/candle)
-│       │       ├── context.rs     # Context capture (app_bundle_id + window_title)
-│       │       ├── ingestion.rs   # Post-interaction storage pipeline
-│       │       ├── retrieval.rs   # Query and metadata filtering
-│       │       └── augmentation.rs # Prompt context injection
 │       └── uniffi.toml            # UniFFI configuration
 │
-├── AetherTests/                   # Unit tests
-├── AetherUITests/                 # UI tests
+├── docs/                          # Documentation
 └── config.toml                    # User config (~/.config/aether/config.toml)
 ```
+
+---
 
 ## Build Commands
 
@@ -148,14 +132,6 @@ cargo build
 # Release build for current platform
 cargo build --release
 
-# macOS universal binary (Intel + Apple Silicon)
-cargo build --release --target x86_64-apple-darwin
-cargo build --release --target aarch64-apple-darwin
-lipo -create \
-  target/x86_64-apple-darwin/release/libaethecore.dylib \
-  target/aarch64-apple-darwin/release/libaethecore.dylib \
-  -output libaethecore.universal.dylib
-
 # Generate UniFFI bindings for Swift
 cargo run --bin uniffi-bindgen generate src/aether.udl \
   --language swift \
@@ -163,8 +139,6 @@ cargo run --bin uniffi-bindgen generate src/aether.udl \
 
 # Copy library to Frameworks directory
 cp target/release/libaethecore.dylib ../Frameworks/
-
-# Output: target/release/libaethecore.{dylib,dll,so}
 ```
 
 ### Building macOS Client with XcodeGen
@@ -176,24 +150,8 @@ xcodegen generate
 # Open in Xcode
 open Aether.xcodeproj
 
-# Or build from command line (requires full Xcode installation)
+# Or build from command line
 xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Release build
-
-# Output: DerivedData/Aether/Build/Products/Release/Aether.app
-```
-
-### Running in Development
-
-```bash
-# Terminal 1: Build and watch Rust core
-cd Aether/core/
-cargo watch -x build
-
-# Terminal 2: Generate Xcode project and run
-cd ../..
-xcodegen generate
-open Aether.xcodeproj
-# Click Run in Xcode (Cmd+R)
 ```
 
 ### Testing
@@ -203,17 +161,12 @@ open Aether.xcodeproj
 cd Aether/core/
 cargo test                              # All tests
 cargo test router                       # Module-specific tests
-cargo test --test integration           # Integration tests only
-cargo test -- --nocapture               # Show println! output
-
-# Test specific provider
-cargo test providers::openai
 
 # macOS client tests
 xcodebuild test -project Aether.xcodeproj -scheme Aether
-
-# Or in Xcode: Cmd+U
 ```
+
+---
 
 ## Architecture: Rust Core + UniFFI Bindings
 
@@ -253,11 +206,6 @@ enum ProcessingState {
   "Error"
 };
 
-dictionary HaloPosition {
-  f64 x;
-  f64 y;
-};
-
 interface AetherCore {
   constructor(AetherEventHandler handler);
   void start_listening();
@@ -272,13 +220,6 @@ callback interface AetherEventHandler {
   void on_halo_show(HaloPosition position, string? provider_color);
   void on_halo_hide();
   void on_error(string message);
-};
-
-dictionary Config {
-  GeneralConfig general;
-  ShortcutsConfig shortcuts;
-  sequence<ProviderConfig> providers;
-  sequence<RoutingRule> rules;
 };
 ```
 
@@ -298,71 +239,14 @@ Swift: Renders Halo at mouse position
     ↓
 Rust: Routes to AI provider (async)
     ↓
-Rust → Swift: handler.on_state_changed(.processing)
-    ↓
 Rust: Receives AI response
     ↓
 Rust: Simulates Cmd+V (paste result)
     ↓
-Rust → Swift: handler.on_state_changed(.success)
 Rust → Swift: handler.on_halo_hide()
-    ↓
-Swift: Fade out Halo animation
 ```
 
-### Swift Implementation Example
-
-```swift
-// EventHandler.swift
-class AetherEventHandlerImpl: AetherEventHandler {
-    weak var haloWindow: HaloWindow?
-
-    func onStateChanged(state: ProcessingState) {
-        DispatchQueue.main.async {
-            self.haloWindow?.setState(state)
-        }
-    }
-
-    func onHaloShow(position: HaloPosition, providerColor: String?) {
-        DispatchQueue.main.async {
-            self.haloWindow?.show(at: position, color: providerColor)
-        }
-    }
-
-    func onHaloHide() {
-        DispatchQueue.main.async {
-            self.haloWindow?.fadeOut()
-        }
-    }
-
-    func onError(message: String) {
-        print("Aether error: \(message)")
-    }
-}
-
-// AppDelegate.swift
-class AppDelegate: NSObject, NSApplicationDelegate {
-    var core: AetherCore?
-    var eventHandler: AetherEventHandlerImpl?
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        eventHandler = AetherEventHandlerImpl()
-        core = AetherCore(handler: eventHandler!)
-        core?.startListening()
-    }
-}
-```
-
-## Context Acquisition Strategy: "Smart Fallback"
-
-Aether intelligently determines user intent without relying on Accessibility APIs:
-
-1. **The Probe**: Simulate `Cmd + C` silently
-2. **The Check**: Compare new clipboard with previous state
-   - **Scenario A (Explicit Selection)**: Clipboard changed → Process selected text only
-   - **Scenario B (Implicit Context)**: No change → Assume no selection
-3. **The Fallback**: For Scenario B, simulate `Cmd + A` (Select All) + `Cmd + X` (Cut)
-4. **Processing**: Route to appropriate AI provider
+---
 
 ## Configuration Schema
 
@@ -384,32 +268,22 @@ typing_speed = 50                  # chars per second
 
 [memory]
 enabled = true                     # Enable/disable memory module
-embedding_model = "all-MiniLM-L6-v2"  # Local embedding model
-max_context_items = 5              # Max number of past interactions to retrieve
-retention_days = 90                # Auto-delete memories older than N days (0 = never)
-vector_db = "sqlite-vec"           # sqlite-vec | lancedb
-similarity_threshold = 0.7         # Minimum similarity score to include (0.0-1.0)
-excluded_apps = [                  # App bundle IDs to exclude from memory
-  "com.apple.keychainaccess",
-  "com.agilebits.onepassword7",
-]
+embedding_model = "all-MiniLM-L6-v2"
+max_context_items = 5
+retention_days = 90
+vector_db = "sqlite-vec"
+similarity_threshold = 0.7
 
 [providers.openai]
 api_key = "sk-..."
 model = "gpt-4o"
 base_url = "https://api.openai.com/v1"
 color = "#10a37f"
-max_tokens = 4096
-temperature = 0.7
 
 [providers.claude]
 api_key = "sk-ant-..."
 model = "claude-3-5-sonnet-20241022"
 color = "#d97757"
-
-[providers.ollama]
-command = "ollama run llama3.2"
-color = "#0000ff"
 
 [[rules]]
 regex = "^/draw"
@@ -417,14 +291,11 @@ provider = "openai"
 system_prompt = "You are DALL-E. Generate images."
 
 [[rules]]
-regex = "^/code|rust|python"
-provider = "claude"
-system_prompt = "You are a senior engineer. Output code only, no explanations."
-
-[[rules]]
 regex = ".*"                       # Catch-all
 provider = "openai"
 ```
+
+---
 
 ## Key Design Constraints
 
@@ -446,9 +317,7 @@ Use trait-based abstractions for all core components to support swapping:
 - Embedding inference runs locally (no cloud API calls)
 
 **Context Capture:**
-- Use macOS Accessibility API to query:
-  - Active application bundle ID (`NSWorkspace.shared.frontmostApplication?.bundleIdentifier`)
-  - Active window title (via `AXUIElementCopyAttributeValue` with `kAXTitleAttribute`)
+- Use macOS Accessibility API to query active application bundle ID and window title
 - Capture context at the moment of hotkey press
 - Store context anchors with each memory entry
 
@@ -457,23 +326,19 @@ Use trait-based abstractions for all core components to support swapping:
 - Only retrieved context snippets are sent to cloud LLMs
 - User can view/delete all stored memories via Settings UI
 - Implement retention policies (auto-delete after N days)
-- Memory database file: `~/.config/aether/memory.db` or `~/.config/aether/memory.lance`
 
 **Performance:**
 - Embedding inference must complete within 100ms
 - Vector search must complete within 50ms
 - Use lazy loading for embedding model (load on first use)
-- Consider model quantization (INT8) for faster inference
 
 ### Critical UI Behavior
 
 **macOS Halo Window Requirements:**
 - NSWindow with `styleMask: .borderless`
 - `level: .floating` (above all apps)
-- `backgroundColor: .clear`
-- `isOpaque: false`
+- `backgroundColor: .clear`, `isOpaque: false`
 - `ignoresMouseEvents: true` (click-through)
-- `collectionBehavior: [.canJoinAllSpaces, .stationary, .ignoresCycle]`
 - Never call `makeKeyAndOrderFront()` to avoid focus theft
 
 **Focus Protection:**
@@ -494,704 +359,9 @@ Use trait-based abstractions for all core components to support swapping:
 - **Local-First**: All config stored locally
 - **No Telemetry**: Zero tracking, no analytics
 - **API Key Storage**: Use macOS Keychain (via `Security` framework in Swift)
-- **Memory Privacy**:
-  - All memory data stored locally (never synced to cloud)
-  - Vector embeddings remain on-device
-  - Only final augmented prompts sent to cloud LLMs
-  - User controls: View all memories, delete specific entries, clear all history
-  - Automatic expiration based on retention policy
+- **Memory Privacy**: All memory data stored locally, only augmented prompts sent to cloud
 
-## Development Phases
-
-### Phase 1: Core Infrastructure (CURRENT PRIORITY)
-
-**Goal**: Build Rust core with UniFFI bindings and minimal Swift UI
-
-- [ ] Initialize Cargo workspace with `crate-type = ["cdylib", "staticlib"]`
-- [ ] Create `aether.udl` interface definition
-- [ ] Implement `AetherCore` struct with basic lifecycle
-- [ ] Implement `AetherEventHandler` trait for callbacks
-- [ ] Set up UniFFI bindings generation
-- [ ] Create macOS Xcode project
-- [ ] Generate Swift bindings and integrate into Xcode
-- [ ] Implement basic `EventHandler` in Swift
-- [ ] Test Rust ↔ Swift callback communication
-
-**Success Criteria**: Swift app can initialize Rust core and receive callback events
-
-### Phase 2: Hotkey & Clipboard Integration
-
-**Goal**: Complete the Cut → Process → Paste cycle
-
-- [ ] Implement global hotkey listener with `rdev`
-- [ ] Implement clipboard manager with `arboard`
-- [ ] Implement keyboard simulator with `enigo`
-- [ ] Build "Smart Fallback" context acquisition logic
-- [ ] Request macOS Accessibility permissions
-- [ ] Create native permission prompt UI in Swift
-- [ ] Test end-to-end hotkey → clipboard → callback flow
-
-**Success Criteria**: Pressing Cmd+~ triggers clipboard read and callback
-
-### Phase 3: Halo Overlay
-
-**Goal**: Native transparent overlay with animations
-
-- [ ] Create `HaloWindow` (NSWindow subclass)
-- [ ] Implement borderless, transparent, floating window
-- [ ] Create `HaloView` (SwiftUI) with animation states
-- [ ] Implement Halo state machine (Idle/Listening/Processing/Success/Error)
-- [ ] Add mouse position tracking
-- [ ] Implement fade in/out animations
-- [ ] Add provider-specific colors
-
-**Success Criteria**: Halo appears at cursor, animates, and disappears
-
-### Phase 4: The Memory Module (Local RAG)
-
-**Goal**: Context-aware Local RAG with app/window-based memory anchors
-
-Aether requires a long-term memory system to enable context-aware interactions based on the active application and window context.
-
-**Technical Strategy:**
-* **Database:** Embedded Vector Database (Recommendation: `LanceDB` or `SQLite` with `sqlite-vec` extension) running within the Rust Core.
-* **Context Anchors:** Every interaction is tagged with metadata:
-    * `app_bundle_id`: (e.g., `com.apple.Notes`)
-    * `window_title`: (e.g., "Project Plan.txt" or "Chat with Zhang San") - *Requires Accessibility API query.*
-    * `timestamp`: UTC time.
-* **Workflow:**
-    1.  **Ingestion:** After an AI response is accepted by the user, the interaction (User Input + AI Output) is embedded locally (using a lightweight model like `all-MiniLM-L6-v2` via `ORT` or `candle`) and stored.
-    2.  **Retrieval:** When a new request comes in, Aether queries the vector DB filtering by the current `app_bundle_id` and `window_title`.
-    3.  **Augmentation:** Relevant past interactions are retrieved and injected into the LLM's system prompt as "Context History".
-
-**Constraint:**
-* **Zero-Knowledge Cloud:** Raw memory data MUST remain on the local device. Only the specific retrieved context relevant to the current query is sent to the Cloud LLM for processing.
-
-**Implementation Tasks:**
-
-- [ ] Integrate embedded vector database (LanceDB or SQLite + sqlite-vec)
-- [ ] Implement embedding model inference (all-MiniLM-L6-v2 via ORT/candle)
-- [ ] Create context capture module (app_bundle_id + window_title via Accessibility API)
-- [ ] Build memory ingestion pipeline (post-interaction embedding + storage)
-- [ ] Implement retrieval logic with metadata filtering
-- [ ] Design context augmentation strategy for LLM prompts
-- [ ] Add UniFFI bindings for memory operations
-- [ ] Implement privacy controls (memory retention policies, manual deletion)
-- [ ] Add memory management UI in Settings (view/delete history)
-
-**Success Criteria**: Aether remembers past interactions per-app/per-window and augments prompts with relevant context
-
-### Phase 5: AI Integration ✅ COMPLETED
-
-**Goal**: Connect to real AI providers
-
-- [x] Implement OpenAI API client (reqwest + tokio)
-- [x] Implement Anthropic Claude API client
-- [x] Implement local Ollama execution (Command::spawn)
-- [x] Build Router with regex-based rule matching
-- [x] Implement Config TOML parser (serde) with file loading
-- [x] Add async processing pipeline
-- [x] Handle API errors and timeouts
-- [x] Integrate with memory module for context-aware AI responses
-- [x] Add comprehensive integration tests
-- [x] Add performance benchmarks
-- [ ] Implement Google Gemini API client (deferred to Phase 6)
-
-**Success Criteria**: ✅ All criteria met
-- ✅ OpenAI, Claude, and Ollama providers implemented
-- ✅ Router correctly routes requests based on regex rules
-- ✅ Config can be loaded from `~/.config/aether/config.toml`
-- ✅ Memory module integrated with AI pipeline
-- ✅ Error handling comprehensive with proper error types
-- ✅ All integration tests passing (14 tests)
-- ✅ Performance benchmarks demonstrate <1ms routing, <50ms memory retrieval
-
-**Key Files**:
-- `Aether/core/src/providers/` - AI provider implementations (OpenAI, Claude, Ollama, Mock)
-- `Aether/core/src/router/` - Smart routing system
-- `Aether/core/src/config.rs` - Configuration management with TOML loading
-- `Aether/config.example.toml` - Comprehensive configuration example
-- `Aether/core/tests/integration_ai.rs` - Integration tests
-- `Aether/core/benches/ai_benchmarks.rs` - Performance benchmarks
-
-### Phase 6: Settings UI ✅ COMPLETED
-
-**Goal**: Native settings interface
-
-- [x] Create SwiftUI settings window
-- [x] Implement Providers tab (add/edit/test API keys)
-- [x] Implement Routing tab (rule editor with drag-to-reorder)
-- [x] Implement Shortcuts tab (hotkey recorder)
-- [x] Implement Behavior tab (input/output modes)
-- [x] Implement General tab (version display, theme selection)
-- [x] Implement Memory tab (view/delete history, configure retention policy) - *Completed in Phase 4E*
-- [x] Add menu bar icon with dropdown menu
-- [x] Integrate with macOS Keychain for API key storage
-- [x] Config hot-reload with file watcher
-- [x] Atomic config file writes
-- [x] Config validation (regex, API keys, temperature, timeouts)
-- [x] Import/Export routing rules as JSON
-- [x] Hotkey conflict detection
-- [x] PII scrubbing configuration
-- [x] Typing speed preview
-
-**Success Criteria**: ✅ All criteria met
-- ✅ User can add/edit/delete AI provider credentials via native UI
-- ✅ User can create and manage routing rules with drag-to-reorder
-- ✅ User can customize global hotkey with visual key recorder
-- ✅ User can configure behavior (input/output modes, typing speed, PII scrubbing)
-- ✅ All config changes persist to `~/.config/aether/config.toml`
-- ✅ Hot-reload works for external config.toml edits (within 1 second)
-- ✅ API keys stored securely in macOS Keychain (not in config.toml)
-- ✅ Config validation prevents invalid settings
-
-**Key Files**:
-- `Aether/Sources/SettingsView.swift` - Main settings window with tabs
-- `Aether/Sources/ProvidersView.swift` - Provider management UI
-- `Aether/Sources/RoutingView.swift` - Routing rules editor
-- `Aether/Sources/ShortcutsView.swift` - Hotkey customization
-- `Aether/Sources/BehaviorSettingsView.swift` - Behavior configuration
-- `Aether/Sources/GeneralSettingsView.swift` - General settings (version, theme, updates)
-- `Aether/Sources/Settings/ProviderConfigView.swift` - Provider add/edit modal
-- `Aether/Sources/Settings/RuleEditorView.swift` - Rule editor modal
-- `Aether/Sources/Settings/HotkeyRecorderView.swift` - Hotkey recorder component
-- `Aether/Sources/KeychainManagerImpl.swift` - Keychain integration
-- `Aether/core/src/config/mod.rs` - Config validation and persistence
-- `Aether/core/src/config/watcher.rs` - File watcher for hot-reload
-- `Aether/core/src/config/keychain.rs` - Keychain trait definition
-
-**Testing**:
-- `Aether/core/src/config/mod.rs` - 32 unit tests for config validation (all passing)
-- `AetherTests/ConfigPersistenceTests.swift` - Integration tests for config persistence
-- `docs/manual-testing-checklist.md` - Comprehensive manual testing guide
-
-**Notes**:
-- Halo tab customization (theme/colors) is implemented in General tab
-- Sparkle framework integration for auto-updates deferred to Phase 6.1
-
-### Phase 7: Polish & Optimization ✅ COMPLETED
-
-**Goal**: Production-ready experience
-
-- [x] Image clipboard support (Base64 encoding)
-- [x] Typewriter effect for output
-- [x] PII scrubbing (regex filters)
-- [x] Improve error handling and user feedback
-- [x] Performance profiling and optimization
-- [x] Add logging (with privacy protection)
-- [x] Write comprehensive tests
-
-**Success Criteria**: ✅ All criteria met
-- ✅ Image clipboard operations (PNG, JPEG, GIF) with Base64 encoding
-- ✅ Typewriter animation with configurable speed and Escape key cancellation
-- ✅ PII scrubbing layer for logging (email, phone, API keys redacted)
-- ✅ Enhanced error messages with actionable suggestions
-- ✅ Performance metrics module with stage timing and slow operation warnings
-- ✅ Structured logging with file rotation and privacy protection
-- ✅ Test coverage 98.2% (327/333 tests passing)
-
-**Key Files**:
-- `Aether/core/src/clipboard/mod.rs` - ImageData with Base64 encoding
-- `Aether/core/src/error.rs` - Enhanced error types with suggestions
-- `Aether/core/src/metrics/mod.rs` - Performance timing instrumentation
-- `Aether/core/src/logging/` - Logging subsystem (pii_filter, file_appender, retention, level_control)
-- `Aether/core/src/utils/pii.rs` - PII scrubbing utilities
-- `Aether/Sources/EventHandler.swift` - Typewriter callbacks (lines 163-191, 404-445)
-- `Aether/Sources/LogViewerView.swift` - Log viewer UI
-- `Aether/core/src/aether.udl` - UniFFI bindings for Phase 7 features
-
-**Testing**:
-- `Aether/core/tests/` - Comprehensive unit tests (327/333 passing, 98.2%)
-- `Aether/core/benches/performance_benchmarks.rs` - Performance benchmarks
-- 6 failed tests are environment-dependent (clipboard, file watcher) - not functional issues
-
-**Notes**:
-- Image clipboard integration tested and functional in Rust core
-- Typewriter progress bar UI may need visual polish in HaloView
-- All core functionality complete and ready for production use
-
-## macOS 26 Window Design Architecture
-
-**Status**: ✅ Implemented (Phase 1 & 2 Complete)
-
-Aether采用 macOS 26 最新设计语言，将系统控制按钮（交通灯）集成到左侧圆角侧边栏中，实现现代化、沉浸式的设置窗口体验。
-
-### Design Philosophy
-
-**macOS 26 设计语言特征:**
-- **Content-First**: 隐藏原生标题栏，内容紧贴窗口上沿
-- **Unified Controls**: 交通灯按钮融入侧边栏，而非独立的标题栏
-- **Continuous Curves**: 使用 18pt continuous 圆角（Apple 标准）
-- **Adaptive Materials**: 自适应 Dark/Light Mode 背景材质
-
-### Window Architecture
-
-#### From Settings Scene to WindowGroup
-
-**旧设计（已弃用）:**
-```swift
-Settings {
-    SettingsView()
-}
-```
-
-**新设计（macOS 26 风格）:**
-```swift
-WindowGroup {
-    RootContentView(core: appDelegate.core, keychainManager: appDelegate.keychainManager)
-        .frame(minWidth: 800, minHeight: 500)
-}
-.windowStyle(.hiddenTitleBar)          // 隐藏原生标题栏
-.windowToolbarStyle(.unifiedCompact)   // 内容紧贴窗口上沿
-.defaultSize(width: 1200, height: 800)
-```
-
-**关键优势:**
-- 完全控制窗口顶部区域的视觉设计
-- 为自绘交通灯提供空间
-- 实现与原生应用一致的沉浸式体验
-
-### Component Architecture
-
-#### 1. TrafficLightButton Component
-
-自定义交通灯按钮，完美复刻 macOS 原生外观：
-
-```swift
-struct TrafficLightButton: View {
-    let color: Color  // .red, .yellow, .green
-    let action: () -> Void
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            ZStack {
-                Circle()
-                    .fill(color.gradient)  // 渐变填充
-                    .frame(width: 13, height: 13)
-
-                if isHovering {
-                    Image(systemName: symbolName)  // xmark, minus, arrow
-                        .font(.system(size: 7, weight: .bold))
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
-    }
-}
-```
-
-**规格:**
-- 直径: 13pt（与原生一致）
-- 间距: 8pt（按钮之间）
-- 位置: top 14pt, leading 18pt（相对侧边栏）
-- Hover 状态: 显示操作图标（✕、−、全屏箭头）
-
-#### 2. WindowController Bridge
-
-AppKit 窗口控制桥接，连接 SwiftUI 和 NSWindow API：
-
-```swift
-final class WindowController {
-    static let shared = WindowController()
-
-    func close() {
-        NSApp.keyWindow?.performClose(nil)
-    }
-
-    func minimize() {
-        NSApp.keyWindow?.miniaturize(nil)
-    }
-
-    func toggleFullscreen() {
-        NSApp.keyWindow?.toggleFullScreen(nil)
-    }
-}
-```
-
-**设计模式:**
-- 单例模式确保全局唯一
-- 动态获取 keyWindow（支持多窗口扩展）
-- 优雅处理 nil window（Debug 日志）
-
-#### 3. WindowConfigurator (Native Traffic Lights Hiding)
-
-AppKit 窗口配置器，隐藏原生交通灯按钮：
-
-```swift
-struct WindowConfigurator: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            guard let window = view.window else { return }
-            self.configureWindow(window)
-        }
-        return view
-    }
-
-    private func configureWindow(_ window: NSWindow) {
-        // Make titlebar transparent
-        window.titlebarAppearsTransparent = true
-
-        // Hide standard window buttons (native traffic lights)
-        window.standardWindowButton(.closeButton)?.isHidden = true
-        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        window.standardWindowButton(.zoomButton)?.isHidden = true
-
-        // Hide titlebar but keep window resizable
-        window.titleVisibility = .hidden
-
-        // Allow dragging from content area
-        window.isMovableByWindowBackground = true
-    }
-}
-```
-
-**关键功能:**
-- `titlebarAppearsTransparent`: 标题栏透明化
-- `standardWindowButton().isHidden`: 隐藏原生红绿灯
-- `titleVisibility = .hidden`: 隐藏标题文字
-- `isMovableByWindowBackground`: 允许从内容区域拖动窗口
-
-**使用方式:**
-```swift
-RootContentView()
-    .hideNativeTrafficLights()  // 应用修饰符
-```
-
-**重要性:**
-- `.windowStyle(.hiddenTitleBar)` 只隐藏标题文字，不隐藏交通灯
-- 必须通过 AppKit API 显式隐藏原生交通灯
-- 否则会同时显示原生和自定义两套交通灯
-
-#### 4. SidebarWithTrafficLights Component
-
-圆角侧边栏，集成交通灯和导航：
-
-```swift
-struct SidebarWithTrafficLights: View {
-    @Binding var selectedTab: SettingsTab
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            // 圆角背景
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(sidebarBackground)
-                .strokeBorder(.separator.opacity(0.25))
-                .padding(.leading: 8, .vertical: 8)
-
-            VStack(alignment: .leading, spacing: 12) {
-                // 交通灯按钮
-                HStack(spacing: 8) {
-                    TrafficLightButton(color: .red, action: WindowController.shared.close)
-                    TrafficLightButton(color: .yellow, action: WindowController.shared.minimize)
-                    TrafficLightButton(color: .green, action: WindowController.shared.toggleFullscreen)
-                }
-                .padding(.top: 14, .leading: 18)
-
-                // 导航项目...
-            }
-        }
-        .frame(width: 220)
-    }
-}
-```
-
-**视觉规格:**
-- 宽度: 220pt（固定）
-- 圆角: 18pt continuous（Apple 标准）
-- 边框: .separator.opacity(0.25)
-- 背景:
-  - Dark Mode: `windowBackgroundColor.opacity(0.9)`
-  - Light Mode: `underPageBackgroundColor`
-
-#### 4. RootContentView Component
-
-窗口根布局，两栏设计：
-
-```swift
-struct RootContentView: View {
-    let core: AetherCore?
-    let keychainManager: KeychainManagerImpl
-    @State private var selectedTab: SettingsTab = .general
-
-    var body: some View {
-        HStack(spacing: 0) {
-            SidebarWithTrafficLights(selectedTab: $selectedTab)  // 220pt
-            Divider()                                             // 1pt
-            ContentArea(selectedTab: selectedTab)                 // 填充剩余空间
-        }
-        .background(.windowBackground)
-    }
-}
-```
-
-**布局比例:**
-- 左侧: 220pt 圆角侧边栏
-- 分隔线: 1pt Divider
-- 右侧: 内容区（.frame(maxWidth: .infinity)）
-
-### Migration from Settings Scene
-
-**为什么从 Settings 迁移到 WindowGroup？**
-
-| 特性 | Settings Scene | WindowGroup |
-|------|---------------|-------------|
-| 窗口样式控制 | ❌ 不支持自定义 | ✅ 完全控制 |
-| 标题栏隐藏 | ❌ 无法隐藏 | ✅ `.hiddenTitleBar` |
-| 交通灯位置 | ❌ 固定左上角 | ✅ 可通过自绘实现 |
-| 最小尺寸设置 | ⚠️ 有限支持 | ✅ `.frame(minWidth:minHeight:)` |
-| 菜单栏集成 | ✅ 自动处理 | ⚠️ 需手动管理 |
-
-**迁移策略:**
-- 使用 `#if DEBUG` Feature Flag 控制
-- Debug 构建: 使用新 WindowGroup（测试）
-- Release 构建: 保留旧 Settings（稳定回退）
-- 测试通过后移除 Flag
-
-### Window Activation Logic
-
-**AppDelegate.showSettings() 实现:**
-
-```swift
-@objc private func showSettings() {
-    #if DEBUG
-    // 新设计: 查找或激活 WindowGroup 窗口
-    if let window = NSApp.windows.first(where: { $0.isVisible }) {
-        window.makeKeyAndOrderFront(nil)
-    } else {
-        NSApp.activate(ignoringOtherApps: true)  // SwiftUI 自动创建窗口
-    }
-    #else
-    // 旧设计: 手动创建 NSWindow
-    let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView()))
-    window.makeKeyAndOrderFront(nil)
-    #endif
-}
-```
-
-### Technical Constraints
-
-**macOS 限制:**
-1. **交通灯不可移动**: 系统不允许移动原生交通灯位置，只能通过隐藏 + 自绘实现
-2. **标题栏透明技巧**: `.hiddenTitleBar` 仅隐藏视觉，拖拽区域仍保留
-3. **Focus 管理**: 自绘交通灯不触发窗口激活（使用 `.buttonStyle(.plain)`）
-
-**兼容性:**
-- 最低支持: macOS 13 (Ventura)
-- 最佳体验: macOS 14+ (Sonoma, Sequoia)
-- `.continuous` 圆角在所有版本正确渲染
-
-### Event Flow Example
-
-```
-用户点击菜单栏"Settings..."
-    ↓
-AppDelegate.showSettings() 调用
-    ↓
-查找现有 WindowGroup 窗口
-    ↓ (如果存在)
-window.makeKeyAndOrderFront(nil) - 激活现有窗口
-    ↓ (如果不存在)
-NSApp.activate() - SwiftUI 自动创建 WindowGroup
-    ↓
-RootContentView 渲染
-    ↓
-SidebarWithTrafficLights 显示（含交通灯）
-    ↓
-用户点击红色交通灯
-    ↓
-WindowController.shared.close()
-    ↓
-NSApp.keyWindow?.performClose(nil)
-    ↓
-窗口关闭
-```
-
-### Files Changed
-
-**新增组件 (5 个文件):**
-- `Aether/Sources/Components/Window/TrafficLightButton.swift` - 自定义交通灯按钮
-- `Aether/Sources/Components/Window/WindowController.swift` - AppKit 桥接
-- `Aether/Sources/Components/Window/WindowConfigurator.swift` - 隐藏原生交通灯
-- `Aether/Sources/Components/Window/SidebarWithTrafficLights.swift` - 圆角侧边栏
-- `Aether/Sources/Components/Window/RootContentView.swift` - 根布局容器
-
-**修改文件 (2 个文件):**
-- `Aether/Sources/AetherApp.swift` - 添加 WindowGroup（Feature Flag 控制）
-- `Aether/Sources/AppDelegate.swift` - 暴露 core/keychainManager，更新 showSettings()
-
-**代码统计:**
-- 新增代码: ~525 行（含 WindowConfigurator）
-- Preview 数量: 6 个
-- 文档注释: 完整的 MARK 和 DocC 注释
-
-### Testing Checklist
-
-**视觉验证:**
-- [ ] 交通灯尺寸和位置符合规范（13pt, top:14pt, leading:18pt）
-- [ ] 圆角半径正确（18pt continuous）
-- [ ] Dark/Light Mode 背景色正确切换
-- [ ] Hover 状态显示图标
-
-**功能验证:**
-- [ ] 红色按钮关闭窗口
-- [ ] 黄色按钮最小化到 Dock
-- [ ] 绿色按钮切换全屏
-- [ ] 窗口调整大小（最小 800x500）
-- [ ] 所有设置标签页正常工作
-
-**跨版本验证:**
-- [ ] macOS 13 (Ventura) 兼容性
-- [ ] macOS 14 (Sonoma) 兼容性
-- [ ] macOS 15 (Sequoia) 兼容性
-
-## Platform-Specific Notes
-
-### macOS (Primary Target)
-
-**Required Entitlements** (in `Aether.entitlements`):
-```xml
-<key>com.apple.security.automation.apple-events</key>
-<true/>
-```
-
-**Info.plist Configuration**:
-```xml
-<key>LSUIElement</key>
-<true/>  <!-- No Dock icon, Menu Bar only -->
-<key>NSAppleEventsUsageDescription</key>
-<string>Aether needs to simulate keyboard input to paste AI responses.</string>
-```
-
-**Accessibility Permissions**:
-
-Aether requires macOS Accessibility permission to detect global hotkeys and simulate keyboard input. Users must grant this permission manually through System Settings > Privacy & Security > Accessibility.
-
-**Menu Bar Setup**:
-```swift
-let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-statusItem.button?.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Aether")
-statusItem.menu = createMenu()
-```
-
-## Risk Mitigation
-
-### Focus Loss Prevention
-**Problem**: Overlay might steal focus from original app
-**Solution**: Use `ignoresMouseEvents: true` and never call window activation methods
-
-### Paste Latency
-**Problem**: Some apps (IDEs) respond slowly to paste
-**Solution**: Add configurable delay (50-100ms) between Cut and Paste
-
-### Clipboard Conflicts
-**Problem**: User copies something else while AI is processing
-**Solution**: Store original clipboard content, restore if operation cancelled
-
-### UniFFI Memory Management
-**Problem**: Rust objects passed to Swift might be deallocated prematurely
-**Solution**: UniFFI uses Arc<> internally; ensure Swift retains strong references
-
-## Internationalization (i18n)
-
-Aether supports multiple languages through SwiftUI's localization system. Currently supported languages:
-- English (en) - Base language
-- Simplified Chinese (zh_CN)
-
-### Localization Architecture
-
-**File Structure:**
-```
-Aether/Resources/
-├── en.lproj/
-│   ├── Localizable.strings    # All UI text keys
-│   └── InfoPlist.strings       # System permission descriptions
-└── zh_CN.lproj/
-    ├── Localizable.strings
-    └── InfoPlist.strings
-```
-
-**Key Naming Conventions:**
-```
-common.*               # Reusable UI elements (save, cancel, ok, etc.)
-settings.section.*     # Settings window sections
-provider.*             # AI provider configuration
-error.*                # Error messages
-alert.*                # Alert dialogs
-halo.state.*           # Halo overlay states
-```
-
-### How to Localize New UI Text
-
-1. **For SwiftUI Views (Declarative):**
-   ```swift
-   // Use LocalizedStringKey directly
-   Text(LocalizedStringKey("settings.general.title"))
-   Button(LocalizedStringKey("common.save")) { ... }
-   ```
-
-2. **For Programmatic Strings:**
-   ```swift
-   // Use NSLocalizedString
-   alert.messageText = NSLocalizedString("error.title", comment: "")
-   let message = String(format: NSLocalizedString("alert.about.message", comment: ""), version)
-   ```
-
-3. **Add Keys to Localizable.strings:**
-   ```swift
-   // en.lproj/Localizable.strings
-   "settings.general.title" = "General";
-   "alert.about.message" = "AI Middleware for macOS\nVersion %@\n\nBrings AI intelligence to your cursor.";
-
-   // zh_CN.lproj/Localizable.strings
-   "settings.general.title" = "通用";
-   "alert.about.message" = "macOS AI 中间件\n版本 %@\n\n将 AI 智能带到您的光标。";
-   ```
-
-### Validation
-
-**Before Committing:**
-```bash
-# Run translation validation script
-./Scripts/validate_translations.sh
-
-# Expected output:
-# ✅ All translations are complete!
-# 📊 Coverage: 100.0%
-```
-
-**The script checks:**
-- All English keys have corresponding translations
-- No missing keys in any language
-- No extra unused keys
-
-### Adding a New Language
-
-1. Create new `.lproj` directory: `Aether/Resources/fr.lproj/`
-2. Copy `en.lproj/Localizable.strings` to new directory
-3. Translate all values (keep keys unchanged)
-4. Update XcodeGen configuration in `project.yml`
-5. Run `Scripts/validate_translations.sh` to verify
-
-### Best Practices
-
-- **Never hardcode UI text** - Always use localization keys
-- **Keep keys descriptive** - Use hierarchical naming (`section.subsection.key`)
-- **Add comments** - Use `comment` parameter to explain context
-- **Test both languages** - Switch system language to verify
-- **Use MARK comments** - Organize `.strings` files with `// MARK: - Section`
-- **String formatting** - Use `%@` for dynamic content, `%d` for integers
-- **Validate before commit** - Run translation script to ensure 100% coverage
-
-### Common Pitfalls
-
-- ❌ DO NOT use String literal interpolation in LocalizedStringKey: `Text("Welcome \(name)")`
-- ✅ DO use String(format:) for dynamic content: `Text(String(format: NSLocalizedString("welcome.message", comment: ""), name))`
-- ❌ DO NOT localize technical IDs (API keys, model names, regex patterns)
-- ✅ DO localize all user-facing text (labels, buttons, help text, error messages)
+---
 
 ## Anti-Patterns to Avoid
 
@@ -1204,31 +374,7 @@ halo.state.*           # Halo overlay states
 - DO NOT put business logic in Swift (belongs in Rust core only)
 - DO NOT manually write FFI bindings (use UniFFI)
 
-## Debugging Tips
-
-### Rust Core Debugging
-```bash
-# Enable verbose logging
-RUST_LOG=debug cargo run
-
-# Check UniFFI bindings generation
-cargo run --bin uniffi-bindgen generate src/aether.udl --language swift
-```
-
-### Swift Debugging
-```swift
-// In EventHandler.swift
-func onStateChanged(state: ProcessingState) {
-    print("[Aether] State changed to: \(state)")
-    // Use Xcode debugger breakpoints here
-}
-```
-
-### FFI Boundary Issues
-- Check `libaethecore.dylib` is in Frameworks folder
-- Verify `@rpath` in Xcode Build Settings
-- Use `otool -L` to inspect library dependencies
-- Check Swift imports: `import AetherFFI`
+---
 
 ## Testing Strategy
 
@@ -1237,6 +383,10 @@ func onStateChanged(state: ProcessingState) {
 - **Mock providers**: Use fake AI responses for deterministic tests
 - **UI tests**: XCTest for SwiftUI components (manual testing preferred for overlay)
 - **Manual testing**: Hotkeys, permissions, focus behavior across different apps
+
+See [docs/TESTING_GUIDE.md](./docs/TESTING_GUIDE.md) for detailed testing procedures.
+
+---
 
 ## Critical Success Factors
 
@@ -1247,24 +397,60 @@ func onStateChanged(state: ProcessingState) {
 5. **Memory Safety**: No crashes at FFI boundary
 6. **Smooth Animations**: 60fps Halo transitions
 
+---
+
+## Additional Documentation
+
+**Detailed Guides:**
+- [Development Phases](./docs/DEVELOPMENT_PHASES.md) - Project roadmap and phase completion status
+- [macOS 26 Window Design](./docs/MACOS26_WINDOW_DESIGN.md) - Modern window design architecture
+- [Platform-Specific Notes](./docs/PLATFORM_NOTES.md) - macOS/Windows/Linux setup and permissions
+- [Debugging Guide](./docs/DEBUGGING_GUIDE.md) - Rust and Swift debugging techniques
+- [Localization Guide](./docs/LOCALIZATION.md) - i18n implementation and translation workflow
+- [XcodeGen Workflow](./docs/XCODEGEN_README.md) - Project generation and management
+
+**Testing & Quality:**
+- [Testing Guide](./docs/TESTING_GUIDE.md) - Automated and manual testing strategies
+- [Performance Guide](./docs/PERFORMANCE_GUIDE.md) - Performance optimization techniques
+- [Manual Testing Checklist](./docs/manual-testing-checklist.md) - Comprehensive test scenarios
+
+**Design & UI:**
+- [UI Design Guide](./docs/ui-design-guide.md) - Design system and component guidelines
+- [Component Index](./docs/ComponentsIndex.md) - SwiftUI component catalog
+
+---
+
 ## Skills
-使用skills：~/.claude/skills/build-macos-apps中的macOS开发规范和技能。
+
+使用 skills：~/.claude/skills/build-macos-apps 中的 macOS 开发规范和技能。
+
+---
 
 ## Environment
-- Python path: ~/.python3/bin/python
-- Activate python: source ~/.python3/bin/activate
-- Install package: cd ~/.python3 && uv pip install <package>
-- Xcode generation: xcodegen generate
-- Syntax validation: ~/.python3/bin/python verify_swift_syntax.py <file.swift>
-- This project uses XcodeGen to manage the Xcode project. See docs/XCODEGEN_README.md for detailed workflow instructions. 
-- The script file is in the Scripts folder, and all kinds of document files are in the docs folder.
+
+- Python path: `~/.python3/bin/python`
+- Activate python: `source ~/.python3/bin/activate`
+- Install package: `cd ~/.python3 && uv pip install <package>`
+- Xcode generation: `xcodegen generate`
+- Syntax validation: `~/.python3/bin/python verify_swift_syntax.py <file.swift>`
+- Script files: `Scripts/` directory
+- Documentation: `docs/` directory
+
+---
 
 ## git commit
-After completing a task or fixing an issue, use git add and git commit to submit this modification.
+
+After completing a task or fixing an issue, use `git add` and `git commit` to submit this modification.
+
+---
 
 ## memory prompt
+
 When the token is low to 10% of the limit, summarize this session at the end of the session to generate a "memory prompt" that can be directly copied and used, so that the next session can be inherited.
 
+---
+
 ## language
+
 - Reply language in Chinese
-- program comments in English
+- Program comments in English
