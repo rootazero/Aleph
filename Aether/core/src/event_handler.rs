@@ -48,8 +48,7 @@ pub trait AetherEventHandler: Send + Sync {
     /// Called when the processing state changes
     fn on_state_changed(&self, state: ProcessingState);
 
-    /// Called when a hotkey is detected with clipboard content
-    fn on_hotkey_detected(&self, clipboard_content: String);
+    // REMOVED: on_hotkey_detected() - hotkey handling now in Swift layer
 
     /// Called when an error occurs
     fn on_error(&self, message: String, suggestion: Option<String>);
@@ -88,7 +87,7 @@ pub trait AetherEventHandler: Send + Sync {
 #[cfg(test)]
 pub struct MockEventHandler {
     pub state_changes: std::sync::Arc<std::sync::Mutex<Vec<ProcessingState>>>,
-    pub hotkey_events: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    // REMOVED: hotkey_events - hotkey handling now in Swift layer
     pub errors: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     pub response_chunks: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     pub typed_errors: std::sync::Arc<std::sync::Mutex<Vec<(ErrorType, String)>>>,
@@ -106,7 +105,7 @@ impl MockEventHandler {
     pub fn new() -> Self {
         Self {
             state_changes: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            hotkey_events: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            // REMOVED: hotkey_events - hotkey handling now in Swift layer
             errors: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             response_chunks: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             typed_errors: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -124,9 +123,7 @@ impl MockEventHandler {
         self.state_changes.lock().unwrap().clone()
     }
 
-    pub fn get_hotkey_events(&self) -> Vec<String> {
-        self.hotkey_events.lock().unwrap().clone()
-    }
+    // REMOVED: get_hotkey_events() - hotkey handling now in Swift layer
 
     pub fn get_errors(&self) -> Vec<String> {
         self.errors.lock().unwrap().clone()
@@ -175,9 +172,7 @@ impl AetherEventHandler for MockEventHandler {
         self.state_changes.lock().unwrap().push(state);
     }
 
-    fn on_hotkey_detected(&self, clipboard_content: String) {
-        self.hotkey_events.lock().unwrap().push(clipboard_content);
-    }
+    // REMOVED: on_hotkey_detected() - hotkey handling now in Swift layer
 
     fn on_error(&self, message: String, _suggestion: Option<String>) {
         self.errors.lock().unwrap().push(message);
@@ -247,17 +242,7 @@ mod tests {
         assert_eq!(states[1], ProcessingState::Listening);
     }
 
-    #[test]
-    fn test_mock_handler_hotkey_events() {
-        let handler = MockEventHandler::new();
-        handler.on_hotkey_detected("test content".to_string());
-        handler.on_hotkey_detected("more content".to_string());
-
-        let events = handler.get_hotkey_events();
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0], "test content");
-        assert_eq!(events[1], "more content");
-    }
+    // REMOVED: test_mock_handler_hotkey_events - hotkey handling now in Swift layer
 
     #[test]
     fn test_mock_handler_errors() {

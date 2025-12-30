@@ -26,12 +26,7 @@ enum LogLevel {
   "Trace"      // All logs (very verbose)
 };
 
-// Image format enumeration (Phase 7.1 - Image Clipboard Support)
-enum ImageFormat {
-  "Png",
-  "Jpeg",
-  "Gif"
-};
+// REMOVED: ImageFormat enum - image handling now in Swift layer (ClipboardManager)
 
 // Error types for typed error handling
 enum ErrorType {
@@ -55,20 +50,17 @@ interface AetherCore {
   [Throws=AetherException]
   constructor(AetherEventHandler handler);
 
-  // Start listening for hotkey events (DEPRECATED - handled by Swift layer)
-  [Throws=AetherException]
-  void start_listening();
+  // REMOVED: System API methods (now handled by Swift layer)
+  // - start_listening() / stop_listening() - handled by GlobalHotkeyMonitor
+  // - get_clipboard_text() - handled by ClipboardManager
+  // - has_clipboard_image() / read_clipboard_image() / write_clipboard_image() - handled by ClipboardManager
+  // - is_listening() - no longer needed
 
-  // Stop listening for hotkey events (DEPRECATED - handled by Swift layer)
+  // AI PROCESSING METHODS
+  // Process input with AI using the complete pipeline: Memory → Router → Provider → Storage
+  // This is the main entry point for the new architecture
   [Throws=AetherException]
-  void stop_listening();
-
-  // Get current clipboard text
-  [Throws=AetherException]
-  string get_clipboard_text();
-
-  // Check if currently listening (DEPRECATED - always returns false)
-  boolean is_listening();
+  string process_input(string user_input, CapturedContext context);
 
   // TEST METHODS (debug only - for Phase 3 development)
   // Simulate streaming AI response
@@ -125,11 +117,7 @@ interface AetherCore {
   [Throws=AetherException]
   string retrieve_and_augment_prompt(string base_prompt, string user_input);
 
-  // AI PROCESSING METHODS (Phase 7 - Task 7.2, 7.3)
-  // Process input with AI using the complete pipeline: Memory → Router → Provider → Storage
-  // This integrates all Phase 5 & 6 components
-  [Throws=AetherException]
-  string process_with_ai(string input, CapturedContext context);
+  // REMOVED: process_with_ai() - replaced by process_input()
 
   // Manually trigger memory cleanup
   [Throws=AetherException]
@@ -171,18 +159,10 @@ interface AetherCore {
   // Test provider connection with temporary configuration (without persisting to disk)
   TestConnectionResult test_provider_connection_with_config(string provider_name, ProviderConfig provider_config);
 
-  // IMAGE CLIPBOARD METHODS (Phase 7.1 - Image Clipboard Support)
-
-  // Check if clipboard contains image data
-  boolean has_clipboard_image();
-
-  // Read image from clipboard
-  [Throws=AetherException]
-  ImageData? read_clipboard_image();
-
-  // Write image to clipboard
-  [Throws=AetherException]
-  void write_clipboard_image(ImageData image);
+  // REMOVED: Image clipboard methods - now handled by Swift ClipboardManager
+  // - has_clipboard_image()
+  // - read_clipboard_image()
+  // - write_clipboard_image()
 
   // LOGGING CONTROL METHODS (Phase 7.3 - Logging System)
 
@@ -203,8 +183,7 @@ callback interface AetherEventHandler {
   // Called when processing state changes
   void on_state_changed(ProcessingState state);
 
-  // Called when hotkey is detected with clipboard content
-  void on_hotkey_detected(string clipboard_content);
+  // REMOVED: on_hotkey_detected() - hotkey handling now in Swift layer
 
   // Called when an error occurs
   void on_error(string message, string? suggestion);
@@ -380,10 +359,4 @@ dictionary MemoryStats {
 dictionary CapturedContext {
   string app_bundle_id;
   string? window_title;
-};
-
-// Image data for clipboard operations (Phase 7.1 - Image Clipboard Support)
-dictionary ImageData {
-  sequence<u8> data;
-  ImageFormat format;
 };
