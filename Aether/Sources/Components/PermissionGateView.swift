@@ -65,6 +65,12 @@ struct PermissionGateView: View {
     /// Permission status monitor
     @StateObject private var monitor = PermissionStatusMonitor()
 
+    /// CRITICAL FIX: Track if we are still in initialization phase
+    /// During initialization (first 3 seconds), permission changes from false → true
+    /// should NOT trigger automatic restart, as they are likely due to macOS cache lag
+    /// Only after initialization, real user-granted permissions should trigger restart
+    @State private var isInitializing: Bool = true
+
     /// Callback when all permissions are granted
     let onAllPermissionsGranted: () -> Void
 
@@ -99,6 +105,16 @@ struct PermissionGateView: View {
         .onAppear {
             checkInitialPermissions()
             startMonitoring()
+
+            // CRITICAL FIX: Mark initialization as complete after 3 seconds
+            // This prevents false positive "just granted" detection during app startup
+            // When macOS permission APIs have cache lag, permissions may appear as false
+            // initially, then change to true after 1-2 seconds. This is NOT a "user grant"
+            // event and should NOT trigger automatic restart.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                self.isInitializing = false
+                print("[PermissionGateView] Initialization phase complete - now detecting real permission changes")
+            }
         }
         .onDisappear {
             monitor.stopMonitoring()
@@ -316,16 +332,23 @@ struct PermissionGateView: View {
                 hasInputMonitoring = inputMonitoring
             }
 
-            // CRITICAL: When Accessibility permission is granted, macOS may silently terminate the app
-            // We need to restart the app ourselves (unlike Input Monitoring which shows system prompt)
+            // CRITICAL FIX: Only trigger automatic restart if we are NOT in initialization phase
+            // During initialization (first 3 seconds), permission changes from false → true
+            // are likely due to macOS permission cache lag, NOT real user grant events
+            // Only after initialization, real user-granted permissions should trigger restart
             if accessibilityJustGranted {
-                print("[PermissionGateView] Accessibility permission just granted - app may be terminated by macOS, restarting proactively")
+                if isInitializing {
+                    print("[PermissionGateView] ⚠️ Accessibility permission detected during initialization - SKIPPING auto-restart (likely cache lag)")
+                    print("[PermissionGateView] This is expected behavior when permissions were already granted before app launch")
+                } else {
+                    print("[PermissionGateView] Accessibility permission just granted by user - app may be terminated by macOS, restarting proactively")
 
-                // Give user brief moment to see the checkmark
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    self.restartApplication(reason: "Accessibility permission granted")
+                    // Give user brief moment to see the checkmark
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        self.restartApplication(reason: "Accessibility permission granted")
+                    }
+                    return  // Don't proceed with other logic
                 }
-                return  // Don't proceed with other logic
             }
 
             // Auto-progress from Accessibility to Input Monitoring when Accessibility is granted
