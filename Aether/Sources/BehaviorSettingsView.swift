@@ -9,6 +9,10 @@ import SwiftUI
 
 /// Behavior settings view with UnifiedSaveBar pattern (example implementation)
 struct BehaviorSettingsView: View {
+    // Dependencies
+    let core: AetherCore?
+    @ObservedObject var saveBarState: SettingsSaveBarState
+
     // Working copy (editable state)
     @State private var inputMode: InputMode = .cut
     @State private var outputMode: OutputMode = .typewriter
@@ -28,44 +32,38 @@ struct BehaviorSettingsView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
 
-    let core: AetherCore?
-
     var body: some View {
-        VStack(spacing: 0) {
-            // Scrollable content
-            ScrollView {
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                    headerSection
-                    inputModeCard
-                    outputModeCard
+        // Scrollable content only (no internal save bar)
+        ScrollView {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                headerSection
+                inputModeCard
+                outputModeCard
 
-                    if outputMode == .typewriter {
-                        typingSpeedCard
-                    }
-
-                    piiScrubbingCard
+                if outputMode == .typewriter {
+                    typingSpeedCard
                 }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(DesignTokens.Spacing.lg)
-            }
-            .scrollEdge(edges: [.top, .bottom], style: .hard())
 
-            // Fixed save bar at bottom
-            UnifiedSaveBar(
-                hasUnsavedChanges: hasUnsavedChanges,
-                isSaving: isSaving,
-                statusMessage: statusMessage,
-                onSave: saveSettings,
-                onCancel: cancelEditing
-            )
+                piiScrubbingCard
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(DesignTokens.Spacing.lg)
         }
+        .scrollEdge(edges: [.top, .bottom], style: .hard())
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showingPreview) {
             TypingSpeedPreviewSheet(speed: typingSpeed)
         }
         .onAppear {
             loadSettings()
+            updateSaveBarState()
         }
+        .onChange(of: inputMode) { _, _ in updateSaveBarState() }
+        .onChange(of: outputMode) { _, _ in updateSaveBarState() }
+        .onChange(of: typingSpeed) { _, _ in updateSaveBarState() }
+        .onChange(of: piiScrubbingEnabled) { _, _ in updateSaveBarState() }
+        .onChange(of: piiTypes) { _, _ in updateSaveBarState() }
+        .onChange(of: isSaving) { _, _ in updateSaveBarState() }
     }
 
     // MARK: - View Components
@@ -412,6 +410,17 @@ struct BehaviorSettingsView: View {
         piiTypes = savedPiiTypes
         errorMessage = nil
     }
+
+    /// Update saveBarState to reflect current state
+    private func updateSaveBarState() {
+        saveBarState.update(
+            hasUnsavedChanges: hasUnsavedChanges,
+            isSaving: isSaving,
+            statusMessage: statusMessage,
+            onSave: saveSettings,
+            onCancel: cancelEditing
+        )
+    }
 }
 
 // MARK: - Input Mode
@@ -619,6 +628,6 @@ struct TypingSpeedPreviewSheet: View {
 
 struct BehaviorSettingsView_Previews: PreviewProvider {
     static var previews: some View {
-        BehaviorSettingsView(core: nil)
+        BehaviorSettingsView(core: nil, saveBarState: SettingsSaveBarState())
     }
 }

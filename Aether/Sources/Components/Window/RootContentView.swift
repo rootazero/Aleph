@@ -34,6 +34,9 @@ struct RootContentView: View {
     // Theme management
     @StateObject private var themeManager = ThemeManager()
 
+    // Unified save bar state (shared with all settings views)
+    @StateObject private var saveBarState = SettingsSaveBarState()
+
     // MARK: - Initialization
 
     init(core: AetherCore? = nil) {
@@ -61,6 +64,10 @@ struct RootContentView: View {
         .onAppear {
             loadProviders()
             themeManager.applyTheme()
+        }
+        .onChange(of: selectedTab) { _, _ in
+            // Reset save bar state when switching tabs
+            saveBarState.reset()
         }
         .onChange(of: appDelegate.core != nil) { _, isInitialized in
             // Reload providers when core is initialized
@@ -99,8 +106,26 @@ struct RootContentView: View {
             .frame(height: 52)
             .background(DesignTokens.Materials.titlebar)
 
-            // Tab content
+            // Tab content (main scrollable area)
             tabContent
+                .frame(maxHeight: .infinity)  // Allow content to expand
+
+            // Unified Save Bar at bottom of content area (shown when any tab has unsaved changes)
+            if saveBarState.hasUnsavedChanges {
+                UnifiedSaveBar(
+                    hasUnsavedChanges: saveBarState.hasUnsavedChanges,
+                    isSaving: saveBarState.isSaving,
+                    statusMessage: saveBarState.statusMessage,
+                    onSave: {
+                        Task {
+                            await saveBarState.onSave?()
+                        }
+                    },
+                    onCancel: {
+                        saveBarState.onCancel?()
+                    }
+                )
+            }
         }
         .frame(maxHeight: .infinity)
         // No maxWidth - let content area fill remaining space in HStack naturally
@@ -133,7 +158,7 @@ struct RootContentView: View {
             ShortcutsView()
 
         case .behavior:
-            BehaviorSettingsView(core: appDelegate.core)
+            BehaviorSettingsView(core: appDelegate.core, saveBarState: saveBarState)
                 .id(configReloadTrigger)
 
         case .memory:
