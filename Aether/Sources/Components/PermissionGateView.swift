@@ -282,8 +282,21 @@ struct PermissionGateView: View {
 
     // MARK: - Actions
 
+    /// Open System Settings and request permission
+    /// This method first requests the permission (which may trigger system prompt)
+    /// then opens System Settings for manual granting
     private func openSystemSettings() {
         let permissionType = currentStep.permissionType
+
+        // Request permission first (may show system prompt)
+        switch permissionType {
+        case .accessibility:
+            PermissionChecker.requestAccessibilityPermission()
+        case .inputMonitoring:
+            PermissionChecker.requestInputMonitoringPermission()
+        }
+
+        // Then open System Settings for manual granting
         if let url = URL(string: permissionType.systemSettingsURL) {
             NSWorkspace.shared.open(url)
         }
