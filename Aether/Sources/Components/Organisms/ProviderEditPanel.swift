@@ -454,40 +454,41 @@ struct ProviderEditPanel: View {
 
     @ViewBuilder
     private var editModeFooter: some View {
-        VStack(spacing: 0) {
-            Divider()
+        // Unified Save Bar replaces old footer
+        UnifiedSaveBar(
+            hasUnsavedChanges: hasUnsavedFormChanges,
+            isSaving: isSaving,
+            statusMessage: statusMessage,
+            onSave: {
+                saveProvider()
+            },
+            onCancel: cancelEditing
+        )
+    }
 
-            HStack(spacing: DesignTokens.Spacing.md) {
-                // Left side: Test Connection button with inline result
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                    ActionButton(
-                        isTesting ? NSLocalizedString("provider.button.testing", comment: "") : NSLocalizedString("common.test_connection", comment: ""),
-                        icon: "network",
-                        style: .secondary,
-                        action: testConnection
-                    )
-                    .disabled(isTesting || !isFormValid())
+    // MARK: - Computed Properties for Save Bar
 
-                    // Inline test result below button
-                    if let result = testResult {
-                        testResultView(result)
-                    }
-                }
-
-                Spacer()
-
-                // Right side: Save button only
-                ActionButton(
-                    isSaving ? NSLocalizedString("provider.button.saving", comment: "") : NSLocalizedString("common.save", comment: ""),
-                    icon: "checkmark",
-                    style: .primary,
-                    action: saveProvider
-                )
-                .disabled(isSaving || !isFormValid())
-            }
-            .padding(DesignTokens.Spacing.lg)
-            .background(DesignTokens.Colors.contentBackground)
+    /// Check if form has unsaved changes (simplified version)
+    private var hasUnsavedFormChanges: Bool {
+        // For now, consider form "dirty" if any field is non-empty
+        // TODO: Implement proper working copy vs saved state comparison
+        if isAddingNew {
+            return !providerName.isEmpty || !model.isEmpty || !apiKey.isEmpty
+        } else {
+            // For existing providers, always consider as potentially changed
+            return true
         }
+    }
+
+    /// Status message for UnifiedSaveBar
+    private var statusMessage: String? {
+        if let error = errorMessage {
+            return error
+        }
+        if hasUnsavedFormChanges {
+            return "Unsaved changes"  // Simplified message without localization for now
+        }
+        return nil
     }
 
 
@@ -820,6 +821,16 @@ struct ProviderEditPanel: View {
                 }
             }
         }
+    }
+
+    /// Cancel editing and revert to saved state
+    private func cancelEditing() {
+        // Clear any error messages
+        errorMessage = nil
+        testResult = nil
+
+        // Reload provider data to revert changes
+        loadProviderData()
     }
 
     private func saveProviderConfig(persist: Bool) async throws {
