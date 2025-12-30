@@ -87,16 +87,6 @@ struct PresetProviders {
             baseUrl: "http://localhost:11434"
         ),
         PresetProvider(
-            id: "aihubmix",
-            name: "AiHubMix",
-            iconName: "cube.transparent",
-            color: "#ff6b9d",
-            providerType: "openai",
-            defaultModel: "gpt-4o",
-            description: "Mixed AI provider hub",
-            baseUrl: nil
-        ),
-        PresetProvider(
             id: "deepseek",
             name: "DeepSeek",
             iconName: "eye",
