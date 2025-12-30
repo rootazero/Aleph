@@ -10,7 +10,10 @@ name = "aethecore"
 
 [dependencies]
 uniffi = { version = "0.25", features = ["cli"] }
-rdev = "0.5"
+# Use rdev from git main branch - contains fixes for macOS main thread issues
+# Original rdev 0.5.x has a bug where it calls TSMGetInputSourceProperty on background thread
+# causing _dispatch_assert_queue_fail crash when typing in other apps
+rdev = { git = "https://github.com/Narsil/rdev.git", branch = "main" }
 arboard = "3.3"
 enigo = "0.2.1"
 tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "process"] }
