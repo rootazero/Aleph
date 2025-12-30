@@ -35,6 +35,11 @@ struct ProvidersView: View {
     // Toast notification state
     @State private var toastData: ToastData?
 
+    // Test connection state (per provider)
+    @State private var testingProviders: Set<String> = []  // Provider IDs currently being tested
+    @State private var testResults: [String: SimpleProviderCard.TestResult] = [:]  // Provider ID -> Test result
+    @State private var testResultTimers: [String: Timer] = [:]  // Timers for auto-hiding test results
+
     // MARK: - Computed Properties
 
     /// All preset providers
@@ -218,7 +223,10 @@ struct ProvidersView: View {
                         isConfigured: isConfigured(preset),
                         isActive: isActive(preset),
                         isSelected: selectedProviderId == preset.id,
-                        onTap: { selectProvider(preset.id) }
+                        onTap: { selectProvider(preset.id) },
+                        isTesting: testingProviders.contains(preset.id),
+                        testResult: testResults[preset.id],
+                        onTestConnection: { testProviderConnection(preset) }
                     )
                 }
             }
@@ -285,6 +293,51 @@ struct ProvidersView: View {
         } else {
             selectedPreset = nil
             isAddingNew = false
+        }
+    }
+
+    /// Test provider connection with current configuration
+    private func testProviderConnection(_ preset: PresetProvider) {
+        // Only test if provider is configured
+        guard let config = getConfig(for: preset) else {
+            return
+        }
+
+        // Cancel any existing timer for this provider
+        testResultTimers[preset.id]?.invalidate()
+        testResultTimers[preset.id] = nil
+
+        // Clear previous result
+        testResults[preset.id] = nil
+
+        // Set testing state
+        testingProviders.insert(preset.id)
+
+        Task {
+            // Call test API with saved config
+            let result = core.testProviderConnectionWithConfig(
+                providerName: config.name,
+                providerConfig: config.config
+            )
+
+            await MainActor.run {
+                // Update testing state
+                testingProviders.remove(preset.id)
+
+                // Store test result
+                if result.success {
+                    testResults[preset.id] = .success(result.message)
+                } else {
+                    testResults[preset.id] = .failure(result.message)
+                }
+
+                // Auto-clear result after 5 seconds
+                let timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
+                    testResults[preset.id] = nil
+                    testResultTimers[preset.id] = nil
+                }
+                testResultTimers[preset.id] = timer
+            }
         }
     }
 }
