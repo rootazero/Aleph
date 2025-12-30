@@ -106,14 +106,20 @@ struct PermissionGateView: View {
             checkInitialPermissions()
             startMonitoring()
 
-            // CRITICAL FIX: Mark initialization as complete after 3 seconds
+            // CRITICAL FIX: Mark initialization as complete after 5 seconds
             // This prevents false positive "just granted" detection during app startup
             // When macOS permission APIs have cache lag, permissions may appear as false
             // initially, then change to true after 1-2 seconds. This is NOT a "user grant"
             // event and should NOT trigger automatic restart.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+            //
+            // Timing considerations:
+            // - PermissionStatusMonitor uses 3-reading debounce (3 seconds total delay)
+            // - Plus 1-2 seconds for macOS cache sync
+            // - Total: up to 5 seconds before debounced callback triggers
+            // - Therefore: initialization phase must last longer than 5 seconds
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
                 self.isInitializing = false
-                print("[PermissionGateView] Initialization phase complete - now detecting real permission changes")
+                print("[PermissionGateView] Initialization phase complete (5s) - now detecting real permission changes")
             }
         }
         .onDisappear {
@@ -313,6 +319,12 @@ struct PermissionGateView: View {
             // If both permissions already granted, dismiss gate immediately
             if self.hasAccessibility && self.hasInputMonitoring {
                 print("[PermissionGateView] All permissions already granted, dismissing gate")
+
+                // OPTIMIZATION: Mark initialization as complete immediately
+                // Since we found all permissions granted, no need to wait 5 seconds
+                self.isInitializing = false
+                print("[PermissionGateView] Initialization phase completed early (all permissions granted)")
+
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     self.onAllPermissionsGranted()
                 }
@@ -364,6 +376,14 @@ struct PermissionGateView: View {
             // This callback will be triggered on the next app launch
             if accessibility && inputMonitoring {
                 print("[PermissionGateView] All permissions granted - dismissing gate")
+
+                // OPTIMIZATION: Mark initialization as complete immediately
+                // Since all permissions are now granted, no need to wait 5 seconds
+                if isInitializing {
+                    isInitializing = false
+                    print("[PermissionGateView] Initialization phase completed early (all permissions granted)")
+                }
+
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     onAllPermissionsGranted()
                 }
