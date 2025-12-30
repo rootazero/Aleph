@@ -16,9 +16,9 @@ enum PermissionGateStep: Int {
     var title: String {
         switch self {
         case .accessibility:
-            return "步骤 1/2: 辅助功能权限"
+            return NSLocalizedString("permission.gate.step1_title", comment: "")
         case .inputMonitoring:
-            return "步骤 2/2: 输入监控权限"
+            return NSLocalizedString("permission.gate.step2_title", comment: "")
         }
     }
 
@@ -34,9 +34,9 @@ enum PermissionGateStep: Int {
     var description: String {
         switch self {
         case .accessibility:
-            return "Aether 需要辅助功能权限来捕获窗口上下文和模拟键盘输入，以便将 AI 响应粘贴到您的应用程序中。"
+            return NSLocalizedString("permission.gate.accessibility_description", comment: "")
         case .inputMonitoring:
-            return "Aether 需要输入监控权限来检测全局热键（默认: ` 键），让您可以在任何应用中快速召唤 AI 助手。\n\n⚠️ 重要提示：授予此权限后，macOS 系统会弹出重启提示，请点击「重新打开」按钮。"
+            return NSLocalizedString("permission.gate.input_monitoring_description", comment: "")
         }
     }
 
@@ -112,7 +112,7 @@ struct PermissionGateView: View {
             // Step 1: Accessibility
             stepBadge(
                 step: 1,
-                title: "辅助功能",
+                title: NSLocalizedString("permission.gate.accessibility_short", comment: ""),
                 isActive: currentStep == .accessibility,
                 isComplete: hasAccessibility
             )
@@ -126,7 +126,7 @@ struct PermissionGateView: View {
             // Step 2: Input Monitoring
             stepBadge(
                 step: 2,
-                title: "输入监控",
+                title: NSLocalizedString("permission.gate.input_monitoring_short", comment: ""),
                 isActive: currentStep == .inputMonitoring,
                 isComplete: hasInputMonitoring
             )
@@ -204,7 +204,7 @@ struct PermissionGateView: View {
                 .fill(isGranted ? Color.green : Color.orange)
                 .frame(width: 12, height: 12)
 
-            Text(isGranted ? "已授权 ✓" : "等待授权...")
+            Text(isGranted ? NSLocalizedString("permission.gate.status_granted", comment: "") : NSLocalizedString("permission.gate.status_waiting", comment: ""))
                 .font(.subheadline.weight(.medium))
                 .foregroundColor(isGranted ? .green : .orange)
         }
@@ -227,7 +227,7 @@ struct PermissionGateView: View {
                 Button(action: openSystemSettings) {
                     HStack(spacing: 8) {
                         Image(systemName: "gear")
-                        Text("打开系统设置")
+                        Text(LocalizedStringKey("permission.open_settings"))
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
@@ -252,7 +252,7 @@ struct PermissionGateView: View {
                     }
                 }) {
                     HStack(spacing: 8) {
-                        Text("继续")
+                        Text(LocalizedStringKey("permission.gate.button.continue"))
                         Image(systemName: "arrow.right")
                     }
                     .frame(maxWidth: .infinity)

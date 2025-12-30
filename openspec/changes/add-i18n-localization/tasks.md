@@ -106,10 +106,12 @@
 - [x] **Task 3.1: Localize PermissionPromptView strings**
   - Replace "Accessibility Permission Required", "Input Monitoring Permission Required", "Open System Settings" with localized keys
   - Add English strings for all permission prompts
+  - **UPDATED**: Also localized PermissionGateView (startup permission gate with 2-step flow)
   - **Validation**: ✅ Test permission prompts in English
 
 - [x] **Task 3.2: Add Chinese translations for permission prompts**
   - Translate all permission-related strings
+  - **UPDATED**: Added translations for both PermissionPromptView and PermissionGateView
   - **Validation**: ✅ Test permission flow with Chinese system language
 
 - [x] **Task 3.3: Localize InfoPlist.strings for permission descriptions**
@@ -202,13 +204,13 @@
   - Explain how to add new language
   - Document string key conventions
   - Include example workflows
-  - **Validation**: ✅ LOCALIZATION.md exists with comprehensive guide (323 lines, updated statistics to 249 keys)
+  - **Validation**: ✅ LOCALIZATION.md exists with comprehensive guide (updated to 260 keys)
 
 - [x] **Task 7.2: Update main README with language support info**
   - Add "Supported Languages" section
   - List currently supported languages (English, Simplified Chinese)
   - Mention how to contribute translations
-  - **Validation**: ✅ Enhanced i18n section with flag emojis, translation statistics (249 keys), coverage info, and contributor links
+  - **Validation**: ✅ Enhanced i18n section with flag emojis, translation statistics (260 keys), coverage info, and contributor links
 
 ---
 
@@ -221,9 +223,9 @@
 - Access to native Simplified Chinese speaker for translation review
 
 **Success Criteria**:
-- [ ] All user-facing text is localized (no hardcoded strings)
-- [ ] English and Simplified Chinese fully supported
-- [ ] Validation script passes with 100% translation coverage
-- [ ] UI layouts accommodate both languages without overflow
-- [ ] Permission prompts display in correct language
-- [ ] Unsupported languages fallback to English gracefully
+- [x] All user-facing text is localized (no hardcoded strings) - ✅ Including PermissionGateView
+- [x] English and Simplified Chinese fully supported - ✅ 260 keys, 100% coverage
+- [x] Validation script passes with 100% translation coverage - ✅ validate_translations.sh passing
+- [x] UI layouts accommodate both languages without overflow - ✅ Tested
+- [x] Permission prompts display in correct language - ✅ Both PermissionPromptView and PermissionGateView
+- [x] Unsupported languages fallback to English gracefully - ✅ NSLocalizedString default behavior

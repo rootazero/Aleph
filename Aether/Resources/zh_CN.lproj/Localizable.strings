@@ -238,12 +238,23 @@
 "permission.input_monitoring.title" = "需要输入监控权限";
 "permission.input_monitoring.description" = "Aether 需要输入监控权限来捕获键盘事件。";
 "permission.open_settings" = "打开系统设置";
-"permission.grant_instruction" = "请在系统设置中授予权限，然后返回此应用。";
+"permission.grant_instruction" = "请在系统设置中授予权限,然后返回此应用。";
 "permission.button.later" = "稍后设置";
 "permission.instruction.step1" = "点击下方「打开系统设置」按钮";
 "permission.instruction.step2" = "找到「隐私与安全性」→「辅助功能」";
 "permission.instruction.step3" = "在列表中找到 Aether 并勾选";
 "permission.instruction.step4" = "返回 Aether，热键将自动生效";
+
+// MARK: - Permission Gate View
+"permission.gate.step1_title" = "步骤 1/2: 辅助功能权限";
+"permission.gate.step2_title" = "步骤 2/2: 输入监控权限";
+"permission.gate.accessibility_short" = "辅助功能";
+"permission.gate.input_monitoring_short" = "输入监控";
+"permission.gate.accessibility_description" = "Aether 需要辅助功能权限来捕获窗口上下文和模拟键盘输入，以便将 AI 响应粘贴到您的应用程序中。";
+"permission.gate.input_monitoring_description" = "Aether 需要输入监控权限来检测全局热键（默认: ` 键），让您可以在任何应用中快速召唤 AI 助手。\n\n⚠️ 重要提示：授予此权限后，macOS 系统会弹出重启提示，请点击「重新打开」按钮。";
+"permission.gate.status_granted" = "已授权 ✓";
+"permission.gate.status_waiting" = "等待授权...";
+"permission.gate.button.continue" = "继续";
 
 // MARK: - Error Messages
 "error.provider.invalid_api_key" = "无效的 API 密钥。请检查您的凭据。";
