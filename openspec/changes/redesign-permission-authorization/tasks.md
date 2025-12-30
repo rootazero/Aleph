@@ -3,14 +3,14 @@
 ## Phase 1: Swift Layer - Permission Monitoring Redesign
 
 ### Task 1.1: Create new PermissionManager class
-- [ ] Create `Aether/Sources/Utils/PermissionManager.swift`
-- [ ] Implement `@Published` properties: `accessibilityGranted`, `inputMonitoringGranted`
-- [ ] Implement `Timer`-based polling (1-second interval)
-- [ ] Implement `checkPermissions()` method (passive monitoring, no restart)
-- [ ] Implement `checkInputMonitoringViaHID()` using IOHIDManager
-- [ ] Implement `requestAccessibility()` method
-- [ ] Implement `requestInputMonitoring()` method
-- [ ] Add `startMonitoring()` and `stopMonitoring()` lifecycle methods
+- [x] Create `Aether/Sources/Utils/PermissionManager.swift`
+- [x] Implement `@Published` properties: `accessibilityGranted`, `inputMonitoringGranted`
+- [x] Implement `Timer`-based polling (1-second interval)
+- [x] Implement `checkPermissions()` method (passive monitoring, no restart)
+- [x] Implement `checkInputMonitoringViaHID()` using IOHIDManager
+- [x] Implement `requestAccessibility()` method
+- [x] Implement `requestInputMonitoring()` method
+- [x] Add `startMonitoring()` and `stopMonitoring()` lifecycle methods
 - [ ] Validation: Run unit tests to verify timer polling and state updates
 
 **Files created:**
@@ -23,14 +23,16 @@
 - ✅ NO calls to `exit()`, `NSApp.terminate()`, or restart methods
 
 ### Task 1.2: Rewrite PermissionGateView with waterfall design
-- [ ] Backup existing `Aether/Sources/Components/PermissionGateView.swift`
-- [ ] Replace `@StateObject var monitor: PermissionStatusMonitor` with `PermissionManager`
-- [ ] Implement waterfall flow: Step 1 (Accessibility) → Step 2 (Input Monitoring)
-- [ ] Add `isEnabled` logic for Step 2 (depends on Step 1 completion)
-- [ ] Remove all automatic restart logic from `startMonitoring()` callback
-- [ ] Add "进入 Aether" button (shown when both permissions granted)
-- [ ] Implement user-triggered `restartApp()` method
-- [ ] Simplify `checkInitialPermissions()` (0.3s delay, no debounce)
+- [x] Backup existing `Aether/Sources/Components/PermissionGateView.swift`
+- [x] Replace `@StateObject var monitor: PermissionStatusMonitor` with `PermissionManager`
+- [x] Implement waterfall flow: Step 1 (Accessibility) → Step 2 (Input Monitoring)
+- [x] Add `isEnabled` logic for Step 2 (depends on Step 1 completion)
+- [x] Remove all automatic restart logic from `startMonitoring()` callback
+- [x] Add "进入 Aether" button (shown when both permissions granted)
+- [x] Implement user-triggered `restartApp()` method
+- [x] Simplify `checkInitialPermissions()` (0.3s delay, no debounce)
+- [x] **FIX**: Call `manager.startMonitoring()` to activate timer polling
+- [x] **FIX**: Request permissions before opening System Settings
 - [ ] Validation: Manual test permission grant flow
 
 **Files modified:**
@@ -43,12 +45,12 @@
 - ✅ No automatic restart logic in entire view
 
 ### Task 1.3: Enhance PermissionChecker with HID detection
-- [ ] Modify `Aether/Sources/Utils/PermissionChecker.swift`
-- [ ] Add `hasInputMonitoringViaHID()` static method
-- [ ] Implement IOHIDManager creation, device matching, and open/close
-- [ ] Update `hasInputMonitoringPermission()` to call HID method
-- [ ] Add `openSystemSettings(for:)` method with deep link URLs
-- [ ] Remove retry/sleep logic from `hasAccessibilityPermission()`
+- [x] Modify `Aether/Sources/Utils/PermissionChecker.swift`
+- [x] Add `hasInputMonitoringViaHID()` static method
+- [x] Implement IOHIDManager creation, device matching, and open/close
+- [x] Update `hasInputMonitoringPermission()` to call HID method
+- [x] Add `openSystemSettings(for:)` method with deep link URLs
+- [x] Remove retry/sleep logic from `hasAccessibilityPermission()`
 - [ ] Validation: Run unit tests to verify HID detection accuracy
 
 **Files modified:**
@@ -61,11 +63,11 @@
 - ✅ Opens System Settings to correct privacy pane
 
 ### Task 1.4: Delete deprecated PermissionStatusMonitor
-- [ ] Remove all references to `PermissionStatusMonitor` in codebase
-- [ ] Search for imports: `grep -r "PermissionStatusMonitor" Aether/Sources/`
-- [ ] Update `PermissionGateView` to use `PermissionManager` instead
-- [ ] Delete file: `Aether/Sources/Utils/PermissionStatusMonitor.swift`
-- [ ] Validation: Build succeeds without errors
+- [x] Remove all references to `PermissionStatusMonitor` in codebase
+- [x] Search for imports: `grep -r "PermissionStatusMonitor" Aether/Sources/`
+- [x] Update `PermissionGateView` to use `PermissionManager` instead
+- [x] Delete file: `Aether/Sources/Utils/PermissionStatusMonitor.swift`
+- [x] Validation: Build succeeds without errors
 
 **Files deleted:**
 - `Aether/Sources/Utils/PermissionStatusMonitor.swift`
@@ -93,11 +95,11 @@
 ## Phase 2: Rust Layer - Panic Protection & Permission Pre-Check
 
 ### Task 2.1: Add panic protection to rdev listener
-- [ ] Modify `Aether/core/src/hotkey/rdev_listener.rs`
-- [ ] Wrap `rdev::listen()` call in `std::panic::catch_unwind()`
-- [ ] Implement panic payload extraction (String or &str)
-- [ ] Log detailed panic message with user guidance
-- [ ] Return `Err(HotkeyError::PermissionDenied)` on panic
+- [x] Modify `Aether/core/src/hotkey/rdev_listener.rs`
+- [x] Wrap `rdev::listen()` call in `std::panic::catch_unwind()`
+- [x] Implement panic payload extraction (String or &str)
+- [x] Log detailed panic message with user guidance
+- [x] Return `Err(HotkeyError::PermissionDenied)` on panic
 - [ ] Validation: Run unit test simulating panic
 
 **Files modified:**
@@ -109,12 +111,12 @@
 - ✅ Detailed error log includes user guidance
 
 ### Task 2.2: Implement permission pre-check in AetherCore
-- [ ] Modify `Aether/core/src/core.rs`
-- [ ] Add `has_input_monitoring_permission: bool` field to `AetherCore` struct
-- [ ] Implement `set_input_monitoring_permission(granted: bool)` method
-- [ ] Update `start_listening()` to check permission before calling rdev
-- [ ] Return `Err(AetherError::PermissionDenied)` if permission not granted
-- [ ] Call `event_handler.on_error()` with permission error message
+- [x] Modify `Aether/core/src/core.rs`
+- [x] Add `has_input_monitoring_permission: bool` field to `AetherCore` struct
+- [x] Implement `set_input_monitoring_permission(granted: bool)` method
+- [x] Update `start_listening()` to check permission before calling rdev
+- [x] Return `Err(AetherError::PermissionDenied)` if permission not granted
+- [x] Call `event_handler.on_error()` with permission error message
 - [ ] Validation: Run unit test with permission = false
 
 **Files modified:**
