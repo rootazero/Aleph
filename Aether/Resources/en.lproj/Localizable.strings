@@ -174,6 +174,34 @@
 "settings.shortcuts.preset_sheet_title" = "Choose a Preset Shortcut";
 "settings.shortcuts.preset_sheet_description" = "Select a common keyboard shortcut combination:";
 "settings.shortcuts.use_this_button" = "Use This";
+"settings.shortcuts.current_hotkey" = "Current:";
+"settings.shortcuts.double_tap_shift_description" = "Quickly press the Shift key twice to summon Aether. This is the recommended method as it avoids input method conflicts.";
+"settings.shortcuts.double_tap_description" = "Double-tap the designated key to summon Aether. This method bypasses input method interception.";
+"settings.shortcuts.modifier_combo_description" = "Use modifier keys combined with another key to summon Aether. Ensure this doesn't conflict with system or application shortcuts.";
+"settings.shortcuts.reset_default" = "Reset to Default";
+"settings.shortcuts.custom_hotkey" = "Custom Hotkey";
+"settings.shortcuts.presets" = "Preset Shortcuts";
+"settings.shortcuts.preset_double_tap_shift" = "Double-tap Shift";
+"settings.shortcuts.preset_default_description" = "Recommended - Works with all input methods";
+"settings.shortcuts.preset_command_grave" = "Backtick with Command key";
+"settings.shortcuts.preset_option_space" = "Space with Option key (may conflict with input methods)";
+"settings.shortcuts.preset_control_command_a" = "A with Control+Command";
+"settings.shortcuts.use_this" = "Use";
+"settings.shortcuts.conflict_spotlight" = "May conflict with Spotlight (⌘+Space)";
+"settings.shortcuts.conflict_input_method" = "May conflict with some input methods";
+"settings.shortcuts.conflict_input_switch" = "May conflict with input method switching (⌃+Space)";
+"settings.shortcuts.custom_hotkey_title" = "Custom Hotkey";
+"settings.shortcuts.custom_hotkey_instruction" = "Press the key combination you want. Must include at least one modifier key (⌘⌥⇧⌃).";
+"settings.shortcuts.recording_prompt" = "Press a key combination...";
+"settings.shortcuts.start_recording_hint" = "Click the button below to start recording";
+"settings.shortcuts.stop_recording" = "Stop Recording";
+"settings.shortcuts.start_recording" = "Start Recording";
+"settings.shortcuts.apply_hotkey" = "Apply This Hotkey";
+"settings.shortcuts.error_requires_modifier" = "Must include at least one modifier key (⌘⌥⇧⌃)";
+
+// MARK: - Hotkey Display
+"hotkey.double_tap_shift" = "Double-tap Shift";
+"hotkey.double_tap_key" = "Double-tap %@";
 
 // MARK: - Settings Window - Behavior Tab
 "settings.behavior.title" = "Behavior";
@@ -362,3 +390,8 @@
 "settings.unsaved_changes.discard" = "Discard";
 "settings.unsaved_changes.close_title" = "Unsaved Changes";
 "settings.unsaved_changes.close_message" = "You have unsaved changes. Do you want to save them before closing?";
+
+// MARK: - Halo Input Mode Selection
+"halo.input_mode.title" = "Select Mode";
+"halo.input_mode.replace" = "Replace";
+"halo.input_mode.append" = "Append";

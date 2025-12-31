@@ -173,6 +173,34 @@
 "settings.shortcuts.preset_sheet_title" = "选择预设快捷键";
 "settings.shortcuts.preset_sheet_description" = "选择常用的键盘快捷键组合：";
 "settings.shortcuts.use_this_button" = "使用此快捷键";
+"settings.shortcuts.current_hotkey" = "当前热键：";
+"settings.shortcuts.double_tap_shift_description" = "快速按两次 Shift 键召唤 Aether。这是推荐的方式，可以避免输入法冲突。";
+"settings.shortcuts.double_tap_description" = "双击指定的键召唤 Aether。此方法可绕过输入法拦截。";
+"settings.shortcuts.modifier_combo_description" = "使用修饰键组合来召唤 Aether。请确保不与系统或应用程序快捷键冲突。";
+"settings.shortcuts.reset_default" = "恢复默认";
+"settings.shortcuts.custom_hotkey" = "自定义热键";
+"settings.shortcuts.presets" = "预设快捷键";
+"settings.shortcuts.preset_double_tap_shift" = "双击 Shift";
+"settings.shortcuts.preset_default_description" = "推荐 - 适用于所有输入法";
+"settings.shortcuts.preset_command_grave" = "反引号 + Command 键";
+"settings.shortcuts.preset_option_space" = "空格 + Option 键（可能与输入法冲突）";
+"settings.shortcuts.preset_control_command_a" = "A + Control + Command";
+"settings.shortcuts.use_this" = "使用";
+"settings.shortcuts.conflict_spotlight" = "可能与聚焦搜索冲突（⌘+空格）";
+"settings.shortcuts.conflict_input_method" = "可能与某些输入法冲突";
+"settings.shortcuts.conflict_input_switch" = "可能与输入法切换冲突（⌃+空格）";
+"settings.shortcuts.custom_hotkey_title" = "自定义热键";
+"settings.shortcuts.custom_hotkey_instruction" = "按下您想要的组合键。必须包含至少一个修饰键（⌘⌥⇧⌃）。";
+"settings.shortcuts.recording_prompt" = "请按下组合键...";
+"settings.shortcuts.start_recording_hint" = "点击下方按钮开始录制";
+"settings.shortcuts.stop_recording" = "停止录制";
+"settings.shortcuts.start_recording" = "开始录制";
+"settings.shortcuts.apply_hotkey" = "应用此热键";
+"settings.shortcuts.error_requires_modifier" = "必须包含至少一个修饰键（⌘⌥⇧⌃）";
+
+// MARK: - 热键显示
+"hotkey.double_tap_shift" = "双击 Shift";
+"hotkey.double_tap_key" = "双击 %@";
 
 // MARK: - Settings Window - Behavior Tab
 "settings.behavior.title" = "行为";
@@ -361,3 +389,8 @@
 "settings.unsaved_changes.discard" = "放弃修改";
 "settings.unsaved_changes.close_title" = "未保存的修改";
 "settings.unsaved_changes.close_message" = "你有未保存的修改。是否在关闭前保存？";
+
+// MARK: - Halo Input Mode Selection
+"halo.input_mode.title" = "选择模式";
+"halo.input_mode.replace" = "替换";
+"halo.input_mode.append" = "追加";

@@ -123,6 +123,15 @@ class HaloWindow: NSWindow {
         // Update via ViewModel (ObservableObject) to propagate changes to SwiftUI
         haloViewModel.state = state
 
+        // Enable/disable mouse events based on state
+        // awaitingInputMode and error states need mouse interaction
+        switch state {
+        case .awaitingInputMode, .error, .permissionRequired:
+            self.ignoresMouseEvents = false
+        default:
+            self.ignoresMouseEvents = true
+        }
+
         // Dynamically resize window based on new state
         let newSize = getWindowSize()
         NSAnimationContext.runAnimationGroup({ context in
@@ -153,6 +162,10 @@ class HaloWindow: NSWindow {
 
     private func getWindowSize() -> NSSize {
         switch haloViewModel.state {
+        case .awaitingInputMode:
+            // Input mode selection buttons
+            return NSSize(width: 220, height: 100)
+
         case .processing(_, let text), .success(let text):
             let width: CGFloat = text != nil ? 300 : 120
             let height: CGFloat

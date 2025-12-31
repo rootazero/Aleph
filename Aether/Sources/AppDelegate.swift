@@ -608,25 +608,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
-        guard let core = core else {
+        guard core != nil else {
             print("[AppDelegate] ⚠️ Hotkey blocked - core not initialized")
             NSSound.beep()
             return
         }
 
-        // Load input_mode from config (cut or copy)
-        // Default to "cut" if not configured
-        var inputMode = "cut"
-        do {
-            let config = try core.loadConfig()
-            if let behavior = config.behavior {
-                inputMode = behavior.inputMode
-            }
-        } catch {
-            print("[AppDelegate] ⚠️ Failed to load config, using default input_mode=cut: \(error)")
+        // Show Halo with input mode selection
+        let mouseLocation = NSEvent.mouseLocation
+        DispatchQueue.main.async { [weak self] in
+            self?.haloWindow?.show(at: mouseLocation)
+            self?.haloWindow?.updateState(.awaitingInputMode { [weak self] choice in
+                // User selected input mode, proceed with processing
+                print("[AppDelegate] 📋 User selected input mode: \(choice)")
+                self?.processWithInputMode(choice)
+            })
         }
-        let useCutMode = (inputMode == "cut")
-        print("[AppDelegate] 📋 Input mode: \(inputMode) (useCutMode: \(useCutMode))")
+    }
+
+    /// Process input after user selects input mode
+    private func processWithInputMode(_ choice: InputModeChoice) {
+        print("[AppDelegate] Processing with input mode: \(choice)")
+
+        guard let core = core else {
+            print("[AppDelegate] ⚠️ Core not initialized")
+            return
+        }
+
+        let useCutMode = (choice == .replace)
+        print("[AppDelegate] 📋 Input mode: \(choice) (useCutMode: \(useCutMode))")
 
         // CRITICAL: Save original clipboard content to restore later
         // This protects user's pre-existing clipboard data
@@ -769,15 +779,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let windowContext = ContextCapture.captureContext()
         print("[AppDelegate] Context: app=\(windowContext.bundleId ?? "unknown"), window=\(windowContext.windowTitle ?? "nil")")
 
-        // Show Halo at cursor position
+        // Update Halo to listening state (Halo is already shown from handleHotkeyPressed)
         DispatchQueue.main.async { [weak self] in
-            let mouseLocation = NSEvent.mouseLocation
-            self?.haloWindow?.show(at: mouseLocation)
             self?.haloWindow?.updateState(.listening)
         }
-
-        // NEW ARCHITECTURE: Call Rust core's process_input() method
-        // Note: core is already validated as non-nil at the start of handleHotkeyPressed
 
         // Process input asynchronously to avoid blocking UI
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -812,6 +817,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 // Call Rust core's process_input() - this replaces the old onHotkeyDetected flow
                 // The method will handle: Memory retrieval → AI routing → Provider call → Memory storage
                 // It returns the AI response text which we need to output using KeyboardSimulator
+                guard let core = self.core else {
+                    print("[AppDelegate] ERROR: Core became nil during processing")
+                    return
+                }
                 let response = try core.processInput(
                     userInput: userInput,
                     context: capturedContext

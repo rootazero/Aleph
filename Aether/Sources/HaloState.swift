@@ -7,8 +7,15 @@
 
 import SwiftUI
 
+/// Input mode selection for user choice before AI processing
+enum InputModeChoice {
+    case replace  // Cut original text, replace with AI response
+    case append   // Copy original text, append AI response after it
+}
+
 enum HaloState: Equatable {
     case idle
+    case awaitingInputMode(onSelect: (InputModeChoice) -> Void)  // Waiting for user to select input mode
     case listening
     case retrievingMemory  // Phase 9: Retrieving memories from database
     case processingWithAI(providerColor: Color, providerName: String?)  // Phase 9: AI provider is processing
@@ -22,6 +29,9 @@ enum HaloState: Equatable {
     static func == (lhs: HaloState, rhs: HaloState) -> Bool {
         switch (lhs, rhs) {
         case (.idle, .idle):
+            return true
+        case (.awaitingInputMode, .awaitingInputMode):
+            // Closures can't be compared, so we just check if both are awaiting
             return true
         case (.listening, .listening):
             return true
