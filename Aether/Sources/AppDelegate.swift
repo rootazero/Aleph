@@ -166,6 +166,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         let hostingController = NSHostingController(rootView: settingsView)
 
+        // CRITICAL: Remove safe area insets to ensure content starts at window edge
+        hostingController.view.wantsLayer = true
+        hostingController.view.layer?.masksToBounds = false
+        // Remove default safe area insets added by NSHostingController
+        hostingController.safeAreaRegions = []
+
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Settings"
         window.setContentSize(NSSize(width: 980, height: 750))

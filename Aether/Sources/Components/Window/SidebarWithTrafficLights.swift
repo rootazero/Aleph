@@ -43,7 +43,10 @@ struct SidebarWithTrafficLights: View {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .strokeBorder(.separator.opacity(0.25))
                 )
-                .padding(8)  // Uniform padding on all sides for floating effect
+                .padding(.leading, 8)      // Left padding for floating effect
+                .padding(.trailing, 8)     // Right padding for floating effect
+                .padding(.bottom, 8)       // Bottom padding for floating effect
+                .padding(.top, 0)          // NO top padding - start at window edge
 
             // Content: Traffic lights + Logo + Navigation items
             VStack(alignment: .leading, spacing: 12) {
@@ -54,6 +57,7 @@ struct SidebarWithTrafficLights: View {
                     TrafficLightButton(color: .green, action: WindowController.shared.toggleFullscreen)
                 }
                 .padding(.leading, 10)  // Reduced from 18 to account for outer padding
+                .padding(.top, 8)       // Add top padding for traffic lights only
 
                 // Logo section
                 VStack(spacing: 6) {
@@ -97,10 +101,13 @@ struct SidebarWithTrafficLights: View {
                 if onImportSettings != nil || onExportSettings != nil || onResetSettings != nil {
                     actionButtonsSection
                         .padding(.horizontal, 10)  // Reduced from 18 to account for outer padding
-                        .padding(.bottom, 10)  // Reduced from 18 to account for outer padding
+                        .padding(.bottom, 10)      // Reduced from 18 to account for outer padding
                 }
             }
-            .padding(8)  // Match outer RoundedRectangle padding for perfect alignment
+            .padding(.leading, 8)      // Left padding to match background
+            .padding(.trailing, 8)     // Right padding to match background
+            .padding(.bottom, 8)       // Bottom padding to match background
+            .padding(.top, 0)          // NO top padding - start at window edge
         }
         .frame(width: 220)
     }

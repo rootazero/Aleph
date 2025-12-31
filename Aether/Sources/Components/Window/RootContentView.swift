@@ -60,7 +60,7 @@ struct RootContentView: View {
             contentArea
         }
         .background(.windowBackground)
-        .edgesIgnoringSafeArea(.all)  // Changed from .top to .all to ensure full-window layout
+        .ignoresSafeArea()  // Use new API instead of deprecated edgesIgnoringSafeArea
         .hideNativeTrafficLights()
         .onAppear {
             loadProviders()
