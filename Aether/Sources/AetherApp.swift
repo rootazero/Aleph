@@ -13,10 +13,11 @@ struct AetherApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        // Empty Settings scene to satisfy SwiftUI App requirement
-        // Actual settings window is managed by AppDelegate.showSettings()
+        // Settings scene that opens when using Cmd+,
+        // Creates RootContentView with proper core reference from AppDelegate
         Settings {
-            EmptyView()
+            RootContentView(core: appDelegate.core)
+                .environmentObject(appDelegate)
         }
     }
 }

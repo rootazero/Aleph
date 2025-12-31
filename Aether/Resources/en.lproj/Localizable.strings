@@ -248,6 +248,8 @@
 "menu.settings" = "Settings...";
 "menu.quit" = "Quit Aether";
 "menu.about" = "About Aether";
+"menu.default_provider" = "Default Provider";
+"menu.no_providers" = "No providers available";
 
 // Menu Bar - Default Provider Quick Switch (NEW for default provider management)
 "menu.providers.section_title" = "Default Provider";

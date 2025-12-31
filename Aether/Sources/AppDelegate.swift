@@ -16,10 +16,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Menu item for Settings (stored separately for enable/disable)
     private var settingsMenuItem: NSMenuItem?
 
-    // Menu separator indices for dynamic providers section
-    private var providersMenuStartIndex: Int?
-    private var providersMenuEndIndex: Int?
-
     // Rust core instance (internal for access from AetherApp)
     // Published to trigger UI updates when initialized
     @Published internal var core: AetherCore?
@@ -103,14 +99,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         ))
         menu.addItem(NSMenuItem.separator())
 
-        // Store separator start index for providers section (will be added later)
-        providersMenuStartIndex = menu.items.count
+        // Add "Default Provider" submenu (will be populated by rebuildProvidersMenu)
+        let defaultProviderMenuItem = NSMenuItem(
+            title: NSLocalizedString("menu.default_provider", comment: "Default Provider menu item"),
+            action: nil,
+            keyEquivalent: ""
+        )
+        defaultProviderMenuItem.submenu = NSMenu()  // Create empty submenu for now
+        menu.addItem(defaultProviderMenuItem)
 
-        // Providers section will be added here dynamically via rebuildProvidersMenu()
-        // Initial menu items: About, Separator, [Providers Section], Separator, Settings, Separator, Quit
-
-        // Mark end of providers section (before Settings)
-        providersMenuEndIndex = menu.items.count
         menu.addItem(NSMenuItem.separator())
 
         // Create and store Settings menu item for enable/disable control
@@ -162,9 +159,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
 
         // Create new settings window with RootContentView
+        // Pass core (may be nil if not initialized yet, RootContentView will handle gracefully)
         let settingsView = RootContentView(core: core)
-        .environmentObject(self)
-        .frame(minWidth: 980, minHeight: 750)
+            .environmentObject(self)
+            .frame(minWidth: 980, minHeight: 750)
 
         let hostingController = NSHostingController(rootView: settingsView)
 
@@ -194,20 +192,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     // MARK: - Providers Menu Management (NEW for default provider management)
 
-    /// Rebuild the providers menu section with enabled providers
+    /// Rebuild the providers submenu with enabled providers
     private func rebuildProvidersMenu() {
         guard let menu = statusItem?.menu else { return }
         guard let core = core else { return }
-        guard let startIndex = providersMenuStartIndex,
-              let endIndex = providersMenuEndIndex else { return }
 
-        // Remove existing provider menu items (between start and end indices)
-        while menu.items.count > startIndex && menu.items.count > endIndex {
-            menu.removeItem(at: startIndex)
+        // Find the "Default Provider" menu item (should be at index 2 after About + Separator)
+        guard let defaultProviderMenuItem = menu.items.first(where: { $0.title == NSLocalizedString("menu.default_provider", comment: "Default Provider menu item") }),
+              let submenu = defaultProviderMenuItem.submenu else {
+            print("[AppDelegate] ERROR: Default Provider submenu not found")
+            return
         }
 
-        // Reset end index
-        providersMenuEndIndex = startIndex
+        // Clear existing submenu items
+        submenu.removeAllItems()
 
         // Get enabled providers
         let enabledProviders = core.getEnabledProviders()
@@ -231,13 +229,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     item.state = .off
                 }
 
-                menu.insertItem(item, at: startIndex + (menu.items.count - startIndex))
-                providersMenuEndIndex = providersMenuEndIndex! + 1
+                submenu.addItem(item)
             }
 
-            print("[AppDelegate] Rebuilt providers menu with \(enabledProviders.count) enabled providers")
+            // Enable the submenu
+            defaultProviderMenuItem.isEnabled = true
+
+            print("[AppDelegate] Rebuilt providers submenu with \(enabledProviders.count) enabled providers")
         } else {
-            print("[AppDelegate] No enabled providers, skipping menu section")
+            // No enabled providers, add placeholder and disable submenu
+            let placeholderItem = NSMenuItem(
+                title: NSLocalizedString("menu.no_providers", comment: "No providers available"),
+                action: nil,
+                keyEquivalent: ""
+            )
+            placeholderItem.isEnabled = false
+            submenu.addItem(placeholderItem)
+
+            defaultProviderMenuItem.isEnabled = false
+            print("[AppDelegate] No enabled providers, disabling submenu")
         }
     }
 
