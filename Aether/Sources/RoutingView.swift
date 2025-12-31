@@ -120,12 +120,50 @@ struct RoutingView: View {
 
             // Footer info
             if !rules.isEmpty {
-                HStack(spacing: DesignTokens.Spacing.sm) {
-                    Image(systemName: "info.circle")
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-                    Text(LocalizedStringKey("settings.routing.footer_info"))
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                    // Rule evaluation order hint
+                    HStack(spacing: DesignTokens.Spacing.sm) {
+                        Image(systemName: "info.circle")
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                        Text(LocalizedStringKey("settings.routing.footer_info"))
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+
+                    // Default provider hint
+                    HStack(spacing: DesignTokens.Spacing.sm) {
+                        Image(systemName: "info.circle")
+                            .foregroundColor(DesignTokens.Colors.accentBlue)
+
+                        if let defaultName = defaultProviderName {
+                            HStack(spacing: DesignTokens.Spacing.xs) {
+                                Text(LocalizedStringKey("settings.routing.default_provider_hint"))
+                                    .font(DesignTokens.Typography.caption)
+                                    .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                                // Default provider badge
+                                HStack(spacing: DesignTokens.Spacing.xs) {
+                                    if let color = defaultProviderColor {
+                                        Circle()
+                                            .fill(color)
+                                            .frame(width: 6, height: 6)
+                                    }
+                                    Text(defaultName)
+                                        .font(DesignTokens.Typography.caption)
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(DesignTokens.Colors.textPrimary)
+                                }
+                                .padding(.horizontal, DesignTokens.Spacing.xs)
+                                .padding(.vertical, 2)
+                                .background(DesignTokens.Colors.accentBlue.opacity(0.1))
+                                .cornerRadius(DesignTokens.CornerRadius.small)
+                            }
+                        } else {
+                            Text(LocalizedStringKey("settings.routing.no_default_provider_hint"))
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.warning)
+                        }
+                    }
                 }
             }
         }
@@ -161,6 +199,26 @@ struct RoutingView: View {
                 Text(String(format: NSLocalizedString("settings.routing.delete_rule_message", comment: ""), rules[index].regex))
             }
         }
+    }
+
+    // MARK: - Computed Properties
+
+    /// Get the current default provider name
+    private var defaultProviderName: String? {
+        do {
+            return try core.getDefaultProvider()
+        } catch {
+            return nil
+        }
+    }
+
+    /// Get default provider color
+    private var defaultProviderColor: Color? {
+        guard let defaultName = defaultProviderName,
+              let provider = providers.first(where: { $0.name == defaultName }) else {
+            return nil
+        }
+        return Color(hex: provider.config.color)
     }
 
     // MARK: - Data Loading

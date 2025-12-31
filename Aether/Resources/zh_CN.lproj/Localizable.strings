@@ -54,6 +54,9 @@
 "settings.providers.preset_providers" = "预设提供商";
 "settings.providers.configured_providers" = "已配置提供商";
 "settings.providers.no_results" = "未找到提供商";
+"settings.providers.status.default_tooltip" = "默认供应商（当路由规则都不匹配时使用）";
+"settings.providers.status.active_tooltip" = "已激活的供应商";
+"settings.providers.status.inactive_tooltip" = "未激活的供应商";
 
 // MARK: - Provider Configuration
 "provider.field.active" = "启用";
@@ -146,6 +149,8 @@
 "settings.routing.not_configured" = "（未配置）";
 "settings.routing.edit_rule_help" = "编辑规则";
 "settings.routing.delete_rule_help" = "删除规则";
+"settings.routing.default_provider_hint" = "当所有规则都不匹配时，将使用默认供应商：";
+"settings.routing.no_default_provider_hint" = "未设置默认供应商。请在「供应商」标签页中设置默认供应商。";
 
 // MARK: - Settings Window - Shortcuts Tab
 "settings.shortcuts.title" = "键盘快捷键";

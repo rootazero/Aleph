@@ -55,6 +55,9 @@
 "settings.providers.preset_providers" = "Preset Providers";
 "settings.providers.configured_providers" = "Configured Providers";
 "settings.providers.no_results" = "No providers found";
+"settings.providers.status.default_tooltip" = "Default provider (used when no routing rules match)";
+"settings.providers.status.active_tooltip" = "Active provider";
+"settings.providers.status.inactive_tooltip" = "Inactive provider";
 
 // MARK: - Provider Configuration
 "provider.field.active" = "Active";
@@ -147,6 +150,8 @@
 "settings.routing.not_configured" = "(not configured)";
 "settings.routing.edit_rule_help" = "Edit rule";
 "settings.routing.delete_rule_help" = "Delete rule";
+"settings.routing.default_provider_hint" = "When no rules match, the default provider will be used:";
+"settings.routing.no_default_provider_hint" = "No default provider set. Please set a default provider in the Providers tab.";
 
 // MARK: - Settings Window - Shortcuts Tab
 "settings.shortcuts.title" = "Keyboard Shortcuts";

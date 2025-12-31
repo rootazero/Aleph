@@ -1120,8 +1120,10 @@ impl AetherCore {
         );
 
         // Notify UI about AI response (Task 7.4)
-        let response_preview = if response.len() > 100 {
-            format!("{}...", &response[..100])
+        // Use char-boundary safe truncation for Unicode strings (e.g., Chinese)
+        let response_preview = if response.chars().count() > 100 {
+            let truncated: String = response.chars().take(100).collect();
+            format!("{}...", truncated)
         } else {
             response.clone()
         };

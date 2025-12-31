@@ -49,6 +49,7 @@ struct SimpleProviderCard: View {
                 Circle()
                     .fill(statusIndicatorColor)
                     .frame(width: 8, height: 8)
+                    .help(statusIndicatorTooltip)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, DesignTokens.Spacing.sm + 2)
@@ -91,6 +92,17 @@ struct SimpleProviderCard: View {
         } else {
             // Gray dot for inactive/unconfigured
             return Color(hex: "#8E8E93") ?? .gray
+        }
+    }
+
+    /// Tooltip text for status indicator
+    private var statusIndicatorTooltip: LocalizedStringKey {
+        if isDefault && isConfigured {
+            return "settings.providers.status.default_tooltip"
+        } else if isConfigured && isActive {
+            return "settings.providers.status.active_tooltip"
+        } else {
+            return "settings.providers.status.inactive_tooltip"
         }
     }
 

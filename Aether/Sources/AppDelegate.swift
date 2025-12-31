@@ -41,6 +41,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Global hotkey monitor (Swift layer)
     private var hotkeyMonitor: GlobalHotkeyMonitor?
 
+    // Typewriter cancellation token
+    private var typewriterCancellation: CancellationToken?
+
+    // ESC key monitor for cancelling typewriter
+    private var escapeKeyMonitor: Any?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hide from Dock (menu bar only)
         NSApp.setActivationPolicy(.accessory)
@@ -72,6 +78,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     func applicationWillTerminate(_ notification: Notification) {
         // Stop hotkey monitoring
         hotkeyMonitor?.stopMonitoring()
+
+        // Remove ESC key monitor
+        removeEscapeKeyMonitor()
 
         // Clean up Rust core (only if initialized)
         // Note: No need to call stopListening() as hotkey monitoring is now in Swift
@@ -538,6 +547,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Connect event handler to halo window for error action callbacks
         haloWindow?.setEventHandler(eventHandler!)
 
+        // Setup ESC key monitor for cancelling typewriter
+        setupEscapeKeyMonitor()
+
         // Initialize Rust core
         initializeRustCore()
 
@@ -564,6 +576,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// Now Swift's GlobalHotkeyMonitor detects the key, and we handle everything here.
     private func handleHotkeyPressed() {
         print("[AppDelegate] Hotkey pressed - handling in Swift layer")
+
+        // CRITICAL: Record clipboard state BEFORE copying
+        // This allows us to detect if user had selected text
+        let oldChangeCount = ClipboardManager.shared.changeCount()
+        let oldClipboardText = ClipboardManager.shared.getText()
+
+        // Simulate Cmd+C to copy selected text (if any)
+        print("[AppDelegate] Simulating Cmd+C to copy selected text...")
+        KeyboardSimulator.shared.simulateCopy()
+
+        // Wait for clipboard to update (macOS needs a small delay)
+        Thread.sleep(forTimeInterval: 0.1)  // 100ms delay
+
+        // Check if clipboard changed (means there was selected text)
+        let newChangeCount = ClipboardManager.shared.changeCount()
+        let hasSelectedText = (newChangeCount != oldChangeCount)
+
+        if hasSelectedText {
+            print("[AppDelegate] ✓ Detected selected text, using new clipboard content")
+        } else {
+            print("[AppDelegate] ⚠ No selected text detected, using old clipboard content")
+        }
 
         // Get clipboard content using Swift ClipboardManager
         guard let clipboardText = ClipboardManager.shared.getText() else {
@@ -631,21 +665,52 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
                 print("[AppDelegate] Received AI response (\(response.count) chars)")
 
+                // CRITICAL: Limit response length to prevent infinite output
+                let maxResponseLength = 5000  // Max 5000 characters
+                let truncatedResponse: String
+                if response.count > maxResponseLength {
+                    print("[AppDelegate] ⚠ Response too long (\(response.count) chars), truncating to \(maxResponseLength)")
+                    truncatedResponse = String(response.prefix(maxResponseLength)) + "\n\n[... response truncated due to length limit ...]"
+                } else {
+                    truncatedResponse = response
+                }
+
                 // Type response using Swift KeyboardSimulator
                 // This replaces Rust's typewriter implementation
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+
+                    // Create cancellation token for this typewriter session
+                    self.typewriterCancellation = CancellationToken()
+
                     // Get typing speed from config (default to 50 chars/sec)
                     let typingSpeed = 50 // TODO: Read from config when available
 
                     // Type the response
                     Task {
                         do {
-                            try await KeyboardSimulator.shared.typeText(response, speed: typingSpeed)
-                            print("[AppDelegate] ✅ Response typed successfully")
+                            let typedCount = await KeyboardSimulator.shared.typeText(
+                                truncatedResponse,
+                                speed: typingSpeed,
+                                cancellationToken: self.typewriterCancellation
+                            )
+
+                            if typedCount < truncatedResponse.count {
+                                print("[AppDelegate] ⏸ Typewriter cancelled by user (\(typedCount)/\(truncatedResponse.count) chars typed)")
+                                // Paste remaining text instantly
+                                let remaining = String(truncatedResponse.dropFirst(typedCount))
+                                ClipboardManager.shared.setText(remaining)
+                                KeyboardSimulator.shared.simulatePaste()
+                            } else {
+                                print("[AppDelegate] ✅ Response typed successfully (\(typedCount) chars)")
+                            }
+
+                            // Clear cancellation token
+                            self.typewriterCancellation = nil
 
                             // Update Halo to success state
                             DispatchQueue.main.async { [weak self] in
-                                self?.haloWindow?.updateState(.success(finalText: String(response.prefix(100))))
+                                self?.haloWindow?.updateState(.success(finalText: String(truncatedResponse.prefix(100))))
                                 // Auto-hide after 2 seconds
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                                     self?.haloWindow?.hide()
@@ -654,7 +719,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                         } catch {
                             print("[AppDelegate] ❌ Error during typewriter: \(error)")
                             // Fall back to instant paste if typewriter fails
-                            ClipboardManager.shared.setText(response)
+                            ClipboardManager.shared.setText(truncatedResponse)
                             KeyboardSimulator.shared.simulatePaste()
                         }
                     }
@@ -685,6 +750,47 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                         )
                     }
                 }
+            }
+        }
+    }
+
+    // MARK: - ESC Key Monitoring for Typewriter Cancellation
+
+    /// Setup global ESC key monitor to cancel typewriter animation
+    private func setupEscapeKeyMonitor() {
+        escapeKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            // Check if ESC key was pressed (keyCode 53)
+            if event.keyCode == 53 {
+                self?.handleEscapeKey()
+            }
+        }
+        print("[AppDelegate] ESC key monitor installed for typewriter cancellation")
+    }
+
+    /// Remove ESC key monitor
+    private func removeEscapeKeyMonitor() {
+        if let monitor = escapeKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            escapeKeyMonitor = nil
+            print("[AppDelegate] ESC key monitor removed")
+        }
+    }
+
+    /// Handle ESC key press - cancel typewriter animation
+    private func handleEscapeKey() {
+        guard let cancellation = typewriterCancellation else {
+            print("[AppDelegate] ESC pressed but no typewriter is running")
+            return
+        }
+
+        print("[AppDelegate] ESC pressed - cancelling typewriter animation")
+        cancellation.cancel()
+
+        // Show brief feedback
+        DispatchQueue.main.async { [weak self] in
+            self?.haloWindow?.updateState(.success(finalText: "⏸ Typewriter cancelled"))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.haloWindow?.hide()
             }
         }
     }
