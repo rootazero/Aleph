@@ -777,17 +777,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
 
         // NEW ARCHITECTURE: Call Rust core's process_input() method
-        guard let core = core else {
-            print("[AppDelegate] ERROR: Core not initialized")
-            DispatchQueue.main.async { [weak self] in
-                self?.haloWindow?.updateState(.error(
-                    type: .unknown,
-                    message: NSLocalizedString("error.core_not_initialized", comment: "Core not initialized"),
-                    suggestion: NSLocalizedString("error.core_not_initialized.suggestion", comment: "Please restart the app")
-                ))
-            }
-            return
-        }
+        // Note: core is already validated as non-nil at the start of handleHotkeyPressed
 
         // Process input asynchronously to avoid blocking UI
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in

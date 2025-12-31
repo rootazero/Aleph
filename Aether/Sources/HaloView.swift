@@ -8,17 +8,24 @@
 import SwiftUI
 
 struct HaloView: View {
-    @State var state: HaloState = .idle
+    @ObservedObject var viewModel: HaloViewModel
     @ObservedObject var themeEngine: ThemeEngine
-    var eventHandler: EventHandler?
 
     private var theme: any HaloTheme {
         themeEngine.activeTheme
     }
 
+    private var state: HaloState {
+        viewModel.state
+    }
+
+    private var eventHandler: EventHandler? {
+        viewModel.eventHandler
+    }
+
     var body: some View {
         ZStack {
-            switch state {
+            switch viewModel.state {
             case .idle:
                 EmptyView()
 
@@ -292,22 +299,38 @@ struct HaloView_Previews: PreviewProvider {
         let themeEngine = ThemeEngine()
 
         Group {
-            HaloView(state: .listening, themeEngine: themeEngine)
+            HaloView(viewModel: {
+                let vm = HaloViewModel()
+                vm.state = .listening
+                return vm
+            }(), themeEngine: themeEngine)
                 .previewDisplayName("Listening")
                 .frame(width: 120, height: 120)
                 .background(Color.black.opacity(0.3))
 
-            HaloView(state: .processing(providerColor: .green, streamingText: nil), themeEngine: themeEngine)
+            HaloView(viewModel: {
+                let vm = HaloViewModel()
+                vm.state = .processing(providerColor: .green, streamingText: nil)
+                return vm
+            }(), themeEngine: themeEngine)
                 .previewDisplayName("Processing")
                 .frame(width: 120, height: 120)
                 .background(Color.black.opacity(0.3))
 
-            HaloView(state: .success(finalText: nil), themeEngine: themeEngine)
+            HaloView(viewModel: {
+                let vm = HaloViewModel()
+                vm.state = .success(finalText: nil)
+                return vm
+            }(), themeEngine: themeEngine)
                 .previewDisplayName("Success")
                 .frame(width: 120, height: 120)
                 .background(Color.black.opacity(0.3))
 
-            HaloView(state: .error(type: .unknown, message: "Test error", suggestion: nil), themeEngine: themeEngine)
+            HaloView(viewModel: {
+                let vm = HaloViewModel()
+                vm.state = .error(type: .unknown, message: "Test error", suggestion: nil)
+                return vm
+            }(), themeEngine: themeEngine)
                 .previewDisplayName("Error")
                 .frame(width: 120, height: 120)
                 .background(Color.black.opacity(0.3))

@@ -8,18 +8,20 @@
 
 import Cocoa
 import SwiftUI
+import Combine
 
 class HaloWindow: NSWindow {
     private var haloHostingView: NSHostingView<HaloView>?
-    private var haloView: HaloView
+    private var haloViewModel: HaloViewModel
     private let themeEngine: ThemeEngine
     private weak var eventHandler: EventHandler?
 
     init(themeEngine: ThemeEngine) {
         self.themeEngine = themeEngine
 
-        // Create HaloView with theme engine (event handler will be set later)
-        haloView = HaloView(themeEngine: themeEngine)
+        // Create HaloViewModel (ObservableObject) and HaloView
+        haloViewModel = HaloViewModel()
+        let haloView = HaloView(viewModel: haloViewModel, themeEngine: themeEngine)
 
         // Initialize window with borderless style
         super.init(
@@ -64,7 +66,7 @@ class HaloWindow: NSWindow {
     /// Set event handler reference for error action callbacks
     func setEventHandler(_ handler: EventHandler) {
         self.eventHandler = handler
-        haloView.eventHandler = handler
+        haloViewModel.eventHandler = handler
     }
 
     func show(at position: NSPoint) {
@@ -118,7 +120,8 @@ class HaloWindow: NSWindow {
     }
 
     func updateState(_ state: HaloState) {
-        haloView.state = state
+        // Update via ViewModel (ObservableObject) to propagate changes to SwiftUI
+        haloViewModel.state = state
 
         // Dynamically resize window based on new state
         let newSize = getWindowSize()
@@ -143,17 +146,17 @@ class HaloWindow: NSWindow {
     /// Update typewriter progress (0.0-1.0)
     func updateTypewriterProgress(_ progress: Float) {
         // Update state with new progress value
-        haloView.state = .typewriting(progress: progress)
+        haloViewModel.state = .typewriting(progress: progress)
     }
 
     // MARK: - Private Helpers
 
     private func getWindowSize() -> NSSize {
-        switch haloView.state {
+        switch haloViewModel.state {
         case .processing(_, let text), .success(let text):
             let width: CGFloat = text != nil ? 300 : 120
             let height: CGFloat
-            if case .processing = haloView.state {
+            if case .processing = haloViewModel.state {
                 height = text != nil ? 200 : 120
             } else {
                 height = text != nil ? 150 : 120
@@ -171,4 +174,11 @@ class HaloWindow: NSWindow {
             return NSSize(width: 120, height: 120)
         }
     }
+}
+
+// MARK: - HaloViewModel (ObservableObject for SwiftUI state propagation)
+
+class HaloViewModel: ObservableObject {
+    @Published var state: HaloState = .idle
+    weak var eventHandler: EventHandler?
 }
