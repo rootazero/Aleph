@@ -245,19 +245,46 @@ struct ProviderEditPanel: View {
                         }
 
                         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                            // Show provider name - editable for custom, fixed for preset
-                            if isCustomProvider && !providerName.isEmpty {
-                                Text(providerName)
-                                    .font(DesignTokens.Typography.title)
-                                    .foregroundColor(DesignTokens.Colors.textPrimary)
-                            } else if !isCustomProvider {
-                                Text(preset.name)
-                                    .font(DesignTokens.Typography.title)
-                                    .foregroundColor(DesignTokens.Colors.textPrimary)
-                            } else {
-                                Text(LocalizedStringKey("provider.custom_provider"))
-                                    .font(DesignTokens.Typography.title)
-                                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                            // Provider name with test button
+                            HStack(spacing: DesignTokens.Spacing.sm) {
+                                // Show provider name - editable for custom, fixed for preset
+                                if isCustomProvider && !providerName.isEmpty {
+                                    Text(providerName)
+                                        .font(DesignTokens.Typography.title)
+                                        .foregroundColor(DesignTokens.Colors.textPrimary)
+                                } else if !isCustomProvider {
+                                    Text(preset.name)
+                                        .font(DesignTokens.Typography.title)
+                                        .foregroundColor(DesignTokens.Colors.textPrimary)
+                                } else {
+                                    Text(LocalizedStringKey("provider.custom_provider"))
+                                        .font(DesignTokens.Typography.title)
+                                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                                }
+
+                                // Test connection button (lightning icon)
+                                if canTestConnection {
+                                    Button(action: testConnection) {
+                                        if isTesting {
+                                            ProgressView()
+                                                .scaleEffect(0.6)
+                                                .frame(width: 20, height: 20)
+                                                .tint(isCustomProvider ? color : (Color(hex: preset.color) ?? DesignTokens.Colors.accentBlue))
+                                        } else {
+                                            Image(systemName: "bolt.fill")
+                                                .font(.system(size: 12, weight: .semibold))
+                                                .foregroundColor(isCustomProvider ? color : (Color(hex: preset.color) ?? DesignTokens.Colors.accentBlue))
+                                                .frame(width: 20, height: 20)
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .strokeBorder((isCustomProvider ? color : (Color(hex: preset.color) ?? DesignTokens.Colors.accentBlue)).opacity(0.3), lineWidth: 1)
+                                    )
+                                    .disabled(isTesting)
+                                    .help(NSLocalizedString("common.test_connection", comment: "Test Connection"))
+                                }
                             }
 
                             Text(getProviderTypeName(preset.providerType))
@@ -267,44 +294,12 @@ struct ProviderEditPanel: View {
 
                         Spacer()
 
-                        // Action buttons area: Two-row layout
-                        // Row 1: Test Connection (left) + Active Toggle (right)
-                        // Row 2: Set as Default Toggle (right-aligned)
+                        // Action buttons area: Single-row layout
+                        // Active Toggle + Set as Default Toggle
                         VStack(alignment: .trailing, spacing: DesignTokens.Spacing.sm) {
-                            // First row: Test Connection + Active toggle
-                            HStack(spacing: DesignTokens.Spacing.md) {
-                                // Test Connection button
-                                Button(action: testConnection) {
-                                    HStack(spacing: 4) {
-                                        if isTesting {
-                                            ProgressView()
-                                                .scaleEffect(0.7)
-                                                .frame(width: 14, height: 14)
-                                        } else {
-                                            Image(systemName: "network")
-                                                .font(.system(size: 12))
-                                        }
-                                        Text(isTesting ? NSLocalizedString("provider.button.testing", comment: "") : NSLocalizedString("common.test_connection", comment: ""))
-                                            .font(.system(size: 12, weight: .medium))
-                                    }
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                                    .background(canTestConnection ? Color(hex: "#007AFF") ?? .blue : DesignTokens.Colors.textSecondary.opacity(0.3))
-                                    .cornerRadius(6)
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(!canTestConnection || isTesting)
-                                .help(canTestConnection ? NSLocalizedString("common.test_connection", comment: "") : "Configure API key and model first")
-
-                                Spacer()
-
-                                // Active toggle (right-aligned)
-                                Toggle(NSLocalizedString("provider.field.active", comment: ""), isOn: $isProviderActive)
-                                    .toggleStyle(.switch)
-                            }
-
-                            // Second row: Set as Default toggle (right-aligned with Active toggle above)
+                            // Active toggle
+                            Toggle(NSLocalizedString("provider.field.active", comment: ""), isOn: $isProviderActive)
+                                .toggleStyle(.switch)
                             if !isAddingNew {
                                 Toggle(isOn: isDefaultBinding) {
                                     Text(NSLocalizedString("provider.action.set_default", comment: "Set as Default"))
