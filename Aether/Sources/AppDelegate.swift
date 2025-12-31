@@ -704,6 +704,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             print("[Aether] Accessibility permission already granted")
         }
     }
+
+    // MARK: - Application Lifecycle
+
+    /// Prevent app from terminating when last window closes
+    /// This is essential for menu bar apps - they should keep running with no windows open
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return false
+    }
 }
 
 // MARK: - NSWindowDelegate Extension
