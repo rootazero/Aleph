@@ -16,6 +16,9 @@ struct ProviderEditPanel: View {
     @Binding var isAddingNew: Bool  // NEW: External control for adding new provider
     @Binding var selectedPreset: PresetProvider?  // NEW: Selected preset provider
 
+    // Default provider state (NEW for default provider management)
+    var defaultProviderId: Binding<String?>? = nil
+
     // MARK: - State
 
     // Form fields - Basic
@@ -231,6 +234,42 @@ struct ProviderEditPanel: View {
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    // "Set as Default" button (NEW for default provider management)
+                    if !isAddingNew, let currentDefault = defaultProviderId?.wrappedValue {
+                        HStack(spacing: DesignTokens.Spacing.sm) {
+                            if currentDefault == providerName {
+                                // Already default - show indicator
+                                HStack(spacing: 4) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(Color(hex: "#007AFF") ?? .blue)
+                                    Text("This is the default provider")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                                }
+                            } else {
+                                // Not default - show "Set as Default" button
+                                Button(action: setAsDefaultProvider) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "star.fill")
+                                            .font(.system(size: 10))
+                                        Text("Set as Default")
+                                            .font(.system(size: 11, weight: .medium))
+                                    }
+                                    .foregroundColor(isProviderActive ? Color(hex: "#007AFF") ?? .blue : DesignTokens.Colors.textSecondary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(isProviderActive ? Color(hex: "#007AFF")?.opacity(0.1) ?? Color.blue.opacity(0.1) : DesignTokens.Colors.textSecondary.opacity(0.1))
+                                    .cornerRadius(4)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(!isProviderActive)
+                                .help(isProviderActive ? "Set this provider as the default for routing" : "Provider must be enabled to set as default")
+                            }
+                        }
+                        .padding(.top, DesignTokens.Spacing.xs)
                     }
                 }
                 .padding(.vertical, DesignTokens.Spacing.sm)
@@ -570,6 +609,25 @@ struct ProviderEditPanel: View {
     }
 
     // MARK: - Actions
+
+    /// Set current provider as default (NEW for default provider management)
+    private func setAsDefaultProvider() {
+        guard !providerName.isEmpty else { return }
+        guard isProviderActive else {
+            print("[ProviderEditPanel] Cannot set disabled provider as default")
+            return
+        }
+
+        do {
+            try core.setDefaultProvider(providerName: providerName)
+            // Update binding to trigger UI refresh
+            defaultProviderId?.wrappedValue = providerName
+            print("[ProviderEditPanel] Set default provider to: \(providerName)")
+        } catch {
+            print("[ProviderEditPanel] Error setting default provider: \(error)")
+            errorMessage = "Failed to set default: \(error.localizedDescription)"
+        }
+    }
 
     /// Load provider data into form (for both new and existing providers)
     private func loadProviderData() {

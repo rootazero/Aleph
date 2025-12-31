@@ -14,6 +14,9 @@ struct SimpleProviderCard: View {
     let testResult: TestResult?
     let onTestConnection: () -> Void
 
+    // Default provider state (NEW for default provider management)
+    var isDefault: Bool = false
+
     /// Test connection result
     enum TestResult {
         case success(String)
@@ -38,6 +41,17 @@ struct SimpleProviderCard: View {
                     .minimumScaleFactor(0.85)
 
                 Spacer()
+
+                // Default badge (NEW for default provider management)
+                if isDefault {
+                    Text("Default")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(hex: "#007AFF") ?? .blue)
+                        .cornerRadius(4)
+                }
 
                 // Test connection button (icon only)
                 Button(action: onTestConnection) {

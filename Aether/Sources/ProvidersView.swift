@@ -27,6 +27,9 @@ struct ProvidersView: View {
     // Selection state - provider name (matches ProviderEditPanel's selectedProvider)
     @State private var selectedProviderId: String?
 
+    // Default provider tracking (NEW for default provider management)
+    @State private var defaultProviderId: String?
+
     // Selected preset provider (for display in edit panel)
     @State private var selectedPreset: PresetProvider?
 
@@ -96,6 +99,11 @@ struct ProvidersView: View {
         return config.config.enabled
     }
 
+    /// Check if a preset provider is the default provider
+    private func isDefault(_ preset: PresetProvider) -> Bool {
+        return defaultProviderId == preset.id
+    }
+
     /// Get configuration for a preset provider
     private func getConfig(for preset: PresetProvider) -> ProviderConfigEntry? {
         return configuredProviders.first { $0.name == preset.id }
@@ -131,7 +139,8 @@ struct ProvidersView: View {
                     providers: $configuredProviders,
                     selectedProvider: $selectedProviderId,
                     isAddingNew: $isAddingNew,
-                    selectedPreset: $selectedPreset
+                    selectedPreset: $selectedPreset,
+                    defaultProviderId: $defaultProviderId
                 )
                 .frame(maxWidth: .infinity)  // Auto-expand to fill remaining space
                 .background(DesignTokens.Colors.contentBackground)
@@ -149,6 +158,7 @@ struct ProvidersView: View {
         .toast($toastData)
         .onAppear {
             loadProviders()
+            loadDefaultProvider()
             // Auto-select first configured provider, or first preset if none configured
             if selectedProviderId == nil {
                 if let firstConfigured = configuredProviders.first?.name {
@@ -228,7 +238,8 @@ struct ProvidersView: View {
                         onTap: { selectProvider(preset.id) },
                         isTesting: testingProviders.contains(preset.id),
                         testResult: testResults[preset.id],
-                        onTestConnection: { testProviderConnection(preset) }
+                        onTestConnection: { testProviderConnection(preset) },
+                        isDefault: isDefault(preset)
                     )
                 }
             }
@@ -271,6 +282,17 @@ struct ProvidersView: View {
                     isLoading = false
                 }
             }
+        }
+    }
+
+    /// Load default provider from config (NEW for default provider management)
+    private func loadDefaultProvider() {
+        do {
+            defaultProviderId = try core.getDefaultProvider()
+            print("[ProvidersView] Default provider loaded: \(defaultProviderId ?? "none")")
+        } catch {
+            print("[ProvidersView] Error loading default provider: \(error)")
+            defaultProviderId = nil
         }
     }
 

@@ -99,6 +99,17 @@
 "provider.custom_api_endpoint" = "OpenAI 兼容 API：%@";
 "provider.custom_compatible" = "自定义 OpenAI 兼容提供商";
 
+// MARK: - Provider Default Selection (默认供应商选择)
+"provider.badge.default" = "默认";
+"provider.action.set_default" = "设为默认";
+"provider.status.is_default" = "这是默认提供商";
+"provider.help.set_default" = "将此提供商设为路由的默认提供商";
+"provider.help.set_default_disabled" = "提供商必须启用才能设为默认";
+"provider.notification.default_changed" = "默认提供商已设为 %@";
+"provider.error.cannot_set_disabled_as_default" = "无法将已禁用的提供商设为默认";
+"provider.error.set_default_failed" = "设置默认提供商失败";
+"provider.warning.default_disabled" = "默认提供商已禁用，正在使用备用提供商。";
+
 "provider.delete.title" = "删除提供商";
 "provider.delete.message" = "您确定要删除「%@」吗？这也会从钥匙串中删除 API 密钥。";
 
@@ -232,6 +243,12 @@
 "menu.settings" = "设置...";
 "menu.quit" = "退出 Aether";
 "menu.about" = "关于 Aether";
+
+// Menu Bar - Default Provider Quick Switch (菜单栏默认供应商快速切换)
+"menu.providers.section_title" = "默认提供商";
+"menu.providers.switch_to" = "切换到 %@";
+"menu.providers.error.failed_to_set" = "设置默认提供商失败";
+"menu.providers.error.message" = "无法将「%@」设为默认提供商。\n\n错误：%@";
 
 // MARK: - Permissions
 "permission.accessibility.title" = "需要辅助功能权限";

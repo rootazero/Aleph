@@ -16,6 +16,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Menu item for Settings (stored separately for enable/disable)
     private var settingsMenuItem: NSMenuItem?
 
+    // Menu separator indices for dynamic providers section
+    private var providersMenuStartIndex: Int?
+    private var providersMenuEndIndex: Int?
+
     // Rust core instance (internal for access from AetherApp)
     // Published to trigger UI updates when initialized
     @Published internal var core: AetherCore?
@@ -99,6 +103,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         ))
         menu.addItem(NSMenuItem.separator())
 
+        // Store separator start index for providers section (will be added later)
+        providersMenuStartIndex = menu.items.count
+
+        // Providers section will be added here dynamically via rebuildProvidersMenu()
+        // Initial menu items: About, Separator, [Providers Section], Separator, Settings, Separator, Quit
+
+        // Mark end of providers section (before Settings)
+        providersMenuEndIndex = menu.items.count
+        menu.addItem(NSMenuItem.separator())
+
         // Create and store Settings menu item for enable/disable control
         settingsMenuItem = NSMenuItem(
             title: NSLocalizedString("menu.settings", comment: "Settings menu item"),
@@ -118,6 +132,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Initially disable Settings menu if permissions not granted
         settingsMenuItem?.isEnabled = !isPermissionGateActive
+
+        // Rebuild providers menu when core is initialized
+        // (will be called later after initializeRustCore)
     }
 
     @objc private func showAbout() {
@@ -173,6 +190,88 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
+    }
+
+    // MARK: - Providers Menu Management (NEW for default provider management)
+
+    /// Rebuild the providers menu section with enabled providers
+    private func rebuildProvidersMenu() {
+        guard let menu = statusItem?.menu else { return }
+        guard let core = core else { return }
+        guard let startIndex = providersMenuStartIndex,
+              let endIndex = providersMenuEndIndex else { return }
+
+        // Remove existing provider menu items (between start and end indices)
+        while menu.items.count > startIndex && menu.items.count > endIndex {
+            menu.removeItem(at: startIndex)
+        }
+
+        // Reset end index
+        providersMenuEndIndex = startIndex
+
+        // Get enabled providers
+        let enabledProviders = core.getEnabledProviders()
+
+        if !enabledProviders.isEmpty {
+            // Get current default provider
+            let defaultProvider = try? core.getDefaultProvider()
+
+            // Add menu items for each enabled provider (sorted alphabetically)
+            for providerName in enabledProviders.sorted() {
+                let item = NSMenuItem(
+                    title: providerName,
+                    action: #selector(selectDefaultProvider(_:)),
+                    keyEquivalent: ""
+                )
+
+                // Add checkmark if this is the default provider
+                if let defaultProvider = defaultProvider, providerName == defaultProvider {
+                    item.state = .on
+                } else {
+                    item.state = .off
+                }
+
+                menu.insertItem(item, at: startIndex + (menu.items.count - startIndex))
+                providersMenuEndIndex = providersMenuEndIndex! + 1
+            }
+
+            print("[AppDelegate] Rebuilt providers menu with \(enabledProviders.count) enabled providers")
+        } else {
+            print("[AppDelegate] No enabled providers, skipping menu section")
+        }
+    }
+
+    /// Handle provider selection from menu bar (set as default)
+    @objc private func selectDefaultProvider(_ sender: NSMenuItem) {
+        let providerName = sender.title
+
+        print("[AppDelegate] User selected provider from menu: \(providerName)")
+
+        guard let core = core else {
+            print("[AppDelegate] ERROR: Core not initialized")
+            return
+        }
+
+        do {
+            try core.setDefaultProvider(providerName: providerName)
+            print("[AppDelegate] ✅ Default provider set to: \(providerName)")
+
+            // Rebuild menu to update checkmark
+            rebuildProvidersMenu()
+
+            // Optional: Show brief notification
+            // (Could add a toast notification here in the future)
+        } catch {
+            print("[AppDelegate] ❌ Error setting default provider: \(error)")
+
+            // Show error alert
+            let alert = NSAlert()
+            alert.messageText = "Failed to set default provider"
+            alert.informativeText = "Could not set '\(providerName)' as default provider.\n\nError: \(error.localizedDescription)"
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
     }
 
     // MARK: - Rust Core Initialization
@@ -244,6 +343,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
             // Update menu bar icon to show active state
             updateMenuBarIcon(state: .listening)
+
+            // Rebuild providers menu now that core is initialized
+            rebuildProvidersMenu()
 
         } catch {
             print("[Aether] ❌ Error initializing core: \(error)")
@@ -413,6 +515,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Initialize Rust core
         initializeRustCore()
+
+        // Observe config changes to rebuild providers menu
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(onConfigChanged),
+            name: NSNotification.Name("AetherConfigSavedInternally"),
+            object: nil
+        )
+    }
+
+    /// Handle config change notification (rebuild providers menu)
+    @objc private func onConfigChanged() {
+        print("[AppDelegate] Config changed, rebuilding providers menu")
+        rebuildProvidersMenu()
     }
 
     // MARK: - Hotkey Handling
