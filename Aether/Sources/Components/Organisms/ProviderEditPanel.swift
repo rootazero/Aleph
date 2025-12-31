@@ -245,51 +245,44 @@ struct ProviderEditPanel: View {
                         }
 
                         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                            // Provider name with test button
-                            HStack(spacing: DesignTokens.Spacing.sm) {
-                                // Show provider name - editable for custom, fixed for preset
-                                if isCustomProvider && !providerName.isEmpty {
-                                    Text(providerName)
-                                        .font(DesignTokens.Typography.title)
-                                        .foregroundColor(DesignTokens.Colors.textPrimary)
-                                } else if !isCustomProvider {
-                                    Text(preset.name)
-                                        .font(DesignTokens.Typography.title)
-                                        .foregroundColor(DesignTokens.Colors.textPrimary)
-                                } else {
-                                    Text(LocalizedStringKey("provider.custom_provider"))
-                                        .font(DesignTokens.Typography.title)
-                                        .foregroundColor(DesignTokens.Colors.textSecondary)
-                                }
-
-                                // Test connection button (lightning icon)
-                                if canTestConnection {
-                                    Button(action: testConnection) {
-                                        if isTesting {
-                                            ProgressView()
-                                                .scaleEffect(0.6)
-                                                .frame(width: 20, height: 20)
-                                                .tint(isCustomProvider ? color : (Color(hex: preset.color) ?? DesignTokens.Colors.accentBlue))
-                                        } else {
-                                            Image(systemName: "bolt.fill")
-                                                .font(.system(size: 12, weight: .semibold))
-                                                .foregroundColor(isCustomProvider ? color : (Color(hex: preset.color) ?? DesignTokens.Colors.accentBlue))
-                                                .frame(width: 20, height: 20)
-                                        }
-                                    }
-                                    .buttonStyle(.plain)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 4)
-                                            .strokeBorder((isCustomProvider ? color : (Color(hex: preset.color) ?? DesignTokens.Colors.accentBlue)).opacity(0.3), lineWidth: 1)
-                                    )
-                                    .disabled(isTesting)
-                                    .help(NSLocalizedString("common.test_connection", comment: "Test Connection"))
-                                }
+                            // Provider name
+                            if isCustomProvider && !providerName.isEmpty {
+                                Text(providerName)
+                                    .font(DesignTokens.Typography.title)
+                                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                            } else if !isCustomProvider {
+                                Text(preset.name)
+                                    .font(DesignTokens.Typography.title)
+                                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                            } else {
+                                Text(LocalizedStringKey("provider.custom_provider"))
+                                    .font(DesignTokens.Typography.title)
+                                    .foregroundColor(DesignTokens.Colors.textSecondary)
                             }
 
-                            Text(getProviderTypeName(preset.providerType))
-                                .font(DesignTokens.Typography.caption)
-                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                            // Test connection button below provider name
+                            Button(action: testConnection) {
+                                HStack(spacing: 4) {
+                                    if isTesting {
+                                        ProgressView()
+                                            .scaleEffect(0.7)
+                                            .frame(width: 14, height: 14)
+                                    } else {
+                                        Image(systemName: "network")
+                                            .font(.system(size: 12))
+                                    }
+                                    Text(isTesting ? NSLocalizedString("provider.button.testing", comment: "") : NSLocalizedString("common.test_connection", comment: ""))
+                                        .font(.system(size: 12, weight: .medium))
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(canTestConnection ? Color(hex: "#007AFF") ?? .blue : DesignTokens.Colors.textSecondary.opacity(0.3))
+                                .cornerRadius(6)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!canTestConnection || isTesting)
+                            .help(canTestConnection ? NSLocalizedString("common.test_connection", comment: "") : "Configure API key and model first")
                         }
 
                         Spacer()
@@ -300,15 +293,16 @@ struct ProviderEditPanel: View {
                             // Active toggle
                             Toggle(NSLocalizedString("provider.field.active", comment: ""), isOn: $isProviderActive)
                                 .toggleStyle(.switch)
-                            if !isAddingNew {
-                                Toggle(isOn: isDefaultBinding) {
-                                    Text(NSLocalizedString("provider.action.set_default", comment: "Set as Default"))
-                                        .font(.system(size: 12, weight: .medium))
-                                }
-                                .toggleStyle(.switch)
-                                .disabled(!isProviderActive)
-                                .help(isProviderActive ? NSLocalizedString("provider.help.set_default", comment: "") : NSLocalizedString("provider.help.set_default_disabled", comment: ""))
+
+                            // Set as Default toggle (always show, disable when inactive or adding new)
+                            Toggle(isOn: isDefaultBinding) {
+                                Text(NSLocalizedString("provider.action.set_default", comment: "Set as Default"))
+                                    .font(.system(size: 12, weight: .medium))
                             }
+                            .toggleStyle(.switch)
+                            .disabled(!isProviderActive || isAddingNew)
+                            .help(isAddingNew ? NSLocalizedString("provider.help.set_default_save_first", comment: "Save provider first") :
+                                  (isProviderActive ? NSLocalizedString("provider.help.set_default", comment: "") : NSLocalizedString("provider.help.set_default_disabled", comment: "")))
                         }
                     }
 
