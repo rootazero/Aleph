@@ -79,11 +79,10 @@ struct UnifiedSaveBar: View {
                 Button(action: onCancel) {
                     Text(LocalizedStringKey("common.cancel"))
                         .font(DesignTokens.Typography.body)
+                        .foregroundColor((hasUnsavedChanges && !isSaving) ? DesignTokens.Colors.textPrimary : DesignTokens.Colors.textSecondary)
                 }
                 .buttonStyle(.plain)
-                .foregroundColor(DesignTokens.Colors.textPrimary)
                 .disabled(!hasUnsavedChanges || isSaving)
-                .opacity((hasUnsavedChanges && !isSaving) ? 1.0 : 0.5)
                 .help("Revert all changes (Esc)")
                 .accessibilityLabel("Cancel changes")
                 .accessibilityHint("Reverts all fields to last saved state")
@@ -109,9 +108,9 @@ struct UnifiedSaveBar: View {
                     .padding(.vertical, DesignTokens.Spacing.sm)
                     .background(
                         RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small)
-                            .fill(hasUnsavedChanges && !isSaving ? DesignTokens.Colors.accentBlue : DesignTokens.Colors.textSecondary.opacity(0.2))
+                            .fill(hasUnsavedChanges && !isSaving ? DesignTokens.Colors.accentBlue : DesignTokens.Colors.textSecondary.opacity(0.15))
                     )
-                    .foregroundColor(.white)
+                    .foregroundColor(hasUnsavedChanges && !isSaving ? .white : DesignTokens.Colors.textSecondary)
                 }
                 .buttonStyle(.plain)
                 .disabled(!hasUnsavedChanges || isSaving)
