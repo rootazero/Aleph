@@ -62,12 +62,30 @@ struct ProviderCard: View {
 
             // Middle: Provider info
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                // Provider name
-                Text(provider.name)
-                    .font(DesignTokens.Typography.heading)
-                    .foregroundColor(DesignTokens.Colors.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                // Provider name with test connection button
+                HStack(spacing: DesignTokens.Spacing.sm) {
+                    Text(provider.name)
+                        .font(DesignTokens.Typography.heading)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    // Test connection button (only show if callback provided and has API key)
+                    if let testConnection = onTestConnection, hasApiKey {
+                        Button(action: testConnection) {
+                            Image(systemName: "bolt.fill")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(Color(hex: provider.config.color) ?? DesignTokens.Colors.accentBlue)
+                                .frame(width: 20, height: 20)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .strokeBorder(Color(hex: provider.config.color)?.opacity(0.3) ?? DesignTokens.Colors.accentBlue.opacity(0.3), lineWidth: 1)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .help(NSLocalizedString("common.test_connection", comment: "Test Connection"))
+                    }
+                }
 
                 // Provider type badge
                 Text(providerTypeName)

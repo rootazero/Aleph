@@ -152,7 +152,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Check if settings window already exists
         if let window = settingsWindow, window.isVisible {
-            // Window exists and is visible, bring to front
+            // Window exists and is visible, reset size to default and bring to front
+            window.setContentSize(NSSize(width: 980, height: 750))
+            window.center()
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -182,7 +184,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Prevent window from hiding when losing focus
         window.hidesOnDeactivate = false
-        window.isReleasedWhenClosed = false
+        // IMPORTANT: Set to true to recreate window with default size on next open
+        window.isReleasedWhenClosed = true
+
+        // Set window delegate to clear reference on close
+        window.delegate = self
 
         // Store window reference
         settingsWindow = window
@@ -694,6 +700,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
         } else {
             print("[Aether] Accessibility permission already granted")
+        }
+    }
+}
+
+// MARK: - NSWindowDelegate Extension
+
+extension AppDelegate: NSWindowDelegate {
+    /// Called when settings window is about to close
+    /// Clear the window reference to ensure next open creates a fresh window with default size
+    func windowWillClose(_ notification: Notification) {
+        if let window = notification.object as? NSWindow, window == settingsWindow {
+            print("[AppDelegate] Settings window closing, clearing reference")
+            settingsWindow = nil
         }
     }
 }

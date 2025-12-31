@@ -360,9 +360,6 @@ struct ProviderEditPanel: View {
                         .onChange(of: apiKey) {
                             testResult = nil // Clear test result when API key changes
                         }
-                    Text(LocalizedStringKey("provider.help.api_key"))
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
             }
 
