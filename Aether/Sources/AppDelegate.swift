@@ -180,15 +180,32 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Remove default safe area insets added by NSHostingController
         hostingController.safeAreaRegions = []
 
-        let window = NSWindow(contentViewController: hostingController)
+        // IMPORTANT: Create window WITHOUT contentViewController first
+        // This prevents SwiftUI from auto-sizing the window based on content
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 980, height: 750),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+
         window.title = "Settings"
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
 
-        // Set minimum and initial size
+        // CRITICAL: Set constraints BEFORE setting contentViewController
+        // This ensures SwiftUI cannot override our size settings
         window.minSize = NSSize(width: 980, height: 750)
+        window.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+
+        // Set initial content size (will be enforced by minSize)
         window.setContentSize(NSSize(width: 980, height: 750))
+
+        // NOW set the content view controller
+        // SwiftUI will adapt to the window size, not the other way around
+        window.contentViewController = hostingController
+
+        // Center after all size settings are applied
         window.center()
 
         // Prevent window from hiding when losing focus
