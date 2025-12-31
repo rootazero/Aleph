@@ -577,12 +577,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func handleHotkeyPressed() {
         print("[AppDelegate] Hotkey pressed - handling in Swift layer")
 
-        // CRITICAL: Record clipboard state BEFORE copying
-        // This allows us to detect if user had selected text
-        let oldChangeCount = ClipboardManager.shared.changeCount()
-        let oldClipboardText = ClipboardManager.shared.getText()
+        // CRITICAL: Save original clipboard content to restore later
+        // This protects user's pre-existing clipboard data
+        let originalClipboardText = ClipboardManager.shared.getText()
+        let originalChangeCount = ClipboardManager.shared.changeCount()
+        print("[AppDelegate] 💾 Saved original clipboard state (changeCount: \(originalChangeCount))")
 
-        // Simulate Cmd+C to copy selected text (if any)
+        // Step 1: Try to copy selected text with Cmd+C
         print("[AppDelegate] Simulating Cmd+C to copy selected text...")
         KeyboardSimulator.shared.simulateCopy()
 
@@ -590,30 +591,54 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         Thread.sleep(forTimeInterval: 0.1)  // 100ms delay
 
         // Check if clipboard changed (means there was selected text)
-        let newChangeCount = ClipboardManager.shared.changeCount()
-        let hasSelectedText = (newChangeCount != oldChangeCount)
+        let afterCopyChangeCount = ClipboardManager.shared.changeCount()
+        let hasSelectedText = (afterCopyChangeCount != originalChangeCount)
 
-        if hasSelectedText {
-            print("[AppDelegate] ✓ Detected selected text, using new clipboard content")
+        if !hasSelectedText {
+            // Step 2: No selected text detected, try Cmd+A to select all
+            print("[AppDelegate] ⚠️ No selected text detected, trying Cmd+A to select all...")
+            KeyboardSimulator.shared.simulateSelectAll()
+            Thread.sleep(forTimeInterval: 0.05)  // 50ms delay
+
+            // Copy again after selecting all
+            KeyboardSimulator.shared.simulateCopy()
+            Thread.sleep(forTimeInterval: 0.1)  // 100ms delay
+
+            let afterSelectAllChangeCount = ClipboardManager.shared.changeCount()
+            if afterSelectAllChangeCount == afterCopyChangeCount {
+                print("[AppDelegate] ❌ No text content found even after Cmd+A")
+                // Restore original clipboard
+                if let original = originalClipboardText {
+                    ClipboardManager.shared.setText(original)
+                }
+
+                // Show error
+                DispatchQueue.main.async { [weak self] in
+                    self?.haloWindow?.show(at: NSEvent.mouseLocation)
+                    self?.haloWindow?.updateState(.error(
+                        type: .unknown,
+                        message: NSLocalizedString("error.no_text_in_window", comment: "No text content in current window"),
+                        suggestion: NSLocalizedString("error.no_text_in_window.suggestion", comment: "Please open a text document first")
+                    ))
+                    // Auto-hide after 2 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                        self?.haloWindow?.hide()
+                    }
+                }
+                return
+            } else {
+                print("[AppDelegate] ✓ Selected all text in current window")
+            }
         } else {
-            print("[AppDelegate] ⚠ No selected text detected, using old clipboard content")
+            print("[AppDelegate] ✓ Detected selected text")
         }
 
-        // Get clipboard content using Swift ClipboardManager
+        // Get the captured clipboard content
         guard let clipboardText = ClipboardManager.shared.getText() else {
-            print("[AppDelegate] No text in clipboard, ignoring hotkey")
-            // Show brief error indication
-            DispatchQueue.main.async { [weak self] in
-                self?.haloWindow?.show(at: NSEvent.mouseLocation)
-                self?.haloWindow?.updateState(.error(
-                    type: .unknown,
-                    message: NSLocalizedString("error.no_clipboard_text", comment: "No text in clipboard"),
-                    suggestion: NSLocalizedString("error.no_clipboard_text.suggestion", comment: "Please select text first")
-                ))
-                // Auto-hide after 2 seconds
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                    self?.haloWindow?.hide()
-                }
+            print("[AppDelegate] ❌ Clipboard is empty after copy operation")
+            // Restore original clipboard
+            if let original = originalClipboardText {
+                ClipboardManager.shared.setText(original)
             }
             return
         }
@@ -708,6 +733,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                             // Clear cancellation token
                             self.typewriterCancellation = nil
 
+                            // CRITICAL: Restore original clipboard after a small delay
+                            // This ensures user's pre-existing clipboard data is not lost
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                if let original = originalClipboardText {
+                                    ClipboardManager.shared.setText(original)
+                                    print("[AppDelegate] ♻️ Restored original clipboard content")
+                                } else {
+                                    ClipboardManager.shared.clear()
+                                    print("[AppDelegate] ♻️ Cleared clipboard (original was empty)")
+                                }
+                            }
+
                             // Update Halo to success state
                             DispatchQueue.main.async { [weak self] in
                                 self?.haloWindow?.updateState(.success(finalText: String(truncatedResponse.prefix(100))))
@@ -721,11 +758,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                             // Fall back to instant paste if typewriter fails
                             ClipboardManager.shared.setText(truncatedResponse)
                             KeyboardSimulator.shared.simulatePaste()
+
+                            // Restore original clipboard after paste completes
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                if let original = originalClipboardText {
+                                    ClipboardManager.shared.setText(original)
+                                    print("[AppDelegate] ♻️ Restored original clipboard content (after error)")
+                                }
+                            }
                         }
                     }
                 }
             } catch {
                 print("[AppDelegate] ❌ Error processing input: \(error)")
+
+                // CRITICAL: Restore original clipboard on error
+                DispatchQueue.main.async {
+                    if let original = originalClipboardText {
+                        ClipboardManager.shared.setText(original)
+                        print("[AppDelegate] ♻️ Restored original clipboard content (after AI error)")
+                    }
+                }
 
                 // For AetherException, the error details have already been sent via callback
                 // in Rust before throwing the exception. We just need to log it here.

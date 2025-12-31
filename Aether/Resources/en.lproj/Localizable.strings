@@ -299,6 +299,8 @@
 "error.aether" = "Aether Error";
 "error.no_clipboard_text" = "No text in clipboard";
 "error.no_clipboard_text.suggestion" = "Please select text first";
+"error.no_text_in_window" = "No text content in current window";
+"error.no_text_in_window.suggestion" = "Please open a text document first";
 "error.core_not_initialized" = "Core not initialized";
 "error.core_not_initialized.suggestion" = "Please restart the app";
 "error.check_connection" = "Please check network connection and API configuration";
