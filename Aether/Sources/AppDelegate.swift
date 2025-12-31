@@ -162,6 +162,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
+        // CRITICAL: Check if core is initialized before opening settings
+        guard let core = core else {
+            print("[Aether] ERROR: Core not initialized, cannot open settings")
+
+            // Show error alert
+            let alert = NSAlert()
+            alert.messageText = NSLocalizedString("error.core_not_initialized", comment: "")
+            alert.informativeText = "Aether核心未初始化，请等待权限授予后重试。"
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
+            alert.runModal()
+            return
+        }
+
         // Check if settings window already exists and is valid
         // First check if reference exists and window is still alive (not released)
         if let window = settingsWindow {
@@ -358,14 +372,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // IMPORTANT: Initialize Swift-based global hotkey monitor
             // This replaces the Rust-based EventTapListener to avoid thread conflicts
             print("[Aether] Initializing Swift-based global hotkey monitor...")
-            hotkeyMonitor = GlobalHotkeyMonitor { [weak self] in
-                // When ` key is detected, handle it in Swift layer
+
+            // Load hotkey configuration from config
+            let hotkeyMode = loadHotkeyConfiguration()
+            hotkeyMonitor = GlobalHotkeyMonitor(hotkeyMode: hotkeyMode) { [weak self] in
                 self?.handleHotkeyPressed()
             }
 
             // Start monitoring for hotkey
             if hotkeyMonitor?.startMonitoring() == true {
-                print("[Aether] ✅ Global hotkey monitoring started successfully (` key)")
+                print("[Aether] ✅ Global hotkey monitoring started successfully (\(hotkeyMode.displayString))")
             } else {
                 print("[Aether] ❌ Failed to start global hotkey monitoring")
                 // Fall back to showing permission gate
@@ -584,6 +600,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func handleHotkeyPressed() {
         print("[AppDelegate] Hotkey pressed - handling in Swift layer")
 
+        // CRITICAL: Block hotkey if permission gate is active or core not initialized
+        // This prevents "noise prompt" and unnecessary clipboard operations
+        if isPermissionGateActive {
+            print("[AppDelegate] ⚠️ Hotkey blocked - permission gate is active")
+            NSSound.beep()
+            return
+        }
+
+        guard core != nil else {
+            print("[AppDelegate] ⚠️ Hotkey blocked - core not initialized")
+            NSSound.beep()
+            return
+        }
+
         // CRITICAL: Save original clipboard content to restore later
         // This protects user's pre-existing clipboard data
         let originalClipboardText = ClipboardManager.shared.getText()
@@ -602,39 +632,69 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let hasSelectedText = (afterCopyChangeCount != originalChangeCount)
 
         if !hasSelectedText {
-            // Step 2: No selected text detected, try Cmd+A to select all
-            print("[AppDelegate] ⚠️ No selected text detected, trying Cmd+A to select all...")
-            KeyboardSimulator.shared.simulateSelectAll()
-            Thread.sleep(forTimeInterval: 0.05)  // 50ms delay
+            // Step 2: No selected text detected
+            // Try elegant Accessibility API first (silent, no visible selection)
+            print("[AppDelegate] ⚠️ No selected text detected, trying Accessibility API to read window text...")
 
-            // Copy again after selecting all
-            KeyboardSimulator.shared.simulateCopy()
-            Thread.sleep(forTimeInterval: 0.1)  // 100ms delay
+            let accessibilityResult = AccessibilityTextReader.shared.readFocusedText()
 
-            let afterSelectAllChangeCount = ClipboardManager.shared.changeCount()
-            if afterSelectAllChangeCount == afterCopyChangeCount {
-                print("[AppDelegate] ❌ No text content found even after Cmd+A")
-                // Restore original clipboard
-                if let original = originalClipboardText {
-                    ClipboardManager.shared.setText(original)
-                }
+            switch accessibilityResult {
+            case .success(let text):
+                // Successfully read text via Accessibility API!
+                print("[AppDelegate] ✅ Read text via Accessibility API (\(text.count) chars) - completely silent!")
+                // Temporarily set the text to clipboard for processing
+                ClipboardManager.shared.setText(text)
 
-                // Show error
-                DispatchQueue.main.async { [weak self] in
-                    self?.haloWindow?.show(at: NSEvent.mouseLocation)
-                    self?.haloWindow?.updateState(.error(
-                        type: .unknown,
-                        message: NSLocalizedString("error.no_text_in_window", comment: "No text content in current window"),
-                        suggestion: NSLocalizedString("error.no_text_in_window.suggestion", comment: "Please open a text document first")
-                    ))
-                    // Auto-hide after 2 seconds
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                        self?.haloWindow?.hide()
+            case .noTextContent, .noFocusedElement, .unsupported:
+                // Accessibility API couldn't get text, fallback to Cmd+A
+                print("[AppDelegate] ⚠️ Accessibility API failed, falling back to Cmd+A method...")
+                KeyboardSimulator.shared.simulateSelectAll()
+                Thread.sleep(forTimeInterval: 0.05)  // 50ms delay
+
+                // Copy again after selecting all
+                KeyboardSimulator.shared.simulateCopy()
+                Thread.sleep(forTimeInterval: 0.1)  // 100ms delay
+
+                let afterSelectAllChangeCount = ClipboardManager.shared.changeCount()
+                if afterSelectAllChangeCount == afterCopyChangeCount {
+                    print("[AppDelegate] ❌ No text content found even after Cmd+A")
+                    // Restore original clipboard
+                    if let original = originalClipboardText {
+                        ClipboardManager.shared.setText(original)
                     }
+
+                    // Show error
+                    DispatchQueue.main.async { [weak self] in
+                        self?.haloWindow?.show(at: NSEvent.mouseLocation)
+                        self?.haloWindow?.updateState(.error(
+                            type: .unknown,
+                            message: NSLocalizedString("error.no_text_in_window", comment: "No text content in current window"),
+                            suggestion: NSLocalizedString("error.no_text_in_window.suggestion", comment: "Please open a text document first")
+                        ))
+                        // Auto-hide after 2 seconds
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                            self?.haloWindow?.hide()
+                        }
+                    }
+                    return
+                } else {
+                    print("[AppDelegate] ✓ Selected all text in current window (via Cmd+A)")
                 }
-                return
-            } else {
-                print("[AppDelegate] ✓ Selected all text in current window")
+
+            case .accessibilityDenied:
+                // This shouldn't happen as we check permissions at startup
+                print("[AppDelegate] ❌ Accessibility permission denied, using Cmd+A fallback")
+                KeyboardSimulator.shared.simulateSelectAll()
+                Thread.sleep(forTimeInterval: 0.05)
+                KeyboardSimulator.shared.simulateCopy()
+                Thread.sleep(forTimeInterval: 0.1)
+
+            case .error(let message):
+                print("[AppDelegate] ❌ Accessibility error: \(message), using Cmd+A fallback")
+                KeyboardSimulator.shared.simulateSelectAll()
+                Thread.sleep(forTimeInterval: 0.05)
+                KeyboardSimulator.shared.simulateCopy()
+                Thread.sleep(forTimeInterval: 0.1)
             }
         } else {
             print("[AppDelegate] ✓ Detected selected text")
@@ -820,6 +880,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             } catch {
                 print("[AppDelegate] ❌ Error processing input: \(error)")
 
+                // CRITICAL: Clear clipboard monitor history to prevent error messages from being used as context
+                ClipboardMonitor.shared.clearHistory()
+                print("[AppDelegate] 🗑️ Cleared clipboard monitor history after error")
+
                 // CRITICAL: Restore original clipboard on error
                 DispatchQueue.main.async {
                     if let original = originalClipboardText {
@@ -894,6 +958,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 self?.haloWindow?.hide()
             }
         }
+    }
+
+    // MARK: - Hotkey Configuration
+
+    /// Load hotkey configuration from config file
+    /// - Returns: The configured hotkey mode, or default (double-tap Space) if not configured
+    private func loadHotkeyConfiguration() -> HotkeyMode {
+        // Try to load from user config
+        let configPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/aether/config.toml")
+
+        if FileManager.default.fileExists(atPath: configPath.path) {
+            do {
+                let content = try String(contentsOf: configPath, encoding: .utf8)
+
+                // Parse [shortcuts] section for summon key
+                if let summonLine = content.split(separator: "\n").first(where: { $0.hasPrefix("summon") }) {
+                    let value = summonLine
+                        .split(separator: "=")
+                        .last?
+                        .trimmingCharacters(in: .whitespaces)
+                        .replacingOccurrences(of: "\"", with: "")
+                        ?? ""
+
+                    if let mode = HotkeyMode.from(configString: value) {
+                        print("[Aether] Loaded hotkey from config: \(mode.displayString)")
+                        return mode
+                    }
+                }
+            } catch {
+                print("[Aether] Failed to read config file: \(error)")
+            }
+        }
+
+        // Default: double-tap Space
+        print("[Aether] Using default hotkey: double-tap Space")
+        return .default
+    }
+
+    /// Update hotkey configuration at runtime
+    func updateHotkeyConfiguration(_ mode: HotkeyMode) {
+        hotkeyMonitor?.updateHotkey(mode)
+        print("[AppDelegate] Hotkey updated to: \(mode.displayString)")
     }
 
     // MARK: - Accessibility Permission Check (Legacy - now using PermissionGate)

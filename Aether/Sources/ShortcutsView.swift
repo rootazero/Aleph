@@ -3,6 +3,7 @@
 //  Aether
 //
 //  Keyboard shortcuts configuration tab with hotkey recorder.
+//  Supports double-tap Space (default) and custom modifier + key combos.
 //
 
 import SwiftUI
@@ -11,8 +12,8 @@ import AppKit
 struct ShortcutsView: View {
     @ObservedObject var saveBarState: SettingsSaveBarState
 
-    @State private var currentHotkey: Hotkey?
-    @State private var showingPresets = false
+    @State private var currentHotkeyMode: HotkeyMode = .default
+    @State private var showingCustomHotkeyRecorder = false
     @State private var conflictWarning: String?
     @State private var showingSaveConfirmation = false
 
@@ -37,15 +38,49 @@ struct ShortcutsView: View {
                         .foregroundColor(DesignTokens.Colors.textPrimary)
 
                     VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                        // Current hotkey display
                         HStack {
-                            Text(LocalizedStringKey("settings.shortcuts.summon_label"))
+                            Text("当前热键")
                                 .font(DesignTokens.Typography.body)
-                                .frame(width: 120, alignment: .leading)
+                                .frame(width: 80, alignment: .leading)
+
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(DesignTokens.Colors.cardBackground)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .stroke(DesignTokens.Colors.accentBlue.opacity(0.3), lineWidth: 1)
+                                    )
+                                    .frame(height: 36)
+
+                                Text(currentHotkeyMode.displayString)
+                                    .font(.system(.body, design: .monospaced))
+                                    .fontWeight(.medium)
+                                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                            }
+                            .frame(minWidth: 200)
+
                             Spacer()
                         }
 
-                        HotkeyRecorderView(hotkey: $currentHotkey) { newHotkey in
-                            handleHotkeyChange(newHotkey)
+                        // Mode description
+                        switch currentHotkeyMode {
+                        case .doubleTap:
+                            HStack(spacing: DesignTokens.Spacing.sm) {
+                                Image(systemName: "info.circle")
+                                    .foregroundColor(DesignTokens.Colors.accentBlue)
+                                Text("快速双击空格键触发 Aether，第一次按键会正常输入空格")
+                                    .font(DesignTokens.Typography.caption)
+                                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                            }
+                        case .modifierCombo:
+                            HStack(spacing: DesignTokens.Spacing.sm) {
+                                Image(systemName: "info.circle")
+                                    .foregroundColor(DesignTokens.Colors.accentBlue)
+                                Text("按下组合键触发 Aether")
+                                    .font(DesignTokens.Typography.caption)
+                                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                            }
                         }
 
                         // Conflict warning
@@ -63,14 +98,17 @@ struct ShortcutsView: View {
                             .cornerRadius(DesignTokens.CornerRadius.small)
                         }
 
+                        Divider()
+                            .padding(.vertical, DesignTokens.Spacing.sm)
+
                         // Action buttons
                         HStack(spacing: DesignTokens.Spacing.md) {
-                            ActionButton(NSLocalizedString("settings.shortcuts.reset_button", comment: ""), style: .secondary) {
+                            ActionButton("恢复默认", style: .secondary) {
                                 resetToDefault()
                             }
 
-                            ActionButton(NSLocalizedString("settings.shortcuts.preset_button", comment: ""), style: .secondary) {
-                                showingPresets = true
+                            ActionButton("自定义热键", style: .secondary) {
+                                showingCustomHotkeyRecorder = true
                             }
 
                             Spacer()
@@ -81,7 +119,54 @@ struct ShortcutsView: View {
                                     .font(DesignTokens.Typography.caption)
                             }
                         }
-                        .padding(.top, DesignTokens.Spacing.sm)
+                    }
+                }
+                .padding(DesignTokens.Spacing.md)
+                .background(DesignTokens.Colors.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
+
+                // Preset Shortcuts Card
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                    Label("预设快捷键", systemImage: "star")
+                        .font(DesignTokens.Typography.heading)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                    VStack(spacing: DesignTokens.Spacing.sm) {
+                        PresetHotkeyRow(
+                            name: "双击空格键",
+                            mode: .default,
+                            description: "默认设置，无输入法冲突",
+                            isSelected: currentHotkeyMode == .default
+                        ) {
+                            applyHotkey(.default)
+                        }
+
+                        PresetHotkeyRow(
+                            name: "⌘ + `",
+                            mode: .modifierCombo(keyCode: 50, modifiers: .maskCommand),
+                            description: "Command + 反引号",
+                            isSelected: currentHotkeyMode == .modifierCombo(keyCode: 50, modifiers: .maskCommand)
+                        ) {
+                            applyHotkey(.modifierCombo(keyCode: 50, modifiers: .maskCommand))
+                        }
+
+                        PresetHotkeyRow(
+                            name: "⌥ + ␣",
+                            mode: .modifierCombo(keyCode: 49, modifiers: .maskAlternate),
+                            description: "Option + 空格",
+                            isSelected: currentHotkeyMode == .modifierCombo(keyCode: 49, modifiers: .maskAlternate)
+                        ) {
+                            applyHotkey(.modifierCombo(keyCode: 49, modifiers: .maskAlternate))
+                        }
+
+                        PresetHotkeyRow(
+                            name: "⌃ + ⌘ + A",
+                            mode: .modifierCombo(keyCode: 0, modifiers: [.maskControl, .maskCommand]),
+                            description: "Control + Command + A",
+                            isSelected: currentHotkeyMode == .modifierCombo(keyCode: 0, modifiers: [.maskControl, .maskCommand])
+                        ) {
+                            applyHotkey(.modifierCombo(keyCode: 0, modifiers: [.maskControl, .maskCommand]))
+                        }
                     }
                 }
                 .padding(DesignTokens.Spacing.md)
@@ -130,10 +215,10 @@ struct ShortcutsView: View {
             .padding(DesignTokens.Spacing.lg)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .sheet(isPresented: $showingPresets) {
-            PresetShortcutsSheet(selectedHotkey: $currentHotkey) { hotkey in
-                handleHotkeyChange(hotkey)
-                showingPresets = false
+        .sheet(isPresented: $showingCustomHotkeyRecorder) {
+            CustomHotkeyRecorderSheet { newMode in
+                applyHotkey(newMode)
+                showingCustomHotkeyRecorder = false
             }
         }
         .onAppear {
@@ -150,105 +235,138 @@ struct ShortcutsView: View {
     }
 
     private func loadCurrentHotkey() {
-        // Load from config - default is single-key backtick
-        currentHotkey = Hotkey(modifiers: [], keyCode: 50, character: "`")
-    }
+        // Load from config file
+        let configPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/aether/config.toml")
 
-    private func handleHotkeyChange(_ newHotkey: Hotkey?) {
-        guard let hotkey = newHotkey else {
-            conflictWarning = nil
-            return
+        if FileManager.default.fileExists(atPath: configPath.path) {
+            do {
+                let content = try String(contentsOf: configPath, encoding: .utf8)
+                if let summonLine = content.split(separator: "\n").first(where: { $0.hasPrefix("summon") }) {
+                    let value = summonLine
+                        .split(separator: "=")
+                        .last?
+                        .trimmingCharacters(in: .whitespaces)
+                        .replacingOccurrences(of: "\"", with: "")
+                        ?? ""
+
+                    if let mode = HotkeyMode.from(configString: value) {
+                        currentHotkeyMode = mode
+                        return
+                    }
+                }
+            } catch {
+                print("[ShortcutsView] Failed to read config: \(error)")
+            }
         }
 
-        // Check for conflicts (will show warning for single-key if not default)
-        conflictWarning = HotkeyConflictDetector.detectConflict(for: hotkey, isDefault: false)
-
-        // Save to config
-        saveHotkey(hotkey)
+        // Default
+        currentHotkeyMode = .default
     }
 
-    private func saveHotkey(_ hotkey: Hotkey) {
-        // TODO: Save to config via Rust core
-        // For now, just show confirmation
-        print("Saving hotkey: \(hotkey.configString)")
+    private func applyHotkey(_ mode: HotkeyMode) {
+        currentHotkeyMode = mode
+        conflictWarning = detectConflict(for: mode)
+        saveHotkey(mode)
 
-        showingSaveConfirmation = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            showingSaveConfirmation = false
+        // Update the running hotkey monitor
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            appDelegate.updateHotkeyConfiguration(mode)
+        }
+    }
+
+    private func detectConflict(for mode: HotkeyMode) -> String? {
+        // Check for common system hotkey conflicts
+        switch mode {
+        case .doubleTap:
+            return nil // Double-tap is safe
+
+        case .modifierCombo(let keyCode, let modifiers):
+            // Check Command+Space (Spotlight)
+            if keyCode == 49 && modifiers == .maskCommand {
+                return "此快捷键可能与 Spotlight 冲突"
+            }
+            // Check Option+Space (some input methods)
+            if keyCode == 49 && modifiers == .maskAlternate {
+                return "此快捷键可能与某些输入法冲突"
+            }
+            // Check Control+Space (input method switch)
+            if keyCode == 49 && modifiers == .maskControl {
+                return "此快捷键可能与输入法切换冲突"
+            }
+            return nil
+        }
+    }
+
+    private func saveHotkey(_ mode: HotkeyMode) {
+        // Save to config file
+        let configPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/aether/config.toml")
+
+        do {
+            var content = ""
+            if FileManager.default.fileExists(atPath: configPath.path) {
+                content = try String(contentsOf: configPath, encoding: .utf8)
+            }
+
+            // Update or add summon line in [shortcuts] section
+            let newSummon = "summon = \"\(mode.configString)\""
+
+            if content.contains("summon = ") {
+                // Replace existing summon line
+                content = content.replacingOccurrences(
+                    of: #"summon = \"[^\"]*\""#,
+                    with: newSummon,
+                    options: .regularExpression
+                )
+            } else if content.contains("[shortcuts]") {
+                // Add after [shortcuts] section
+                content = content.replacingOccurrences(
+                    of: "[shortcuts]",
+                    with: "[shortcuts]\n\(newSummon)"
+                )
+            } else {
+                // Add new section
+                content += "\n\n[shortcuts]\n\(newSummon)\n"
+            }
+
+            try content.write(to: configPath, atomically: true, encoding: .utf8)
+            print("[ShortcutsView] Saved hotkey: \(mode.configString)")
+
+            showingSaveConfirmation = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                showingSaveConfirmation = false
+            }
+        } catch {
+            print("[ShortcutsView] Failed to save hotkey: \(error)")
         }
     }
 
     private func resetToDefault() {
-        // Default is single-key backtick (no modifiers)
-        currentHotkey = Hotkey(modifiers: [], keyCode: 50, character: "`")
-        // Don't show conflict warning for default
-        conflictWarning = nil
-        saveHotkey(currentHotkey!)
+        applyHotkey(.default)
     }
 
     private func openAccessibilitySettings() {
-        // Open System Settings to Accessibility preferences
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }
     }
 }
 
-/// Preset shortcuts selection sheet
-struct PresetShortcutsSheet: View {
-    @Binding var selectedHotkey: Hotkey?
-    let onSelect: (Hotkey) -> Void
-    @Environment(\.dismiss) private var dismiss
+// MARK: - Preset Hotkey Row
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-            HStack {
-                Text(LocalizedStringKey("settings.shortcuts.preset_sheet_title"))
-                    .font(DesignTokens.Typography.title)
-                    .foregroundColor(DesignTokens.Colors.textPrimary)
-                Spacer()
-                Button(LocalizedStringKey("common.close")) {
-                    dismiss()
-                }
-            }
-
-            Text(LocalizedStringKey("settings.shortcuts.preset_sheet_description"))
-                .font(DesignTokens.Typography.caption)
-                .foregroundColor(DesignTokens.Colors.textSecondary)
-
-            Divider()
-
-            ScrollView {
-                VStack(spacing: DesignTokens.Spacing.sm) {
-                    ForEach(PresetShortcut.presets) { preset in
-                        PresetShortcutRow(
-                            preset: preset,
-                            isSelected: selectedHotkey == preset.hotkey
-                        ) {
-                            onSelect(preset.hotkey)
-                        }
-                    }
-                }
-            }
-        }
-        .padding(DesignTokens.Spacing.lg)
-        .frame(width: 600, height: 500)
-    }
-}
-
-/// Row view for a single preset shortcut
-struct PresetShortcutRow: View {
-    let preset: PresetShortcut
+struct PresetHotkeyRow: View {
+    let name: String
+    let mode: HotkeyMode
+    let description: String
     let isSelected: Bool
     let onSelect: () -> Void
-
-    @State private var conflictWarning: String?
 
     var body: some View {
         HStack(spacing: DesignTokens.Spacing.md) {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                 HStack(spacing: DesignTokens.Spacing.sm) {
-                    Text(preset.hotkey.displayString)
+                    Text(name)
                         .font(DesignTokens.Typography.code)
                         .fontWeight(.semibold)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
@@ -259,12 +377,90 @@ struct PresetShortcutRow: View {
                     }
                 }
 
-                Text(preset.description)
+                Text(description)
                     .font(DesignTokens.Typography.caption)
                     .foregroundColor(DesignTokens.Colors.textSecondary)
+            }
 
-                if let warning = conflictWarning {
-                    Label(warning, systemImage: "exclamationmark.triangle")
+            Spacer()
+
+            ActionButton("使用", style: .primary, isDisabled: isSelected) {
+                onSelect()
+            }
+        }
+        .padding(DesignTokens.Spacing.sm)
+        .background(isSelected ? DesignTokens.Colors.accentBlue.opacity(0.1) : Color.clear)
+        .cornerRadius(DesignTokens.CornerRadius.small)
+    }
+}
+
+// MARK: - Custom Hotkey Recorder Sheet
+
+struct CustomHotkeyRecorderSheet: View {
+    let onSelect: (HotkeyMode) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var isRecording = false
+    @State private var recordedHotkey: HotkeyMode?
+    @State private var errorMessage: String?
+    @State private var eventMonitor: Any?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+            HStack {
+                Text("自定义热键")
+                    .font(DesignTokens.Typography.title)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                Spacer()
+                Button("取消") {
+                    stopRecording()
+                    dismiss()
+                }
+            }
+
+            Text("按下您想要的组合键。必须包含至少一个修饰键（⌘⌥⇧⌃）")
+                .font(DesignTokens.Typography.body)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
+
+            Divider()
+
+            // Recording area
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isRecording ? DesignTokens.Colors.accentBlue.opacity(0.1) : DesignTokens.Colors.cardBackground)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(isRecording ? DesignTokens.Colors.accentBlue : DesignTokens.Colors.border, lineWidth: 2)
+                    )
+                    .frame(height: 80)
+
+                VStack(spacing: DesignTokens.Spacing.sm) {
+                    if isRecording {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("请按下组合键...")
+                                .font(DesignTokens.Typography.body)
+                                .foregroundColor(DesignTokens.Colors.accentBlue)
+                        }
+                    } else if let hotkey = recordedHotkey {
+                        Text(hotkey.displayString)
+                            .font(.system(size: 24, weight: .bold, design: .monospaced))
+                            .foregroundColor(DesignTokens.Colors.textPrimary)
+                    } else {
+                        Text("点击下方按钮开始录制")
+                            .font(DesignTokens.Typography.body)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+                }
+            }
+
+            // Error message
+            if let error = errorMessage {
+                HStack(spacing: DesignTokens.Spacing.sm) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundColor(DesignTokens.Colors.warning)
+                    Text(error)
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.warning)
                 }
@@ -272,15 +468,76 @@ struct PresetShortcutRow: View {
 
             Spacer()
 
-            ActionButton(NSLocalizedString("settings.shortcuts.use_this_button", comment: ""), style: .primary, isDisabled: isSelected) {
-                onSelect()
+            // Action buttons
+            HStack(spacing: DesignTokens.Spacing.md) {
+                if isRecording {
+                    ActionButton("停止录制", style: .secondary) {
+                        stopRecording()
+                    }
+                } else {
+                    ActionButton("开始录制", icon: "record.circle", style: .primary) {
+                        startRecording()
+                    }
+                }
+
+                Spacer()
+
+                if let hotkey = recordedHotkey, !isRecording {
+                    ActionButton("应用此热键", icon: "checkmark.circle", style: .primary) {
+                        onSelect(hotkey)
+                    }
+                }
             }
         }
-        .padding(DesignTokens.Spacing.md)
-        .background(isSelected ? DesignTokens.Colors.accentBlue.opacity(0.15) : DesignTokens.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
-        .onAppear {
-            conflictWarning = HotkeyConflictDetector.detectConflict(for: preset.hotkey, isDefault: false)
+        .padding(DesignTokens.Spacing.lg)
+        .frame(width: 450, height: 300)
+        .onDisappear {
+            stopRecording()
         }
+    }
+
+    private func startRecording() {
+        isRecording = true
+        errorMessage = nil
+        recordedHotkey = nil
+
+        // Monitor for key events
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+            handleKeyEvent(event)
+            return nil // Consume the event
+        }
+    }
+
+    private func stopRecording() {
+        isRecording = false
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+            eventMonitor = nil
+        }
+    }
+
+    private func handleKeyEvent(_ event: NSEvent) {
+        // Get modifiers
+        let flags = event.modifierFlags
+        var cgFlags: CGEventFlags = []
+
+        if flags.contains(.command) { cgFlags.insert(.maskCommand) }
+        if flags.contains(.option) { cgFlags.insert(.maskAlternate) }
+        if flags.contains(.shift) { cgFlags.insert(.maskShift) }
+        if flags.contains(.control) { cgFlags.insert(.maskControl) }
+
+        // Require at least one modifier
+        if cgFlags.isEmpty {
+            errorMessage = "必须包含至少一个修饰键（⌘⌥⇧⌃）"
+            NSSound.beep()
+            return
+        }
+
+        // Record the hotkey
+        let keyCode = event.keyCode
+        recordedHotkey = .modifierCombo(keyCode: keyCode, modifiers: cgFlags)
+        errorMessage = nil
+
+        stopRecording()
     }
 }
