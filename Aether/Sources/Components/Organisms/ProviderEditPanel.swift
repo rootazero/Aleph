@@ -274,10 +274,10 @@ struct ProviderEditPanel: View {
                                     Text(isTesting ? NSLocalizedString("provider.button.testing", comment: "") : NSLocalizedString("common.test_connection", comment: ""))
                                         .font(.system(size: 12, weight: .medium))
                                 }
-                                .foregroundColor(.white)
+                                .foregroundColor(canTestConnection ? .white : DesignTokens.Colors.textSecondary)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
-                                .background(canTestConnection ? Color(hex: "#007AFF") ?? .blue : DesignTokens.Colors.textSecondary.opacity(0.3))
+                                .background(canTestConnection ? Color(hex: "#007AFF") ?? .blue : DesignTokens.Colors.textSecondary.opacity(0.15))
                                 .cornerRadius(6)
                             }
                             .buttonStyle(.plain)
