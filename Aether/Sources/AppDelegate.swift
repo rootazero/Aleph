@@ -164,7 +164,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Pass core (may be nil if not initialized yet, RootContentView will handle gracefully)
         let settingsView = RootContentView(core: core)
             .environmentObject(self)
-            .frame(minWidth: 980, minHeight: 750)
 
         let hostingController = NSHostingController(rootView: settingsView)
 
@@ -176,10 +175,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Settings"
-        window.setContentSize(NSSize(width: 980, height: 750))
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+
+        // Set minimum and initial size
+        window.minSize = NSSize(width: 980, height: 750)
+        window.setContentSize(NSSize(width: 980, height: 750))
         window.center()
 
         // Prevent window from hiding when losing focus
