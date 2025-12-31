@@ -56,7 +56,8 @@ struct SidebarWithTrafficLights: View {
                     TrafficLightButton(color: .yellow, action: WindowController.shared.minimize)
                     TrafficLightButton(color: .green, action: WindowController.shared.toggleFullscreen)
                 }
-                .padding(.leading, 10)  // Reduced from 18 to account for outer padding
+                .padding(.leading, 10)  // Left padding from sidebar edge
+                .padding(.top, 8)       // Top padding from rounded rectangle border (8pt from edge)
 
                 // Logo section
                 VStack(spacing: 6) {
