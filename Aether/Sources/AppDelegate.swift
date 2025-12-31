@@ -175,7 +175,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Settings"
         window.setContentSize(NSSize(width: 980, height: 750))
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.center()

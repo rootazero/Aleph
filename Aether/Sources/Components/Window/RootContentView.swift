@@ -59,8 +59,9 @@ struct RootContentView: View {
             // Right: Content area
             contentArea
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.windowBackground)
-        .ignoresSafeArea()  // Use new API instead of deprecated edgesIgnoringSafeArea
+        .ignoresSafeArea(.all, edges: .all)  // Explicitly ignore all safe areas on all edges
         .hideNativeTrafficLights()
         .onAppear {
             loadProviders()
