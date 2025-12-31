@@ -1370,6 +1370,48 @@ impl AetherCore {
             },
         }
     }
+
+    // DEFAULT PROVIDER MANAGEMENT METHODS (Phase 3.3 - add-default-provider-selection)
+
+    /// Get the current default provider (if exists and enabled)
+    ///
+    /// Returns None if:
+    /// - No default provider is configured
+    /// - Default provider does not exist
+    /// - Default provider is disabled
+    pub fn get_default_provider(&self) -> Option<String> {
+        let config = self.config.lock().unwrap();
+        config.get_default_provider()
+    }
+
+    /// Set the default provider (validates that provider exists and is enabled)
+    ///
+    /// # Arguments
+    /// * `provider_name` - The name of the provider to set as default
+    ///
+    /// # Returns
+    /// * `Ok(())` - Successfully set default provider
+    /// * `Err` - Provider not found or disabled
+    pub fn set_default_provider(&self, provider_name: String) -> Result<()> {
+        let mut config = self.config.lock().unwrap();
+        config.set_default_provider(&provider_name)?;
+        config.save()?;
+
+        // Notify event handler of config change
+        self.event_handler.on_config_changed();
+
+        info!(provider = %provider_name, "Default provider updated");
+        Ok(())
+    }
+
+    /// Get list of all enabled provider names (sorted alphabetically)
+    ///
+    /// # Returns
+    /// * `Vec<String>` - List of enabled provider names
+    pub fn get_enabled_providers(&self) -> Vec<String> {
+        let config = self.config.lock().unwrap();
+        config.get_enabled_providers()
+    }
 }
 
 /// Helper struct for async memory storage operations

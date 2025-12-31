@@ -77,6 +77,10 @@ void uniffi_aethecore_fn_method_aethercore_delete_memory(void*_Nonnull ptr, Rust
 );
 void uniffi_aethecore_fn_method_aethercore_delete_provider(void*_Nonnull ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
 );
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_default_provider(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_enabled_providers(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_log_directory(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_log_level(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -96,6 +100,8 @@ void uniffi_aethecore_fn_method_aethercore_retry_last_request(void*_Nonnull ptr,
 RustBuffer uniffi_aethecore_fn_method_aethercore_search_memories(void*_Nonnull ptr, RustBuffer app_bundle_id, RustBuffer window_title, uint32_t limit, RustCallStatus *_Nonnull out_status
 );
 void uniffi_aethecore_fn_method_aethercore_set_current_context(void*_Nonnull ptr, RustBuffer context, RustCallStatus *_Nonnull out_status
+);
+void uniffi_aethecore_fn_method_aethercore_set_default_provider(void*_Nonnull ptr, RustBuffer provider_name, RustCallStatus *_Nonnull out_status
 );
 void uniffi_aethecore_fn_method_aethercore_set_log_level(void*_Nonnull ptr, RustBuffer level, RustCallStatus *_Nonnull out_status
 );
@@ -254,6 +260,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_delete_memory(void
 uint16_t uniffi_aethecore_checksum_method_aethercore_delete_provider(void
     
 );
+uint16_t uniffi_aethecore_checksum_method_aethercore_get_default_provider(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethercore_get_enabled_providers(void
+    
+);
 uint16_t uniffi_aethecore_checksum_method_aethercore_get_log_directory(void
     
 );
@@ -282,6 +294,9 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_search_memories(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_set_current_context(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_aethercore_set_default_provider(void
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_set_log_level(void

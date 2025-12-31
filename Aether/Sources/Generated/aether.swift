@@ -428,6 +428,8 @@ public protocol AetherCoreProtocol {
     func clearRequestContext()  
     func deleteMemory(id: String)  throws
     func deleteProvider(name: String)  throws
+    func getDefaultProvider()   -> String?
+    func getEnabledProviders()   -> [String]
     func getLogDirectory()  throws -> String
     func getLogLevel()   -> LogLevel
     func getMemoryConfig()   -> MemoryConfig
@@ -438,6 +440,7 @@ public protocol AetherCoreProtocol {
     func retryLastRequest()  throws
     func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32)  throws -> [MemoryEntry]
     func setCurrentContext(context: CapturedContext)  
+    func setDefaultProvider(providerName: String)  throws
     func setLogLevel(level: LogLevel)  throws
     func storeInteractionMemory(userInput: String, aiOutput: String)  throws -> String
     func storeRequestContext(clipboardContent: String, provider: String)  
@@ -526,6 +529,28 @@ public class AetherCore: AetherCoreProtocol {
         FfiConverterString.lower(name),$0
     )
 }
+    }
+
+    public func getDefaultProvider()  -> String? {
+        return try!  FfiConverterOptionString.lift(
+            try! 
+    rustCall() {
+    
+    uniffi_aethecore_fn_method_aethercore_get_default_provider(self.pointer, $0
+    )
+}
+        )
+    }
+
+    public func getEnabledProviders()  -> [String] {
+        return try!  FfiConverterSequenceString.lift(
+            try! 
+    rustCall() {
+    
+    uniffi_aethecore_fn_method_aethercore_get_enabled_providers(self.pointer, $0
+    )
+}
+        )
     }
 
     public func getLogDirectory() throws -> String {
@@ -631,6 +656,15 @@ public class AetherCore: AetherCoreProtocol {
     
     uniffi_aethecore_fn_method_aethercore_set_current_context(self.pointer, 
         FfiConverterTypeCapturedContext.lower(context),$0
+    )
+}
+    }
+
+    public func setDefaultProvider(providerName: String) throws {
+        try 
+    rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_set_default_provider(self.pointer, 
+        FfiConverterString.lower(providerName),$0
     )
 }
     }
@@ -2710,6 +2744,12 @@ private var initializationResult: InitializationResult {
     if (uniffi_aethecore_checksum_method_aethercore_delete_provider() != 54495) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_get_default_provider() != 24946) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_enabled_providers() != 10198) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_get_log_directory() != 19967) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2738,6 +2778,9 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_set_current_context() != 13853) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_set_default_provider() != 32296) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_set_log_level() != 50110) {

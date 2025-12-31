@@ -910,6 +910,81 @@ impl Config {
     pub fn save(&self) -> Result<()> {
         self.save_to_file(Self::default_path())
     }
+
+    /// Get the default provider if it exists and is enabled
+    ///
+    /// Returns None if:
+    /// - No default provider is configured
+    /// - Default provider does not exist in providers map
+    /// - Default provider is disabled
+    ///
+    /// # Returns
+    /// * `Some(String)` - The name of the enabled default provider
+    /// * `None` - No valid default provider
+    pub fn get_default_provider(&self) -> Option<String> {
+        self.general.default_provider.as_ref().and_then(|name| {
+            self.providers.get(name).and_then(|config| {
+                if config.enabled {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+        })
+    }
+
+    /// Set the default provider with validation
+    ///
+    /// Validates that:
+    /// - Provider exists in providers map
+    /// - Provider is enabled
+    ///
+    /// # Arguments
+    /// * `name` - The name of the provider to set as default
+    ///
+    /// # Returns
+    /// * `Ok(())` - Successfully set default provider
+    /// * `Err(AetherError::InvalidConfig)` - Provider not found or disabled
+    pub fn set_default_provider(&mut self, name: &str) -> Result<()> {
+        match self.providers.get(name) {
+            Some(config) if config.enabled => {
+                debug!(provider = %name, "Setting default provider");
+                self.general.default_provider = Some(name.to_string());
+                Ok(())
+            }
+            Some(_) => {
+                error!(provider = %name, "Cannot set disabled provider as default");
+                Err(AetherError::invalid_config(format!(
+                    "Provider '{}' is not enabled",
+                    name
+                )))
+            }
+            None => {
+                error!(provider = %name, "Provider not found in config");
+                Err(AetherError::invalid_config(format!(
+                    "Provider '{}' not found",
+                    name
+                )))
+            }
+        }
+    }
+
+    /// Get list of all enabled provider names
+    ///
+    /// Returns provider names in alphabetical order
+    ///
+    /// # Returns
+    /// * `Vec<String>` - List of enabled provider names
+    pub fn get_enabled_providers(&self) -> Vec<String> {
+        let mut providers: Vec<String> = self
+            .providers
+            .iter()
+            .filter(|(_, cfg)| cfg.enabled)
+            .map(|(name, _)| name.clone())
+            .collect();
+        providers.sort();
+        providers
+    }
 }
 
 #[cfg(test)]

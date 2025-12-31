@@ -159,6 +159,18 @@ interface AetherCore {
   // Test provider connection with temporary configuration (without persisting to disk)
   TestConnectionResult test_provider_connection_with_config(string provider_name, ProviderConfig provider_config);
 
+  // DEFAULT PROVIDER MANAGEMENT (Phase 3.3 - add-default-provider-selection)
+
+  // Get the current default provider (returns None if no default or if disabled)
+  string? get_default_provider();
+
+  // Set the default provider (validates that provider exists and is enabled)
+  [Throws=AetherException]
+  void set_default_provider(string provider_name);
+
+  // Get list of all enabled provider names (sorted alphabetically)
+  sequence<string> get_enabled_providers();
+
   // REMOVED: Image clipboard methods - now handled by Swift ClipboardManager
   // - has_clipboard_image()
   // - read_clipboard_image()
