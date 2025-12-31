@@ -608,11 +608,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
-        guard core != nil else {
+        guard let core = core else {
             print("[AppDelegate] ⚠️ Hotkey blocked - core not initialized")
             NSSound.beep()
             return
         }
+
+        // Load input_mode from config (cut or copy)
+        // Default to "cut" if not configured
+        var inputMode = "cut"
+        do {
+            let config = try core.loadConfig()
+            if let behavior = config.behavior {
+                inputMode = behavior.inputMode
+            }
+        } catch {
+            print("[AppDelegate] ⚠️ Failed to load config, using default input_mode=cut: \(error)")
+        }
+        let useCutMode = (inputMode == "cut")
+        print("[AppDelegate] 📋 Input mode: \(inputMode) (useCutMode: \(useCutMode))")
 
         // CRITICAL: Save original clipboard content to restore later
         // This protects user's pre-existing clipboard data
@@ -620,9 +634,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let originalChangeCount = ClipboardManager.shared.changeCount()
         print("[AppDelegate] 💾 Saved original clipboard state (changeCount: \(originalChangeCount))")
 
-        // Step 1: Try to copy selected text with Cmd+C
-        print("[AppDelegate] Simulating Cmd+C to copy selected text...")
-        KeyboardSimulator.shared.simulateCopy()
+        // Step 1: Try to cut/copy selected text based on input_mode
+        if useCutMode {
+            print("[AppDelegate] Simulating Cmd+X to cut selected text...")
+            KeyboardSimulator.shared.simulateCut()
+        } else {
+            print("[AppDelegate] Simulating Cmd+C to copy selected text...")
+            KeyboardSimulator.shared.simulateCopy()
+        }
 
         // Wait for clipboard to update (macOS needs a small delay)
         Thread.sleep(forTimeInterval: 0.1)  // 100ms delay
@@ -651,8 +670,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 KeyboardSimulator.shared.simulateSelectAll()
                 Thread.sleep(forTimeInterval: 0.05)  // 50ms delay
 
-                // Copy again after selecting all
-                KeyboardSimulator.shared.simulateCopy()
+                // Cut/Copy again after selecting all (based on input_mode)
+                if useCutMode {
+                    KeyboardSimulator.shared.simulateCut()
+                } else {
+                    KeyboardSimulator.shared.simulateCopy()
+                }
                 Thread.sleep(forTimeInterval: 0.1)  // 100ms delay
 
                 let afterSelectAllChangeCount = ClipboardManager.shared.changeCount()
@@ -686,14 +709,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 print("[AppDelegate] ❌ Accessibility permission denied, using Cmd+A fallback")
                 KeyboardSimulator.shared.simulateSelectAll()
                 Thread.sleep(forTimeInterval: 0.05)
-                KeyboardSimulator.shared.simulateCopy()
+                if useCutMode {
+                    KeyboardSimulator.shared.simulateCut()
+                } else {
+                    KeyboardSimulator.shared.simulateCopy()
+                }
                 Thread.sleep(forTimeInterval: 0.1)
 
             case .error(let message):
                 print("[AppDelegate] ❌ Accessibility error: \(message), using Cmd+A fallback")
                 KeyboardSimulator.shared.simulateSelectAll()
                 Thread.sleep(forTimeInterval: 0.05)
-                KeyboardSimulator.shared.simulateCopy()
+                if useCutMode {
+                    KeyboardSimulator.shared.simulateCut()
+                } else {
+                    KeyboardSimulator.shared.simulateCopy()
+                }
                 Thread.sleep(forTimeInterval: 0.1)
             }
         } else {
