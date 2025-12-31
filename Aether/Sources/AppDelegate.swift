@@ -152,7 +152,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Check if settings window already exists
         if let window = settingsWindow, window.isVisible {
-            // Window exists and is visible, reset size to default and bring to front
+            // Window exists and is visible, reset to minimum size and bring to front
             window.setContentSize(NSSize(width: 980, height: 750))
             window.center()
             window.makeKeyAndOrderFront(nil)
