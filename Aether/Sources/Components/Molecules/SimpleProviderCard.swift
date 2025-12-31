@@ -40,6 +40,29 @@ struct SimpleProviderCard: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
 
+                // Test connection button (only show if configured)
+                if isConfigured {
+                    Button(action: onTestConnection) {
+                        if isTesting {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                                .frame(width: 20, height: 20)
+                                .tint(Color(hex: preset.color) ?? DesignTokens.Colors.accentBlue)
+                        } else {
+                            Image(systemName: "bolt.fill")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(Color(hex: preset.color) ?? DesignTokens.Colors.accentBlue)
+                                .frame(width: 20, height: 20)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(Color(hex: preset.color)?.opacity(0.3) ?? DesignTokens.Colors.accentBlue.opacity(0.3), lineWidth: 1)
+                    )
+                    .help(NSLocalizedString("common.test_connection", comment: "Test Connection"))
+                }
+
                 Spacer()
 
                 // Status indicator (visual only, no test button in card)

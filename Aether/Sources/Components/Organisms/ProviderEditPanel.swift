@@ -188,6 +188,15 @@ struct ProviderEditPanel: View {
         }
         .onChange(of: isSaving) { _, _ in updateSaveBarState() }
         .onChange(of: errorMessage) { _, _ in updateSaveBarState() }
+        // Monitor form field changes to update save bar state
+        .onChange(of: providerName) { _, _ in updateSaveBarState() }
+        .onChange(of: apiKey) { _, _ in updateSaveBarState() }
+        .onChange(of: model) { _, _ in updateSaveBarState() }
+        .onChange(of: baseURL) { _, _ in updateSaveBarState() }
+        .onChange(of: color) { _, _ in updateSaveBarState() }
+        .onChange(of: isProviderActive) { _, _ in updateSaveBarState() }
+        .onChange(of: temperature) { _, _ in updateSaveBarState() }
+        .onChange(of: maxTokens) { _, _ in updateSaveBarState() }
         .onAppear {
             updateSaveBarState()
         }
