@@ -53,6 +53,26 @@ struct ProviderEditPanel: View {
     // Provider active state
     @State private var isProviderActive: Bool = false
 
+    // Saved state for change detection (NEW)
+    @State private var savedProviderName: String = ""
+    @State private var savedProviderType: String = "openai"
+    @State private var savedApiKey: String = ""
+    @State private var savedModel: String = ""
+    @State private var savedBaseURL: String = ""
+    @State private var savedColor: Color = .blue
+    @State private var savedTimeoutSeconds: String = "30"
+    @State private var savedMaxTokens: String = ""
+    @State private var savedTemperature: String = ""
+    @State private var savedTopP: String = ""
+    @State private var savedTopK: String = ""
+    @State private var savedFrequencyPenalty: String = ""
+    @State private var savedPresencePenalty: String = ""
+    @State private var savedStopSequences: String = ""
+    @State private var savedThinkingLevel: String = "HIGH"
+    @State private var savedMediaResolution: String = "MEDIUM"
+    @State private var savedRepeatPenalty: String = ""
+    @State private var savedIsProviderActive: Bool = false
+
     // UI state
     @State private var isSaving: Bool = false
     @State private var isTesting: Bool = false
@@ -536,13 +556,29 @@ struct ProviderEditPanel: View {
 
     /// Check if form has unsaved changes (simplified version)
     private var hasUnsavedFormChanges: Bool {
-        // For now, consider form "dirty" if any field is non-empty
-        // TODO: Implement proper working copy vs saved state comparison
         if isAddingNew {
+            // For new providers, consider "dirty" if any field is non-empty
             return !providerName.isEmpty || !model.isEmpty || !apiKey.isEmpty
         } else {
-            // For existing providers, always consider as potentially changed
-            return true
+            // For existing providers, compare current state with saved state
+            return providerName != savedProviderName ||
+                   providerType != savedProviderType ||
+                   apiKey != savedApiKey ||
+                   model != savedModel ||
+                   baseURL != savedBaseURL ||
+                   color != savedColor ||
+                   timeoutSeconds != savedTimeoutSeconds ||
+                   maxTokens != savedMaxTokens ||
+                   temperature != savedTemperature ||
+                   topP != savedTopP ||
+                   topK != savedTopK ||
+                   frequencyPenalty != savedFrequencyPenalty ||
+                   presencePenalty != savedPresencePenalty ||
+                   stopSequences != savedStopSequences ||
+                   thinkingLevel != savedThinkingLevel ||
+                   mediaResolution != savedMediaResolution ||
+                   repeatPenalty != savedRepeatPenalty ||
+                   isProviderActive != savedIsProviderActive
         }
     }
 
@@ -719,6 +755,31 @@ struct ProviderEditPanel: View {
 
         // Load API key from config
         apiKey = provider.config.apiKey ?? ""
+
+        // Save current state as baseline for change detection
+        saveSavedState()
+    }
+
+    /// Save current form state as the baseline for change detection
+    private func saveSavedState() {
+        savedProviderName = providerName
+        savedProviderType = providerType
+        savedApiKey = apiKey
+        savedModel = model
+        savedBaseURL = baseURL
+        savedColor = color
+        savedTimeoutSeconds = timeoutSeconds
+        savedMaxTokens = maxTokens
+        savedTemperature = temperature
+        savedTopP = topP
+        savedTopK = topK
+        savedFrequencyPenalty = frequencyPenalty
+        savedPresencePenalty = presencePenalty
+        savedStopSequences = stopSequences
+        savedThinkingLevel = thinkingLevel
+        savedMediaResolution = mediaResolution
+        savedRepeatPenalty = repeatPenalty
+        savedIsProviderActive = isProviderActive
     }
 
     /// Load preset defaults for unconfigured provider
@@ -912,6 +973,9 @@ struct ProviderEditPanel: View {
                     isAddingNew = false
 
                     isSaving = false
+
+                    // Update saved state after successful save
+                    saveSavedState()
 
                     // Notify that configuration was saved internally
                     // This prevents ConfigWatcher from triggering a full view rebuild
