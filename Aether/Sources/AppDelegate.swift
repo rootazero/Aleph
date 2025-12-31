@@ -171,12 +171,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Pass core (may be nil if not initialized yet, RootContentView will handle gracefully)
         let settingsView = RootContentView(core: core)
             .environmentObject(self)
+            .fixedSize(horizontal: false, vertical: false)  // CRITICAL: Tell SwiftUI NOT to use intrinsic size
 
         let hostingController = NSHostingController(rootView: settingsView)
 
         // CRITICAL: Disable NSHostingController's automatic window sizing
         // This prevents SwiftUI from auto-adjusting the window based on content
         hostingController.sizingOptions = []
+
+        // CRITICAL: Set preferred content size to prevent auto-sizing
+        hostingController.preferredContentSize = NSSize(width: 980, height: 750)
 
         // CRITICAL: Remove safe area insets to ensure content starts at window edge
         hostingController.view.wantsLayer = true
@@ -198,15 +202,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         window.titleVisibility = .hidden
 
         // CRITICAL: Set constraints BEFORE setting contentViewController
-        // This ensures SwiftUI cannot override our size settings
+        // Use both minSize and contentMinSize for double protection
         window.minSize = NSSize(width: 980, height: 750)
+        window.contentMinSize = NSSize(width: 980, height: 750)
         window.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
 
         // Set initial content size (will be enforced by minSize)
         window.setContentSize(NSSize(width: 980, height: 750))
 
+        // CRITICAL: Constrain the frame rect to enforce size limits
+        let constrainedFrame = window.constrainFrameRect(window.frame, to: NSScreen.main)
+        window.setFrame(constrainedFrame, display: false)
+
         print("[AppDelegate] Window constraints set:")
         print("  - minSize: \(window.minSize)")
+        print("  - contentMinSize: \(window.contentMinSize)")
         print("  - maxSize: \(window.maxSize)")
         print("  - contentSize: \(window.frame.size)")
 
@@ -241,11 +251,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // IMPORTANT: Force window size constraints after showing
         // Some SwiftUI layouts may try to adjust size after first layout pass
         DispatchQueue.main.async {
-            window.setContentSize(NSSize(width: 980, height: 750))
+            // Force the exact size first
+            window.setFrame(NSRect(origin: window.frame.origin, size: NSSize(width: 980, height: 750)), display: true)
+
+            // Then reapply all constraints
             window.minSize = NSSize(width: 980, height: 750)
+            window.contentMinSize = NSSize(width: 980, height: 750)
+            window.setContentSize(NSSize(width: 980, height: 750))
+
             print("[AppDelegate] Final window size enforced:")
             print("  - frame size: \(window.frame.size)")
             print("  - minSize: \(window.minSize)")
+            print("  - contentMinSize: \(window.contentMinSize)")
         }
     }
 
