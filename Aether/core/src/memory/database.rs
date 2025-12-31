@@ -65,7 +65,7 @@ impl VectorDatabase {
         // Serialize embedding to bytes
         let embedding_bytes = Self::serialize_embedding(&embedding);
 
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             r#"
             INSERT INTO memories (id, app_bundle_id, window_title, user_input, ai_output, embedding, timestamp)
@@ -94,7 +94,7 @@ impl VectorDatabase {
         query_embedding: &[f32],
         limit: u32,
     ) -> Result<Vec<MemoryEntry>, AetherError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Query memories matching the context
         let mut stmt = conn
@@ -166,7 +166,7 @@ impl VectorDatabase {
 
     /// Delete memory by ID
     pub async fn delete_memory(&self, id: &str) -> Result<(), AetherError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let rows_affected = conn
             .execute("DELETE FROM memories WHERE id = ?1", params![id])
             .map_err(|e| AetherError::config(format!("Failed to delete memory: {}", e)))?;
@@ -184,7 +184,7 @@ impl VectorDatabase {
         app_bundle_id: Option<&str>,
         window_title: Option<&str>,
     ) -> Result<u64, AetherError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         let (query, params_vec): (String, Vec<&str>) = match (app_bundle_id, window_title) {
             (Some(app), Some(window)) => (
@@ -216,7 +216,7 @@ impl VectorDatabase {
 
     /// Get database statistics
     pub async fn get_stats(&self) -> Result<MemoryStats, AetherError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Count total memories
         let total_memories: u64 = conn
@@ -261,7 +261,7 @@ impl VectorDatabase {
 
     /// Delete memories older than timestamp (for retention policy)
     pub async fn delete_older_than(&self, cutoff_timestamp: i64) -> Result<u64, AetherError> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let rows_affected = conn
             .execute(
                 "DELETE FROM memories WHERE timestamp < ?1",

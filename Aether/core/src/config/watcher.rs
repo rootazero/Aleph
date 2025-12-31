@@ -119,7 +119,7 @@ impl ConfigWatcher {
     /// // Config file is now being watched...
     /// ```
     pub fn start(&self) -> Result<()> {
-        let mut debouncer_lock = self.debouncer.lock().unwrap();
+        let mut debouncer_lock = self.debouncer.lock().unwrap_or_else(|e| e.into_inner());
 
         // Check if already started
         if debouncer_lock.is_some() {
@@ -194,7 +194,7 @@ impl ConfigWatcher {
     /// watcher.stop()?;
     /// ```
     pub fn stop(&self) -> Result<()> {
-        let mut debouncer_lock = self.debouncer.lock().unwrap();
+        let mut debouncer_lock = self.debouncer.lock().unwrap_or_else(|e| e.into_inner());
 
         if debouncer_lock.is_none() {
             return Err(AetherError::config("Watcher not started"));
@@ -210,7 +210,7 @@ impl ConfigWatcher {
     /// Check if the watcher is currently running (test only)
     #[cfg(test)]
     pub fn is_running(&self) -> bool {
-        self.debouncer.lock().unwrap().is_some()
+        self.debouncer.lock().unwrap_or_else(|e| e.into_inner()).is_some()
     }
 }
 
