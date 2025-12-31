@@ -168,28 +168,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
 
         // Create new settings window with RootContentView
-        // Pass core (may be nil if not initialized yet, RootContentView will handle gracefully)
         let settingsView = RootContentView(core: core)
             .environmentObject(self)
-            .fixedSize(horizontal: false, vertical: false)  // CRITICAL: Tell SwiftUI NOT to use intrinsic size
 
         let hostingController = NSHostingController(rootView: settingsView)
+        hostingController.sizingOptions = []  // Disable auto-sizing
 
-        // CRITICAL: Disable NSHostingController's automatic window sizing
-        // This prevents SwiftUI from auto-adjusting the window based on content
-        hostingController.sizingOptions = []
-
-        // CRITICAL: Set preferred content size to prevent auto-sizing
-        hostingController.preferredContentSize = NSSize(width: 980, height: 750)
-
-        // CRITICAL: Remove safe area insets to ensure content starts at window edge
-        hostingController.view.wantsLayer = true
-        hostingController.view.layer?.masksToBounds = false
-        // Remove default safe area insets added by NSHostingController
-        hostingController.safeAreaRegions = []
-
-        // IMPORTANT: Create window WITHOUT contentViewController first
-        // This prevents SwiftUI from auto-sizing the window based on content
+        // Create window with explicit size
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 980, height: 750),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -200,70 +185,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         window.title = "Settings"
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-
-        // CRITICAL: Set constraints BEFORE setting contentViewController
-        // Use both minSize and contentMinSize for double protection
-        window.minSize = NSSize(width: 980, height: 750)
-        window.contentMinSize = NSSize(width: 980, height: 750)
-        window.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-
-        // Set initial content size (will be enforced by minSize)
-        window.setContentSize(NSSize(width: 980, height: 750))
-
-        // CRITICAL: Constrain the frame rect to enforce size limits
-        let constrainedFrame = window.constrainFrameRect(window.frame, to: NSScreen.main)
-        window.setFrame(constrainedFrame, display: false)
-
-        print("[AppDelegate] Window constraints set:")
-        print("  - minSize: \(window.minSize)")
-        print("  - contentMinSize: \(window.contentMinSize)")
-        print("  - maxSize: \(window.maxSize)")
-        print("  - contentSize: \(window.frame.size)")
-
-        // NOW set the content view controller
-        // SwiftUI will adapt to the window size, not the other way around
         window.contentViewController = hostingController
 
-        print("[AppDelegate] After setting contentViewController:")
-        print("  - frame size: \(window.frame.size)")
-        print("  - contentSize: \(window.contentLayoutRect.size)")
-        print("  - minSize: \(window.minSize)")
-
-        // Center after all size settings are applied
+        // Set size constraints
+        window.minSize = NSSize(width: 980, height: 750)
         window.center()
 
-        // Prevent window from hiding when losing focus
+        // Window management
         window.hidesOnDeactivate = false
-        // IMPORTANT: Do NOT auto-release window on close to prevent crashes
-        // We manually manage window lifecycle in windowWillClose
         window.isReleasedWhenClosed = false
-
-        // Set window delegate to clear reference on close
         window.delegate = self
 
-        // Store window reference
         settingsWindow = window
-
-        // Show window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-
-        // IMPORTANT: Force window size constraints after showing
-        // Some SwiftUI layouts may try to adjust size after first layout pass
-        DispatchQueue.main.async {
-            // Force the exact size first
-            window.setFrame(NSRect(origin: window.frame.origin, size: NSSize(width: 980, height: 750)), display: true)
-
-            // Then reapply all constraints
-            window.minSize = NSSize(width: 980, height: 750)
-            window.contentMinSize = NSSize(width: 980, height: 750)
-            window.setContentSize(NSSize(width: 980, height: 750))
-
-            print("[AppDelegate] Final window size enforced:")
-            print("  - frame size: \(window.frame.size)")
-            print("  - minSize: \(window.minSize)")
-            print("  - contentMinSize: \(window.contentMinSize)")
-        }
     }
 
     @objc private func quit() {
