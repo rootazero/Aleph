@@ -79,6 +79,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Stop hotkey monitoring
         hotkeyMonitor?.stopMonitoring()
 
+        // Stop clipboard monitoring
+        ClipboardMonitor.shared.stopMonitoring()
+
         // Remove ESC key monitor
         removeEscapeKeyMonitor()
 
@@ -550,6 +553,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Setup ESC key monitor for cancelling typewriter
         setupEscapeKeyMonitor()
 
+        // Start clipboard monitoring for context tracking
+        ClipboardMonitor.shared.startMonitoring()
+        print("[Aether] Clipboard monitoring started for context tracking")
+
         // Initialize Rust core
         initializeRustCore()
 
@@ -645,9 +652,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         print("[AppDelegate] Clipboard text: \(clipboardText.prefix(50))...")
 
-        // Capture current context
-        let context = ContextCapture.captureContext()
-        print("[AppDelegate] Context: app=\(context.bundleId ?? "unknown"), window=\(context.windowTitle ?? "nil")")
+        // IMPORTANT: Check for recent clipboard content (within 10 seconds)
+        // This allows us to use previous clipboard as additional context
+        let recentClipboardContent = ClipboardMonitor.shared.getRecentClipboardContent()
+        let clipboardContext: String? = {
+            // Only use clipboard as context if:
+            // 1. We have recent clipboard content
+            // 2. It's different from current text
+            // 3. It's not empty
+            guard let recentContent = recentClipboardContent,
+                  !recentContent.isEmpty,
+                  recentContent != clipboardText else {
+                return nil
+            }
+            return recentContent
+        }()
+
+        if let context = clipboardContext {
+            print("[AppDelegate] 📋 Found clipboard context (\(context.count) chars, within 10s)")
+        } else {
+            print("[AppDelegate] No clipboard context to use")
+        }
+
+        // Capture current window context
+        let windowContext = ContextCapture.captureContext()
+        print("[AppDelegate] Context: app=\(windowContext.bundleId ?? "unknown"), window=\(windowContext.windowTitle ?? "nil")")
 
         // Show Halo at cursor position
         DispatchQueue.main.async { [weak self] in
@@ -676,15 +705,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             do {
                 // Create captured context for Rust
                 let capturedContext = CapturedContext(
-                    appBundleId: context.bundleId ?? "unknown",
-                    windowTitle: context.windowTitle
+                    appBundleId: windowContext.bundleId ?? "unknown",
+                    windowTitle: windowContext.windowTitle
                 )
+
+                // CRITICAL: Construct user input with clipboard context if available
+                // This provides additional context to the AI for better responses
+                let userInput: String
+                if let clipContext = clipboardContext {
+                    // Format: Current text + Clipboard context
+                    userInput = """
+                    Current content:
+                    \(clipboardText)
+
+                    Clipboard context (recent copy):
+                    \(clipContext)
+                    """
+                    print("[AppDelegate] 🤖 Sending to AI: current text (\(clipboardText.count) chars) + clipboard context (\(clipContext.count) chars)")
+                } else {
+                    // No clipboard context, just send current text
+                    userInput = clipboardText
+                    print("[AppDelegate] 🤖 Sending to AI: current text only (\(clipboardText.count) chars)")
+                }
 
                 // Call Rust core's process_input() - this replaces the old onHotkeyDetected flow
                 // The method will handle: Memory retrieval → AI routing → Provider call → Memory storage
                 // It returns the AI response text which we need to output using KeyboardSimulator
                 let response = try core.processInput(
-                    userInput: clipboardText,
+                    userInput: userInput,
                     context: capturedContext
                 )
 
