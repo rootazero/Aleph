@@ -42,38 +42,12 @@ struct SimpleProviderCard: View {
 
                 Spacer()
 
-                // Default badge (NEW for default provider management)
-                if isDefault {
-                    Text("Default")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color(hex: "#007AFF") ?? .blue)
-                        .cornerRadius(4)
-                }
-
-                // Test connection button (icon only)
-                Button(action: onTestConnection) {
-                    if isTesting {
-                        ProgressView()
-                            .scaleEffect(0.6)
-                            .frame(width: 16, height: 16)
-                    } else {
-                        Image(systemName: "network")
-                            .font(.system(size: 14))
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
-                    }
-                }
-                .buttonStyle(.plain)
-                .frame(width: 24, height: 24)
-                .disabled(isTesting || !isConfigured)
-                .help(NSLocalizedString("common.test_connection", comment: "Test connection"))
-                .opacity((isConfigured && !isTesting) ? 1.0 : 0.4)
-
-                // Status indicator (blue dot if active)
+                // Status indicator (visual only, no test button in card)
+                // Red dot = Default (also implies active, since default must be active)
+                // Blue dot = Active (but not default)
+                // No dot = Inactive
                 Circle()
-                    .fill((isConfigured && isActive) ? Color(hex: "#007AFF") ?? .blue : Color.clear)
+                    .fill(statusIndicatorColor)
                     .frame(width: 8, height: 8)
             }
             .padding(.horizontal, 12)
@@ -102,6 +76,22 @@ struct SimpleProviderCard: View {
         }
         .animation(DesignTokens.Animation.quick, value: isSelected)
         .animation(.easeInOut(duration: 0.15), value: testResult != nil)
+    }
+
+    // MARK: - Computed Properties
+
+    /// Status indicator color based on provider state
+    private var statusIndicatorColor: Color {
+        if isDefault && isConfigured {
+            // Red dot for default provider (must be active)
+            return Color(hex: "#FF3B30") ?? .red
+        } else if isConfigured && isActive {
+            // Blue dot for active (but not default)
+            return Color(hex: "#007AFF") ?? .blue
+        } else {
+            // Gray dot for inactive/unconfigured
+            return Color(hex: "#8E8E93") ?? .gray
+        }
     }
 
     // MARK: - Test Result View

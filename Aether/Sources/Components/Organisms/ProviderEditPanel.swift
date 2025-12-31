@@ -98,6 +98,34 @@ struct ProviderEditPanel: View {
         return provider.config.apiKey != nil || provider.config.providerType == "ollama"
     }
 
+    /// Check if can test connection
+    private var canTestConnection: Bool {
+        // Ollama doesn't need API key
+        if providerType == "ollama" {
+            return !model.isEmpty
+        }
+        // Other providers need API key and model
+        return !apiKey.isEmpty && !model.isEmpty
+    }
+
+    /// Binding for default provider toggle with mutual exclusion logic
+    private var isDefaultBinding: Binding<Bool> {
+        Binding(
+            get: {
+                defaultProviderId?.wrappedValue == providerName
+            },
+            set: { newValue in
+                if newValue {
+                    // Set this provider as default (will auto-clear others)
+                    setAsDefaultProvider()
+                } else {
+                    // Cannot unset default by toggling off - must set another provider as default
+                    print("[ProviderEditPanel] Cannot unset default provider directly")
+                }
+            }
+        )
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -210,10 +238,53 @@ struct ProviderEditPanel: View {
 
                         Spacer()
 
-                        // Active toggle (iOS-style switch)
-                        Toggle("", isOn: $isProviderActive)
-                            .toggleStyle(.switch)
-                            .labelsHidden()
+                        // Action buttons row: Test Connection + Set as Default + Active Toggle
+                        HStack(spacing: DesignTokens.Spacing.md) {
+                            // Test Connection button
+                            Button(action: testConnection) {
+                                HStack(spacing: 4) {
+                                    if isTesting {
+                                        ProgressView()
+                                            .scaleEffect(0.7)
+                                            .frame(width: 14, height: 14)
+                                    } else {
+                                        Image(systemName: "network")
+                                            .font(.system(size: 12))
+                                    }
+                                    Text(isTesting ? NSLocalizedString("provider.button.testing", comment: "") : NSLocalizedString("common.test_connection", comment: ""))
+                                        .font(.system(size: 12, weight: .medium))
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(canTestConnection ? Color(hex: "#007AFF") ?? .blue : DesignTokens.Colors.textSecondary.opacity(0.3))
+                                .cornerRadius(6)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!canTestConnection || isTesting)
+                            .help(canTestConnection ? NSLocalizedString("common.test_connection", comment: "") : "Configure API key and model first")
+
+                            // Set as Default toggle (NEW - replaces button with toggle)
+                            if !isAddingNew {
+                                Toggle(isOn: isDefaultBinding) {
+                                    Text(NSLocalizedString("provider.action.set_default", comment: "Set as Default"))
+                                        .font(.system(size: 12, weight: .medium))
+                                }
+                                .toggleStyle(.switch)
+                                .disabled(!isProviderActive)
+                                .help(isProviderActive ? NSLocalizedString("provider.help.set_default", comment: "") : NSLocalizedString("provider.help.set_default_disabled", comment: ""))
+                            }
+
+                            // Active toggle (iOS-style switch)
+                            Toggle(NSLocalizedString("provider.field.active", comment: ""), isOn: $isProviderActive)
+                                .toggleStyle(.switch)
+                        }
+                    }
+
+                    // Test result display (moved from card to edit panel)
+                    if let result = testResult {
+                        testResultView(result)
+                            .padding(.top, DesignTokens.Spacing.xs)
                     }
 
                     // Description - custom or preset
@@ -234,42 +305,6 @@ struct ProviderEditPanel: View {
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    // "Set as Default" button (NEW for default provider management)
-                    if !isAddingNew, let currentDefault = defaultProviderId?.wrappedValue {
-                        HStack(spacing: DesignTokens.Spacing.sm) {
-                            if currentDefault == providerName {
-                                // Already default - show indicator
-                                HStack(spacing: 4) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .font(.system(size: 12))
-                                        .foregroundColor(Color(hex: "#007AFF") ?? .blue)
-                                    Text("This is the default provider")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(DesignTokens.Colors.textSecondary)
-                                }
-                            } else {
-                                // Not default - show "Set as Default" button
-                                Button(action: setAsDefaultProvider) {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "star.fill")
-                                            .font(.system(size: 10))
-                                        Text("Set as Default")
-                                            .font(.system(size: 11, weight: .medium))
-                                    }
-                                    .foregroundColor(isProviderActive ? Color(hex: "#007AFF") ?? .blue : DesignTokens.Colors.textSecondary)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(isProviderActive ? Color(hex: "#007AFF")?.opacity(0.1) ?? Color.blue.opacity(0.1) : DesignTokens.Colors.textSecondary.opacity(0.1))
-                                    .cornerRadius(4)
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(!isProviderActive)
-                                .help(isProviderActive ? "Set this provider as the default for routing" : "Provider must be enabled to set as default")
-                            }
-                        }
-                        .padding(.top, DesignTokens.Spacing.xs)
                     }
                 }
                 .padding(.vertical, DesignTokens.Spacing.sm)
