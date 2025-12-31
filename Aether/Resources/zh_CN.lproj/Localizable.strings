@@ -221,8 +221,10 @@
 "settings.behavior.save_confirmation" = "设置已成功保存！";
 "settings.behavior.input_mode_cut" = "剪切";
 "settings.behavior.input_mode_copy" = "复制";
+"settings.behavior.input_mode_halo" = "Halo 选择";
 "settings.behavior.input_mode_cut_description" = "文本消失（⌘X），提供物理反馈。原始内容被删除。";
 "settings.behavior.input_mode_copy_description" = "文本保持可见（⌘C）。原始内容被保留。";
+"settings.behavior.input_mode_halo_description" = "每次在 Halo 浮层中选择替换或追加。";
 "settings.behavior.output_mode_typewriter" = "打字机";
 "settings.behavior.output_mode_instant" = "即时";
 "settings.behavior.output_mode_typewriter_description" = "AI 响应以可配置的速度逐字输入（电影效果）。";

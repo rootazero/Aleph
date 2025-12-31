@@ -222,8 +222,10 @@
 "settings.behavior.save_confirmation" = "Settings saved successfully!";
 "settings.behavior.input_mode_cut" = "Cut";
 "settings.behavior.input_mode_copy" = "Copy";
+"settings.behavior.input_mode_halo" = "Halo Selection";
 "settings.behavior.input_mode_cut_description" = "Text disappears (⌘X), providing physical feedback. Original content is removed.";
 "settings.behavior.input_mode_copy_description" = "Text remains visible (⌘C). Original content is preserved.";
+"settings.behavior.input_mode_halo_description" = "Choose Replace or Append each time in the Halo overlay.";
 "settings.behavior.output_mode_typewriter" = "Typewriter";
 "settings.behavior.output_mode_instant" = "Instant";
 "settings.behavior.output_mode_typewriter_description" = "AI response is typed character-by-character at configurable speed (cinematic effect).";

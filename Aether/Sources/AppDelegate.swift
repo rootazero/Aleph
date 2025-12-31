@@ -597,6 +597,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     ///
     /// This replaces the old flow where Rust detected the hotkey via rdev.
     /// Now Swift's GlobalHotkeyMonitor detects the key, and we handle everything here.
+    ///
+    /// Three input modes are supported:
+    /// - cut: Directly execute Cmd+X, then show Halo (listening) → AI → replace original
+    /// - copy: Directly execute Cmd+C, then show Halo (listening) → AI → append after original
+    /// - halo: Show Halo with selection UI → user clicks → then execute based on choice
     private func handleHotkeyPressed() {
         print("[AppDelegate] Hotkey pressed - handling in Swift layer")
 
@@ -608,35 +613,77 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
-        guard core != nil else {
+        guard let core = core else {
             print("[AppDelegate] ⚠️ Hotkey blocked - core not initialized")
             NSSound.beep()
             return
         }
 
-        // Show Halo with input mode selection
+        // Load input_mode from config (cut, copy, or halo)
+        var inputModeString = "cut"
+        do {
+            let config = try core.loadConfig()
+            if let behavior = config.behavior {
+                inputModeString = behavior.inputMode
+            }
+        } catch {
+            print("[AppDelegate] ⚠️ Failed to load config, using default input_mode=cut: \(error)")
+        }
+
+        let inputMode = InputMode.from(string: inputModeString)
+        print("[AppDelegate] 📋 Input mode from config: \(inputMode.rawValue)")
+
         let mouseLocation = NSEvent.mouseLocation
-        DispatchQueue.main.async { [weak self] in
-            self?.haloWindow?.show(at: mouseLocation)
-            self?.haloWindow?.updateState(.awaitingInputMode { [weak self] choice in
-                // User selected input mode, proceed with processing
-                print("[AppDelegate] 📋 User selected input mode: \(choice)")
-                self?.processWithInputMode(choice)
-            })
+
+        switch inputMode {
+        case .cut:
+            // Direct cut mode: Show Halo immediately and process with replace
+            print("[AppDelegate] Mode: cut - directly executing Cmd+X")
+            DispatchQueue.main.async { [weak self] in
+                self?.haloWindow?.show(at: mouseLocation)
+                self?.haloWindow?.updateState(.listening)
+            }
+            processWithInputMode(.replace)
+
+        case .copy:
+            // Direct copy mode: Show Halo immediately and process with append
+            print("[AppDelegate] Mode: copy - directly executing Cmd+C")
+            DispatchQueue.main.async { [weak self] in
+                self?.haloWindow?.show(at: mouseLocation)
+                self?.haloWindow?.updateState(.listening)
+            }
+            processWithInputMode(.append)
+
+        case .halo:
+            // Halo selection mode: Show selection UI first
+            print("[AppDelegate] Mode: halo - showing selection UI")
+            DispatchQueue.main.async { [weak self] in
+                self?.haloWindow?.show(at: mouseLocation)
+                self?.haloWindow?.updateState(.awaitingInputMode { [weak self] choice in
+                    // User selected input mode, proceed with processing
+                    print("[AppDelegate] 📋 User selected: \(choice)")
+                    self?.processWithInputMode(choice)
+                })
+            }
         }
     }
 
-    /// Process input after user selects input mode
+    /// Process input after input mode is determined (either from config or user selection)
     private func processWithInputMode(_ choice: InputModeChoice) {
-        print("[AppDelegate] Processing with input mode: \(choice)")
+        print("[AppDelegate] Processing with input mode choice: \(choice)")
 
-        guard let core = core else {
+        guard core != nil else {
             print("[AppDelegate] ⚠️ Core not initialized")
             return
         }
 
+        // Update Halo to listening state (in case we came from awaitingInputMode)
+        DispatchQueue.main.async { [weak self] in
+            self?.haloWindow?.updateState(.listening)
+        }
+
         let useCutMode = (choice == .replace)
-        print("[AppDelegate] 📋 Input mode: \(choice) (useCutMode: \(useCutMode))")
+        print("[AppDelegate] 📋 Using cut mode: \(useCutMode)")
 
         // CRITICAL: Save original clipboard content to restore later
         // This protects user's pre-existing clipboard data

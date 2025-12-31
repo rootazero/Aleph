@@ -428,11 +428,13 @@ struct BehaviorSettingsView: View {
 enum InputMode: String, CaseIterable {
     case cut = "cut"
     case copy = "copy"
+    case halo = "halo"
 
     var displayName: String {
         switch self {
         case .cut: return NSLocalizedString("settings.behavior.input_mode_cut", comment: "")
         case .copy: return NSLocalizedString("settings.behavior.input_mode_copy", comment: "")
+        case .halo: return NSLocalizedString("settings.behavior.input_mode_halo", comment: "")
         }
     }
 
@@ -440,6 +442,7 @@ enum InputMode: String, CaseIterable {
         switch self {
         case .cut: return "scissors"
         case .copy: return "doc.on.doc"
+        case .halo: return "circle.circle"
         }
     }
 
@@ -449,6 +452,8 @@ enum InputMode: String, CaseIterable {
             return NSLocalizedString("settings.behavior.input_mode_cut_description", comment: "")
         case .copy:
             return NSLocalizedString("settings.behavior.input_mode_copy_description", comment: "")
+        case .halo:
+            return NSLocalizedString("settings.behavior.input_mode_halo_description", comment: "")
         }
     }
 
