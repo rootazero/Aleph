@@ -1,18 +1,16 @@
 // GlobalHotkeyMonitor.swift
-// Global hotkey monitoring using macOS CGEventTap API
+// Global hotkey monitoring using macOS IOHIDManager API
+//
+// Uses IOHIDManager for low-level keyboard event detection that bypasses
+// input method interception. This ensures hotkeys work regardless of
+// the active input method (Chinese, Japanese, etc.).
 //
 // Supports two hotkey modes:
-// 1. Double-tap Space (default) - immune to input method interception
+// 1. Double-tap Space (default) - works with any input method
 // 2. Custom modifier + key combos (e.g., Command+Space, Option+Grave)
-//
-// Key advantages over Rust-based solutions:
-// - Thread-safe by design (runs on macOS event loop)
-// - No FFI complexity
-// - Native macOS API guarantees
-// - Easier to debug and maintain
 
 import Cocoa
-import Carbon.HIToolbox
+import IOKit.hid
 
 // MARK: - Hotkey Configuration
 
@@ -30,9 +28,6 @@ enum HotkeyMode: Equatable {
     }
 
     /// Parse from config string format
-    /// - "DoubleTap+Space" -> double-tap Space
-    /// - "Command+Grave" -> modifier combo
-    /// - "Option+Shift+A" -> modifier combo
     static func from(configString: String) -> HotkeyMode? {
         let components = configString.split(separator: "+").map { $0.trimmingCharacters(in: .whitespaces) }
         guard !components.isEmpty else { return nil }
@@ -63,13 +58,10 @@ enum HotkeyMode: Equatable {
             }
         }
 
-        // Modifier combo requires at least one modifier
         guard keyCode != 0, !modifiers.isEmpty else { return nil }
-
         return .modifierCombo(keyCode: keyCode, modifiers: modifiers)
     }
 
-    /// Convert to config string format
     var configString: String {
         switch self {
         case .doubleTap(let keyCode):
@@ -85,7 +77,6 @@ enum HotkeyMode: Equatable {
         }
     }
 
-    /// Human-readable description
     var displayString: String {
         switch self {
         case .doubleTap(let keyCode):
@@ -104,7 +95,6 @@ enum HotkeyMode: Equatable {
 
 // MARK: - Key Code Utilities
 
-/// Get key code for key name
 private func keyCodeForName(_ name: String) -> UInt16 {
     let keyMap: [String: UInt16] = [
         "grave": 50, "~": 50, "`": 50,
@@ -121,7 +111,6 @@ private func keyCodeForName(_ name: String) -> UInt16 {
     return keyMap[name] ?? 0
 }
 
-/// Get key name for key code
 private func nameForKeyCode(_ keyCode: UInt16) -> String {
     let codeMap: [UInt16: String] = [
         50: "Grave", 49: "Space",
@@ -137,7 +126,6 @@ private func nameForKeyCode(_ keyCode: UInt16) -> String {
     return codeMap[keyCode] ?? "Key\(keyCode)"
 }
 
-/// Get symbol for key code
 private func symbolForKeyCode(_ keyCode: UInt16) -> String {
     let symbolMap: [UInt16: String] = [
         50: "`", 49: "␣",
@@ -146,63 +134,66 @@ private func symbolForKeyCode(_ keyCode: UInt16) -> String {
     return symbolMap[keyCode] ?? nameForKeyCode(keyCode)
 }
 
-// MARK: - Global Hotkey Monitor
+// MARK: - Global Hotkey Monitor (Hybrid Implementation)
 
-/// Global hotkey monitor using CGEventTap
+/// Global hotkey monitor using IOHIDManager for low-level events
+/// and CGEventTap for modifier key combos.
 ///
-/// Monitors for configurable keyboard shortcuts globally and triggers a callback.
-/// Supports double-tap mode (default) and modifier + key combos.
+/// IOHIDManager provides raw hardware events that bypass input method
+/// interception, making it ideal for double-tap detection.
 class GlobalHotkeyMonitor {
-    // MARK: - Types
-
     typealias HotkeyCallback = () -> Void
 
     // MARK: - Properties
 
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
     private let callback: HotkeyCallback
     private var isMonitoring = false
 
     /// Current hotkey configuration
     private(set) var hotkeyMode: HotkeyMode
 
-    /// Double-tap detection state
+    // IOHIDManager for raw keyboard events
+    private var hidManager: IOHIDManager?
+
+    // CGEventTap for modifier combo detection
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+
+    // Double-tap detection state
     private var lastKeyPressTime: Date?
-    private var lastKeyCode: UInt16 = 0
+    private var lastKeyCode: UInt32 = 0
 
     /// Double-tap threshold in seconds (default: 300ms)
     var doubleTapThreshold: TimeInterval = 0.3
 
-    /// Debug mode to log all key events
+    /// Debug mode
     var debugMode: Bool = false
 
     // MARK: - Initialization
 
-    /// Create a new global hotkey monitor
-    ///
-    /// - Parameters:
-    ///   - hotkeyMode: The hotkey mode to monitor for (default: double-tap Space)
-    ///   - callback: Function to call when hotkey is triggered
     init(hotkeyMode: HotkeyMode = .default, callback: @escaping HotkeyCallback) {
         self.hotkeyMode = hotkeyMode
         self.callback = callback
     }
 
-    /// Update the hotkey configuration
     func updateHotkey(_ mode: HotkeyMode) {
+        let wasMonitoring = isMonitoring
+        if wasMonitoring {
+            stopMonitoring()
+        }
+
         hotkeyMode = mode
-        // Reset double-tap state when hotkey changes
         lastKeyPressTime = nil
         lastKeyCode = 0
+
+        if wasMonitoring {
+            startMonitoring()
+        }
         print("[GlobalHotkeyMonitor] Updated hotkey to: \(mode.displayString)")
     }
 
-    // MARK: - Public Methods
+    // MARK: - Start/Stop Monitoring
 
-    /// Start monitoring for global hotkey
-    ///
-    /// - Returns: True if monitoring started successfully, false otherwise
     @discardableResult
     func startMonitoring() -> Bool {
         guard !isMonitoring else {
@@ -210,10 +201,204 @@ class GlobalHotkeyMonitor {
             return true
         }
 
-        // Create event tap for KeyDown events
-        let eventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+        switch hotkeyMode {
+        case .doubleTap:
+            // Use IOHIDManager for double-tap (bypasses input method)
+            let success = startHIDMonitoring()
+            if success {
+                isMonitoring = true
+                print("[GlobalHotkeyMonitor] Started IOHIDManager monitoring for: \(hotkeyMode.displayString)")
+            }
+            return success
 
-        let selfPointer = Unmanaged.passUnretained(self).toOpaque()
+        case .modifierCombo:
+            // Use CGEventTap for modifier combos
+            let success = startEventTapMonitoring()
+            if success {
+                isMonitoring = true
+                print("[GlobalHotkeyMonitor] Started CGEventTap monitoring for: \(hotkeyMode.displayString)")
+            }
+            return success
+        }
+    }
+
+    func stopMonitoring() {
+        guard isMonitoring else { return }
+
+        stopHIDMonitoring()
+        stopEventTapMonitoring()
+
+        isMonitoring = false
+        lastKeyPressTime = nil
+        lastKeyCode = 0
+        print("[GlobalHotkeyMonitor] Stopped monitoring")
+    }
+
+    // MARK: - IOHIDManager (for double-tap)
+
+    private func startHIDMonitoring() -> Bool {
+        hidManager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
+
+        guard let manager = hidManager else {
+            print("[GlobalHotkeyMonitor] ERROR: Failed to create IOHIDManager")
+            return false
+        }
+
+        // Match keyboard devices
+        let matchingDict: [String: Any] = [
+            kIOHIDDeviceUsagePageKey as String: kHIDPage_GenericDesktop,
+            kIOHIDDeviceUsageKey as String: kHIDUsage_GD_Keyboard
+        ]
+
+        IOHIDManagerSetDeviceMatching(manager, matchingDict as CFDictionary)
+
+        // Set up callback
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+
+        IOHIDManagerRegisterInputValueCallback(manager, { context, result, sender, value in
+            guard let context = context else { return }
+            let monitor = Unmanaged<GlobalHotkeyMonitor>.fromOpaque(context).takeUnretainedValue()
+            monitor.handleHIDValue(value)
+        }, selfPtr)
+
+        // Schedule on main run loop
+        IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
+
+        // Open the manager
+        let result = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        if result != kIOReturnSuccess {
+            print("[GlobalHotkeyMonitor] ERROR: Failed to open IOHIDManager (result: \(result))")
+            print("[GlobalHotkeyMonitor] Please grant Input Monitoring permission")
+            return false
+        }
+
+        return true
+    }
+
+    private func stopHIDMonitoring() {
+        guard let manager = hidManager else { return }
+
+        IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
+        IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        hidManager = nil
+    }
+
+    private func handleHIDValue(_ value: IOHIDValue) {
+        let element = IOHIDValueGetElement(value)
+        let usagePage = IOHIDElementGetUsagePage(element)
+        let usage = IOHIDElementGetUsage(element)
+
+        // Only process keyboard events (usage page 7)
+        guard usagePage == kHIDPage_KeyboardOrKeypad else { return }
+
+        // Get key state (1 = pressed, 0 = released)
+        let pressed = IOHIDValueGetIntegerValue(value) == 1
+        guard pressed else { return } // Only handle key down
+
+        // Convert HID usage to macOS keyCode
+        let keyCode = hidUsageToKeyCode(usage)
+
+        if debugMode {
+            print("[GlobalHotkeyMonitor] HID: usage=\(usage), keyCode=\(keyCode)")
+        }
+
+        // Handle double-tap
+        if case .doubleTap(let targetKeyCode) = hotkeyMode {
+            handleDoubleTap(keyCode: keyCode, targetKeyCode: UInt32(targetKeyCode))
+        }
+    }
+
+    /// Convert HID usage code to macOS virtual keycode
+    private func hidUsageToKeyCode(_ usage: UInt32) -> UInt32 {
+        // HID usage codes for common keys
+        // See USB HID Usage Tables: https://usb.org/sites/default/files/hut1_22.pdf
+        let hidToKeyCode: [UInt32: UInt32] = [
+            0x2C: 49,  // Space (HID 0x2C -> macOS 49)
+            0x35: 50,  // Grave accent (HID 0x35 -> macOS 50)
+            0x04: 0,   // A
+            0x05: 11,  // B
+            0x06: 8,   // C
+            0x07: 2,   // D
+            0x08: 14,  // E
+            0x09: 3,   // F
+            0x0A: 5,   // G
+            0x0B: 4,   // H
+            0x0C: 34,  // I
+            0x0D: 38,  // J
+            0x0E: 40,  // K
+            0x0F: 37,  // L
+            0x10: 46,  // M
+            0x11: 45,  // N
+            0x12: 31,  // O
+            0x13: 35,  // P
+            0x14: 12,  // Q
+            0x15: 15,  // R
+            0x16: 1,   // S
+            0x17: 17,  // T
+            0x18: 32,  // U
+            0x19: 9,   // V
+            0x1A: 13,  // W
+            0x1B: 7,   // X
+            0x1C: 16,  // Y
+            0x1D: 6,   // Z
+            0x1E: 18,  // 1
+            0x1F: 19,  // 2
+            0x20: 20,  // 3
+            0x21: 21,  // 4
+            0x22: 23,  // 5
+            0x23: 22,  // 6
+            0x24: 26,  // 7
+            0x25: 28,  // 8
+            0x26: 25,  // 9
+            0x27: 29,  // 0
+            0x28: 36,  // Return
+            0x29: 53,  // Escape
+            0x2A: 51,  // Delete
+            0x2B: 48,  // Tab
+        ]
+        return hidToKeyCode[usage] ?? usage
+    }
+
+    private func handleDoubleTap(keyCode: UInt32, targetKeyCode: UInt32) {
+        guard keyCode == targetKeyCode else {
+            // Different key, reset
+            lastKeyPressTime = nil
+            lastKeyCode = 0
+            return
+        }
+
+        let now = Date()
+
+        if let lastTime = lastKeyPressTime, lastKeyCode == keyCode {
+            let interval = now.timeIntervalSince(lastTime)
+
+            if interval <= doubleTapThreshold {
+                print("[GlobalHotkeyMonitor] Double-tap detected! Triggering Aether...")
+
+                lastKeyPressTime = nil
+                lastKeyCode = 0
+
+                DispatchQueue.main.async { [weak self] in
+                    self?.callback()
+                }
+                return
+            }
+        }
+
+        // First tap or too slow
+        lastKeyPressTime = now
+        lastKeyCode = keyCode
+
+        if debugMode {
+            print("[GlobalHotkeyMonitor] First tap recorded, waiting for second...")
+        }
+    }
+
+    // MARK: - CGEventTap (for modifier combos)
+
+    private func startEventTapMonitoring() -> Bool {
+        let eventMask = (1 << CGEventType.keyDown.rawValue)
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
 
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -224,63 +409,37 @@ class GlobalHotkeyMonitor {
                 guard let refcon = refcon else {
                     return Unmanaged.passRetained(event)
                 }
-
                 let monitor = Unmanaged<GlobalHotkeyMonitor>.fromOpaque(refcon).takeUnretainedValue()
-                return monitor.handleEvent(proxy: proxy, type: type, event: event)
+                return monitor.handleCGEvent(event: event)
             },
-            userInfo: selfPointer
+            userInfo: selfPtr
         ) else {
             print("[GlobalHotkeyMonitor] ERROR: Failed to create CGEventTap")
-            print("[GlobalHotkeyMonitor] Please grant Accessibility permission in: System Settings → Privacy & Security → Accessibility")
             return false
         }
 
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-
         CGEvent.tapEnable(tap: tap, enable: true)
 
         self.eventTap = tap
         self.runLoopSource = source
-        self.isMonitoring = true
-
-        print("[GlobalHotkeyMonitor] Started monitoring for: \(hotkeyMode.displayString)")
         return true
     }
 
-    /// Stop monitoring for global hotkey
-    func stopMonitoring() {
-        guard isMonitoring else {
-            print("[GlobalHotkeyMonitor] Not currently monitoring")
-            return
-        }
-
+    private func stopEventTapMonitoring() {
         if let source = runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
             runLoopSource = nil
         }
-
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
             eventTap = nil
         }
-
-        isMonitoring = false
-        lastKeyPressTime = nil
-        lastKeyCode = 0
-        print("[GlobalHotkeyMonitor] Stopped monitoring")
     }
 
-    // MARK: - Private Methods
-
-    /// Handle keyboard event from CGEventTap
-    private func handleEvent(
-        proxy: CGEventTapProxy,
-        type: CGEventType,
-        event: CGEvent
-    ) -> Unmanaged<CGEvent>? {
-        // Only process key down events
-        guard type == .keyDown else {
+    private func handleCGEvent(event: CGEvent) -> Unmanaged<CGEvent>? {
+        guard case .modifierCombo(let targetKeyCode, let targetModifiers) = hotkeyMode else {
             return Unmanaged.passRetained(event)
         }
 
@@ -288,103 +447,28 @@ class GlobalHotkeyMonitor {
         let flags = event.flags
 
         if debugMode {
-            print("[GlobalHotkeyMonitor] DEBUG: keyCode=\(keyCode), flags=\(flags.rawValue)")
+            print("[GlobalHotkeyMonitor] CGEvent: keyCode=\(keyCode), flags=\(flags.rawValue)")
         }
 
-        switch hotkeyMode {
-        case .doubleTap(let targetKeyCode):
-            return handleDoubleTap(keyCode: keyCode, targetKeyCode: targetKeyCode, event: event)
-
-        case .modifierCombo(let targetKeyCode, let targetModifiers):
-            return handleModifierCombo(
-                keyCode: keyCode,
-                targetKeyCode: targetKeyCode,
-                flags: flags,
-                targetModifiers: targetModifiers,
-                event: event
-            )
-        }
-    }
-
-    /// Handle double-tap detection
-    private func handleDoubleTap(
-        keyCode: UInt16,
-        targetKeyCode: UInt16,
-        event: CGEvent
-    ) -> Unmanaged<CGEvent>? {
-        guard keyCode == targetKeyCode else {
-            // Different key pressed, reset state
-            lastKeyPressTime = nil
-            lastKeyCode = 0
-            return Unmanaged.passRetained(event)
-        }
-
-        let now = Date()
-
-        if let lastTime = lastKeyPressTime, lastKeyCode == keyCode {
-            let interval = now.timeIntervalSince(lastTime)
-
-            if interval <= doubleTapThreshold {
-                // Double-tap detected!
-                print("[GlobalHotkeyMonitor] Double-tap detected - triggering Aether")
-
-                // Reset state
-                lastKeyPressTime = nil
-                lastKeyCode = 0
-
-                // Trigger callback on main thread
-                DispatchQueue.main.async { [weak self] in
-                    self?.callback()
-                }
-
-                // Swallow the second tap
-                return nil
-            }
-        }
-
-        // First tap or too slow, record this press
-        lastKeyPressTime = now
-        lastKeyCode = keyCode
-
-        // Allow the first tap to pass through (types a space)
-        return Unmanaged.passRetained(event)
-    }
-
-    /// Handle modifier + key combo
-    private func handleModifierCombo(
-        keyCode: UInt16,
-        targetKeyCode: UInt16,
-        flags: CGEventFlags,
-        targetModifiers: CGEventFlags,
-        event: CGEvent
-    ) -> Unmanaged<CGEvent>? {
         guard keyCode == targetKeyCode else {
             return Unmanaged.passRetained(event)
         }
 
-        // Check if required modifiers are pressed
-        // We use intersection to ignore other flags like caps lock, numpad, etc.
         let relevantFlags: CGEventFlags = [.maskCommand, .maskAlternate, .maskShift, .maskControl]
         let pressedModifiers = flags.intersection(relevantFlags)
         let requiredModifiers = targetModifiers.intersection(relevantFlags)
 
         if pressedModifiers == requiredModifiers {
-            print("[GlobalHotkeyMonitor] Hotkey combo detected - triggering Aether")
+            print("[GlobalHotkeyMonitor] Modifier combo detected! Triggering Aether...")
 
-            // Trigger callback on main thread
             DispatchQueue.main.async { [weak self] in
                 self?.callback()
             }
-
-            // Swallow the event
-            return nil
+            return nil // Swallow event
         }
 
-        // Wrong modifiers, allow event to pass
         return Unmanaged.passRetained(event)
     }
-
-    // MARK: - Deinitialization
 
     deinit {
         stopMonitoring()
