@@ -39,21 +39,37 @@ struct UnifiedSaveBar: View {
 
     var body: some View {
         HStack(spacing: DesignTokens.Spacing.md) {
-            // Left: Status message
-            if let message = statusMessage {
-                HStack(spacing: 6) {
-                    // Warning icon for unsaved changes
+            // Left: Status message - always show status (saved or unsaved)
+            HStack(spacing: 6) {
+                if hasUnsavedChanges {
+                    // Unsaved changes - warning icon
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12))
                         .foregroundColor(DesignTokens.Colors.warning)
 
-                    Text(message)
+                    Text(LocalizedStringKey("settings.save_bar.changes_unsaved"))
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                } else {
+                    // All saved - checkmark icon
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(DesignTokens.Colors.success)
+
+                    Text(LocalizedStringKey("settings.save_bar.all_changes_saved"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Warning: \(message)")
+
+                // Error message (if provided via statusMessage parameter)
+                if let message = statusMessage, message.contains("Failed") || message.contains("Error") || message.contains("失败") || message.contains("错误") {
+                    Text("• \(message)")
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.error)
+                }
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(hasUnsavedChanges ? "Warning: Changes unsaved" : "All changes saved")
 
             Spacer()
 
@@ -136,7 +152,7 @@ struct UnifiedSaveBar: View {
     UnifiedSaveBar(
         hasUnsavedChanges: true,
         isSaving: false,
-        statusMessage: "Unsaved changes",
+        statusMessage: nil,
         onSave: {},
         onCancel: {}
     )
@@ -147,7 +163,7 @@ struct UnifiedSaveBar: View {
     UnifiedSaveBar(
         hasUnsavedChanges: true,
         isSaving: true,
-        statusMessage: "Unsaved changes",
+        statusMessage: nil,
         onSave: {},
         onCancel: {}
     )

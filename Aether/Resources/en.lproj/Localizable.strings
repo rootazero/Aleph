@@ -44,6 +44,10 @@
 "settings.general.coming_soon" = "Coming Soon";
 "settings.general.coming_soon_message" = "%@ will be available in a future update.";
 
+// MARK: - Settings Window - Unified Save Bar (NEW)
+"settings.save_bar.all_changes_saved" = "All changes saved";
+"settings.save_bar.changes_unsaved" = "Changes unsaved";
+
 // MARK: - Settings Window - Providers Tab
 "settings.providers.title" = "Providers";
 "settings.providers.search_placeholder" = "Search providers...";

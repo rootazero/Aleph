@@ -32,6 +32,9 @@ enum DesignTokens {
         /// Success/active state color (green)
         static let providerActive = Color.green
 
+        /// Success state color (same as providerActive for consistency)
+        static let success = Color.green
+
         /// Inactive/offline state color (gray)
         static let providerInactive = Color.gray
 

@@ -43,6 +43,10 @@
 "settings.general.coming_soon" = "即将推出";
 "settings.general.coming_soon_message" = "%@ 将在未来的更新中提供。";
 
+// MARK: - Settings Window - Unified Save Bar (统一保存栏)
+"settings.save_bar.all_changes_saved" = "所有设置已保存";
+"settings.save_bar.changes_unsaved" = "设置未保存";
+
 // MARK: - Settings Window - Providers Tab
 "settings.providers.title" = "提供商";
 "settings.providers.search_placeholder" = "搜索提供商...";
