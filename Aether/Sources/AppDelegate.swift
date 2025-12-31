@@ -9,6 +9,13 @@ import Cocoa
 import SwiftUI
 import Combine
 
+/// Tracks where the input text came from, used to determine output strategy
+enum TextSource {
+    case selectedText      // User had text selected, Cmd+X/C captured it
+    case accessibilityAPI  // No selection, read full window text via Accessibility API (text NOT deleted)
+    case selectAll         // Accessibility failed, used Cmd+A then Cmd+X/C
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Menu bar status item
     private var statusItem: NSStatusItem?
@@ -685,6 +692,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let useCutMode = (choice == .replace)
         print("[AppDelegate] 📋 Using cut mode: \(useCutMode)")
 
+        // Track where the text came from - this determines output strategy
+        var textSource: TextSource = .selectedText
+
         // CRITICAL: Save original clipboard content to restore later
         // This protects user's pre-existing clipboard data
         let originalClipboardText = ClipboardManager.shared.getText()
@@ -717,13 +727,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             switch accessibilityResult {
             case .success(let text):
                 // Successfully read text via Accessibility API!
+                // IMPORTANT: Text is NOT deleted from window, just read
                 print("[AppDelegate] ✅ Read text via Accessibility API (\(text.count) chars) - completely silent!")
+                textSource = .accessibilityAPI  // Mark source as Accessibility API
                 // Temporarily set the text to clipboard for processing
                 ClipboardManager.shared.setText(text)
 
             case .noTextContent, .noFocusedElement, .unsupported:
                 // Accessibility API couldn't get text, fallback to Cmd+A
                 print("[AppDelegate] ⚠️ Accessibility API failed, falling back to Cmd+A method...")
+                textSource = .selectAll  // Mark source as select all
                 KeyboardSimulator.shared.simulateSelectAll()
                 Thread.sleep(forTimeInterval: 0.05)  // 50ms delay
 
@@ -764,6 +777,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             case .accessibilityDenied:
                 // This shouldn't happen as we check permissions at startup
                 print("[AppDelegate] ❌ Accessibility permission denied, using Cmd+A fallback")
+                textSource = .selectAll
                 KeyboardSimulator.shared.simulateSelectAll()
                 Thread.sleep(forTimeInterval: 0.05)
                 if useCutMode {
@@ -775,6 +789,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
             case .error(let message):
                 print("[AppDelegate] ❌ Accessibility error: \(message), using Cmd+A fallback")
+                textSource = .selectAll
                 KeyboardSimulator.shared.simulateSelectAll()
                 Thread.sleep(forTimeInterval: 0.05)
                 if useCutMode {
@@ -786,7 +801,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
         } else {
             print("[AppDelegate] ✓ Detected selected text")
+            textSource = .selectedText
         }
+
+        print("[AppDelegate] 📍 Text source: \(textSource), Input mode: \(useCutMode ? "replace" : "append")")
 
         // Get the captured clipboard content
         guard let clipboardText = ClipboardManager.shared.getText() else {
@@ -889,6 +907,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 // This replaces Rust's typewriter implementation
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
+
+                    // CRITICAL: Prepare cursor position based on text source and input mode
+                    // This ensures AI response is placed correctly (replace vs append)
+                    self.prepareOutputPosition(textSource: textSource, useCutMode: useCutMode)
 
                     // Create cancellation token for this typewriter session
                     self.typewriterCancellation = CancellationToken()
@@ -993,6 +1015,59 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - Output Preparation
+
+    /// Prepare cursor position before outputting AI response
+    ///
+    /// This method ensures the cursor is in the correct position based on:
+    /// - Text source: Where the input text came from
+    /// - Input mode: Whether user wants to replace or append
+    ///
+    /// | Text Source      | Replace Mode      | Append Mode           |
+    /// |------------------|-------------------|-----------------------|
+    /// | selectedText     | No action needed  | Move to selection end |
+    /// | accessibilityAPI | Cmd+A to select   | Cmd+End to move end   |
+    /// | selectAll        | No action needed  | Cmd+End to move end   |
+    private func prepareOutputPosition(textSource: TextSource, useCutMode: Bool) {
+        print("[AppDelegate] 🎯 Preparing output position: source=\(textSource), replace=\(useCutMode)")
+
+        switch (textSource, useCutMode) {
+        case (.selectedText, true):
+            // Replace selected text: Cursor is already at the right position after Cmd+X
+            print("[AppDelegate] ➡️ selectedText + replace: No preparation needed")
+
+        case (.selectedText, false):
+            // Append after selected text: Move cursor to end of selection
+            // After Cmd+C, the selection is still active, pressing Right arrow moves to end
+            print("[AppDelegate] ➡️ selectedText + append: Moving to end of selection")
+            KeyboardSimulator.shared.simulateKeyPress(.rightArrow)
+            Thread.sleep(forTimeInterval: 0.05)
+
+        case (.accessibilityAPI, true):
+            // Replace full window text: Need to select all first, then typing will replace
+            // Because Accessibility API only read the text, didn't delete it
+            print("[AppDelegate] ➡️ accessibilityAPI + replace: Selecting all to replace")
+            KeyboardSimulator.shared.simulateSelectAll()
+            Thread.sleep(forTimeInterval: 0.05)
+
+        case (.accessibilityAPI, false):
+            // Append to full window text: Move cursor to end of document
+            print("[AppDelegate] ➡️ accessibilityAPI + append: Moving to end of document")
+            KeyboardSimulator.shared.simulateMoveToEnd()
+            Thread.sleep(forTimeInterval: 0.05)
+
+        case (.selectAll, true):
+            // Replace after Cmd+A + Cmd+X: Cursor is already at the right position
+            print("[AppDelegate] ➡️ selectAll + replace: No preparation needed")
+
+        case (.selectAll, false):
+            // Append after Cmd+A + Cmd+C: Move cursor to end of document
+            print("[AppDelegate] ➡️ selectAll + append: Moving to end of document")
+            KeyboardSimulator.shared.simulateMoveToEnd()
+            Thread.sleep(forTimeInterval: 0.05)
         }
     }
 

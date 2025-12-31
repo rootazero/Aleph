@@ -62,6 +62,50 @@ class KeyboardSimulator {
         return simulateShortcut(key: CGKeyCode(kVK_ANSI_A))
     }
 
+    /// Simulate Cmd+End (Move to end of document)
+    ///
+    /// - Returns: True if successful, false otherwise
+    @discardableResult
+    func simulateMoveToEnd() -> Bool {
+        return simulateShortcut(key: CGKeyCode(kVK_End))
+    }
+
+    /// Simulate a single key press (without modifiers)
+    ///
+    /// - Parameter key: The key to press
+    /// - Returns: True if successful, false otherwise
+    @discardableResult
+    func simulateKeyPress(_ key: KeyCode) -> Bool {
+        let keyCode = key.cgKeyCode
+
+        // Create key down event
+        guard let keyDown = CGEvent(
+            keyboardEventSource: nil,
+            virtualKey: keyCode,
+            keyDown: true
+        ) else {
+            print("[KeyboardSimulator] ERROR: Failed to create key down event for \(key)")
+            return false
+        }
+        keyDown.post(tap: .cghidEventTap)
+
+        // Small delay
+        usleep(10_000) // 10ms
+
+        // Create key up event
+        guard let keyUp = CGEvent(
+            keyboardEventSource: nil,
+            virtualKey: keyCode,
+            keyDown: false
+        ) else {
+            print("[KeyboardSimulator] ERROR: Failed to create key up event for \(key)")
+            return false
+        }
+        keyUp.post(tap: .cghidEventTap)
+
+        return true
+    }
+
     // MARK: - Typewriter Effect
 
     /// Type text character by character with delay
@@ -228,6 +272,43 @@ class KeyboardSimulator {
         "\t": CGKeyCode(kVK_Tab),
         // Add more as needed
     ]
+}
+
+// MARK: - KeyCode Enum
+
+/// Common key codes for keyboard simulation
+enum KeyCode {
+    case leftArrow
+    case rightArrow
+    case upArrow
+    case downArrow
+    case home
+    case end
+    case pageUp
+    case pageDown
+    case tab
+    case returnKey
+    case escape
+    case delete
+    case backspace
+
+    var cgKeyCode: CGKeyCode {
+        switch self {
+        case .leftArrow: return CGKeyCode(kVK_LeftArrow)
+        case .rightArrow: return CGKeyCode(kVK_RightArrow)
+        case .upArrow: return CGKeyCode(kVK_UpArrow)
+        case .downArrow: return CGKeyCode(kVK_DownArrow)
+        case .home: return CGKeyCode(kVK_Home)
+        case .end: return CGKeyCode(kVK_End)
+        case .pageUp: return CGKeyCode(kVK_PageUp)
+        case .pageDown: return CGKeyCode(kVK_PageDown)
+        case .tab: return CGKeyCode(kVK_Tab)
+        case .returnKey: return CGKeyCode(kVK_Return)
+        case .escape: return CGKeyCode(kVK_Escape)
+        case .delete: return CGKeyCode(kVK_ForwardDelete)
+        case .backspace: return CGKeyCode(kVK_Delete)
+        }
+    }
 }
 
 // MARK: - CancellationToken
