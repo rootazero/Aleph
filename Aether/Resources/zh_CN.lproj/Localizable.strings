@@ -351,5 +351,6 @@
 "settings.unsaved_changes.message" = "你有未保存的修改。是否在离开前保存？";
 "settings.unsaved_changes.save" = "保存";
 "settings.unsaved_changes.dont_save" = "不保存";
+"settings.unsaved_changes.discard" = "放弃修改";
 "settings.unsaved_changes.close_title" = "未保存的修改";
 "settings.unsaved_changes.close_message" = "你有未保存的修改。是否在关闭前保存？";

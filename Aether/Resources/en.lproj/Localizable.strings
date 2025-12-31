@@ -352,5 +352,6 @@
 "settings.unsaved_changes.message" = "You have unsaved changes. Do you want to save them before leaving?";
 "settings.unsaved_changes.save" = "Save";
 "settings.unsaved_changes.dont_save" = "Don't Save";
+"settings.unsaved_changes.discard" = "Discard";
 "settings.unsaved_changes.close_title" = "Unsaved Changes";
 "settings.unsaved_changes.close_message" = "You have unsaved changes. Do you want to save them before closing?";

@@ -37,6 +37,9 @@ struct RootContentView: View {
     // Unified save bar state (shared with all settings views)
     @StateObject private var saveBarState = SettingsSaveBarState()
 
+    // Window delegate for close interception
+    @State private var windowDelegate = SettingsWindowDelegate()
+
     // MARK: - Initialization
 
     init(core: AetherCore? = nil) {
@@ -66,10 +69,29 @@ struct RootContentView: View {
         .onAppear {
             loadProviders()
             themeManager.applyTheme()
+
+            // Set up window delegate for close interception
+            setupWindowDelegate()
         }
-        .onChange(of: selectedTab) { _, _ in
-            // Reset save bar state when switching tabs
-            saveBarState.reset()
+        .onChange(of: selectedTab) { oldTab, newTab in
+            // Check for unsaved changes before allowing tab switch
+            if saveBarState.hasUnsavedChanges {
+                // Show confirmation dialog
+                Task { @MainActor in
+                    let shouldProceed = showUnsavedChangesDialog(action: "switch tabs")
+                    if shouldProceed {
+                        // Reset save bar state when switching tabs
+                        saveBarState.reset()
+                        // Tab change is handled automatically by SwiftUI binding
+                    } else {
+                        // Revert tab selection (prevent switch)
+                        selectedTab = oldTab
+                    }
+                }
+            } else {
+                // No unsaved changes, reset save bar state
+                saveBarState.reset()
+            }
         }
         .onChange(of: appDelegate.core != nil) { _, isInitialized in
             // Reload providers when core is initialized
@@ -385,6 +407,58 @@ struct RootContentView: View {
 
     // MARK: - Helper Methods
 
+    /// Set up window delegate for close interception
+    private func setupWindowDelegate() {
+        // Find the window and assign delegate
+        DispatchQueue.main.async { [weak windowDelegate, weak saveBarState] in
+            guard let window = NSApp.windows.first(where: { $0.title == "Settings" }) else {
+                print("[RootContentView] Failed to find Settings window")
+                return
+            }
+
+            // Pass save bar state to delegate
+            windowDelegate?.saveBarState = saveBarState
+            window.delegate = windowDelegate
+            print("[RootContentView] Window delegate configured")
+        }
+    }
+
+    /// Show unsaved changes dialog and return user's decision
+    /// - Parameter action: The action user is attempting (e.g., "close window", "switch tabs")
+    /// - Returns: true if user wants to proceed (discard changes), false to cancel action
+    @MainActor
+    private func showUnsavedChangesDialog(action: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = NSLocalizedString("settings.unsaved_changes.title", comment: "Unsaved Changes")
+        alert.informativeText = String(format: NSLocalizedString("settings.unsaved_changes.message", comment: ""), action)
+        alert.alertStyle = .warning
+
+        // Add buttons (order matters for return value)
+        alert.addButton(withTitle: NSLocalizedString("common.save", comment: "Save"))
+        alert.addButton(withTitle: NSLocalizedString("settings.unsaved_changes.discard", comment: "Discard"))
+        alert.addButton(withTitle: NSLocalizedString("common.cancel", comment: "Cancel"))
+
+        let response = alert.runModal()
+
+        switch response {
+        case .alertFirstButtonReturn:
+            // Save button clicked
+            Task {
+                await saveBarState.onSave?()
+            }
+            return true  // Proceed after save
+
+        case .alertSecondButtonReturn:
+            // Discard button clicked
+            saveBarState.onCancel?()  // Revert changes
+            return true  // Proceed with discard
+
+        default:
+            // Cancel button clicked or dialog dismissed
+            return false  // Do not proceed
+        }
+    }
+
     /// Show an alert dialog
     private func showAlert(title: String, message: String, style: NSAlert.Style = .warning) {
         let alert = NSAlert()
@@ -410,6 +484,57 @@ struct RootContentView: View {
         alert.addButton(withTitle: confirmButton)
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
+    }
+}
+
+// MARK: - Settings Window Delegate
+
+/// Window delegate for Settings window to intercept close events
+class SettingsWindowDelegate: NSObject, NSWindowDelegate {
+    weak var saveBarState: SettingsSaveBarState?
+
+    /// Called when user attempts to close the window
+    /// Returns false to prevent close if there are unsaved changes
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard let saveBarState = saveBarState else {
+            return true  // No save state, allow close
+        }
+
+        // If no unsaved changes, allow close
+        guard saveBarState.hasUnsavedChanges else {
+            return true
+        }
+
+        // Show confirmation dialog
+        let alert = NSAlert()
+        alert.messageText = NSLocalizedString("settings.unsaved_changes.title", comment: "Unsaved Changes")
+        alert.informativeText = NSLocalizedString("settings.unsaved_changes.close_message", comment: "You have unsaved changes. Do you want to save them before closing?")
+        alert.alertStyle = .warning
+
+        // Add buttons (order matters for return value)
+        alert.addButton(withTitle: NSLocalizedString("common.save", comment: "Save"))
+        alert.addButton(withTitle: NSLocalizedString("settings.unsaved_changes.discard", comment: "Discard"))
+        alert.addButton(withTitle: NSLocalizedString("common.cancel", comment: "Cancel"))
+
+        let response = alert.runModal()
+
+        switch response {
+        case .alertFirstButtonReturn:
+            // Save button clicked
+            Task {
+                await saveBarState.onSave?()
+            }
+            return true  // Allow close after save
+
+        case .alertSecondButtonReturn:
+            // Discard button clicked
+            saveBarState.onCancel?()  // Revert changes
+            return true  // Allow close
+
+        default:
+            // Cancel button clicked or dialog dismissed
+            return false  // Prevent close
+        }
     }
 }
 
