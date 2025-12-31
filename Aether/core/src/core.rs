@@ -109,7 +109,7 @@ impl AetherCore {
 
         // Log configuration status for debugging
         {
-            let cfg = config.lock().unwrap();
+            let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
             info!(
                 providers_count = cfg.providers.len(),
                 rules_count = cfg.rules.len(),
@@ -121,7 +121,7 @@ impl AetherCore {
 
         // Initialize router (if providers are configured)
         let router = {
-            let cfg = config.lock().unwrap();
+            let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
             if !cfg.providers.is_empty() {
                 match Router::new(&cfg) {
                     Ok(r) => Some(Arc::new(r)),
@@ -137,7 +137,7 @@ impl AetherCore {
 
         // Initialize memory database and cleanup service if enabled
         let (memory_db, cleanup_service, cleanup_task_handle) = {
-            let cfg = config.lock().unwrap();
+            let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
             if cfg.memory.enabled {
                 let db_path = Self::get_memory_db_path()?;
                 match VectorDatabase::new(db_path.clone()) {
@@ -430,7 +430,10 @@ impl AetherCore {
     /// * `true` if typewriter was cancelled
     /// * `false` if no typewriter animation was running
     pub fn cancel_typewriter(&self) -> bool {
-        let is_typing = *self.is_typewriting.lock().unwrap();
+        let is_typing = *self.is_typewriting.lock().unwrap_or_else(|e| {
+            warn!("Mutex poisoned in is_typewriting (cancel_typewriter), recovering");
+            e.into_inner()
+        });
 
         if is_typing {
             info!("Cancelling typewriter animation");
@@ -443,7 +446,10 @@ impl AetherCore {
 
     /// Check if typewriter animation is currently running
     pub fn is_typewriting(&self) -> bool {
-        *self.is_typewriting.lock().unwrap()
+        *self.is_typewriting.lock().unwrap_or_else(|e| {
+            warn!("Mutex poisoned in is_typewriting (is_typewriting), recovering");
+            e.into_inner()
+        })
     }
 
     /// Retry the last failed request
@@ -457,7 +463,10 @@ impl AetherCore {
         use std::thread;
         use std::time::Duration;
 
-        let mut last_request_lock = self.last_request.lock().unwrap();
+        let mut last_request_lock = self.last_request.lock().unwrap_or_else(|e| {
+            warn!("Mutex poisoned in last_request (retry_last_request), recovering");
+            e.into_inner()
+        });
 
         let request_ctx = last_request_lock
             .as_mut()
@@ -514,7 +523,10 @@ impl AetherCore {
     /// * `clipboard_content` - The content being processed
     /// * `provider` - The AI provider being used
     pub fn store_request_context(&self, clipboard_content: String, provider: String) {
-        let mut last_request = self.last_request.lock().unwrap();
+        let mut last_request = self.last_request.lock().unwrap_or_else(|e| {
+            warn!("Mutex poisoned in last_request (store_request_context), recovering");
+            e.into_inner()
+        });
         *last_request = Some(RequestContext {
             clipboard_content,
             provider,
@@ -524,7 +536,10 @@ impl AetherCore {
 
     /// Clear stored request context
     pub fn clear_request_context(&self) {
-        let mut last_request = self.last_request.lock().unwrap();
+        let mut last_request = self.last_request.lock().unwrap_or_else(|e| {
+            warn!("Mutex poisoned in last_request (clear_request_context), recovering");
+            e.into_inner()
+        });
         *last_request = None;
     }
 
@@ -603,13 +618,13 @@ impl AetherCore {
 
     /// Get memory configuration
     pub fn get_memory_config(&self) -> MemoryConfig {
-        let config = self.config.lock().unwrap();
+        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         config.memory.clone()
     }
 
     /// Update memory configuration
     pub fn update_memory_config(&self, new_config: MemoryConfig) -> Result<()> {
-        let mut config = self.config.lock().unwrap();
+        let mut config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         let old_retention_days = config.memory.retention_days;
         config.memory = new_config.clone();
 
@@ -632,7 +647,10 @@ impl AetherCore {
 
     /// Set current context (called from Swift when hotkey pressed)
     pub fn set_current_context(&self, context: CapturedContext) {
-        let mut current_context = self.current_context.lock().unwrap();
+        let mut current_context = self.current_context.lock().unwrap_or_else(|e| {
+            warn!("Mutex poisoned in current_context (set_current_context), recovering");
+            e.into_inner()
+        });
         *current_context = Some(context);
     }
 
@@ -675,13 +693,16 @@ impl AetherCore {
         use crate::memory::ingestion::MemoryIngestion;
 
         // Check if memory is enabled
-        let config = self.config.lock().unwrap();
+        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         if !config.memory.enabled {
             return Err(AetherError::config("Memory is disabled"));
         }
 
         // Get current context
-        let current_context = self.current_context.lock().unwrap();
+        let current_context = self.current_context.lock().unwrap_or_else(|e| {
+            warn!("Mutex poisoned in current_context (AetherCore::store_interaction_memory), recovering");
+            e.into_inner()
+        });
         let captured_context = current_context
             .as_ref()
             .ok_or_else(|| AetherError::config("No context captured"))?;
@@ -758,14 +779,17 @@ impl AetherCore {
         let start_time = Instant::now();
 
         // Check if memory is enabled
-        let config = self.config.lock().unwrap();
+        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         if !config.memory.enabled {
             println!("[Memory] Disabled - using base prompt");
             return Ok(format!("{}\n\nUser: {}", base_prompt, user_input));
         }
 
         // Get current context
-        let current_context = self.current_context.lock().unwrap();
+        let current_context = self.current_context.lock().unwrap_or_else(|e| {
+            warn!("Mutex poisoned in current_context (retrieve_and_augment_prompt), recovering");
+            e.into_inner()
+        });
         let captured_context = match current_context.as_ref() {
             Some(ctx) => ctx,
             None => {
@@ -837,6 +861,101 @@ impl AetherCore {
         );
 
         Ok(augmented_prompt)
+    }
+
+    /// Retrieve memories and augment ONLY the user input (no system prompt)
+    ///
+    /// This is the NEW method for the refactored architecture where:
+    /// - System prompt is passed separately to the AI provider
+    /// - User input should not contain "User:" prefix
+    ///
+    /// # Arguments
+    /// * `user_input` - Current user input/query
+    ///
+    /// # Returns
+    /// * `Result<String>` - User input with optional memory context
+    pub fn retrieve_and_augment_user_input(&self, user_input: String) -> Result<String> {
+        use crate::memory::augmentation::PromptAugmenter;
+        use crate::memory::context::ContextAnchor;
+        use crate::memory::embedding::EmbeddingModel;
+        use crate::memory::retrieval::MemoryRetrieval;
+        use std::time::Instant;
+
+        let start_time = Instant::now();
+
+        // Check if memory is enabled
+        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        if !config.memory.enabled {
+            debug!("[Memory] Disabled - returning original user input");
+            return Ok(user_input);
+        }
+
+        // Get current context
+        let current_context = self.current_context.lock().unwrap_or_else(|e| {
+            warn!("Mutex poisoned in current_context (retrieve_and_augment_user_input), recovering");
+            e.into_inner()
+        });
+        let captured_context = match current_context.as_ref() {
+            Some(ctx) => ctx,
+            None => {
+                debug!("[Memory] No context captured, returning original user input");
+                return Ok(user_input);
+            }
+        };
+
+        // Create context anchor
+        let context_anchor = ContextAnchor {
+            app_bundle_id: captured_context.app_bundle_id.clone(),
+            window_title: captured_context.window_title.clone().unwrap_or_default(),
+            timestamp: chrono::Utc::now().timestamp(),
+        };
+
+        // Get memory database
+        let db = match self.memory_db.as_ref() {
+            Some(db) => db,
+            None => {
+                debug!("[Memory] Database not initialized, returning original user input");
+                return Ok(user_input);
+            }
+        };
+
+        // Get embedding model
+        let model_dir = Self::get_embedding_model_dir()?;
+        let embedding_model = Arc::new(EmbeddingModel::new(model_dir).map_err(|e| {
+            AetherError::config(format!("Failed to initialize embedding model: {}", e))
+        })?);
+
+        // Create retrieval service
+        let retrieval = MemoryRetrieval::new(
+            Arc::clone(db),
+            Arc::clone(&embedding_model),
+            Arc::new(config.memory.clone()),
+        );
+
+        // Retrieve memories
+        let memories = self
+            .runtime
+            .block_on(retrieval.retrieve_memories(&context_anchor, &user_input))?;
+
+        debug!(
+            "[Memory] Retrieved {} memories for user input augmentation",
+            memories.len()
+        );
+
+        // Augment user input (without system prompt)
+        let augmenter = PromptAugmenter::with_config(
+            config.memory.max_context_items as usize,
+            false,
+        );
+        let augmented_input = augmenter.augment_user_input(&memories, &user_input);
+
+        let total_time = start_time.elapsed();
+        debug!(
+            "[Memory] User input augmentation completed in {:?}",
+            total_time
+        );
+
+        Ok(augmented_input)
     }
 
     /// Process input with AI using the complete pipeline: Memory → Router → Provider → Storage
@@ -974,11 +1093,14 @@ impl AetherCore {
             })?;
 
         // Step 2: Retrieve memories and augment prompt (if enabled)
-        let config = self.config.lock().unwrap();
+        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         let base_system_prompt = "You are a helpful AI assistant.".to_string();
         let perf_logging_enabled = config.general.enable_performance_logging;
         drop(config); // Release lock before async operations
 
+        // FIXED: Only include user input in augmented_input, NOT the system prompt
+        // The system prompt is passed separately to provider.process()
+        // Including it here was causing the AI to respond in conversation format
         let augmented_input = if self.memory_db.is_some() {
             // Notify UI that we're retrieving memory
             self.event_handler
@@ -996,19 +1118,20 @@ impl AetherCore {
                 None
             };
 
-            match self.retrieve_and_augment_prompt(base_system_prompt.clone(), input.clone()) {
+            match self.retrieve_and_augment_user_input(input.clone()) {
                 Ok(augmented) => {
                     debug!("Memory augmentation succeeded");
                     augmented
                 }
                 Err(e) => {
                     warn!(error = %e, "Memory augmentation failed, using original input");
-                    // Fallback to original input
-                    format!("{}\n\nUser: {}", base_system_prompt, input)
+                    // Fallback to original input (no system prompt, no "User:" prefix)
+                    input.clone()
                 }
             }
         } else {
-            format!("{}\n\nUser: {}", base_system_prompt, input)
+            // No memory - just use the original input directly
+            input.clone()
         };
 
         let memory_time = start_time.elapsed();
@@ -1178,13 +1301,13 @@ impl AetherCore {
 
     /// Load configuration and return it in UniFFI-compatible format
     pub fn load_config(&self) -> Result<crate::config::FullConfig> {
-        let config = self.config.lock().unwrap();
+        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         Ok(config.clone().into())
     }
 
     /// Update provider configuration
     pub fn update_provider(&self, name: String, provider: crate::config::ProviderConfig) -> Result<()> {
-        let mut config = self.config.lock().unwrap();
+        let mut config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         config.providers.insert(name, provider);
         config.save()?;
         Ok(())
@@ -1192,7 +1315,7 @@ impl AetherCore {
 
     /// Delete provider configuration
     pub fn delete_provider(&self, name: String) -> Result<()> {
-        let mut config = self.config.lock().unwrap();
+        let mut config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         config.providers.remove(&name);
         config.save()?;
         Ok(())
@@ -1200,7 +1323,7 @@ impl AetherCore {
 
     /// Update routing rules
     pub fn update_routing_rules(&self, rules: Vec<crate::config::RoutingRuleConfig>) -> Result<()> {
-        let mut config = self.config.lock().unwrap();
+        let mut config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         config.rules = rules;
         config.validate()?;
         config.save()?;
@@ -1209,7 +1332,7 @@ impl AetherCore {
 
     /// Update shortcuts configuration
     pub fn update_shortcuts(&self, shortcuts: crate::config::ShortcutsConfig) -> Result<()> {
-        let mut config = self.config.lock().unwrap();
+        let mut config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         config.shortcuts = Some(shortcuts);
         config.save()?;
         log::info!("Shortcuts configuration updated");
@@ -1218,7 +1341,7 @@ impl AetherCore {
 
     /// Update behavior configuration
     pub fn update_behavior(&self, behavior: crate::config::BehaviorConfig) -> Result<()> {
-        let mut config = self.config.lock().unwrap();
+        let mut config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         config.behavior = Some(behavior);
         config.save()?;
         log::info!("Behavior configuration updated");
@@ -1241,7 +1364,7 @@ impl AetherCore {
         use crate::providers::create_provider;
 
         // Get provider config
-        let config = self.config.lock().unwrap();
+        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         let provider_config = match config.providers.get(&provider_name) {
             Some(cfg) => cfg.clone(),
             None => {
@@ -1382,7 +1505,7 @@ impl AetherCore {
     /// - Default provider does not exist
     /// - Default provider is disabled
     pub fn get_default_provider(&self) -> Option<String> {
-        let config = self.config.lock().unwrap();
+        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         config.get_default_provider()
     }
 
@@ -1395,7 +1518,7 @@ impl AetherCore {
     /// * `Ok(())` - Successfully set default provider
     /// * `Err` - Provider not found or disabled
     pub fn set_default_provider(&self, provider_name: String) -> Result<()> {
-        let mut config = self.config.lock().unwrap();
+        let mut config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         config.set_default_provider(&provider_name)?;
         config.save()?;
 
@@ -1411,7 +1534,7 @@ impl AetherCore {
     /// # Returns
     /// * `Vec<String>` - List of enabled provider names
     pub fn get_enabled_providers(&self) -> Vec<String> {
-        let config = self.config.lock().unwrap();
+        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         config.get_enabled_providers()
     }
 }
@@ -1435,13 +1558,16 @@ impl StorageHelper {
         use crate::memory::ingestion::MemoryIngestion;
 
         // Check if memory is enabled
-        let config = self.config.lock().unwrap();
+        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
         if !config.memory.enabled {
             return Err(AetherError::config("Memory is disabled"));
         }
 
         // Get current context
-        let current_context = self.current_context.lock().unwrap();
+        let current_context = self.current_context.lock().unwrap_or_else(|e| {
+            warn!("Mutex poisoned in current_context (StorageHelper::store_interaction_memory), recovering");
+            e.into_inner()
+        });
         let captured_context = current_context
             .as_ref()
             .ok_or_else(|| AetherError::config("No context captured"))?;
@@ -1680,7 +1806,7 @@ mod tests {
 
         // Enable memory but don't set context
         {
-            let mut config = core.config.lock().unwrap();
+            let mut config = core.config.lock().unwrap_or_else(|e| e.into_inner());
             config.memory.enabled = true;
         }
 
@@ -1709,7 +1835,7 @@ mod tests {
 
         // Enable memory and initialize database
         {
-            let mut config = core.config.lock().unwrap();
+            let mut config = core.config.lock().unwrap_or_else(|e| e.into_inner());
             config.memory.enabled = true;
         }
 

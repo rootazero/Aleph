@@ -54,6 +54,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // ESC key monitor for cancelling typewriter
     private var escapeKeyMonitor: Any?
 
+    // Store the frontmost app when hotkey is pressed
+    // Used to reactivate the correct app after Halo input mode selection
+    private var previousFrontmostApp: NSRunningApplication?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hide from Dock (menu bar only)
         NSApp.setActivationPolicy(.accessory)
@@ -626,6 +630,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
+        // CRITICAL: Store the current frontmost app BEFORE showing Halo
+        // This is essential for Halo mode to correctly reactivate the target app
+        previousFrontmostApp = NSWorkspace.shared.frontmostApplication
+        print("[AppDelegate] 📱 Stored frontmost app: \(previousFrontmostApp?.localizedName ?? "Unknown")")
+
         // Load input_mode from config (cut, copy, or halo)
         var inputModeString = "cut"
         do {
@@ -665,11 +674,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // Halo selection mode: Show selection UI first
             print("[AppDelegate] Mode: halo - showing selection UI")
             DispatchQueue.main.async { [weak self] in
-                self?.haloWindow?.show(at: mouseLocation)
-                self?.haloWindow?.updateState(.awaitingInputMode { [weak self] choice in
+                guard let self = self else { return }
+                self.haloWindow?.show(at: mouseLocation)
+                self.haloWindow?.updateState(.awaitingInputMode { [weak self] choice in
+                    guard let self = self else {
+                        print("[AppDelegate] ❌ Self is nil when user selected input mode")
+                        return
+                    }
+
                     // User selected input mode, proceed with processing
                     print("[AppDelegate] 📋 User selected: \(choice)")
-                    self?.processWithInputMode(choice)
+
+                    // CRITICAL: Hide the input mode selection and show listening state
+                    // This must happen before processing to avoid focus issues
+                    self.haloWindow?.updateState(.listening)
+
+                    // CRITICAL: Add a small delay to let the Halo UI update
+                    // and ensure the original app regains focus
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                        self?.processWithInputMode(choice)
+                    }
                 })
             }
         }
@@ -681,12 +705,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         guard core != nil else {
             print("[AppDelegate] ⚠️ Core not initialized")
+            // Show error in Halo
+            DispatchQueue.main.async { [weak self] in
+                self?.haloWindow?.updateState(.error(
+                    type: .unknown,
+                    message: NSLocalizedString("error.core_not_initialized", comment: "Core not initialized"),
+                    suggestion: NSLocalizedString("error.core_not_initialized.suggestion", comment: "Please restart the app")
+                ))
+            }
             return
         }
 
-        // Update Halo to listening state (in case we came from awaitingInputMode)
-        DispatchQueue.main.async { [weak self] in
-            self?.haloWindow?.updateState(.listening)
+        // Halo state is already set to .listening by the caller (handleHotkeyPressed)
+        // No need to update it again here
+
+        // CRITICAL: Reactivate the previous frontmost app for keyboard events
+        // This is essential when coming from Halo input mode selection
+        if let previousApp = previousFrontmostApp,
+           previousApp.bundleIdentifier != Bundle.main.bundleIdentifier {
+            print("[AppDelegate] 🔄 Reactivating previous app: \(previousApp.localizedName ?? "Unknown")")
+            previousApp.activate(options: [])
+            Thread.sleep(forTimeInterval: 0.15)  // Give time for activation
         }
 
         let useCutMode = (choice == .replace)
@@ -903,77 +942,57 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     truncatedResponse = response
                 }
 
-                // Type response using Swift KeyboardSimulator
-                // This replaces Rust's typewriter implementation
+                // Output AI response using paste (more reliable than typewriter)
+                // NOTE: Using paste instead of typewriter because CGEvent-based typing
+                // can fail silently when the target app doesn't properly receive events
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
+
+                    print("[AppDelegate] 🎯 Starting output phase...")
+                    print("[AppDelegate] 📍 Text source: \(textSource), Replace mode: \(useCutMode)")
+
+                    // CRITICAL: Add small delay to ensure UI is stable before keyboard simulation
+                    // This helps when focus might have shifted during AI processing
+                    Thread.sleep(forTimeInterval: 0.1)
 
                     // CRITICAL: Prepare cursor position based on text source and input mode
                     // This ensures AI response is placed correctly (replace vs append)
                     self.prepareOutputPosition(textSource: textSource, useCutMode: useCutMode)
 
-                    // Create cancellation token for this typewriter session
-                    self.typewriterCancellation = CancellationToken()
+                    // Small delay after cursor positioning
+                    Thread.sleep(forTimeInterval: 0.05)
 
-                    // Get typing speed from config (default to 50 chars/sec)
-                    let typingSpeed = 50 // TODO: Read from config when available
+                    // Use paste for reliable output (typewriter can fail silently)
+                    print("[AppDelegate] 📋 Setting clipboard with AI response (\(truncatedResponse.count) chars)")
+                    ClipboardManager.shared.setText(truncatedResponse)
 
-                    // Type the response
-                    Task {
-                        do {
-                            let typedCount = await KeyboardSimulator.shared.typeText(
-                                truncatedResponse,
-                                speed: typingSpeed,
-                                cancellationToken: self.typewriterCancellation
-                            )
+                    // Small delay to ensure clipboard is updated
+                    Thread.sleep(forTimeInterval: 0.05)
 
-                            if typedCount < truncatedResponse.count {
-                                print("[AppDelegate] ⏸ Typewriter cancelled by user (\(typedCount)/\(truncatedResponse.count) chars typed)")
-                                // Paste remaining text instantly
-                                let remaining = String(truncatedResponse.dropFirst(typedCount))
-                                ClipboardManager.shared.setText(remaining)
-                                KeyboardSimulator.shared.simulatePaste()
-                            } else {
-                                print("[AppDelegate] ✅ Response typed successfully (\(typedCount) chars)")
-                            }
+                    // Simulate paste
+                    print("[AppDelegate] 📋 Simulating Cmd+V to paste response")
+                    let pasteSuccess = KeyboardSimulator.shared.simulatePaste()
+                    print("[AppDelegate] 📋 Paste result: \(pasteSuccess ? "success" : "failed")")
 
-                            // Clear cancellation token
-                            self.typewriterCancellation = nil
-
-                            // CRITICAL: Restore original clipboard after a small delay
-                            // This ensures user's pre-existing clipboard data is not lost
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                if let original = originalClipboardText {
-                                    ClipboardManager.shared.setText(original)
-                                    print("[AppDelegate] ♻️ Restored original clipboard content")
-                                } else {
-                                    ClipboardManager.shared.clear()
-                                    print("[AppDelegate] ♻️ Cleared clipboard (original was empty)")
-                                }
-                            }
-
-                            // Update Halo to success state
-                            DispatchQueue.main.async { [weak self] in
-                                self?.haloWindow?.updateState(.success(finalText: String(truncatedResponse.prefix(100))))
-                                // Auto-hide after 2 seconds
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                                    self?.haloWindow?.hide()
-                                }
-                            }
-                        } catch {
-                            print("[AppDelegate] ❌ Error during typewriter: \(error)")
-                            // Fall back to instant paste if typewriter fails
-                            ClipboardManager.shared.setText(truncatedResponse)
-                            KeyboardSimulator.shared.simulatePaste()
-
-                            // Restore original clipboard after paste completes
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                                if let original = originalClipboardText {
-                                    ClipboardManager.shared.setText(original)
-                                    print("[AppDelegate] ♻️ Restored original clipboard content (after error)")
-                                }
-                            }
+                    // CRITICAL: Restore original clipboard after a delay
+                    // This ensures user's pre-existing clipboard data is not lost
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        if let original = originalClipboardText {
+                            ClipboardManager.shared.setText(original)
+                            print("[AppDelegate] ♻️ Restored original clipboard content")
+                        } else {
+                            ClipboardManager.shared.clear()
+                            print("[AppDelegate] ♻️ Cleared clipboard (original was empty)")
                         }
+                    }
+
+                    // Update Halo to success state and hide
+                    print("[AppDelegate] ✅ Output complete, updating Halo to success state")
+                    self.haloWindow?.updateState(.success(finalText: String(truncatedResponse.prefix(100))))
+
+                    // Auto-hide Halo after 1.5 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                        self?.haloWindow?.hide()
                     }
                 }
             } catch {
@@ -1026,11 +1045,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// - Text source: Where the input text came from
     /// - Input mode: Whether user wants to replace or append
     ///
-    /// | Text Source      | Replace Mode      | Append Mode           |
-    /// |------------------|-------------------|-----------------------|
-    /// | selectedText     | No action needed  | Move to selection end |
-    /// | accessibilityAPI | Cmd+A to select   | Cmd+End to move end   |
-    /// | selectAll        | No action needed  | Cmd+End to move end   |
+    /// | Text Source      | Replace Mode      | Append Mode             |
+    /// |------------------|-------------------|-------------------------|
+    /// | selectedText     | No action needed  | Move to selection end   |
+    /// | accessibilityAPI | Cmd+A to select   | Cmd+Down to move to end |
+    /// | selectAll        | No action needed  | Cmd+Down to move to end |
     private func prepareOutputPosition(textSource: TextSource, useCutMode: Bool) {
         print("[AppDelegate] 🎯 Preparing output position: source=\(textSource), replace=\(useCutMode)")
 

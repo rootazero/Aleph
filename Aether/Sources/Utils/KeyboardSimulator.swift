@@ -62,12 +62,13 @@ class KeyboardSimulator {
         return simulateShortcut(key: CGKeyCode(kVK_ANSI_A))
     }
 
-    /// Simulate Cmd+End (Move to end of document)
+    /// Simulate Cmd+Down Arrow (Move to end of document)
     ///
+    /// On macOS, Cmd+End doesn't work reliably. Use Cmd+Down Arrow instead.
     /// - Returns: True if successful, false otherwise
     @discardableResult
     func simulateMoveToEnd() -> Bool {
-        return simulateShortcut(key: CGKeyCode(kVK_End))
+        return simulateShortcut(key: CGKeyCode(kVK_DownArrow))
     }
 
     /// Simulate a single key press (without modifiers)

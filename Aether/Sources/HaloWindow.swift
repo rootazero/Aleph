@@ -61,6 +61,19 @@ class HaloWindow: NSWindow {
         self.orderOut(nil)
     }
 
+    // MARK: - Focus Prevention
+
+    /// CRITICAL: Prevent Halo from becoming key window
+    /// This ensures keyboard events always go to the original app
+    override var canBecomeKey: Bool {
+        return false
+    }
+
+    /// CRITICAL: Prevent Halo from becoming main window
+    override var canBecomeMain: Bool {
+        return false
+    }
+
     // MARK: - Public API
 
     /// Set event handler reference for error action callbacks

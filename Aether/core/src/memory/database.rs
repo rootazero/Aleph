@@ -97,19 +97,22 @@ impl VectorDatabase {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Query memories matching the context
+        // If app_bundle_id or window_title is empty, treat it as "any value"
         let mut stmt = conn
             .prepare(
                 r#"
             SELECT id, app_bundle_id, window_title, user_input, ai_output, embedding, timestamp
             FROM memories
-            WHERE app_bundle_id = ?1 AND window_title = ?2
+            WHERE (?1 = '' OR app_bundle_id = ?1)
+              AND (?2 = '' OR window_title = ?2)
             ORDER BY timestamp DESC
+            LIMIT ?3
             "#,
             )
             .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
 
         let memories = stmt
-            .query_map(params![app_bundle_id, window_title], |row| {
+            .query_map(params![app_bundle_id, window_title, limit], |row| {
                 let id: String = row.get(0)?;
                 let app_id: String = row.get(1)?;
                 let window: String = row.get(2)?;

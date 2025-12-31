@@ -84,6 +84,44 @@ impl PromptAugmenter {
         )
     }
 
+    /// Augment ONLY the user input with memory context (no system prompt, no "User:" prefix)
+    ///
+    /// This is the NEW method for the refactored architecture where:
+    /// - System prompt is passed separately to the AI provider
+    /// - User input should not contain "User:" prefix (it's added by the API)
+    ///
+    /// # Arguments
+    /// * `memories` - Retrieved memories to include as context
+    /// * `current_input` - Current user input text
+    ///
+    /// # Returns
+    /// * User input string, optionally prefixed with memory context
+    pub fn augment_user_input(
+        &self,
+        memories: &[MemoryEntry],
+        current_input: &str,
+    ) -> String {
+        // If no memories, return just the user input (no prefix)
+        if memories.is_empty() {
+            return current_input.to_string();
+        }
+
+        // Limit number of memories
+        let memories_to_include = memories.iter().take(self.max_memories);
+
+        // Format memories
+        let context_history = self.format_memories(memories_to_include);
+
+        // Construct user input with memory context
+        // Use a simple format that won't confuse the AI
+        // The memory context is provided as background information, then the actual request follows
+        format!(
+            "Previous context for reference:\n{}\n\n---\n\n{}",
+            context_history,
+            current_input
+        )
+    }
+
     /// Format memories into human-readable context
     fn format_memories<'a, I>(&self, memories: I) -> String
     where
