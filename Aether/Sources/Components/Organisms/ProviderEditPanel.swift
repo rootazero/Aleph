@@ -238,33 +238,44 @@ struct ProviderEditPanel: View {
 
                         Spacer()
 
-                        // Action buttons row: Test Connection + Set as Default + Active Toggle
-                        HStack(spacing: DesignTokens.Spacing.md) {
-                            // Test Connection button
-                            Button(action: testConnection) {
-                                HStack(spacing: 4) {
-                                    if isTesting {
-                                        ProgressView()
-                                            .scaleEffect(0.7)
-                                            .frame(width: 14, height: 14)
-                                    } else {
-                                        Image(systemName: "network")
-                                            .font(.system(size: 12))
+                        // Action buttons area: Two-row layout
+                        // Row 1: Test Connection (left) + Active Toggle (right)
+                        // Row 2: Set as Default Toggle (right-aligned)
+                        VStack(alignment: .trailing, spacing: DesignTokens.Spacing.sm) {
+                            // First row: Test Connection + Active toggle
+                            HStack(spacing: DesignTokens.Spacing.md) {
+                                // Test Connection button
+                                Button(action: testConnection) {
+                                    HStack(spacing: 4) {
+                                        if isTesting {
+                                            ProgressView()
+                                                .scaleEffect(0.7)
+                                                .frame(width: 14, height: 14)
+                                        } else {
+                                            Image(systemName: "network")
+                                                .font(.system(size: 12))
+                                        }
+                                        Text(isTesting ? NSLocalizedString("provider.button.testing", comment: "") : NSLocalizedString("common.test_connection", comment: ""))
+                                            .font(.system(size: 12, weight: .medium))
                                     }
-                                    Text(isTesting ? NSLocalizedString("provider.button.testing", comment: "") : NSLocalizedString("common.test_connection", comment: ""))
-                                        .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(canTestConnection ? Color(hex: "#007AFF") ?? .blue : DesignTokens.Colors.textSecondary.opacity(0.3))
+                                    .cornerRadius(6)
                                 }
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(canTestConnection ? Color(hex: "#007AFF") ?? .blue : DesignTokens.Colors.textSecondary.opacity(0.3))
-                                .cornerRadius(6)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!canTestConnection || isTesting)
-                            .help(canTestConnection ? NSLocalizedString("common.test_connection", comment: "") : "Configure API key and model first")
+                                .buttonStyle(.plain)
+                                .disabled(!canTestConnection || isTesting)
+                                .help(canTestConnection ? NSLocalizedString("common.test_connection", comment: "") : "Configure API key and model first")
 
-                            // Set as Default toggle (NEW - replaces button with toggle)
+                                Spacer()
+
+                                // Active toggle (right-aligned)
+                                Toggle(NSLocalizedString("provider.field.active", comment: ""), isOn: $isProviderActive)
+                                    .toggleStyle(.switch)
+                            }
+
+                            // Second row: Set as Default toggle (right-aligned with Active toggle above)
                             if !isAddingNew {
                                 Toggle(isOn: isDefaultBinding) {
                                     Text(NSLocalizedString("provider.action.set_default", comment: "Set as Default"))
@@ -274,10 +285,6 @@ struct ProviderEditPanel: View {
                                 .disabled(!isProviderActive)
                                 .help(isProviderActive ? NSLocalizedString("provider.help.set_default", comment: "") : NSLocalizedString("provider.help.set_default_disabled", comment: ""))
                             }
-
-                            // Active toggle (iOS-style switch)
-                            Toggle(NSLocalizedString("provider.field.active", comment: ""), isOn: $isProviderActive)
-                                .toggleStyle(.switch)
                         }
                     }
 
