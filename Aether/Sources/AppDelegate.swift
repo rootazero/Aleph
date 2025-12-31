@@ -174,6 +174,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         let hostingController = NSHostingController(rootView: settingsView)
 
+        // CRITICAL: Disable NSHostingController's automatic window sizing
+        // This prevents SwiftUI from auto-adjusting the window based on content
+        hostingController.sizingOptions = []
+
         // CRITICAL: Remove safe area insets to ensure content starts at window edge
         hostingController.view.wantsLayer = true
         hostingController.view.layer?.masksToBounds = false
@@ -201,9 +205,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Set initial content size (will be enforced by minSize)
         window.setContentSize(NSSize(width: 980, height: 750))
 
+        print("[AppDelegate] Window constraints set:")
+        print("  - minSize: \(window.minSize)")
+        print("  - maxSize: \(window.maxSize)")
+        print("  - contentSize: \(window.frame.size)")
+
         // NOW set the content view controller
         // SwiftUI will adapt to the window size, not the other way around
         window.contentViewController = hostingController
+
+        print("[AppDelegate] After setting contentViewController:")
+        print("  - frame size: \(window.frame.size)")
+        print("  - contentSize: \(window.contentLayoutRect.size)")
+        print("  - minSize: \(window.minSize)")
 
         // Center after all size settings are applied
         window.center()
@@ -223,6 +237,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Show window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+
+        // IMPORTANT: Force window size constraints after showing
+        // Some SwiftUI layouts may try to adjust size after first layout pass
+        DispatchQueue.main.async {
+            window.setContentSize(NSSize(width: 980, height: 750))
+            window.minSize = NSSize(width: 980, height: 750)
+            print("[AppDelegate] Final window size enforced:")
+            print("  - frame size: \(window.frame.size)")
+            print("  - minSize: \(window.minSize)")
+        }
     }
 
     @objc private func quit() {
