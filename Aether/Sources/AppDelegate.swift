@@ -150,14 +150,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
-        // Check if settings window already exists
-        if let window = settingsWindow, window.isVisible {
-            // Window exists and is visible, reset to minimum size and bring to front
-            window.setContentSize(NSSize(width: 980, height: 750))
-            window.center()
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
+        // Check if settings window already exists and is valid
+        // First check if reference exists and window is still alive (not released)
+        if let window = settingsWindow {
+            // Safely check if window is still valid before accessing properties
+            if window.isVisible {
+                // Window exists and is visible, reset to minimum size and bring to front
+                window.setContentSize(NSSize(width: 980, height: 750))
+                window.center()
+                window.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                return
+            } else {
+                // Window exists but not visible, clean up stale reference
+                settingsWindow = nil
+            }
         }
 
         // Create new settings window with RootContentView
@@ -186,8 +193,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Prevent window from hiding when losing focus
         window.hidesOnDeactivate = false
-        // IMPORTANT: Set to true to recreate window with default size on next open
-        window.isReleasedWhenClosed = true
+        // IMPORTANT: Do NOT auto-release window on close to prevent crashes
+        // We manually manage window lifecycle in windowWillClose
+        window.isReleasedWhenClosed = false
 
         // Set window delegate to clear reference on close
         window.delegate = self
