@@ -65,11 +65,19 @@ struct ShortcutsView: View {
 
                         // Mode description
                         switch currentHotkeyMode {
+                        case .doubleTapShift:
+                            HStack(spacing: DesignTokens.Spacing.sm) {
+                                Image(systemName: "info.circle")
+                                    .foregroundColor(DesignTokens.Colors.accentBlue)
+                                Text("快速双击 Shift 键触发 Aether，不会与任何输入法冲突")
+                                    .font(DesignTokens.Typography.caption)
+                                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                            }
                         case .doubleTap:
                             HStack(spacing: DesignTokens.Spacing.sm) {
                                 Image(systemName: "info.circle")
                                     .foregroundColor(DesignTokens.Colors.accentBlue)
-                                Text("快速双击空格键触发 Aether，第一次按键会正常输入空格")
+                                Text("快速双击指定键触发 Aether")
                                     .font(DesignTokens.Typography.caption)
                                     .foregroundColor(DesignTokens.Colors.textSecondary)
                             }
@@ -133,12 +141,12 @@ struct ShortcutsView: View {
 
                     VStack(spacing: DesignTokens.Spacing.sm) {
                         PresetHotkeyRow(
-                            name: "双击空格键",
-                            mode: .default,
+                            name: "双击 ⇧ Shift",
+                            mode: .doubleTapShift,
                             description: "默认设置，无输入法冲突",
-                            isSelected: currentHotkeyMode == .default
+                            isSelected: currentHotkeyMode == .doubleTapShift
                         ) {
-                            applyHotkey(.default)
+                            applyHotkey(.doubleTapShift)
                         }
 
                         PresetHotkeyRow(
@@ -278,7 +286,7 @@ struct ShortcutsView: View {
     private func detectConflict(for mode: HotkeyMode) -> String? {
         // Check for common system hotkey conflicts
         switch mode {
-        case .doubleTap:
+        case .doubleTapShift, .doubleTap:
             return nil // Double-tap is safe
 
         case .modifierCombo(let keyCode, let modifiers):

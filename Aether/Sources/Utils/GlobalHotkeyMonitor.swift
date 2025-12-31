@@ -16,15 +16,18 @@ import IOKit.hid
 
 /// Hotkey mode enumeration
 enum HotkeyMode: Equatable {
-    /// Double-tap a key (default: Space)
+    /// Double-tap a key (default: Shift)
     case doubleTap(keyCode: UInt16)
+
+    /// Double-tap Shift key (either left or right)
+    case doubleTapShift
 
     /// Modifier + key combo (requires at least one modifier)
     case modifierCombo(keyCode: UInt16, modifiers: CGEventFlags)
 
-    /// Default hotkey: double-tap Space
+    /// Default hotkey: double-tap Shift
     static var `default`: HotkeyMode {
-        .doubleTap(keyCode: 49) // Space key
+        .doubleTapShift
     }
 
     /// Parse from config string format
@@ -34,8 +37,12 @@ enum HotkeyMode: Equatable {
 
         // Check for DoubleTap prefix
         if components.first?.lowercased() == "doubletap" {
-            let keyName = components.dropFirst().joined(separator: "+")
-            let keyCode = keyCodeForName(keyName.isEmpty ? "space" : keyName.lowercased())
+            let keyName = components.dropFirst().joined(separator: "+").lowercased()
+            // Special case for Shift
+            if keyName == "shift" || keyName.isEmpty {
+                return .doubleTapShift
+            }
+            let keyCode = keyCodeForName(keyName)
             return .doubleTap(keyCode: keyCode)
         }
 
@@ -64,6 +71,8 @@ enum HotkeyMode: Equatable {
 
     var configString: String {
         switch self {
+        case .doubleTapShift:
+            return "DoubleTap+Shift"
         case .doubleTap(let keyCode):
             return "DoubleTap+\(nameForKeyCode(keyCode))"
         case .modifierCombo(let keyCode, let modifiers):
@@ -79,6 +88,8 @@ enum HotkeyMode: Equatable {
 
     var displayString: String {
         switch self {
+        case .doubleTapShift:
+            return "双击 ⇧ Shift"
         case .doubleTap(let keyCode):
             return "双击 \(symbolForKeyCode(keyCode))"
         case .modifierCombo(let keyCode, let modifiers):
@@ -89,6 +100,19 @@ enum HotkeyMode: Equatable {
             if modifiers.contains(.maskCommand) { parts.append("⌘") }
             parts.append(symbolForKeyCode(keyCode))
             return parts.joined(separator: " + ")
+        }
+    }
+
+    static func == (lhs: HotkeyMode, rhs: HotkeyMode) -> Bool {
+        switch (lhs, rhs) {
+        case (.doubleTapShift, .doubleTapShift):
+            return true
+        case (.doubleTap(let a), .doubleTap(let b)):
+            return a == b
+        case (.modifierCombo(let kc1, let m1), .modifierCombo(let kc2, let m2)):
+            return kc1 == kc2 && m1 == m2
+        default:
+            return false
         }
     }
 }
@@ -202,6 +226,15 @@ class GlobalHotkeyMonitor {
         }
 
         switch hotkeyMode {
+        case .doubleTapShift:
+            // Use CGEventTap for Shift key (flagsChanged events)
+            let success = startShiftMonitoring()
+            if success {
+                isMonitoring = true
+                print("[GlobalHotkeyMonitor] Started Shift monitoring for: \(hotkeyMode.displayString)")
+            }
+            return success
+
         case .doubleTap:
             // Use IOHIDManager for double-tap (bypasses input method)
             let success = startHIDMonitoring()
@@ -227,11 +260,104 @@ class GlobalHotkeyMonitor {
 
         stopHIDMonitoring()
         stopEventTapMonitoring()
+        stopShiftMonitoring()
 
         isMonitoring = false
         lastKeyPressTime = nil
         lastKeyCode = 0
+        lastShiftState = false
         print("[GlobalHotkeyMonitor] Stopped monitoring")
+    }
+
+    // MARK: - Shift Key Monitoring (for double-tap Shift)
+
+    private var shiftEventTap: CFMachPort?
+    private var shiftRunLoopSource: CFRunLoopSource?
+    private var lastShiftState: Bool = false
+
+    private func startShiftMonitoring() -> Bool {
+        // Monitor flagsChanged events for Shift key
+        let eventMask = (1 << CGEventType.flagsChanged.rawValue)
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .listenOnly,  // Just listen, don't intercept
+            eventsOfInterest: CGEventMask(eventMask),
+            callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
+                guard let refcon = refcon else {
+                    return Unmanaged.passRetained(event)
+                }
+                let monitor = Unmanaged<GlobalHotkeyMonitor>.fromOpaque(refcon).takeUnretainedValue()
+                monitor.handleShiftEvent(event: event)
+                return Unmanaged.passRetained(event)
+            },
+            userInfo: selfPtr
+        ) else {
+            print("[GlobalHotkeyMonitor] ERROR: Failed to create CGEventTap for Shift")
+            return false
+        }
+
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+
+        self.shiftEventTap = tap
+        self.shiftRunLoopSource = source
+        return true
+    }
+
+    private func stopShiftMonitoring() {
+        if let source = shiftRunLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            shiftRunLoopSource = nil
+        }
+        if let tap = shiftEventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            shiftEventTap = nil
+        }
+    }
+
+    private func handleShiftEvent(event: CGEvent) {
+        let flags = event.flags
+
+        // Check if Shift is currently pressed
+        let shiftPressed = flags.contains(.maskShift)
+
+        // Detect Shift key release (was pressed, now released)
+        if lastShiftState && !shiftPressed {
+            // Shift was just released - this is a "tap"
+            handleShiftTap()
+        }
+
+        lastShiftState = shiftPressed
+    }
+
+    private func handleShiftTap() {
+        let now = Date()
+
+        if let lastTime = lastKeyPressTime {
+            let interval = now.timeIntervalSince(lastTime)
+
+            if interval <= doubleTapThreshold {
+                print("[GlobalHotkeyMonitor] Double-tap Shift detected! Triggering Aether...")
+
+                lastKeyPressTime = nil
+
+                DispatchQueue.main.async { [weak self] in
+                    self?.callback()
+                }
+                return
+            }
+        }
+
+        // First tap or too slow
+        lastKeyPressTime = now
+
+        if debugMode {
+            print("[GlobalHotkeyMonitor] First Shift tap recorded, waiting for second...")
+        }
     }
 
     // MARK: - IOHIDManager (for double-tap)
