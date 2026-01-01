@@ -202,6 +202,9 @@ class KeyboardSimulator {
 
     /// Type a single character using Unicode string
     ///
+    /// Uses the correct CGEvent pattern: create one event, set Unicode string,
+    /// post keyDown, change type to keyUp, post keyUp.
+    ///
     /// - Parameter char: Character to type
     /// - Returns: True if successful
     private func typeCharacter(_ char: Character) -> Bool {
@@ -212,29 +215,24 @@ class KeyboardSimulator {
             return typeSpecialKey(specialKey)
         }
 
-        // Create key down event with Unicode string
-        guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
+        // Create a single keyboard event (keyDown initially)
+        // CRITICAL: Use the same event object for both keyDown and keyUp
+        guard let keyEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
             return false
         }
 
-        // Set Unicode string for key down
+        // Set Unicode string (only needs to be set once)
         var unicodeChars = Array(string.utf16)
-        keyDown.keyboardSetUnicodeString(stringLength: unicodeChars.count, unicodeString: &unicodeChars)
-        keyDown.post(tap: .cghidEventTap)
+        keyEvent.keyboardSetUnicodeString(stringLength: unicodeChars.count, unicodeString: &unicodeChars)
 
-        // Delay between key down and key up
-        // CRITICAL: Use longer delay to prevent system warning sounds
-        usleep(5_000) // 5ms - increased from 1ms for stability
+        // Post key down event
+        keyEvent.post(tap: .cghidEventTap)
 
-        // Create key up event
-        guard let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else {
-            return false
-        }
+        // Change event type to key up
+        keyEvent.type = .keyUp
 
-        // CRITICAL: Also set Unicode string for key up event
-        // This ensures proper key release and prevents system warning sounds
-        keyUp.keyboardSetUnicodeString(stringLength: unicodeChars.count, unicodeString: &unicodeChars)
-        keyUp.post(tap: .cghidEventTap)
+        // Post key up event (reusing the same event with Unicode string already set)
+        keyEvent.post(tap: .cghidEventTap)
 
         return true
     }
