@@ -42,6 +42,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Permission gate active state
     private var isPermissionGateActive: Bool = false
 
+    // First-time initialization window
+    private var initializationWindow: NSWindow?
+
     // Theme engine
     private var themeEngine: ThemeEngine?
 
@@ -79,9 +82,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 // Show mandatory permission gate if any permission is missing
                 self.showPermissionGate()
             } else {
-                print("[Aether] ✅ All permissions granted, proceeding with initialization")
-                // All permissions granted, proceed with normal initialization
-                self.initializeAppComponents()
+                print("[Aether] ✅ All permissions granted, checking if first-run initialization needed...")
+
+                // Check if this is a fresh installation
+                self.checkAndRunFirstTimeInit()
             }
         }
     }
@@ -555,8 +559,92 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         permissionGateWindow?.close()
         permissionGateWindow = nil
 
-        // Initialize app components now that permissions are granted
-        initializeAppComponents()
+        // Check if first-time initialization is needed
+        checkAndRunFirstTimeInit()
+    }
+
+    // MARK: - First-Time Initialization
+
+    /// Check if this is a fresh install and run initialization if needed
+    private func checkAndRunFirstTimeInit() {
+        do {
+            let isFresh = try isFreshInstall()
+
+            if isFresh {
+                print("[Aether] 🆕 Fresh installation detected - running first-time initialization...")
+                showInitializationWindow()
+            } else {
+                print("[Aether] Existing installation detected - skipping initialization")
+                initializeAppComponents()
+            }
+        } catch {
+            print("[Aether] ❌ Error checking installation status: \(error)")
+            print("[Aether] Proceeding with normal initialization anyway")
+            initializeAppComponents()
+        }
+    }
+
+    /// Show the first-time initialization progress window
+    private func showInitializationWindow() {
+        let initView = InitializationProgressView(
+            onCompletion: { [weak self] in
+                DispatchQueue.main.async {
+                    print("[Aether] Initialization completed - proceeding with app startup")
+                    self?.closeInitializationWindow()
+                    self?.initializeAppComponents()
+                }
+            },
+            onFailure: { [weak self] error in
+                DispatchQueue.main.async {
+                    print("[Aether] Initialization failed: \(error)")
+
+                    // Show error alert
+                    let alert = NSAlert()
+                    alert.messageText = "Initialization Failed"
+                    alert.informativeText = "Aether failed to complete first-time initialization.\n\nError: \(error)\n\nPlease check your internet connection and try again."
+                    alert.alertStyle = .critical
+                    alert.addButton(withTitle: "Quit")
+                    alert.addButton(withTitle: "Retry")
+
+                    let response = alert.runModal()
+                    if response == .alertFirstButtonReturn {
+                        // Quit
+                        NSApp.terminate(nil)
+                    } else {
+                        // Retry
+                        self?.showInitializationWindow()
+                    }
+                }
+            }
+        )
+
+        let hostingController = NSHostingController(rootView: initView)
+
+        // Create window
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 400),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+
+        window.title = "Initializing Aether"
+        window.contentViewController = hostingController
+        window.center()
+        window.level = .floating
+        window.isReleasedWhenClosed = false
+
+        initializationWindow = window
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        print("[Aether] Initialization window shown")
+    }
+
+    /// Close the initialization window
+    private func closeInitializationWindow() {
+        initializationWindow?.close()
+        initializationWindow = nil
     }
 
     /// Initialize all app components (theme, halo, event handler, core)

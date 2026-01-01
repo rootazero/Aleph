@@ -131,6 +131,13 @@ int8_t uniffi_aethecore_fn_method_aethercore_validate_regex(void*_Nonnull ptr, R
 );
 void uniffi_aethecore_fn_init_callback_aethereventhandler(ForeignCallback _Nonnull callback_stub, RustCallStatus *_Nonnull out_status
 );
+void uniffi_aethecore_fn_init_callback_initializationprogresshandler(ForeignCallback _Nonnull callback_stub, RustCallStatus *_Nonnull out_status
+);
+int8_t uniffi_aethecore_fn_func_is_fresh_install(RustCallStatus *_Nonnull out_status
+    
+);
+void uniffi_aethecore_fn_func_run_first_time_init(RustBuffer progress_handler, RustCallStatus *_Nonnull out_status
+);
 RustBuffer ffi_aethecore_rustbuffer_alloc(int32_t size, RustCallStatus *_Nonnull out_status
 );
 RustBuffer ffi_aethecore_rustbuffer_from_bytes(ForeignBytes bytes, RustCallStatus *_Nonnull out_status
@@ -244,6 +251,12 @@ void ffi_aethecore_rust_future_cancel_void(void* _Nonnull handle
 void ffi_aethecore_rust_future_free_void(void* _Nonnull handle
 );
 void ffi_aethecore_rust_future_complete_void(void* _Nonnull handle, RustCallStatus *_Nonnull out_status
+);
+uint16_t uniffi_aethecore_checksum_func_is_fresh_install(void
+    
+);
+uint16_t uniffi_aethecore_checksum_func_run_first_time_init(void
+    
 );
 uint16_t uniffi_aethecore_checksum_method_aethercore_cleanup_old_memories(void
     
@@ -372,6 +385,24 @@ uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_typewriter_progr
     
 );
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_typewriter_cancelled(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_initializationprogresshandler_on_init_started(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_initializationprogresshandler_on_step_started(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_initializationprogresshandler_on_download_progress(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_initializationprogresshandler_on_step_completed(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_initializationprogresshandler_on_init_completed(void
+    
+);
+uint16_t uniffi_aethecore_checksum_method_initializationprogresshandler_on_init_failed(void
     
 );
 uint32_t ffi_aethecore_uniffi_contract_version(void

@@ -2521,6 +2521,242 @@ extension FfiConverterCallbackInterfaceAetherEventHandler : FfiConverter {
     }
 }
 
+
+
+// Declaration and FfiConverters for InitializationProgressHandler Callback Interface
+
+public protocol InitializationProgressHandler : AnyObject {
+    func onInitStarted() 
+    func onStepStarted(stepName: String, current: UInt32, total: UInt32) 
+    func onDownloadProgress(downloadedBytes: UInt64, totalBytes: UInt64) 
+    func onStepCompleted(stepName: String) 
+    func onInitCompleted() 
+    func onInitFailed(error: String) 
+    
+}
+
+// The ForeignCallback that is passed to Rust.
+fileprivate let foreignCallbackCallbackInterfaceInitializationProgressHandler : ForeignCallback =
+    { (handle: UniFFICallbackHandle, method: Int32, argsData: UnsafePointer<UInt8>, argsLen: Int32, out_buf: UnsafeMutablePointer<RustBuffer>) -> Int32 in
+    
+
+    func invokeOnInitStarted(_ swiftCallbackInterface: InitializationProgressHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.onInitStarted(
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        return try makeCall()
+    }
+
+    func invokeOnStepStarted(_ swiftCallbackInterface: InitializationProgressHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.onStepStarted(
+                    stepName:  try FfiConverterString.read(from: &reader), 
+                    current:  try FfiConverterUInt32.read(from: &reader), 
+                    total:  try FfiConverterUInt32.read(from: &reader)
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        return try makeCall()
+    }
+
+    func invokeOnDownloadProgress(_ swiftCallbackInterface: InitializationProgressHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.onDownloadProgress(
+                    downloadedBytes:  try FfiConverterUInt64.read(from: &reader), 
+                    totalBytes:  try FfiConverterUInt64.read(from: &reader)
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        return try makeCall()
+    }
+
+    func invokeOnStepCompleted(_ swiftCallbackInterface: InitializationProgressHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.onStepCompleted(
+                    stepName:  try FfiConverterString.read(from: &reader)
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        return try makeCall()
+    }
+
+    func invokeOnInitCompleted(_ swiftCallbackInterface: InitializationProgressHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.onInitCompleted(
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        return try makeCall()
+    }
+
+    func invokeOnInitFailed(_ swiftCallbackInterface: InitializationProgressHandler, _ argsData: UnsafePointer<UInt8>, _ argsLen: Int32, _ out_buf: UnsafeMutablePointer<RustBuffer>) throws -> Int32 {
+        var reader = createReader(data: Data(bytes: argsData, count: Int(argsLen)))
+        func makeCall() throws -> Int32 {
+            try swiftCallbackInterface.onInitFailed(
+                    error:  try FfiConverterString.read(from: &reader)
+                    )
+            return UNIFFI_CALLBACK_SUCCESS
+        }
+        return try makeCall()
+    }
+
+
+    switch method {
+        case IDX_CALLBACK_FREE:
+            FfiConverterCallbackInterfaceInitializationProgressHandler.drop(handle: handle)
+            // Sucessful return
+            // See docs of ForeignCallback in `uniffi_core/src/ffi/foreigncallbacks.rs`
+            return UNIFFI_CALLBACK_SUCCESS
+        case 1:
+            let cb: InitializationProgressHandler
+            do {
+                cb = try FfiConverterCallbackInterfaceInitializationProgressHandler.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("InitializationProgressHandler: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeOnInitStarted(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        case 2:
+            let cb: InitializationProgressHandler
+            do {
+                cb = try FfiConverterCallbackInterfaceInitializationProgressHandler.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("InitializationProgressHandler: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeOnStepStarted(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        case 3:
+            let cb: InitializationProgressHandler
+            do {
+                cb = try FfiConverterCallbackInterfaceInitializationProgressHandler.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("InitializationProgressHandler: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeOnDownloadProgress(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        case 4:
+            let cb: InitializationProgressHandler
+            do {
+                cb = try FfiConverterCallbackInterfaceInitializationProgressHandler.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("InitializationProgressHandler: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeOnStepCompleted(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        case 5:
+            let cb: InitializationProgressHandler
+            do {
+                cb = try FfiConverterCallbackInterfaceInitializationProgressHandler.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("InitializationProgressHandler: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeOnInitCompleted(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        case 6:
+            let cb: InitializationProgressHandler
+            do {
+                cb = try FfiConverterCallbackInterfaceInitializationProgressHandler.lift(handle)
+            } catch {
+                out_buf.pointee = FfiConverterString.lower("InitializationProgressHandler: Invalid handle")
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+            do {
+                return try invokeOnInitFailed(cb, argsData, argsLen, out_buf)
+            } catch let error {
+                out_buf.pointee = FfiConverterString.lower(String(describing: error))
+                return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+            }
+        
+        // This should never happen, because an out of bounds method index won't
+        // ever be used. Once we can catch errors, we should return an InternalError.
+        // https://github.com/mozilla/uniffi-rs/issues/351
+        default:
+            // An unexpected error happened.
+            // See docs of ForeignCallback in `uniffi_core/src/ffi/foreigncallbacks.rs`
+            return UNIFFI_CALLBACK_UNEXPECTED_ERROR
+    }
+}
+
+// FfiConverter protocol for callback interfaces
+fileprivate struct FfiConverterCallbackInterfaceInitializationProgressHandler {
+    private static let initCallbackOnce: () = {
+        // Swift ensures this initializer code will once run once, even when accessed by multiple threads.
+        try! rustCall { (err: UnsafeMutablePointer<RustCallStatus>) in
+            uniffi_aethecore_fn_init_callback_initializationprogresshandler(foreignCallbackCallbackInterfaceInitializationProgressHandler, err)
+        }
+    }()
+
+    private static func ensureCallbackinitialized() {
+        _ = initCallbackOnce
+    }
+
+    static func drop(handle: UniFFICallbackHandle) {
+        handleMap.remove(handle: handle)
+    }
+
+    private static var handleMap = UniFFICallbackHandleMap<InitializationProgressHandler>()
+}
+
+extension FfiConverterCallbackInterfaceInitializationProgressHandler : FfiConverter {
+    typealias SwiftType = InitializationProgressHandler
+    // We can use Handle as the FfiType because it's a typealias to UInt64
+    typealias FfiType = UniFFICallbackHandle
+
+    public static func lift(_ handle: UniFFICallbackHandle) throws -> SwiftType {
+        ensureCallbackinitialized();
+        guard let callback = handleMap.get(handle: handle) else {
+            throw UniffiInternalError.unexpectedStaleHandle
+        }
+        return callback
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        ensureCallbackinitialized();
+        let handle: UniFFICallbackHandle = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func lower(_ v: SwiftType) -> UniFFICallbackHandle {
+        ensureCallbackinitialized();
+        return handleMap.insert(obj: v)
+    }
+
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        ensureCallbackinitialized();
+        writeInt(&buf, lower(v))
+    }
+}
+
 fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
     typealias SwiftType = UInt32?
 
@@ -2626,6 +2862,27 @@ fileprivate struct FfiConverterOptionTypeShortcutsConfig: FfiConverterRustBuffer
     }
 }
 
+fileprivate struct FfiConverterOptionCallbackInterfaceInitializationProgressHandler: FfiConverterRustBuffer {
+    typealias SwiftType = InitializationProgressHandler?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterCallbackInterfaceInitializationProgressHandler.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterCallbackInterfaceInitializationProgressHandler.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -2714,6 +2971,23 @@ fileprivate struct FfiConverterSequenceTypeRoutingRuleConfig: FfiConverterRustBu
     }
 }
 
+public func isFreshInstall() throws -> Bool {
+    return try  FfiConverterBool.lift(
+        try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_func_is_fresh_install($0)
+}
+    )
+}
+
+public func runFirstTimeInit(progressHandler: InitializationProgressHandler?) throws {
+    try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_func_run_first_time_init(
+        FfiConverterOptionCallbackInterfaceInitializationProgressHandler.lower(progressHandler),$0)
+}
+}
+
+
+
 private enum InitializationResult {
     case ok
     case contractVersionMismatch
@@ -2728,6 +3002,12 @@ private var initializationResult: InitializationResult {
     let scaffolding_contract_version = ffi_aethecore_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
+    }
+    if (uniffi_aethecore_checksum_func_is_fresh_install() != 57535) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_func_run_first_time_init() != 28929) {
+        return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_cleanup_old_memories() != 49104) {
         return InitializationResult.apiChecksumMismatch
@@ -2856,6 +3136,24 @@ private var initializationResult: InitializationResult {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_typewriter_cancelled() != 28606) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_init_started() != 45699) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_step_started() != 37574) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_download_progress() != 31136) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_step_completed() != 58663) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_init_completed() != 65255) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_init_failed() != 3346) {
         return InitializationResult.apiChecksumMismatch
     }
 

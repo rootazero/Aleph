@@ -76,6 +76,7 @@ mod config;
 mod core;
 mod error;
 mod event_handler;
+pub mod initialization;
 pub mod logging;
 pub mod memory;
 pub mod metrics;
@@ -94,6 +95,7 @@ pub use crate::config::{
 pub use crate::core::{AetherCore, CapturedContext, MemoryEntryFFI as MemoryEntry};
 pub use crate::error::{AetherError, AetherException, Result};
 pub use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
+pub use crate::initialization::{is_fresh_install, run_first_time_init, InitializationProgressHandler};
 pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer};
 pub use crate::memory::database::MemoryStats;
 pub use crate::metrics::StageTimer;

@@ -223,14 +223,10 @@ class EventHandler: AetherEventHandler {
             announceToVoiceOver("Processing request")
 
         case .success:
-            // Show final accumulated text
-            if !accumulatedText.isEmpty {
-                haloWindow?.updateState(.success(finalText: accumulatedText))
-                announceToVoiceOver("Request completed successfully")
-            } else {
-                haloWindow?.updateState(.success(finalText: nil))
-                announceToVoiceOver("Success")
-            }
+            // Show success checkmark only (no text)
+            haloWindow?.updateState(.success(finalText: nil))
+            announceToVoiceOver("Request completed successfully")
+
             // Auto-hide after 2 seconds
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
                 self?.haloWindow?.hide()

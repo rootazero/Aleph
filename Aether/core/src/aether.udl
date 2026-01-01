@@ -3,7 +3,17 @@
 // This file defines the FFI boundary between Rust and native clients (Swift, Kotlin, C#).
 // UniFFI will automatically generate type-safe bindings from this definition.
 
-namespace aether {};
+namespace aether {
+  // First-run initialization functions
+
+  // Check if this is a fresh installation
+  [Throws=AetherException]
+  boolean is_fresh_install();
+
+  // Run first-time initialization with progress callback
+  [Throws=AetherException]
+  void run_first_time_init(InitializationProgressHandler? progress_handler);
+};
 
 // Processing states for Aether system
 enum ProcessingState {
@@ -230,6 +240,27 @@ callback interface AetherEventHandler {
 
   // Called when typewriter animation is cancelled (Escape key or new hotkey)
   void on_typewriter_cancelled();
+};
+
+// Callback interface for first-time initialization progress
+callback interface InitializationProgressHandler {
+  // Called when initialization starts
+  void on_init_started();
+
+  // Called when a step begins
+  void on_step_started(string step_name, u32 current, u32 total);
+
+  // Called when download progress updates
+  void on_download_progress(u64 downloaded_bytes, u64 total_bytes);
+
+  // Called when a step completes
+  void on_step_completed(string step_name);
+
+  // Called when initialization completes successfully
+  void on_init_completed();
+
+  // Called when initialization fails
+  void on_init_failed(string error);
 };
 
 // Configuration dictionaries
