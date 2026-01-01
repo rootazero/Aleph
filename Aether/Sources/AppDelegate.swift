@@ -1030,14 +1030,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     truncatedResponse = response
                 }
 
-                // Output AI response using paste (more reliable than typewriter)
-                // NOTE: Using paste instead of typewriter because CGEvent-based typing
-                // can fail silently when the target app doesn't properly receive events
+                // Load output mode from config (typewriter or instant)
+                var outputMode = "instant"  // Default to instant if config fails
+                var typingSpeed: Int = 50   // Default typing speed (chars/sec)
+                do {
+                    let config = try core.loadConfig()
+                    if let behavior = config.behavior {
+                        outputMode = behavior.outputMode
+                        typingSpeed = Int(behavior.typingSpeed)
+                    }
+                    print("[AppDelegate] 📋 Output mode from config: \(outputMode), typing speed: \(typingSpeed) chars/sec")
+                } catch {
+                    print("[AppDelegate] ⚠️ Failed to load config, using default output_mode=instant: \(error)")
+                }
+
+                // Output AI response based on configured mode
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
 
                     print("[AppDelegate] 🎯 Starting output phase...")
                     print("[AppDelegate] 📍 Text source: \(textSource), Replace mode: \(useCutMode)")
+                    print("[AppDelegate] 📍 Output mode: \(outputMode)")
 
                     // CRITICAL: Add small delay to ensure UI is stable before keyboard simulation
                     // This helps when focus might have shifted during AI processing
@@ -1050,37 +1063,64 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     // Small delay after cursor positioning
                     Thread.sleep(forTimeInterval: 0.05)
 
-                    // Use paste for reliable output (typewriter can fail silently)
-                    print("[AppDelegate] 📋 Setting clipboard with AI response (\(truncatedResponse.count) chars)")
-                    ClipboardManager.shared.setText(truncatedResponse)
+                    if outputMode == "typewriter" {
+                        // Typewriter mode: Type character by character
+                        print("[AppDelegate] ⌨️ Using typewriter mode at \(typingSpeed) chars/sec")
 
-                    // Small delay to ensure clipboard is updated
-                    Thread.sleep(forTimeInterval: 0.05)
+                        // Update Halo to typewriter state
+                        self.haloWindow?.updateState(.typewriting(progress: 0.0))
 
-                    // Simulate paste
-                    print("[AppDelegate] 📋 Simulating Cmd+V to paste response")
-                    let pasteSuccess = KeyboardSimulator.shared.simulatePaste()
-                    print("[AppDelegate] 📋 Paste result: \(pasteSuccess ? "success" : "failed")")
+                        Task {
+                            let typedCount = await KeyboardSimulator.shared.typeText(
+                                truncatedResponse,
+                                speed: typingSpeed
+                            )
+                            print("[AppDelegate] ⌨️ Typed \(typedCount)/\(truncatedResponse.count) characters")
 
-                    // CRITICAL: Restore original clipboard after a delay
-                    // This ensures user's pre-existing clipboard data is not lost
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        if let original = originalClipboardText {
-                            ClipboardManager.shared.setText(original)
-                            print("[AppDelegate] ♻️ Restored original clipboard content")
-                        } else {
-                            ClipboardManager.shared.clear()
-                            print("[AppDelegate] ♻️ Cleared clipboard (original was empty)")
+                            await MainActor.run {
+                                // Update Halo to success state and hide
+                                print("[AppDelegate] ✅ Output complete, updating Halo to success state")
+                                self.haloWindow?.updateState(.success(finalText: String(truncatedResponse.prefix(100))))
+
+                                // Auto-hide Halo after 1.5 seconds
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                                    self?.haloWindow?.hide()
+                                }
+                            }
                         }
-                    }
+                    } else {
+                        // Instant mode: Use paste for reliable output
+                        print("[AppDelegate] 📋 Using instant mode (paste)")
+                        ClipboardManager.shared.setText(truncatedResponse)
 
-                    // Update Halo to success state and hide
-                    print("[AppDelegate] ✅ Output complete, updating Halo to success state")
-                    self.haloWindow?.updateState(.success(finalText: String(truncatedResponse.prefix(100))))
+                        // Small delay to ensure clipboard is updated
+                        Thread.sleep(forTimeInterval: 0.05)
 
-                    // Auto-hide Halo after 1.5 seconds
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                        self?.haloWindow?.hide()
+                        // Simulate paste
+                        print("[AppDelegate] 📋 Simulating Cmd+V to paste response")
+                        let pasteSuccess = KeyboardSimulator.shared.simulatePaste()
+                        print("[AppDelegate] 📋 Paste result: \(pasteSuccess ? "success" : "failed")")
+
+                        // CRITICAL: Restore original clipboard after a delay
+                        // This ensures user's pre-existing clipboard data is not lost
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            if let original = originalClipboardText {
+                                ClipboardManager.shared.setText(original)
+                                print("[AppDelegate] ♻️ Restored original clipboard content")
+                            } else {
+                                ClipboardManager.shared.clear()
+                                print("[AppDelegate] ♻️ Cleared clipboard (original was empty)")
+                            }
+                        }
+
+                        // Update Halo to success state and hide
+                        print("[AppDelegate] ✅ Output complete, updating Halo to success state")
+                        self.haloWindow?.updateState(.success(finalText: String(truncatedResponse.prefix(100))))
+
+                        // Auto-hide Halo after 1.5 seconds
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                            self?.haloWindow?.hide()
+                        }
                     }
                 }
             } catch {
