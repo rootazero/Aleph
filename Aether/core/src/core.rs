@@ -84,6 +84,10 @@ impl AetherCore {
     ///
     /// Rust core focuses on AI processing, memory, and config.
     pub fn new(event_handler: Box<dyn AetherEventHandler>) -> Result<Self> {
+        // CRITICAL: Initialize logging system FIRST before any log statements
+        // This ensures all log messages are captured to file from the start
+        crate::init_logging();
+
         let event_handler: Arc<dyn AetherEventHandler> = Arc::from(event_handler);
 
         // Initialize tokio runtime with optimized configuration for macOS
