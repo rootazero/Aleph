@@ -202,8 +202,9 @@ class KeyboardSimulator {
 
     /// Type a single character using Unicode string
     ///
-    /// Uses the correct CGEvent pattern: create one event, set Unicode string,
-    /// post keyDown, change type to keyUp, post keyUp.
+    /// Uses the correct CGEvent pattern with privateState to prevent
+    /// modifier key inheritance that can cause characters to be
+    /// interpreted as shortcuts.
     ///
     /// - Parameter char: Character to type
     /// - Returns: True if successful
@@ -215,11 +216,19 @@ class KeyboardSimulator {
             return typeSpecialKey(specialKey)
         }
 
+        // CRITICAL: Use privateState to isolate from current modifier key state
+        // Without this, Command/Option/etc. states are inherited, causing
+        // characters to be interpreted as shortcuts (e.g., Cmd+1 in WeChat)
+        let eventSource = CGEventSource(stateID: .privateState)
+
         // Create a single keyboard event (keyDown initially)
-        // CRITICAL: Use the same event object for both keyDown and keyUp
-        guard let keyEvent = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else {
+        guard let keyEvent = CGEvent(keyboardEventSource: eventSource, virtualKey: 0, keyDown: true) else {
             return false
         }
+
+        // CRITICAL: Explicitly clear all modifier flags
+        // This ensures the character is typed as pure text, not a shortcut
+        keyEvent.flags = []
 
         // Set Unicode string (only needs to be set once)
         var unicodeChars = Array(string.utf16)
@@ -242,14 +251,20 @@ class KeyboardSimulator {
     /// - Parameter keyCode: Virtual key code
     /// - Returns: True if successful
     private func typeSpecialKey(_ keyCode: CGKeyCode) -> Bool {
+        // Use privateState to isolate from current modifier key state
+        let eventSource = CGEventSource(stateID: .privateState)
+
         // Key down
         guard let keyDown = CGEvent(
-            keyboardEventSource: nil,
+            keyboardEventSource: eventSource,
             virtualKey: keyCode,
             keyDown: true
         ) else {
             return false
         }
+
+        // Clear modifier flags
+        keyDown.flags = []
         keyDown.post(tap: .cghidEventTap)
 
         // Delay
@@ -257,12 +272,14 @@ class KeyboardSimulator {
 
         // Key up
         guard let keyUp = CGEvent(
-            keyboardEventSource: nil,
+            keyboardEventSource: eventSource,
             virtualKey: keyCode,
             keyDown: false
         ) else {
             return false
         }
+
+        keyUp.flags = []
         keyUp.post(tap: .cghidEventTap)
 
         return true
