@@ -192,16 +192,6 @@ private struct ZenSuccessView: View {
                         }
                     }
             }
-
-            // Text adapts to system appearance
-            if let text = text, !text.isEmpty {
-                Text(text)
-                    .font(.system(.caption, design: .rounded))
-                    .foregroundColor(.primary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 16)
-            }
         }
     }
 }

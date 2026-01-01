@@ -172,8 +172,10 @@ struct HaloView: View {
             return 220  // Wider for input mode selection buttons
         case .retrievingMemory, .processingWithAI:
             return 120
-        case .processing(_, let text), .success(let text):
+        case .processing(_, let text):
             return text != nil ? 300 : 120
+        case .success:
+            return 120
         case .typewriting:
             return 120
         case .error:
@@ -195,8 +197,8 @@ struct HaloView: View {
             return text != nil ? 200 : 120
         case .typewriting:
             return 120
-        case .success(let text):
-            return text != nil ? 150 : 120
+        case .success:
+            return 120
         case .error:
             return 180
         case .permissionRequired:

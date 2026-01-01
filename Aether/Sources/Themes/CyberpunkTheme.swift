@@ -224,16 +224,6 @@ private struct CyberpunkSuccessView: View {
                         }
                     }
             }
-
-            if let text = text, !text.isEmpty {
-                Text(text)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(textColor)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 16)
-                    .shadow(color: textColor, radius: 5)
-            }
         }
     }
 }
