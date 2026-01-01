@@ -568,7 +568,7 @@ See [docs/TESTING_GUIDE.md](./docs/TESTING_GUIDE.md) for detailed testing proced
 
 ## git commit
 
-After completing a task or fixing an issue, use `git add` and `git commit` to submit this modification.
+After completing a task or fixing an issue, use `git add` and `git commit` to submit this modification use English.
 
 ---
 
