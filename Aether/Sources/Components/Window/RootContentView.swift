@@ -62,7 +62,10 @@ struct RootContentView: View {
             // Right: Content area
             contentArea
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // CRITICAL: Set both min and max dimensions to enforce window size constraints
+        // minWidth/minHeight: Prevent SwiftUI from calculating a smaller natural size
+        // maxWidth/maxHeight: Allow window to expand when needed
+        .frame(minWidth: 980, maxWidth: .infinity, minHeight: 750, maxHeight: .infinity, alignment: .topLeading)
         .background(.windowBackground)
         .ignoresSafeArea(.all, edges: .all)  // Explicitly ignore all safe areas on all edges
         .hideNativeTrafficLights()
