@@ -273,11 +273,12 @@ struct LogViewerView: View {
                 let logDirURL = URL(fileURLWithPath: logDir)
 
                 // Get all log files
+                // Log files have format: aether.log.YYYY-MM-DD (from tracing-appender rolling)
                 let fileManager = FileManager.default
                 let logFiles = try fileManager.contentsOfDirectory(
                     at: logDirURL,
                     includingPropertiesForKeys: nil
-                ).filter { $0.pathExtension == "log" }
+                ).filter { $0.lastPathComponent.hasPrefix("aether.log") }
 
                 // Delete each log file
                 for file in logFiles {
@@ -335,11 +336,12 @@ struct LogViewerView: View {
         }
 
         // Get all log files sorted by modification date
+        // Log files have format: aether.log.YYYY-MM-DD (from tracing-appender rolling)
         let logFiles = try fileManager.contentsOfDirectory(
             at: logDirURL,
             includingPropertiesForKeys: [.contentModificationDateKey]
         )
-        .filter { $0.pathExtension == "log" }
+        .filter { $0.lastPathComponent.hasPrefix("aether.log") }
         .sorted { file1, file2 in
             let date1 = try? file1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
             let date2 = try? file2.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
@@ -365,13 +367,14 @@ struct LogViewerView: View {
         let fileManager = FileManager.default
 
         // Get all log files from last 3 days
+        // Log files have format: aether.log.YYYY-MM-DD (from tracing-appender rolling)
         let cutoffDate = Date().addingTimeInterval(-3 * 24 * 60 * 60)
         let logFiles = try fileManager.contentsOfDirectory(
             at: logDirURL,
             includingPropertiesForKeys: [.contentModificationDateKey]
         )
         .filter { url in
-            guard url.pathExtension == "log" else { return false }
+            guard url.lastPathComponent.hasPrefix("aether.log") else { return false }
             let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
             return (date ?? Date.distantPast) > cutoffDate
         }

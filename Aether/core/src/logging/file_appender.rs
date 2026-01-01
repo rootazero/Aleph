@@ -71,13 +71,14 @@ pub fn init_file_logging_with_retention(retention_days: u32) -> Result<(), Box<d
 
 /// Internal function to set up logging infrastructure
 fn setup_logging(retention_days: u32) -> Result<tracing_appender::non_blocking::WorkerGuard, Box<dyn std::error::Error>> {
-    // Get log directory: ~/.config/aether/logs/
+    // Get log directory: ~/Library/Application Support/aether/logs/ on macOS
     let log_dir = get_log_directory()?;
 
     // Create log directory if it doesn't exist
     std::fs::create_dir_all(&log_dir)?;
 
     // Create rolling file appender (daily rotation)
+    // Creates files like: aether.log.2026-01-01
     let file_appender = RollingFileAppender::new(
         Rotation::DAILY,
         &log_dir,
@@ -115,6 +116,9 @@ fn setup_logging(retention_days: u32) -> Result<tracing_appender::non_blocking::
         .with(file_layer)
         .init();
 
+    // Write initial log entry
+    tracing::info!("Logging system initialized");
+
     // Clean up old log files after logging is initialized
     match crate::logging::cleanup_old_logs(&log_dir, retention_days) {
         Ok(count) if count > 0 => {
@@ -131,7 +135,8 @@ fn setup_logging(retention_days: u32) -> Result<tracing_appender::non_blocking::
 
 /// Get the log directory path
 ///
-/// Returns `~/.config/aether/logs/` on Unix systems
+/// Returns `~/Library/Application Support/aether/logs/` on macOS
+/// (uses dirs::config_dir() which returns Application Support on macOS)
 pub fn get_log_directory() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let config_dir = dirs::config_dir()
         .ok_or("Failed to get config directory")?;
