@@ -135,6 +135,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         defaultProviderMenuItem.submenu = NSMenu()  // Create empty submenu for now
         menu.addItem(defaultProviderMenuItem)
 
+        // Add "Input Mode" submenu (will be populated by rebuildInputModeMenu)
+        let inputModeMenuItem = NSMenuItem(
+            title: NSLocalizedString("menu.input_mode", comment: "Input Mode menu item"),
+            action: nil,
+            keyEquivalent: ""
+        )
+        inputModeMenuItem.submenu = NSMenu()  // Create empty submenu for now
+        menu.addItem(inputModeMenuItem)
+
         menu.addItem(NSMenuItem.separator())
 
         // Create and store Settings menu item for enable/disable control
@@ -340,6 +349,121 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
 
+    // MARK: - Input Mode Menu Management (NEW for input mode management)
+
+    /// Rebuild the input mode submenu with current selection
+    private func rebuildInputModeMenu() {
+        guard let menu = statusItem?.menu else { return }
+        guard let core = core else { return }
+
+        // Find the "Input Mode" menu item
+        guard let inputModeMenuItem = menu.items.first(where: { $0.title == NSLocalizedString("menu.input_mode", comment: "Input Mode menu item") }),
+              let submenu = inputModeMenuItem.submenu else {
+            print("[AppDelegate] ERROR: Input Mode submenu not found")
+            return
+        }
+
+        // Clear existing submenu items
+        submenu.removeAllItems()
+
+        // Get current input mode from config
+        var currentInputMode = "cut"  // Default value
+        do {
+            let config = try core.loadConfig()
+            if let behavior = config.behavior {
+                currentInputMode = behavior.inputMode
+            }
+        } catch {
+            print("[AppDelegate] ⚠️ Failed to load config for input mode menu: \(error)")
+        }
+
+        // Add menu items for each input mode
+        let inputModes: [(String, String)] = [
+            ("cut", NSLocalizedString("settings.behavior.input_mode_cut", comment: "Cut")),
+            ("copy", NSLocalizedString("settings.behavior.input_mode_copy", comment: "Copy")),
+            ("halo", NSLocalizedString("settings.behavior.input_mode_halo", comment: "Halo Selection"))
+        ]
+
+        for (mode, displayName) in inputModes {
+            let item = NSMenuItem(
+                title: displayName,
+                action: #selector(selectInputMode(_:)),
+                keyEquivalent: ""
+            )
+            item.representedObject = mode
+
+            // Add checkmark if this is the current input mode
+            if mode == currentInputMode {
+                item.state = .on
+            } else {
+                item.state = .off
+            }
+
+            submenu.addItem(item)
+        }
+
+        print("[AppDelegate] Rebuilt input mode submenu, current mode: \(currentInputMode)")
+    }
+
+    /// Handle input mode selection from menu bar (set as current)
+    @objc private func selectInputMode(_ sender: NSMenuItem) {
+        guard let inputMode = sender.representedObject as? String else {
+            print("[AppDelegate] ERROR: Invalid input mode sender")
+            return
+        }
+
+        print("[AppDelegate] User selected input mode from menu: \(inputMode)")
+
+        guard let core = core else {
+            print("[AppDelegate] ERROR: Core not initialized")
+            return
+        }
+
+        do {
+            // Load current config
+            let config = try core.loadConfig()
+
+            // Update input mode in behavior section
+            if var behavior = config.behavior {
+                behavior.inputMode = inputMode
+
+                // Use updateBehavior to save the change
+                try core.updateBehavior(behavior: behavior)
+                print("[AppDelegate] ✅ Input mode set to: \(inputMode)")
+            } else {
+                // Create behavior config if it doesn't exist
+                let newBehavior = BehaviorConfig(
+                    inputMode: inputMode,
+                    outputMode: "typewriter",
+                    typingSpeed: 50,
+                    piiScrubbingEnabled: false
+                )
+                try core.updateBehavior(behavior: newBehavior)
+                print("[AppDelegate] ✅ Input mode set to: \(inputMode) (created new behavior config)")
+            }
+
+            // Rebuild menu to update checkmark
+            rebuildInputModeMenu()
+
+            // Post notification for config change (for other components)
+            NotificationCenter.default.post(
+                name: NSNotification.Name("AetherConfigSavedInternally"),
+                object: nil
+            )
+
+        } catch {
+            print("[AppDelegate] ❌ Error setting input mode: \(error)")
+
+            // Show error alert
+            let alert = NSAlert()
+            alert.messageText = "Failed to set input mode"
+            alert.informativeText = "Could not set input mode to '\(inputMode)'.\n\nError: \(error.localizedDescription)"
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+    }
+
     // MARK: - Rust Core Initialization
 
     private var coreInitRetryCount = 0
@@ -414,6 +538,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
             // Rebuild providers menu now that core is initialized
             rebuildProvidersMenu()
+
+            // Rebuild input mode menu now that core is initialized
+            rebuildInputModeMenu()
 
         } catch {
             print("[Aether] ❌ Error initializing core: \(error)")
@@ -686,8 +813,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Handle config change notification (rebuild providers menu)
     @objc private func onConfigChanged() {
-        print("[AppDelegate] Config changed, rebuilding providers menu")
+        print("[AppDelegate] Config changed, rebuilding providers and input mode menus")
         rebuildProvidersMenu()
+        rebuildInputModeMenu()
     }
 
     // MARK: - Hotkey Handling

@@ -283,6 +283,7 @@
 "menu.quit" = "退出 Aether";
 "menu.about" = "关于 Aether";
 "menu.default_provider" = "默认供应商";
+"menu.input_mode" = "输入模式";
 "menu.no_providers" = "无可用供应商";
 
 // Menu Bar - Default Provider Quick Switch (菜单栏默认供应商快速切换)
