@@ -167,7 +167,7 @@
 "settings.shortcuts.permission_required" = "Permission Required";
 "settings.shortcuts.permission_description" = "Aether requires **Accessibility** permission to detect global hotkeys.";
 "settings.shortcuts.why_needed" = "Why this is needed:";
-"settings.shortcuts.permission_detect" = "Detect ` hotkey in any app (default)";
+"settings.shortcuts.permission_detect" = "Detect double-tap Shift hotkey in any app (default)";
 "settings.shortcuts.permission_read" = "Read clipboard content";
 "settings.shortcuts.permission_simulate" = "Simulate keyboard input for paste";
 "settings.shortcuts.open_settings_button" = "Open System Settings";
@@ -183,9 +183,9 @@
 "settings.shortcuts.presets" = "Preset Shortcuts";
 "settings.shortcuts.preset_double_tap_shift" = "Double-tap Shift";
 "settings.shortcuts.preset_default_description" = "Recommended - Works with all input methods";
-"settings.shortcuts.preset_command_grave" = "Backtick with Command key";
-"settings.shortcuts.preset_option_space" = "Space with Option key (may conflict with input methods)";
-"settings.shortcuts.preset_control_command_a" = "A with Control+Command";
+"settings.shortcuts.preset_command_grave" = "Command + Backtick";
+"settings.shortcuts.preset_option_space" = "Option + Space (may conflict with input methods)";
+"settings.shortcuts.preset_control_command_a" = "Control + Command + A";
 "settings.shortcuts.use_this" = "Use";
 "settings.shortcuts.conflict_spotlight" = "May conflict with Spotlight (⌘+Space)";
 "settings.shortcuts.conflict_input_method" = "May conflict with some input methods";
@@ -353,6 +353,10 @@
 "logs.help.clear" = "Delete all log files";
 "logs.help.reload" = "Reload logs";
 "logs.help.close" = "Close log viewer";
+
+// MARK: - Log Viewer Empty State
+"logs.empty.first_run" = "No log files found. Logs will appear here after Aether performs operations.";
+"logs.empty.no_logs" = "No log files found. Logs will appear here after Aether performs operations.";
 
 // MARK: - Routing Alerts
 "alert.routing.export_title" = "Export Successful";

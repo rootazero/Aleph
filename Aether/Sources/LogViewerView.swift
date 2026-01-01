@@ -318,6 +318,22 @@ struct LogViewerView: View {
         let logDirURL = URL(fileURLWithPath: directory)
         let fileManager = FileManager.default
 
+        // Check if log directory exists
+        var isDirectory: ObjCBool = false
+        let exists = fileManager.fileExists(atPath: logDirURL.path, isDirectory: &isDirectory)
+
+        if !exists {
+            // Create log directory if it doesn't exist
+            try fileManager.createDirectory(at: logDirURL, withIntermediateDirectories: true)
+            return NSLocalizedString("logs.empty.first_run", comment: "No log files found. Logs will appear here after Aether performs operations.")
+        }
+
+        if !isDirectory.boolValue {
+            throw NSError(domain: "LogViewerError", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "Log path exists but is not a directory: \(logDirURL.path)"
+            ])
+        }
+
         // Get all log files sorted by modification date
         let logFiles = try fileManager.contentsOfDirectory(
             at: logDirURL,
@@ -331,7 +347,7 @@ struct LogViewerView: View {
         }
 
         guard !logFiles.isEmpty else {
-            return "No log files found."
+            return NSLocalizedString("logs.empty.no_logs", comment: "No log files found. Logs will appear here after Aether performs operations.")
         }
 
         // Read the most recent log file (last 1000 lines)
