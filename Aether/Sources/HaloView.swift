@@ -175,7 +175,7 @@ struct HaloView: View {
         case .processing(_, let text), .success(let text):
             return text != nil ? 300 : 120
         case .typewriting:
-            return 200
+            return 120
         case .error:
             return 300
         case .permissionRequired:

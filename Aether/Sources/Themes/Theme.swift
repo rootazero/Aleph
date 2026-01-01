@@ -172,47 +172,15 @@ extension HaloTheme {
     }
 
     // Default implementation for typewriter view (Phase 7.2)
+    // Only shows keyboard icon during typewriting - progress tracking removed for simplicity
     func typewritingView(progress: Float) -> AnyView {
         AnyView(
-            VStack(spacing: 12) {
-                // Keyboard icon
+            VStack(spacing: 8) {
+                // Keyboard icon with subtle pulse animation
                 Image(systemName: "keyboard")
-                    .font(.system(size: 28))
+                    .font(.system(size: 32))
                     .foregroundColor(.blue)
-                    .accessibilityHidden(true) // Icon is decorative
-
-                // Progress bar
-                GeometryReader { geometry in
-                    ZStack(alignment: .leading) {
-                        // Background track
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(Color.gray.opacity(0.2))
-                            .frame(height: 6)
-
-                        // Progress fill
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(
-                                LinearGradient(
-                                    colors: [.blue, .purple],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .frame(width: geometry.size.width * CGFloat(progress), height: 6)
-                    }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Typewriter progress")
-                    .accessibilityValue("\(Int(progress * 100)) percent")
-                    .accessibilityAddTraits(.updatesFrequently)
-                }
-                .frame(height: 6)
-                .padding(.horizontal, 20)
-
-                // Progress percentage
-                Text("\(Int(progress * 100))%")
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundColor(textColor)
-                    .accessibilityHidden(true) // Redundant with progress bar value
+                    .accessibilityHidden(true)
 
                 // Hint text
                 Text("Press ESC to skip")
@@ -223,8 +191,7 @@ extension HaloTheme {
             }
             .padding()
             .accessibilityElement(children: .contain)
-            .accessibilityLabel("Typewriter animation")
-            .accessibilityValue("\(Int(progress * 100)) percent complete")
+            .accessibilityLabel("Typewriter animation in progress")
             .accessibilityHint("AI response is being typed character by character. Press Escape to paste remaining text instantly.")
         )
     }
