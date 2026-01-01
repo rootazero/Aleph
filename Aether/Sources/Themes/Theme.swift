@@ -176,11 +176,20 @@ extension HaloTheme {
     func typewritingView(progress: Float) -> AnyView {
         AnyView(
             VStack(spacing: 8) {
-                // Keyboard icon with subtle pulse animation
-                Image(systemName: "keyboard")
-                    .font(.system(size: 32))
-                    .foregroundColor(.blue)
-                    .accessibilityHidden(true)
+                ZStack {
+                    // Soft glow background
+                    Circle()
+                        .fill(Color.blue.opacity(0.3))
+                        .frame(width: 70, height: 70)
+                        .blur(radius: 12)
+
+                    // Keyboard icon
+                    Image(systemName: "keyboard")
+                        .font(.system(size: 32))
+                        .foregroundColor(.blue)
+                        .shadow(color: .blue.opacity(0.5), radius: 8)
+                        .accessibilityHidden(true)
+                }
 
                 // Hint text
                 Text("Press ESC to skip")
