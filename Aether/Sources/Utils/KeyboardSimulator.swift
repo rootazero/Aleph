@@ -217,19 +217,23 @@ class KeyboardSimulator {
             return false
         }
 
-        // Set Unicode string
+        // Set Unicode string for key down
         var unicodeChars = Array(string.utf16)
         keyDown.keyboardSetUnicodeString(stringLength: unicodeChars.count, unicodeString: &unicodeChars)
         keyDown.post(tap: .cghidEventTap)
 
-        // Small delay
-        usleep(1_000) // 1ms
+        // Delay between key down and key up
+        // CRITICAL: Use longer delay to prevent system warning sounds
+        usleep(5_000) // 5ms - increased from 1ms for stability
 
         // Create key up event
         guard let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else {
             return false
         }
 
+        // CRITICAL: Also set Unicode string for key up event
+        // This ensures proper key release and prevents system warning sounds
+        keyUp.keyboardSetUnicodeString(stringLength: unicodeChars.count, unicodeString: &unicodeChars)
         keyUp.post(tap: .cghidEventTap)
 
         return true

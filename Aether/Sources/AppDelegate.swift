@@ -1195,15 +1195,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                         // Typewriter mode: Type character by character
                         print("[AppDelegate] ⌨️ Using typewriter mode at \(typingSpeed) chars/sec")
 
+                        // Create cancellation token for ESC key to cancel typewriter
+                        self.typewriterCancellation = CancellationToken()
+
                         // Update Halo to typewriter state
                         self.haloWindow?.updateState(.typewriting(progress: 0.0))
 
                         Task {
                             let typedCount = await KeyboardSimulator.shared.typeText(
                                 truncatedResponse,
-                                speed: typingSpeed
+                                speed: typingSpeed,
+                                cancellationToken: self.typewriterCancellation
                             )
                             print("[AppDelegate] ⌨️ Typed \(typedCount)/\(truncatedResponse.count) characters")
+
+                            // Clear cancellation token after completion
+                            self.typewriterCancellation = nil
 
                             await MainActor.run {
                                 // Update Halo to success state and hide
@@ -1377,6 +1384,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         print("[AppDelegate] ESC pressed - cancelling typewriter animation")
         cancellation.cancel()
+
+        // Clear the cancellation token immediately
+        typewriterCancellation = nil
 
         // Show brief feedback
         DispatchQueue.main.async { [weak self] in
