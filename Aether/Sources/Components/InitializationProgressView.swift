@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import Combine
 
 /// Progress state for initialization
 enum InitializationState {
@@ -64,7 +65,7 @@ class InitializationProgressViewModel: ObservableObject {
 }
 
 /// Swift implementation of InitializationProgressHandler for UniFFI callback
-class InitializationProgressHandler: InitializationProgressHandlerProtocol {
+class InitializationProgressHandlerImpl: InitializationProgressHandler {
     weak var viewModel: InitializationProgressViewModel?
 
     init(viewModel: InitializationProgressViewModel) {
@@ -217,7 +218,7 @@ struct InitializationProgressView: View {
         viewModel.state = .notStarted
         viewModel.overallProgress = 0.0
 
-        let handler = InitializationProgressHandler(viewModel: viewModel)
+        let handler = InitializationProgressHandlerImpl(viewModel: viewModel)
 
         // Run initialization in background
         DispatchQueue.global(qos: .userInitiated).async {
