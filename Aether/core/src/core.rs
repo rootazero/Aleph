@@ -21,7 +21,6 @@ use crate::router::Router;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 /// Context for last request (used for retry)
@@ -61,10 +60,6 @@ pub struct AetherCore {
     // Config hot-reload (must be kept alive for file watching)
     #[allow(dead_code)]
     config_watcher: Option<Arc<ConfigWatcher>>,
-    // Typewriter cancellation (NOTE: Typewriter is now in Swift, but kept for legacy)
-    cancellation_token: CancellationToken,
-    // Track if typewriter is currently active (NOTE: Kept for API compatibility)
-    is_typewriting: Arc<Mutex<bool>>,
 }
 
 impl AetherCore {
@@ -247,8 +242,6 @@ impl AetherCore {
             cleanup_task_handle,
             router,
             config_watcher,
-            cancellation_token: CancellationToken::new(),
-            is_typewriting: Arc::new(Mutex::new(false)),
         })
     }
 

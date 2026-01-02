@@ -17,7 +17,6 @@ uniffi = { version = "0.25", features = ["cli"] }
 # - enigo → Swift KeyboardSimulator (CGEvent)
 # - core-foundation/core-graphics → no longer needed
 tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util"] }
-tokio-util = "0.7"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "1.0"
 rusqlite = { version = "0.30", features = ["bundled"] }
