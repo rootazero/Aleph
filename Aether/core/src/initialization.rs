@@ -443,6 +443,9 @@ mod tests {
     async fn test_create_directory_structure() {
         use tempfile::TempDir;
 
+        // Save original HOME
+        let original_home = std::env::var("HOME").ok();
+
         // Create temp directory
         let temp_dir = TempDir::new().unwrap();
         std::env::set_var("HOME", temp_dir.path());
@@ -455,11 +458,21 @@ mod tests {
         assert!(config_dir.exists());
         assert!(config_dir.join("models").join("all-MiniLM-L6-v2").exists());
         assert!(config_dir.join("logs").exists());
+
+        // Restore original HOME
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
     }
 
     #[tokio::test]
     async fn test_create_default_config() {
         use tempfile::TempDir;
+
+        // Save original HOME
+        let original_home = std::env::var("HOME").ok();
 
         let temp_dir = TempDir::new().unwrap();
         std::env::set_var("HOME", temp_dir.path());
@@ -477,5 +490,12 @@ mod tests {
         // Verify config can be loaded
         let config = Config::load_from_file(&config_file).unwrap();
         assert_eq!(config.default_hotkey, "Grave");
+
+        // Restore original HOME
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
     }
 }
