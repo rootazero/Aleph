@@ -272,6 +272,20 @@ impl AetherCore {
         Ok(model_dir)
     }
 
+    // === Private Helper Methods ===
+
+    /// Acquires the config mutex lock with poison recovery.
+    ///
+    /// This is a convenience wrapper to reduce boilerplate for the common pattern
+    /// of acquiring a config lock with automatic poison recovery.
+    ///
+    /// # Returns
+    /// A `MutexGuard` providing access to the configuration.
+    #[inline(always)]
+    fn lock_config(&self) -> std::sync::MutexGuard<'_, Config> {
+        self.config.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Start listening for hotkey events (DEPRECATED - now handled by Swift layer)
     ///
     /// # IMPORTANT
@@ -416,37 +430,6 @@ impl AetherCore {
     #[cfg(not(debug_assertions))]
     pub fn test_typed_error(&self, _error_type: ErrorType, _message: String) {
         // No-op in release mode
-    }
-
-    /// Cancel typewriter animation if currently running
-    ///
-    /// If typewriter animation is in progress, this will cancel it and paste
-    /// the remaining text instantly via clipboard.
-    ///
-    /// # Returns
-    /// * `true` if typewriter was cancelled
-    /// * `false` if no typewriter animation was running
-    pub fn cancel_typewriter(&self) -> bool {
-        let is_typing = *self.is_typewriting.lock().unwrap_or_else(|e| {
-            warn!("Mutex poisoned in is_typewriting (cancel_typewriter), recovering");
-            e.into_inner()
-        });
-
-        if is_typing {
-            info!("Cancelling typewriter animation");
-            self.cancellation_token.cancel();
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Check if typewriter animation is currently running
-    pub fn is_typewriting(&self) -> bool {
-        *self.is_typewriting.lock().unwrap_or_else(|e| {
-            warn!("Mutex poisoned in is_typewriting (is_typewriting), recovering");
-            e.into_inner()
-        })
     }
 
     /// Retry the last failed request
@@ -615,13 +598,13 @@ impl AetherCore {
 
     /// Get memory configuration
     pub fn get_memory_config(&self) -> MemoryConfig {
-        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let config = self.lock_config();
         config.memory.clone()
     }
 
     /// Update memory configuration
     pub fn update_memory_config(&self, new_config: MemoryConfig) -> Result<()> {
-        let mut config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = self.lock_config();
         let old_retention_days = config.memory.retention_days;
         config.memory = new_config.clone();
 
@@ -690,7 +673,7 @@ impl AetherCore {
         use crate::memory::ingestion::MemoryIngestion;
 
         // Check if memory is enabled
-        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let config = self.lock_config();
         if !config.memory.enabled {
             return Err(AetherError::config("Memory is disabled"));
         }
@@ -776,7 +759,7 @@ impl AetherCore {
         let start_time = Instant::now();
 
         // Check if memory is enabled
-        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let config = self.lock_config();
         if !config.memory.enabled {
             println!("[Memory] Disabled - using base prompt");
             return Ok(format!("{}\n\nUser: {}", base_prompt, user_input));
@@ -881,7 +864,7 @@ impl AetherCore {
         let start_time = Instant::now();
 
         // Check if memory is enabled
-        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let config = self.lock_config();
         if !config.memory.enabled {
             debug!("[Memory] Disabled - returning original user input");
             return Ok(user_input);
@@ -1090,7 +1073,7 @@ impl AetherCore {
             })?;
 
         // Step 2: Retrieve memories and augment prompt (if enabled)
-        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let config = self.lock_config();
         let base_system_prompt = "You are a helpful AI assistant.".to_string();
         let perf_logging_enabled = config.general.enable_performance_logging;
         drop(config); // Release lock before async operations
@@ -1297,13 +1280,13 @@ impl AetherCore {
 
     /// Load configuration and return it in UniFFI-compatible format
     pub fn load_config(&self) -> Result<crate::config::FullConfig> {
-        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let config = self.lock_config();
         Ok(config.clone().into())
     }
 
     /// Update provider configuration
     pub fn update_provider(&self, name: String, provider: crate::config::ProviderConfig) -> Result<()> {
-        let mut config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = self.lock_config();
         config.providers.insert(name, provider);
         config.save()?;
         Ok(())
@@ -1311,7 +1294,7 @@ impl AetherCore {
 
     /// Delete provider configuration
     pub fn delete_provider(&self, name: String) -> Result<()> {
-        let mut config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = self.lock_config();
         config.providers.remove(&name);
         config.save()?;
         Ok(())
@@ -1319,7 +1302,7 @@ impl AetherCore {
 
     /// Update routing rules
     pub fn update_routing_rules(&self, rules: Vec<crate::config::RoutingRuleConfig>) -> Result<()> {
-        let mut config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = self.lock_config();
         config.rules = rules;
         config.validate()?;
         config.save()?;
@@ -1328,7 +1311,7 @@ impl AetherCore {
 
     /// Update shortcuts configuration
     pub fn update_shortcuts(&self, shortcuts: crate::config::ShortcutsConfig) -> Result<()> {
-        let mut config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = self.lock_config();
         config.shortcuts = Some(shortcuts);
         config.save()?;
         log::info!("Shortcuts configuration updated");
@@ -1337,7 +1320,7 @@ impl AetherCore {
 
     /// Update behavior configuration
     pub fn update_behavior(&self, behavior: crate::config::BehaviorConfig) -> Result<()> {
-        let mut config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = self.lock_config();
         config.behavior = Some(behavior);
         config.save()?;
         log::info!("Behavior configuration updated");
@@ -1360,7 +1343,7 @@ impl AetherCore {
         use crate::providers::create_provider;
 
         // Get provider config
-        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let config = self.lock_config();
         let provider_config = match config.providers.get(&provider_name) {
             Some(cfg) => cfg.clone(),
             None => {
@@ -1501,7 +1484,7 @@ impl AetherCore {
     /// - Default provider does not exist
     /// - Default provider is disabled
     pub fn get_default_provider(&self) -> Option<String> {
-        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let config = self.lock_config();
         config.get_default_provider()
     }
 
@@ -1514,7 +1497,7 @@ impl AetherCore {
     /// * `Ok(())` - Successfully set default provider
     /// * `Err` - Provider not found or disabled
     pub fn set_default_provider(&self, provider_name: String) -> Result<()> {
-        let mut config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = self.lock_config();
         config.set_default_provider(&provider_name)?;
         config.save()?;
 
@@ -1530,7 +1513,7 @@ impl AetherCore {
     /// # Returns
     /// * `Vec<String>` - List of enabled provider names
     pub fn get_enabled_providers(&self) -> Vec<String> {
-        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        let config = self.lock_config();
         config.get_enabled_providers()
     }
 }
@@ -1546,6 +1529,12 @@ struct StorageHelper {
 }
 
 impl StorageHelper {
+    /// Acquires the config mutex lock with poison recovery.
+    #[inline(always)]
+    fn lock_config(&self) -> std::sync::MutexGuard<'_, Config> {
+        self.config.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Store interaction memory (used in async context)
     ///
     /// IMPORTANT: This is an async function because it's called from within
@@ -1560,7 +1549,7 @@ impl StorageHelper {
         // MutexGuard is not Send, so we must drop it before await
         let (memory_config, context_anchor, db) = {
             // Check if memory is enabled
-            let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+            let config = self.lock_config();
             if !config.memory.enabled {
                 return Err(AetherError::config("Memory is disabled"));
             }
