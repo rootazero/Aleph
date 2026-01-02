@@ -78,7 +78,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             print("[Aether] Checking permissions after startup delay...")
 
             // Check all required permissions (Accessibility + Input Monitoring)
-            if !self.checkAllRequiredPermissions() {
+            let hasAccessibility = PermissionChecker.hasAccessibilityPermission()
+            let hasInputMonitoring = PermissionChecker.hasInputMonitoringPermission()
+
+            print("[Aether] Permission status - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
+
+            if !hasAccessibility || !hasInputMonitoring {
                 // Show mandatory permission gate if any permission is missing
                 self.showPermissionGate()
             } else {
@@ -617,17 +622,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     // MARK: - Permission Gate Management
-
-    /// Check if all required permissions are granted
-    /// - Returns: true if both Accessibility and Input Monitoring permissions are granted
-    private func checkAllRequiredPermissions() -> Bool {
-        let hasAccessibility = PermissionChecker.hasAccessibilityPermission()
-        let hasInputMonitoring = PermissionChecker.hasInputMonitoringPermission()
-
-        print("[Aether] Permission status - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
-
-        return hasAccessibility && hasInputMonitoring
-    }
 
     /// Show mandatory permission gate window
     private func showPermissionGate() {
