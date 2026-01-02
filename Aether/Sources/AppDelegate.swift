@@ -116,9 +116,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         if let button = statusItem?.button {
-            // Use SF Symbol for menu bar icon
-            button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Aether")
-            button.image?.isTemplate = true
+            // Use custom menu bar icon from Assets.xcassets
+            if let menuBarIcon = NSImage(named: "MenuBarIcon") {
+                menuBarIcon.isTemplate = true
+                button.image = menuBarIcon
+            } else {
+                // Fallback to SF Symbol if custom icon not found
+                button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Aether")
+                button.image?.isTemplate = true
+            }
         }
 
         // Create menu
@@ -339,7 +345,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Get enabled providers and current default
         let enabledProviders = core.getEnabledProviders().sorted()
-        let defaultProvider = try? core.getDefaultProvider()
+        let defaultProvider = core.getDefaultProvider()
 
         // Map providers to (id, displayName) tuples
         let items = enabledProviders.map { ($0, $0) }
@@ -584,10 +590,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
             switch state {
             case .idle:
-                button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Aether")
+                // Use custom menu bar icon for idle state
+                if let menuBarIcon = NSImage(named: "MenuBarIcon") {
+                    menuBarIcon.isTemplate = true
+                    button.image = menuBarIcon
+                } else {
+                    button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Aether")
+                }
             case .listening:
-                button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Aether Listening")
-                // Could add color tint here
+                // Use custom icon for listening state too
+                if let menuBarIcon = NSImage(named: "MenuBarIcon") {
+                    menuBarIcon.isTemplate = true
+                    button.image = menuBarIcon
+                } else {
+                    button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Aether Listening")
+                }
             case .retrievingMemory:
                 button.image = NSImage(systemSymbolName: "brain.head.profile", accessibilityDescription: "Retrieving Memory")
             case .processingWithAi:
@@ -1286,12 +1303,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 } else {
                     // For non-Rust errors (e.g., Swift KeyboardSimulator errors)
                     let errorMessage = error.localizedDescription
-                    let suggestion: String? = {
-                        if let nsError = error as? NSError {
-                            return nsError.userInfo["suggestion"] as? String
-                        }
-                        return nil
-                    }()
+                    let nsError = error as NSError
+                    let suggestion = nsError.userInfo["suggestion"] as? String
 
                     DispatchQueue.main.async { [weak self] in
                         self?.eventHandler?.onError(

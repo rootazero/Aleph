@@ -36,9 +36,8 @@ targets:
       - path: Aether/Sources
         name: Sources
         type: group
-    resources:
-      - Aether/Assets.xcassets
-      - Aether/Resources/**/*.strings
+      - path: Aether/Assets.xcassets
+        type: file
     info:
       path: Aether/Info.plist
       properties:

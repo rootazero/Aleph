@@ -61,10 +61,12 @@ struct SidebarWithTrafficLights: View {
 
                 // Logo section
                 VStack(spacing: 6) {
-                    // App icon
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 32))
-                        .foregroundColor(.accentColor)
+                    // App icon - use custom AppLogo from Assets.xcassets
+                    Image("AppLogo")
+                        .resizable()
+                        .renderingMode(.original)  // Preserve original SVG colors/gradients
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 36, height: 36)
 
                     // App name
                     Text("Aether")
