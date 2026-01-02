@@ -265,7 +265,7 @@ class EventHandler: AetherEventHandler {
 
     private func handleAiProcessingStarted(providerName: String, providerColor: String) {
         // Parse provider color from hex string (e.g., "#10a37f")
-        let color = parseHexColor(providerColor) ?? .green
+        let color = Color(hex: providerColor) ?? .green
 
         // Update Halo to show AI processing with provider info
         haloWindow?.updateState(.processingWithAI(providerColor: color, providerName: providerName))
@@ -277,23 +277,6 @@ class EventHandler: AetherEventHandler {
 
         // Update Halo with the response preview
         haloWindow?.updateState(.processing(providerColor: .green, streamingText: responsePreview))
-    }
-
-    /// Parse hex color string to Color
-    private func parseHexColor(_ hex: String) -> Color? {
-        var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-        hexSanitized = hexSanitized.replacingOccurrences(of: "#", with: "")
-
-        var rgb: UInt64 = 0
-        guard Scanner(string: hexSanitized).scanHexInt64(&rgb) else {
-            return nil
-        }
-
-        let r = Double((rgb & 0xFF0000) >> 16) / 255.0
-        let g = Double((rgb & 0x00FF00) >> 8) / 255.0
-        let b = Double(rgb & 0x0000FF) / 255.0
-
-        return Color(red: r, green: g, blue: b)
     }
 
     // MARK: - Typed Error Handling

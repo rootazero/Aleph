@@ -64,7 +64,7 @@ struct ProviderDetailPanel: View {
                 // Provider icon
                 ZStack {
                     Circle()
-                        .fill(parseHexColor(provider.config.color) ?? DesignTokens.Colors.accentBlue)
+                        .fill(Color(hex: provider.config.color) ?? DesignTokens.Colors.accentBlue)
                         .frame(width: 32, height: 32)
 
                     Image(systemName: providerIconName)
@@ -354,30 +354,6 @@ struct ProviderDetailPanel: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
-    }
-
-    /// Parse hex color string to Color
-    private func parseHexColor(_ hex: String?) -> Color? {
-        guard let hex = hex else { return nil }
-        let trimmed = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: trimmed).scanHexInt64(&int)
-
-        let r, g, b: UInt64
-        switch trimmed.count {
-        case 6: // RGB (24-bit)
-            (r, g, b) = ((int >> 16) & 0xFF, (int >> 8) & 0xFF, int & 0xFF)
-        default:
-            return nil
-        }
-
-        return Color(
-            .sRGB,
-            red: Double(r) / 255,
-            green: Double(g) / 255,
-            blue: Double(b) / 255,
-            opacity: 1
-        )
     }
 }
 
