@@ -175,15 +175,11 @@ struct ProviderCard: View {
     /// Provider icon based on type
     @ViewBuilder
     private var providerIcon: some View {
-        ZStack {
-            Circle()
-                .fill(Color(hex: provider.config.color) ?? DesignTokens.Colors.accentBlue)
-                .frame(width: 44, height: 44)
-
-            Image(systemName: providerIconName)
-                .font(.system(size: 20))
-                .foregroundColor(.white)
-        }
+        ProviderIcon(
+            providerType: provider.config.providerType ?? "",
+            size: 44,
+            showBackground: true
+        )
     }
 
     /// Context menu items
@@ -207,22 +203,6 @@ struct ProviderCard: View {
     }
 
     // MARK: - Helpers
-
-    /// Icon name based on provider type
-    private var providerIconName: String {
-        switch provider.config.providerType?.lowercased() ?? "" {
-        case "openai":
-            return "brain.head.profile"
-        case "claude", "anthropic":
-            return "cpu"
-        case "ollama":
-            return "terminal"
-        case "gemini", "google":
-            return "sparkles"
-        default:
-            return "cloud.fill"
-        }
-    }
 
     /// Provider type display name
     private var providerTypeName: String {

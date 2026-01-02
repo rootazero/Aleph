@@ -28,10 +28,11 @@ struct SimpleProviderCard: View {
             // Main card content
             HStack(spacing: 10) {
                 // Provider icon
-                Image(systemName: preset.iconName)
-                    .font(.system(size: 18))
-                    .foregroundColor(Color(hex: preset.color) ?? .gray)
-                    .frame(width: 28, height: 28)
+                ProviderIcon(
+                    providerType: preset.providerType,
+                    size: 28,
+                    showBackground: true
+                )
 
                 // Provider name
                 Text(preset.name)
