@@ -61,16 +61,12 @@ struct ProviderDetailPanel: View {
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
             HStack(spacing: DesignTokens.Spacing.sm) {
-                // Provider icon
-                ZStack {
-                    Circle()
-                        .fill(Color(hex: provider.config.color) ?? DesignTokens.Colors.accentBlue)
-                        .frame(width: 32, height: 32)
-
-                    Image(systemName: providerIconName)
-                        .font(.system(size: 16))
-                        .foregroundColor(.white)
-                }
+                // Provider icon with brand logo
+                ProviderIcon(
+                    providerType: provider.config.providerType ?? "",
+                    size: 32,
+                    showBackground: true
+                )
 
                 Text(provider.name)
                     .font(DesignTokens.Typography.title)
@@ -279,22 +275,6 @@ struct ProviderDetailPanel: View {
     }
 
     // MARK: - Helpers
-
-    /// Icon name based on provider type
-    private var providerIconName: String {
-        switch provider.config.providerType?.lowercased() ?? "" {
-        case "openai":
-            return "brain.head.profile"
-        case "claude", "anthropic":
-            return "cpu"
-        case "ollama":
-            return "terminal"
-        case "gemini", "google":
-            return "sparkles"
-        default:
-            return "cloud.fill"
-        }
-    }
 
     /// Provider type display name
     private var providerTypeName: String {

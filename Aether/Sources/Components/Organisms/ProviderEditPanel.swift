@@ -233,15 +233,25 @@ struct ProviderEditPanel: View {
             if let preset = selectedPreset {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
                     HStack(spacing: DesignTokens.Spacing.md) {
-                        // Provider icon
-                        ZStack {
-                            Circle()
-                                .fill(isCustomProvider ? color : (Color(hex: preset.color) ?? DesignTokens.Colors.accentBlue))
-                                .frame(width: 48, height: 48)
+                        // Provider icon with brand logo
+                        if isCustomProvider {
+                            // Custom provider - use color circle with SF Symbol
+                            ZStack {
+                                Circle()
+                                    .fill(color)
+                                    .frame(width: 48, height: 48)
 
-                            Image(systemName: preset.iconName)
-                                .font(.system(size: 24))
-                                .foregroundColor(.white)
+                                Image(systemName: "puzzlepiece.extension")
+                                    .font(.system(size: 24))
+                                    .foregroundColor(.white)
+                            }
+                        } else {
+                            // Preset provider - use brand SVG icon
+                            ProviderIcon(
+                                providerType: preset.providerType,
+                                size: 48,
+                                showBackground: true
+                            )
                         }
 
                         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
