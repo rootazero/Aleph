@@ -528,6 +528,7 @@ mod tests {
 
     fn create_test_config() -> ProviderConfig {
         let mut config = ProviderConfig::test_config("gpt-4o");
+        config.color = "#10a37f".to_string(); // OpenAI brand color
         config.max_tokens = Some(1000);
         config.temperature = Some(0.7);
         config

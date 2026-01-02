@@ -557,6 +557,9 @@ mod tests {
     fn create_test_config() -> ProviderConfig {
         let mut config = ProviderConfig::test_config("claude-3-5-sonnet-20241022");
         config.api_key = Some("sk-ant-test-key".to_string());
+        config.color = "#d97757".to_string(); // Claude brand color
+        config.max_tokens = Some(4096);
+        config.temperature = Some(0.7);
         config
     }
 

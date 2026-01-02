@@ -354,8 +354,8 @@ mod tests {
 
         let provider = create_provider("deepseek", config);
         assert!(provider.is_ok());
-        // OpenAI provider is used for DeepSeek
-        assert_eq!(provider.unwrap().name(), "openai");
+        // OpenAI provider implementation is used for DeepSeek, but keeps custom name
+        assert_eq!(provider.unwrap().name(), "deepseek");
     }
 
     #[test]
@@ -419,7 +419,8 @@ mod tests {
 
         assert!(deepseek.is_ok());
         assert!(moonshot.is_ok());
-        assert_eq!(deepseek.unwrap().name(), "openai");
-        assert_eq!(moonshot.unwrap().name(), "openai");
+        // Both use OpenAI provider implementation, but keep their custom names
+        assert_eq!(deepseek.unwrap().name(), "deepseek");
+        assert_eq!(moonshot.unwrap().name(), "moonshot");
     }
 }

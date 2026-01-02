@@ -292,6 +292,7 @@ mod tests {
     fn create_test_config() -> ProviderConfig {
         let mut config = ProviderConfig::test_config("llama3.2");
         config.api_key = None; // Not needed for Ollama
+        config.color = "#0000ff".to_string(); // Ollama brand color
         config.timeout_seconds = 60;
         config
     }
