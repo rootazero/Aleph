@@ -328,12 +328,10 @@ struct RoutingView: View {
 
                 // Show success notification
                 DispatchQueue.main.async {
-                    let alert = NSAlert()
-                    alert.messageText = NSLocalizedString("alert.routing.export_title", comment: "")
-                    alert.informativeText = String(format: NSLocalizedString("alert.routing.export_message", comment: ""), url.lastPathComponent)
-                    alert.alertStyle = .informational
-                    alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
-                    alert.runModal()
+                    showInfoAlert(
+                        title: NSLocalizedString("alert.routing.export_title", comment: ""),
+                        message: String(format: NSLocalizedString("alert.routing.export_message", comment: ""), url.lastPathComponent)
+                    )
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -410,12 +408,10 @@ struct RoutingView: View {
                     rules = config.rules
 
                     // Show success message
-                    let alert = NSAlert()
-                    alert.messageText = NSLocalizedString("alert.routing.import_success_append", comment: "")
-                    alert.informativeText = String(format: NSLocalizedString("alert.routing.import_success_append_message", comment: ""), importedRules.count)
-                    alert.alertStyle = .informational
-                    alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
-                    alert.runModal()
+                    showInfoAlert(
+                        title: NSLocalizedString("alert.routing.import_success_append", comment: ""),
+                        message: String(format: NSLocalizedString("alert.routing.import_success_append_message", comment: ""), importedRules.count)
+                    )
                 }
             } catch {
                 await MainActor.run {
@@ -437,12 +433,10 @@ struct RoutingView: View {
                     rules = config.rules
 
                     // Show success message
-                    let alert = NSAlert()
-                    alert.messageText = NSLocalizedString("alert.routing.import_success_replace", comment: "")
-                    alert.informativeText = String(format: NSLocalizedString("alert.routing.import_success_replace_message", comment: ""), importedRules.count)
-                    alert.alertStyle = .informational
-                    alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
-                    alert.runModal()
+                    showInfoAlert(
+                        title: NSLocalizedString("alert.routing.import_success_replace", comment: ""),
+                        message: String(format: NSLocalizedString("alert.routing.import_success_replace_message", comment: ""), importedRules.count)
+                    )
                 }
             } catch {
                 await MainActor.run {
