@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Provider icon component with brand colors
-/// Uses SF Symbols as icons with provider-specific brand colors
+/// Provider icon component with brand SVG logos
+/// Uses vector SVG assets from lobe-icons for authentic brand representation
 struct ProviderIcon: View {
     let providerType: String
     let size: CGFloat
@@ -17,18 +17,84 @@ struct ProviderIcon: View {
         ZStack {
             if showBackground {
                 Circle()
-                    .fill(brandColor)
+                    .fill(Color.white)
                     .frame(width: size, height: size)
             }
 
-            Image(systemName: iconName)
-                .font(.system(size: iconSize))
-                .foregroundColor(showBackground ? .white : brandColor)
+            // Use SVG icon from Assets.xcassets
+            if let assetName = assetImageName {
+                Image(assetName)
+                    .resizable()
+                    .renderingMode(.original)  // Preserve SVG colors
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: iconSize, height: iconSize)
+            } else {
+                // Fallback to SF Symbol if asset not found
+                Image(systemName: fallbackIconName)
+                    .font(.system(size: iconSize))
+                    .foregroundColor(brandColor)
+            }
         }
         .frame(width: size, height: size)
     }
 
-    // MARK: - Brand Colors
+    // MARK: - Asset Names
+
+    /// Asset name for the provider icon in Assets.xcassets
+    private var assetImageName: String? {
+        switch providerType {
+        case "openai":
+            return "ProviderIcon-OpenAI"
+        case "claude", "anthropic":
+            return "ProviderIcon-Claude"
+        case "gemini", "google":
+            return "ProviderIcon-Gemini"
+        case "ollama":
+            return "ProviderIcon-Ollama"
+        case "deepseek":
+            return "ProviderIcon-DeepSeek"
+        case "moonshot", "kimi":
+            return "ProviderIcon-Moonshot"
+        case "openrouter":
+            return "ProviderIcon-OpenRouter"
+        case "azure", "azure-openai":
+            return "ProviderIcon-Azure"
+        case "github", "github-copilot":
+            return "ProviderIcon-Github"
+        default:
+            return nil
+        }
+    }
+
+    // MARK: - Fallback Icons
+
+    /// Fallback SF Symbol when asset is not available
+    private var fallbackIconName: String {
+        switch providerType {
+        case "openai":
+            return "sparkles"
+        case "claude", "anthropic":
+            return "cpu"
+        case "gemini", "google":
+            return "sparkle"
+        case "ollama":
+            return "server.rack"
+        case "deepseek":
+            return "eye"
+        case "moonshot", "kimi":
+            return "moon.stars"
+        case "openrouter":
+            return "arrow.triangle.branch"
+        case "azure", "azure-openai":
+            return "cloud"
+        case "github", "github-copilot":
+            return "chevron.left.forwardslash.chevron.right"
+        default:
+            return "puzzlepiece.extension"
+        }
+    }
+
+    // MARK: - Brand Colors (for fallback)
 
     private var brandColor: Color {
         switch providerType {
@@ -55,57 +121,11 @@ struct ProviderIcon: View {
         }
     }
 
-    // MARK: - Icon Names
-
-    private var iconName: String {
-        switch providerType {
-        case "openai":
-            return "sparkles"  // More representative of AI
-        case "claude", "anthropic":
-            return "cpu"
-        case "gemini", "google":
-            return "sparkle"  // Google's star symbol
-        case "ollama":
-            return "server.rack"
-        case "deepseek":
-            return "eye"
-        case "moonshot", "kimi":
-            return "moon.stars"
-        case "openrouter":
-            return "arrow.triangle.branch"
-        case "azure", "azure-openai":
-            return "cloud"
-        case "github", "github-copilot":
-            return "chevron.left.forwardslash.chevron.right"
-        default:
-            return "puzzlepiece.extension"
-        }
-    }
-
     private var iconSize: CGFloat {
-        size * 0.5  // Icon is half the container size
+        showBackground ? size * 0.65 : size  // Slightly larger when in circle
     }
 }
 
-// MARK: - Alternative: ProviderIconSVG (Future Enhancement)
-
-/// SVG-based provider icon (for future use when SVG assets are added)
-/// This component will render actual brand logos from SVG files
-struct ProviderIconSVG: View {
-    let providerType: String
-    let size: CGFloat
-
-    init(providerType: String, size: CGFloat = 28) {
-        self.providerType = providerType.lowercased()
-        self.size = size
-    }
-
-    var body: some View {
-        // TODO: Load SVG assets from Resources/ProviderIcons/
-        // For now, fall back to ProviderIcon
-        ProviderIcon(providerType: providerType, size: size)
-    }
-}
 
 // MARK: - Preview Provider
 
