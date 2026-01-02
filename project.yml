@@ -106,11 +106,15 @@ targets:
               "${CARGO_PATH}" build
               # Copy debug library
               cp target/debug/libaethecore.dylib "${PROJECT_DIR}/Aether/Frameworks/"
+              # Fix install_name to use @rpath for portability across machines
+              install_name_tool -id "@rpath/libaethecore.dylib" "${PROJECT_DIR}/Aether/Frameworks/libaethecore.dylib"
           else
               cd "${PROJECT_DIR}/Aether/core"
               "${CARGO_PATH}" build --release
               # Copy release library
               cp target/release/libaethecore.dylib "${PROJECT_DIR}/Aether/Frameworks/"
+              # Fix install_name to use @rpath for portability across machines
+              install_name_tool -id "@rpath/libaethecore.dylib" "${PROJECT_DIR}/Aether/Frameworks/libaethecore.dylib"
           fi
         basedOnDependencyAnalysis: false
       - name: "Generate UniFFI Bindings"
