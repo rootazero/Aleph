@@ -18,11 +18,14 @@ struct MemoryView: View {
     @State private var memoryStats: MemoryStats?
     @State private var memories: [MemoryEntry] = []
     @State private var selectedAppFilter: String = "All Apps"
+    @State private var availableApps: [AppMemoryInfo] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var showDeleteConfirmation = false
     @State private var memoryToDelete: MemoryEntry?
     @State private var showClearAllConfirmation = false
+    @State private var showModelDownloadWindow = false
+    @State private var isCheckingModel = false
 
     init(core: AetherCore, saveBarState: SettingsSaveBarState) {
         self.core = core
@@ -92,6 +95,21 @@ struct MemoryView: View {
         } message: {
             Text(LocalizedStringKey("settings.memory.clear_all_message"))
         }
+        .sheet(isPresented: $showModelDownloadWindow) {
+            ModelDownloadView(
+                onSuccess: { [self] in
+                    print("[MemoryView] Model download succeeded - enabling memory")
+                    memoryConfig.enabled = true
+                    updateConfig()
+                    showModelDownloadWindow = false
+                },
+                onFailure: { [self] error in
+                    print("[MemoryView] Model download failed: \(error)")
+                    errorMessage = "Failed to download model: \(error)"
+                    showModelDownloadWindow = false
+                }
+            )
+        }
     }
 
     // MARK: - Header Section
@@ -118,15 +136,23 @@ struct MemoryView: View {
 
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                 // Enable/Disable Toggle
-                Toggle(LocalizedStringKey("settings.memory.enabled"), isOn: Binding(
-                    get: { memoryConfig.enabled },
-                    set: { newValue in
-                        memoryConfig.enabled = newValue
-                        updateConfig()
+                HStack {
+                    Toggle(LocalizedStringKey("settings.memory.enabled"), isOn: Binding(
+                        get: { memoryConfig.enabled },
+                        set: { newValue in
+                            handleMemoryToggle(newValue)
+                        }
+                    ))
+                    .toggleStyle(.switch)
+                    .font(DesignTokens.Typography.body)
+                    .disabled(isCheckingModel)
+
+                    if isCheckingModel {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                            .padding(.leading, DesignTokens.Spacing.xs)
                     }
-                ))
-                .toggleStyle(.switch)
-                .font(DesignTokens.Typography.body)
+                }
 
                 if memoryConfig.enabled {
                     // Retention Policy
@@ -304,10 +330,15 @@ struct MemoryView: View {
                     // Filter by app
                     Picker(LocalizedStringKey("settings.memory.filter"), selection: $selectedAppFilter) {
                         Text(LocalizedStringKey("settings.memory.all_apps")).tag("All Apps")
-                        // TODO: Add dynamic app list from database
+
+                        // Dynamic app list from database
+                        ForEach(availableApps, id: \.appBundleId) { appInfo in
+                            Text("\(appInfo.appBundleId) (\(appInfo.memoryCount))")
+                                .tag(appInfo.appBundleId)
+                        }
                     }
                     .pickerStyle(.menu)
-                    .frame(width: 200)
+                    .frame(width: 300)
                     .onChange(of: selectedAppFilter) {
                         loadMemories()
                     }
@@ -370,8 +401,48 @@ struct MemoryView: View {
 
     // MARK: - Helper Methods
 
+    /// Handle memory toggle - check model and download if needed
+    private func handleMemoryToggle(_ newValue: Bool) {
+        if newValue {
+            // User wants to enable memory - check if model exists
+            isCheckingModel = true
+
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let modelExists = try checkEmbeddingModelExists()
+
+                    DispatchQueue.main.async {
+                        isCheckingModel = false
+
+                        if modelExists {
+                            // Model exists - enable memory
+                            print("[MemoryView] Model exists, enabling memory")
+                            memoryConfig.enabled = true
+                            updateConfig()
+                        } else {
+                            // Model doesn't exist - show download window
+                            print("[MemoryView] Model doesn't exist, showing download window")
+                            showModelDownloadWindow = true
+                        }
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        isCheckingModel = false
+                        errorMessage = "Failed to check model: \(error.localizedDescription)"
+                    }
+                }
+            }
+        } else {
+            // User wants to disable memory - just update config
+            print("[MemoryView] Disabling memory")
+            memoryConfig.enabled = false
+            updateConfig()
+        }
+    }
+
     private func refreshData() {
         loadStats()
+        loadAppList()
         loadMemories()
     }
 
@@ -380,6 +451,15 @@ struct MemoryView: View {
             memoryStats = try core.getMemoryStats()
         } catch {
             errorMessage = "Failed to load memory statistics: \(error.localizedDescription)"
+        }
+    }
+
+    private func loadAppList() {
+        do {
+            availableApps = try core.getMemoryAppList()
+        } catch {
+            errorMessage = "Failed to load app list: \(error.localizedDescription)"
+            availableApps = []
         }
     }
 

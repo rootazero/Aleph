@@ -13,6 +13,17 @@ namespace aether {
   // Run first-time initialization with progress callback
   [Throws=AetherException]
   void run_first_time_init(InitializationProgressHandler? progress_handler);
+
+  // MEMORY MODULE MANAGEMENT
+
+  // Check if embedding model files exist and are valid
+  [Throws=AetherException]
+  boolean check_embedding_model_exists();
+
+  // Download embedding model files with progress callback
+  // Returns true if download succeeded, false otherwise
+  [Throws=AetherException]
+  boolean download_embedding_model_standalone(InitializationProgressHandler? progress_handler);
 };
 
 // Processing states for Aether system
@@ -99,6 +110,10 @@ interface AetherCore {
   // Search memories by context
   [Throws=AetherException]
   sequence<MemoryEntry> search_memories(string app_bundle_id, string? window_title, u32 limit);
+
+  // Get list of apps with memory counts (for UI filtering)
+  [Throws=AetherException]
+  sequence<AppMemoryInfo> get_memory_app_list();
 
   // Delete specific memory by ID
   [Throws=AetherException]
@@ -376,6 +391,12 @@ dictionary MemoryStats {
   f64 database_size_mb;
   i64 oldest_memory_timestamp;
   i64 newest_memory_timestamp;
+};
+
+// App memory info for UI filtering
+dictionary AppMemoryInfo {
+  string app_bundle_id;
+  u64 memory_count;
 };
 
 // Captured context from active application

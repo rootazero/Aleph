@@ -275,6 +275,34 @@ impl VectorDatabase {
         Ok(rows_affected as u64)
     }
 
+    /// Get list of unique app bundle IDs with memory counts
+    pub async fn get_app_list(&self) -> Result<Vec<(String, u64)>, AetherError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT app_bundle_id, COUNT(*) as count
+                FROM memories
+                GROUP BY app_bundle_id
+                ORDER BY count DESC, app_bundle_id ASC
+                "#,
+            )
+            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+
+        let apps = stmt
+            .query_map([], |row| {
+                let app_bundle_id: String = row.get(0)?;
+                let count: u64 = row.get(1)?;
+                Ok((app_bundle_id, count))
+            })
+            .map_err(|e| AetherError::config(format!("Failed to query app list: {}", e)))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AetherError::config(format!("Failed to parse app rows: {}", e)))?;
+
+        Ok(apps)
+    }
+
     /// Serialize embedding vector to bytes (f32 array -> bytes)
     fn serialize_embedding(embedding: &[f32]) -> Vec<u8> {
         embedding.iter().flat_map(|f| f.to_le_bytes()).collect()

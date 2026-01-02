@@ -564,6 +564,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func getLogLevel()  -> LogLevel
     
+    func getMemoryAppList() throws  -> [AppMemoryInfo]
+    
     func getMemoryConfig()  -> MemoryConfig
     
     func getMemoryStats() throws  -> MemoryStats
@@ -728,6 +730,13 @@ open func getLogDirectory()throws  -> String {
 open func getLogLevel() -> LogLevel {
     return try!  FfiConverterTypeLogLevel.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_get_log_level(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getMemoryAppList()throws  -> [AppMemoryInfo] {
+    return try  FfiConverterSequenceTypeAppMemoryInfo.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_get_memory_app_list(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -952,6 +961,72 @@ public func FfiConverterTypeAetherCore_lift(_ pointer: UnsafeMutableRawPointer) 
 #endif
 public func FfiConverterTypeAetherCore_lower(_ value: AetherCore) -> UnsafeMutableRawPointer {
     return FfiConverterTypeAetherCore.lower(value)
+}
+
+
+public struct AppMemoryInfo {
+    public var appBundleId: String
+    public var memoryCount: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(appBundleId: String, memoryCount: UInt64) {
+        self.appBundleId = appBundleId
+        self.memoryCount = memoryCount
+    }
+}
+
+
+
+extension AppMemoryInfo: Equatable, Hashable {
+    public static func ==(lhs: AppMemoryInfo, rhs: AppMemoryInfo) -> Bool {
+        if lhs.appBundleId != rhs.appBundleId {
+            return false
+        }
+        if lhs.memoryCount != rhs.memoryCount {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(appBundleId)
+        hasher.combine(memoryCount)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAppMemoryInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AppMemoryInfo {
+        return
+            try AppMemoryInfo(
+                appBundleId: FfiConverterString.read(from: &buf), 
+                memoryCount: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AppMemoryInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.appBundleId, into: &buf)
+        FfiConverterUInt64.write(value.memoryCount, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppMemoryInfo_lift(_ buf: RustBuffer) throws -> AppMemoryInfo {
+    return try FfiConverterTypeAppMemoryInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAppMemoryInfo_lower(_ value: AppMemoryInfo) -> RustBuffer {
+    return FfiConverterTypeAppMemoryInfo.lower(value)
 }
 
 
@@ -3145,6 +3220,31 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeAppMemoryInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [AppMemoryInfo]
+
+    public static func write(_ value: [AppMemoryInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeAppMemoryInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [AppMemoryInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [AppMemoryInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeAppMemoryInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeMemoryEntry: FfiConverterRustBuffer {
     typealias SwiftType = [MemoryEntry]
 
@@ -3216,6 +3316,19 @@ fileprivate struct FfiConverterSequenceTypeRoutingRuleConfig: FfiConverterRustBu
         return seq
     }
 }
+public func checkEmbeddingModelExists()throws  -> Bool {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_func_check_embedding_model_exists($0
+    )
+})
+}
+public func downloadEmbeddingModelStandalone(progressHandler: InitializationProgressHandler?)throws  -> Bool {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_func_download_embedding_model_standalone(
+        FfiConverterOptionCallbackInterfaceInitializationProgressHandler.lower(progressHandler),$0
+    )
+})
+}
 public func isFreshInstall()throws  -> Bool {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_func_is_fresh_install($0
@@ -3243,6 +3356,12 @@ private var initializationResult: InitializationResult = {
     let scaffolding_contract_version = ffi_aethecore_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
+    }
+    if (uniffi_aethecore_checksum_func_check_embedding_model_exists() != 65318) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_func_download_embedding_model_standalone() != 33400) {
+        return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_func_is_fresh_install() != 56701) {
         return InitializationResult.apiChecksumMismatch
@@ -3275,6 +3394,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_get_log_level() != 16546) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_memory_app_list() != 2639) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_get_memory_config() != 46228) {

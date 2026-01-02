@@ -581,6 +581,22 @@ impl AetherCore {
             .collect())
     }
 
+    /// Get list of unique app bundle IDs from memories
+    pub fn get_memory_app_list(&self) -> Result<Vec<AppMemoryInfo>> {
+        let db = self.require_memory_db()?;
+
+        let apps = self.runtime.block_on(db.get_app_list())?;
+
+        // Convert to FFI type
+        Ok(apps
+            .into_iter()
+            .map(|(app_bundle_id, memory_count)| AppMemoryInfo {
+                app_bundle_id,
+                memory_count,
+            })
+            .collect())
+    }
+
     /// Delete specific memory by ID
     pub fn delete_memory(&self, id: String) -> Result<()> {
         let db = self.require_memory_db()?;
@@ -1607,6 +1623,13 @@ pub struct MemoryEntryFFI {
     pub ai_output: String,
     pub timestamp: i64,
     pub similarity_score: Option<f32>,
+}
+
+/// App memory info for UI filtering (UniFFI-compatible)
+#[derive(Debug, Clone)]
+pub struct AppMemoryInfo {
+    pub app_bundle_id: String,
+    pub memory_count: u64,
 }
 
 #[cfg(test)]
