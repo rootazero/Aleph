@@ -1,5 +1,13 @@
 # Change: Enforce Mandatory Permission Gating at Startup
 
+## Metadata
+- **ID**: enforce-permission-gating
+- **Title**: Enforce Mandatory Permission Gating at Startup
+- **Type**: Feature Addition / UX Improvement
+- **Status**: Deployed
+- **Created**: 2025-12-29
+- **Deployed**: 2025-12-29
+
 ## Why
 
 Aether requires both **Accessibility** and **Input Monitoring** permissions to function correctly. Currently, users can dismiss permission prompts and access settings without granting these permissions, leading to a broken experience where core functionality (global hotkeys, clipboard operations) fails silently.

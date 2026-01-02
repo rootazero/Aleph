@@ -1,5 +1,13 @@
 # Change: Refactor to Native API Separation Architecture
 
+## Metadata
+- **ID**: refactor-native-api-separation
+- **Title**: Refactor to Native API Separation Architecture
+- **Type**: Architectural Refactoring
+- **Status**: Deployed
+- **Created**: 2025-12-30
+- **Deployed**: 2025-12-30
+
 ## Why
 
 当前的 Aether 架构存在严重的 **前后端职责混淆** 问题，违反了现代软件工程的分层原则，导致以下关键缺陷：

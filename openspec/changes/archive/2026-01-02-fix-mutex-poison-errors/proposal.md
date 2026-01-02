@@ -1,9 +1,34 @@
 # Proposal: Fix Mutex Poison Errors and Core Stability Issues
 
-**Change ID**: `fix-mutex-poison-errors`
-**Status**: Draft
-**Created**: 2025-12-31
-**Priority**: Critical
+## Metadata
+- **ID**: fix-mutex-poison-errors
+- **Title**: Fix Mutex Poison Errors and Core Stability Issues
+- **Type**: Bug Fix / Stability Improvement
+- **Status**: Deployed
+- **Created**: 2025-12-31
+- **Deployed**: 2025-12-31
+- **Priority**: Critical
+
+## Why
+
+Users are experiencing critical crashes due to unsafe Mutex handling in the Rust core. The codebase contains multiple `.lock().unwrap()` calls that panic when a Mutex becomes poisoned after a thread panic. This creates cascading failures where one panic causes all future operations to fail, making the application unusable.
+
+## What Changes
+
+**Core Stability (`Aether/core/src/core.rs`)**:
+- Replace all `.lock().unwrap()` calls with safe error handling
+- Use `lock().unwrap_or_else()` or pattern matching to handle poison errors
+- Add logging for Mutex poison errors
+- Extract helper methods for common Mutex lock patterns
+
+**Error Recovery**:
+- Implement graceful degradation when Mutex is poisoned
+- Clear poisoned state where possible
+- Add error messages to guide users
+
+**Memory Module**:
+- Fix `block_on` panic in async memory storage task
+- Use proper async runtime for async operations
 
 ## Problem Statement
 

@@ -4,8 +4,38 @@
 - **ID**: add-default-provider-selection
 - **Title**: Add Default Provider Selection and Menubar Quick Switch
 - **Type**: Feature Addition
-- **Status**: Draft
+- **Status**: Deployed
 - **Created**: 2025-12-31
+- **Deployed**: 2025-12-31
+
+## Why
+
+Users need an intuitive way to manage their default AI provider without manually editing configuration files. The current system lacks:
+- Visual indication of which provider is set as default
+- UI controls to change the default provider
+- Quick access to switch providers via menu bar
+- Clear distinction between enabled and disabled providers
+
+This creates a poor user experience and forces users to interact with config files directly.
+
+## What Changes
+
+**Rust Core (`Aether/core`)**:
+- Add `set_default_provider()` method to UniFFI interface
+- Add `get_default_provider()` method to query current default
+- Implement validation to ensure only enabled providers can be set as default
+- Update router to use the default provider for fallback routing
+
+**Swift UI (`Aether/Sources`)**:
+- Add "Default" badge indicator in ProvidersView list
+- Add "Set as Default" button in provider edit panel
+- Implement menu bar quick switch with checkmark for current default
+- Filter menu bar to show only enabled providers
+- Add visual feedback when default provider changes
+
+**Configuration**:
+- Ensure `general.default_provider` in config.toml syncs with UI changes
+- Add validation to prevent disabled providers from being default
 
 ## Overview
 

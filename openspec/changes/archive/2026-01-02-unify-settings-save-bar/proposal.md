@@ -1,5 +1,13 @@
 # Proposal: Unify Settings Save Bar
 
+## Metadata
+- **ID**: unify-settings-save-bar
+- **Title**: Unify Settings Save Bar
+- **Type**: Feature Addition / UX Improvement
+- **Status**: Deployed
+- **Created**: 2025-12-30
+- **Deployed**: 2025-12-30
+
 ## Why
 
 Users need confidence when editing settings. Currently, the Aether settings UI saves changes immediately without explicit confirmation, which creates several problems:
@@ -16,6 +24,34 @@ This change addresses these pain points by:
 - Providing clear visual feedback for unsaved state
 
 **User Value**: Users gain control over their settings, can safely experiment with configurations, and quickly test providers without context switching.
+
+## What Changes
+
+**Infrastructure (`UnifiedSaveBar` component)**:
+- Create reusable `UnifiedSaveBar` SwiftUI component
+- Implement status message display (center)
+- Add Cancel/Save buttons with proper styling
+- Support dirty state tracking and validation
+- Add navigation guard to prevent data loss
+
+**Settings Tabs Integration**:
+- General Settings: Add save bar with delayed commit
+- Providers View: Migrate to unified save bar architecture
+- Routing Settings: Add save bar
+- Shortcuts Settings: Add save bar
+- Behavior Settings: Add save bar
+- Memory Settings: Add save bar
+
+**Provider Cards Enhancement**:
+- Add inline "Test" icon button to each provider card
+- Move test functionality from edit panel to card view
+- Show test results directly on card
+- Update visual feedback for testing state
+
+**Provider Edit Panel**:
+- Remove bottom save bar (use unified save bar instead)
+- Remove test connection button from panel
+- Integrate with unified save bar for unsaved changes
 
 ## Problem Statement
 

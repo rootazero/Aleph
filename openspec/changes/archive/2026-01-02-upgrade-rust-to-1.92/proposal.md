@@ -4,8 +4,9 @@
 - **ID**: upgrade-rust-to-1.92
 - **Title**: Upgrade Rust to 1.92 and Migrate to Stdlib Features
 - **Type**: Technical Upgrade / Dependency Reduction
-- **Status**: Draft
+- **Status**: Deployed
 - **Created**: 2026-01-02
+- **Deployed**: 2026-01-02
 
 ## Why
 
@@ -18,6 +19,30 @@ Upgrading to Rust 1.92 and migrating to standard library features addresses thre
 3. **Future-Proof Codebase**: Rust 1.92 brings performance optimizations and modern idioms (C string literals, native async traits) that will benefit future development. UniFFI 0.28 leverages these features for better FFI performance.
 
 4. **Align with Best Practices**: Using stdlib features over external crates is recommended by the Rust ecosystem for foundational primitives.
+
+## What Changes
+
+This change upgrades the Rust codebase to version 1.92 and migrates from external crates to standard library equivalents:
+
+**Dependency Changes**:
+- Update MSRV from 1.70 to 1.92 in `Cargo.toml`
+- Upgrade UniFFI from 0.25 to 0.28.3
+- Remove `async-trait = "0.1"` dependency (replaced by native async fn in traits)
+- Remove `once_cell = "1.19"` dependency (replaced by `std::sync::OnceLock`)
+
+**Code Changes**:
+- `memory/embedding.rs`: Replace `OnceCell` with `std::sync::OnceLock`
+- All provider files (`openai.rs`, `claude.rs`, `ollama.rs`, `mock.rs`, `mod.rs`):
+  - Remove `use async_trait::async_trait` imports
+  - Remove `#[async_trait]` attributes (7 total occurrences)
+  - Add `use std::future::Future` and `use std::pin::Pin` imports
+  - Update async method signatures to return `Pin<Box<dyn Future<...>>>`
+  - Add explicit parameter cloning before async move blocks
+- `config/mod.rs`: Add `ProviderConfig::test_config()` helper function
+
+**Generated Artifacts**:
+- Regenerate UniFFI Swift bindings (`aether.swift`, FFI headers)
+- Rebuild release library (`libaethecore.dylib`)
 
 ## Overview
 

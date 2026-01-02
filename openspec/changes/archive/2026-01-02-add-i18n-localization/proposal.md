@@ -1,5 +1,13 @@
 # Change: Add Internationalization (i18n) Support
 
+## Metadata
+- **ID**: add-i18n-localization
+- **Title**: Add Internationalization (i18n) Support
+- **Type**: Feature Addition
+- **Status**: Deployed
+- **Created**: 2025-12-30
+- **Deployed**: 2025-12-30
+
 ## Why
 
 Aether currently has all UI text hardcoded in English within Swift source files. This limits accessibility for non-English users and makes the application less inclusive. To support a global user base, we need to:
