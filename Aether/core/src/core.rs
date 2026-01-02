@@ -981,6 +981,33 @@ impl AetherCore {
     /// // Swift handles output
     /// KeyboardSimulator.typeText(response)
     /// ```
+
+    /// Handle processing error with user-friendly messaging
+    ///
+    /// This helper centralizes error handling logic for AI processing failures.
+    /// It extracts user-friendly messages, logs errors, notifies the event handler,
+    /// and returns an AetherException.
+    ///
+    /// # Arguments
+    ///
+    /// * `error` - The AetherError to handle
+    ///
+    /// # Returns
+    ///
+    /// AetherException::Error for UniFFI compatibility
+    fn handle_processing_error(&self, error: &AetherError) -> AetherException {
+        let friendly_message = error.user_friendly_message();
+        let suggestion = error.suggestion().map(|s| s.to_string());
+
+        error!(error = ?error, user_message = %friendly_message, "AI processing failed");
+
+        // Notify Swift layer with detailed error
+        self.event_handler.on_error(friendly_message, suggestion);
+        self.event_handler.on_state_changed(ProcessingState::Error);
+
+        AetherException::Error
+    }
+
     pub fn process_input(&self, user_input: String, context: CapturedContext) -> std::result::Result<String, AetherException> {
         use std::time::Instant;
         let start_time = Instant::now();
@@ -998,20 +1025,7 @@ impl AetherCore {
         // Call internal implementation and handle errors
         match self.process_with_ai_internal(user_input, context, start_time) {
             Ok(response) => Ok(response),
-            Err(e) => {
-                // Send user-friendly error message via callback BEFORE throwing exception
-                let friendly_message = e.user_friendly_message();
-                let suggestion = e.suggestion().map(|s| s.to_string());
-
-                error!(error = ?e, user_message = %friendly_message, "AI processing failed");
-
-                // Notify Swift layer with detailed error
-                self.event_handler.on_error(friendly_message.clone(), suggestion.clone());
-                self.event_handler.on_state_changed(ProcessingState::Error);
-
-                // Throw generic exception (Swift will use the message from callback)
-                Err(AetherException::Error)
-            }
+            Err(e) => Err(self.handle_processing_error(&e)),
         }
     }
 
@@ -1035,13 +1049,9 @@ impl AetherCore {
         // Wrapper to handle errors with user-friendly messages
         let result = self.process_with_ai_internal(input, _context, start_time);
 
-        // If error occurred, send user-friendly message to UI
+        // If error occurred, use centralized error handler
         if let Err(ref e) = result {
-            let friendly_message = e.user_friendly_message();
-            let suggestion = e.suggestion().map(|s| s.to_string());
-            error!(error = ?e, user_message = %friendly_message, "AI processing failed");
-            self.event_handler.on_error(friendly_message, suggestion);
-            self.event_handler.on_state_changed(ProcessingState::Error);
+            let _ = self.handle_processing_error(e);
         }
 
         result
