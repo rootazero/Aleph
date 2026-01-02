@@ -249,8 +249,7 @@ struct ProviderEditPanel: View {
                             // Preset provider - use brand SVG icon
                             ProviderIcon(
                                 providerType: preset.providerType,
-                                size: 48,
-                                showBackground: true
+                                size: 48
                             )
                         }
 

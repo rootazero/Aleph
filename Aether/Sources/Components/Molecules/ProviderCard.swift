@@ -177,8 +177,7 @@ struct ProviderCard: View {
     private var providerIcon: some View {
         ProviderIcon(
             providerType: provider.config.providerType ?? "",
-            size: 44,
-            showBackground: true
+            size: 44
         )
     }
 

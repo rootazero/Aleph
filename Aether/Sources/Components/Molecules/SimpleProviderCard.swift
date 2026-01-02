@@ -30,8 +30,7 @@ struct SimpleProviderCard: View {
                 // Provider icon
                 ProviderIcon(
                     providerType: preset.providerType,
-                    size: 28,
-                    showBackground: true
+                    size: 28
                 )
 
                 // Provider name

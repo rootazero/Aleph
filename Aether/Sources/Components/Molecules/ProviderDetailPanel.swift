@@ -64,8 +64,7 @@ struct ProviderDetailPanel: View {
                 // Provider icon with brand logo
                 ProviderIcon(
                     providerType: provider.config.providerType ?? "",
-                    size: 32,
-                    showBackground: true
+                    size: 32
                 )
 
                 Text(provider.name)
