@@ -55,3 +55,7 @@ DerivedData/
 
 # UniFFI generated files (keep these in Git for now)
 # **/Generated/
+
+# Temporary installation logs and notes
+newinstall*.txt
+install_log*.txt
