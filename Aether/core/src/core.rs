@@ -1279,6 +1279,74 @@ impl AetherCore {
 
     // ========== CONFIG MANAGEMENT METHODS (Phase 6 - Task 1.5) ==========
 
+    /// Internal helper to test provider connection (shared logic)
+    ///
+    /// This method contains the common testing logic used by both
+    /// `test_provider_connection()` and `test_provider_connection_with_config()`.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider_name` - Name of the provider (for error messages)
+    /// * `provider_config` - Provider configuration to test
+    ///
+    /// # Returns
+    ///
+    /// TestConnectionResult with success status and message
+    fn test_provider_internal(
+        provider_name: &str,
+        provider_config: crate::config::ProviderConfig,
+    ) -> TestConnectionResult {
+        use crate::providers::create_provider;
+
+        // Create provider instance
+        let provider = match create_provider(provider_name, provider_config) {
+            Ok(p) => p,
+            Err(e) => {
+                return TestConnectionResult {
+                    success: false,
+                    message: format!("Failed to create provider: {}", e.user_friendly_message()),
+                };
+            }
+        };
+
+        // Send test request (block on async operation)
+        let test_prompt = "Say 'OK' if you can read this.";
+        let runtime = match Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                return TestConnectionResult {
+                    success: false,
+                    message: format!("Failed to create runtime: {}", e),
+                };
+            }
+        };
+
+        let result = runtime.block_on(async {
+            provider
+                .process(test_prompt, None)
+                .await
+                .map_err(|e| {
+                    // During testing, show detailed error for debugging
+                    // (unlike production where we show user-friendly messages)
+                    format!("{}", e)
+                })
+        });
+
+        match result {
+            Ok(response) => TestConnectionResult {
+                success: true,
+                message: format!(
+                    "✓ Connection successful! Provider responded: {}",
+                    response.chars().take(50).collect::<String>()
+                ),
+            },
+            Err(err_msg) => TestConnectionResult {
+                success: false,
+                message: err_msg,
+            },
+        }
+    }
+
     /// Load configuration and return it in UniFFI-compatible format
     pub fn load_config(&self) -> Result<crate::config::FullConfig> {
         let config = self.lock_config();
@@ -1341,9 +1409,7 @@ impl AetherCore {
     /// Sends a test request to the provider to verify configuration.
     /// Returns a TestConnectionResult with success status and message.
     pub fn test_provider_connection(&self, provider_name: String) -> TestConnectionResult {
-        use crate::providers::create_provider;
-
-        // Get provider config
+        // Get provider config from stored configuration
         let config = self.lock_config();
         let provider_config = match config.providers.get(&provider_name) {
             Some(cfg) => cfg.clone(),
@@ -1355,56 +1421,10 @@ impl AetherCore {
                 };
             }
         };
-
         drop(config); // Release lock before async operations
 
-        // Create provider instance
-        let provider = match create_provider(&provider_name, provider_config) {
-            Ok(p) => p,
-            Err(e) => {
-                return TestConnectionResult {
-                    success: false,
-                    message: format!("Failed to create provider: {}", e.user_friendly_message()),
-                };
-            }
-        };
-
-        // Send test request (block on async operation)
-        let test_prompt = "Say 'OK' if you can read this.";
-        let runtime = match Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                return TestConnectionResult {
-                    success: false,
-                    message: format!("Failed to create runtime: {}", e),
-                };
-            }
-        };
-
-        let result = runtime.block_on(async {
-            provider
-                .process(test_prompt, None)
-                .await
-                .map_err(|e| {
-                    // During testing, show detailed error for debugging
-                    // (unlike production where we show user-friendly messages)
-                    format!("{}", e)
-                })
-        });
-
-        match result {
-            Ok(response) => TestConnectionResult {
-                success: true,
-                message: format!(
-                    "✓ Connection successful! Provider responded: {}",
-                    response.chars().take(50).collect::<String>()
-                ),
-            },
-            Err(err_msg) => TestConnectionResult {
-                success: false,
-                message: err_msg,
-            },
-        }
+        // Use internal helper
+        Self::test_provider_internal(&provider_name, provider_config)
     }
 
     /// Test provider connection with temporary configuration
@@ -1425,55 +1445,8 @@ impl AetherCore {
         provider_name: String,
         provider_config: crate::config::ProviderConfig,
     ) -> TestConnectionResult {
-        use crate::providers::create_provider;
-
-        // Create provider instance directly from config
-        let provider = match create_provider(&provider_name, provider_config) {
-            Ok(p) => p,
-            Err(e) => {
-                return TestConnectionResult {
-                    success: false,
-                    message: format!("Failed to create provider: {}", e.user_friendly_message()),
-                };
-            }
-        };
-
-        // Send test request (block on async operation)
-        let test_prompt = "Say 'OK' if you can read this.";
-        let runtime = match Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                return TestConnectionResult {
-                    success: false,
-                    message: format!("Failed to create runtime: {}", e),
-                };
-            }
-        };
-
-        let result = runtime.block_on(async {
-            provider
-                .process(test_prompt, None)
-                .await
-                .map_err(|e| {
-                    // During testing, show detailed error for debugging
-                    // (unlike production where we show user-friendly messages)
-                    format!("{}", e)
-                })
-        });
-
-        match result {
-            Ok(response) => TestConnectionResult {
-                success: true,
-                message: format!(
-                    "✓ Connection successful! Provider responded: {}",
-                    response.chars().take(50).collect::<String>()
-                ),
-            },
-            Err(err_msg) => TestConnectionResult {
-                success: false,
-                message: err_msg,
-            },
-        }
+        // Use internal helper directly
+        Self::test_provider_internal(&provider_name, provider_config)
     }
 
     // DEFAULT PROVIDER MANAGEMENT METHODS (Phase 3.3 - add-default-provider-selection)
