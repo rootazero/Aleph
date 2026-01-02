@@ -1625,10 +1625,12 @@ mod tests {
     fn test_start_stop_listening() {
         let core = AetherCore::new(Box::new(MockEventHandler::new())).unwrap();
 
+        // Note: is_listening() always returns false since hotkey monitoring is now in Swift layer
         assert!(!core.is_listening());
 
         core.start_listening().unwrap();
-        assert!(core.is_listening());
+        // is_listening() still returns false (hotkey monitoring handled by Swift)
+        assert!(!core.is_listening());
 
         core.stop_listening().unwrap();
         assert!(!core.is_listening());
