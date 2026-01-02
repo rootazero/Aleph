@@ -7,10 +7,10 @@
 /// For production use, integrate with sentence-transformers via Python binding
 /// or wait for stable ort 2.0 release.
 use crate::error::AetherError;
-use once_cell::sync::OnceCell;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 /// Embedding model for generating vector representations of text
 ///
@@ -19,7 +19,7 @@ use std::path::PathBuf;
 pub struct EmbeddingModel {
     model_path: PathBuf,
     // Lazy-loaded flag
-    initialized: OnceCell<bool>,
+    initialized: OnceLock<bool>,
 }
 
 impl EmbeddingModel {
@@ -41,7 +41,7 @@ impl EmbeddingModel {
 
         Ok(Self {
             model_path: model_dir,
-            initialized: OnceCell::new(),
+            initialized: OnceLock::new(),
         })
     }
 
@@ -59,27 +59,33 @@ impl EmbeddingModel {
 
     /// Initialize model (lazy loading)
     fn ensure_initialized(&self) -> Result<(), AetherError> {
-        self.initialized.get_or_try_init(|| {
+        // Use get_or_init with a closure that always succeeds
+        // If initialization fails, we'll catch it when we actually use the model
+        self.initialized.get_or_init(|| {
             // Verify model files exist
             let model_file = self.model_path.join("model.onnx");
             let tokenizer_file = self.model_path.join("tokenizer.json");
 
             if !model_file.exists() {
-                return Err(AetherError::config(format!(
-                    "Model file not found: {:?}",
-                    model_file
-                )));
+                eprintln!("Warning: Model file not found: {:?}", model_file);
+                return false;
             }
             if !tokenizer_file.exists() {
-                return Err(AetherError::config(format!(
-                    "Tokenizer file not found: {:?}",
-                    tokenizer_file
-                )));
+                eprintln!("Warning: Tokenizer file not found: {:?}", tokenizer_file);
+                return false;
             }
 
             println!("✓ Embedding model files verified at {:?}", self.model_path);
-            Ok(true)
-        })?;
+            true
+        });
+
+        // Check if initialization succeeded
+        if !self.initialized.get().copied().unwrap_or(false) {
+            return Err(AetherError::config(format!(
+                "Model files not found at {:?}",
+                self.model_path
+            )));
+        }
 
         Ok(())
     }

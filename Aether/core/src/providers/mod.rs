@@ -27,7 +27,8 @@
 /// }
 /// ```
 use crate::error::Result;
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 
 // Sub-modules
 pub mod claude;
@@ -147,7 +148,6 @@ pub fn create_provider(name: &str, config: ProviderConfig) -> Result<Arc<dyn AiP
 ///
 /// All processing is async to avoid blocking the runtime during API calls
 /// or command execution.
-#[async_trait]
 pub trait AiProvider: Send + Sync {
     /// Process input text and return AI-generated response
     ///
@@ -177,7 +177,7 @@ pub trait AiProvider: Send + Sync {
     /// ).await.unwrap();
     /// # }
     /// ```
-    async fn process(&self, input: &str, system_prompt: Option<&str>) -> Result<String>;
+    fn process(&self, input: &str, system_prompt: Option<&str>) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>>;
 
     /// Process input with optional image and return AI-generated response
     ///
@@ -196,14 +196,20 @@ pub trait AiProvider: Send + Sync {
     ///
     /// Default implementation calls `process()` and ignores the image.
     /// Vision-capable providers should override this method.
-    async fn process_with_image(
+    fn process_with_image(
         &self,
         input: &str,
         _image: Option<&crate::clipboard::ImageData>,
         system_prompt: Option<&str>,
-    ) -> Result<String> {
-        // Default: ignore image and call text-only process
-        self.process(input, system_prompt).await
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        // Clone the data we need before moving into async block
+        let input = input.to_string();
+        let system_prompt = system_prompt.map(|s| s.to_string());
+
+        Box::pin(async move {
+            // Default: ignore image and call text-only process
+            self.process(&input, system_prompt.as_deref()).await
+        })
     }
 
     /// Check if provider supports vision/image input

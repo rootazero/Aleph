@@ -2,14 +2,14 @@
 name = "aethecore"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.92"
 
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
 name = "aethecore"
 
 [dependencies]
-uniffi = { version = "0.25", features = ["cli"] }
+uniffi = { version = "0.28", features = ["cli"] }
 # REMOVED: System API dependencies (rdev, arboard, enigo) - now handled by Swift layer
 # See: refactor-native-api-separation proposal
 # - rdev → Swift GlobalHotkeyMonitor (CGEventTap)
@@ -23,10 +23,6 @@ rusqlite = { version = "0.30", features = ["bundled"] }
 uuid = { version = "1.7", features = ["v4"] }
 regex = "1.10"
 chrono = "0.4"
-# For lazy loading and synchronization
-once_cell = "1.19"
-# For async trait methods
-async-trait = "0.1"
 # For stream utilities (StreamExt)
 futures-util = "0.3"
 # For HTTP client
@@ -48,7 +44,7 @@ image = { version = "0.24", default-features = false, features = ["png", "jpeg",
 base64 = "0.21"
 
 [build-dependencies]
-uniffi = { version = "0.25", features = ["build"] }
+uniffi = { version = "0.28", features = ["build"] }
 
 [[bin]]
 name = "uniffi-bindgen"

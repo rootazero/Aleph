@@ -42,9 +42,10 @@
 use crate::config::ProviderConfig;
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
-use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
@@ -334,18 +335,22 @@ impl OpenAiProvider {
     }
 }
 
-#[async_trait]
 impl AiProvider for OpenAiProvider {
-    async fn process(&self, input: &str, system_prompt: Option<&str>) -> Result<String> {
-        debug!(
-            model = %self.config.model,
-            input_length = input.len(),
-            has_system_prompt = system_prompt.is_some(),
-            "Sending request to OpenAI"
-        );
+    fn process(&self, input: &str, system_prompt: Option<&str>) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        // Clone the data we need before moving into async block
+        let input = input.to_string();
+        let system_prompt = system_prompt.map(|s| s.to_string());
 
-        // Build request body
-        let request_body = self.build_request(input, system_prompt);
+        Box::pin(async move {
+            debug!(
+                model = %self.config.model,
+                input_length = input.len(),
+                has_system_prompt = system_prompt.is_some(),
+                "Sending request to OpenAI"
+            );
+
+            // Build request body
+            let request_body = self.build_request(&input, system_prompt.as_deref());
 
         // Send POST request
         let response = self
@@ -408,18 +413,25 @@ impl AiProvider for OpenAiProvider {
         );
 
         Ok(content)
+        })
     }
 
-    async fn process_with_image(
+    fn process_with_image(
         &self,
         input: &str,
         image: Option<&crate::clipboard::ImageData>,
         system_prompt: Option<&str>,
-    ) -> Result<String> {
-        // If no image provided, fall back to text-only
-        let Some(image_data) = image else {
-            return self.process(input, system_prompt).await;
-        };
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        // Clone the data we need before moving into async block
+        let input = input.to_string();
+        let image = image.cloned();
+        let system_prompt = system_prompt.map(|s| s.to_string());
+
+        Box::pin(async move {
+            // If no image provided, fall back to text-only
+            let Some(image_data) = image else {
+                return self.process(&input, system_prompt.as_deref()).await;
+            };
 
         debug!(
             model = "gpt-4o (vision)",
@@ -430,7 +442,7 @@ impl AiProvider for OpenAiProvider {
         );
 
         // Build vision request body
-        let request_body = self.build_vision_request(input, image_data, system_prompt);
+        let request_body = self.build_vision_request(&input, &image_data, system_prompt.as_deref());
 
         // Send POST request
         let response = self
@@ -493,6 +505,7 @@ impl AiProvider for OpenAiProvider {
         );
 
         Ok(content)
+        })
     }
 
     fn supports_vision(&self) -> bool {

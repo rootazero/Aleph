@@ -4,7 +4,8 @@
 /// without requiring actual API calls or network connectivity.
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
-use async_trait::async_trait;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 /// Error type to simulate in MockProvider
@@ -124,9 +125,9 @@ impl MockProvider {
     }
 }
 
-#[async_trait]
 impl AiProvider for MockProvider {
-    async fn process(&self, _input: &str, _system_prompt: Option<&str>) -> Result<String> {
+    fn process(&self, _input: &str, _system_prompt: Option<&str>) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        Box::pin(async move {
         // Simulate delay if configured
         if let Some(delay) = self.delay {
             tokio::time::sleep(delay).await;
@@ -139,6 +140,7 @@ impl AiProvider for MockProvider {
 
         // Return configured response
         Ok(self.response.clone())
+        })
     }
 
     fn name(&self) -> &str {

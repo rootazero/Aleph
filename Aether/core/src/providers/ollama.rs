@@ -57,8 +57,9 @@
 use crate::config::ProviderConfig;
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
-use async_trait::async_trait;
 use regex::Regex;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -153,11 +154,15 @@ impl OllamaProvider {
     }
 }
 
-#[async_trait]
 impl AiProvider for OllamaProvider {
-    async fn process(&self, input: &str, system_prompt: Option<&str>) -> Result<String> {
+    fn process(&self, input: &str, system_prompt: Option<&str>) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        // Clone the data we need before moving into async block
+        let input = input.to_string();
+        let system_prompt = system_prompt.map(|s| s.to_string());
+
+        Box::pin(async move {
         // Format prompt
-        let prompt = self.format_prompt(input, system_prompt);
+        let prompt = self.format_prompt(&input, system_prompt.as_deref());
 
         debug!(
             model = %self.model,
@@ -268,6 +273,7 @@ impl AiProvider for OllamaProvider {
         );
 
         Ok(cleaned)
+        })
     }
 
     fn name(&self) -> &str {

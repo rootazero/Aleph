@@ -307,6 +307,33 @@ impl ProviderConfig {
             "openai".to_string()
         }
     }
+
+    /// Create a minimal test configuration with only required fields
+    ///
+    /// This is a helper for tests to avoid specifying all optional fields.
+    /// All optional advanced parameters (like frequency_penalty, media_resolution, etc.) are set to None.
+    #[cfg(test)]
+    pub fn test_config(model: impl Into<String>) -> Self {
+        Self {
+            provider_type: None,
+            api_key: Some("test-key".to_string()),
+            model: model.into(),
+            base_url: None,
+            color: default_provider_color(),
+            timeout_seconds: default_timeout_seconds(),
+            enabled: true, // Tests need enabled providers
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop_sequences: None,
+            thinking_level: None,
+            media_resolution: None,
+            repeat_penalty: None,
+        }
+    }
 }
 
 /// Memory module configuration

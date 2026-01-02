@@ -51,9 +51,10 @@
 use crate::config::ProviderConfig;
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
-use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
@@ -369,9 +370,13 @@ impl ClaudeProvider {
     }
 }
 
-#[async_trait]
 impl AiProvider for ClaudeProvider {
-    async fn process(&self, input: &str, system_prompt: Option<&str>) -> Result<String> {
+    fn process(&self, input: &str, system_prompt: Option<&str>) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        // Clone the data we need before moving into async block
+        let input = input.to_string();
+        let system_prompt = system_prompt.map(|s| s.to_string());
+
+        Box::pin(async move {
         debug!(
             model = %self.config.model,
             input_length = input.len(),
@@ -380,7 +385,7 @@ impl AiProvider for ClaudeProvider {
         );
 
         // Build request body
-        let request_body = self.build_request(input, system_prompt);
+        let request_body = self.build_request(&input, system_prompt.as_deref());
 
         // Send POST request with Claude-specific headers
         let response = self
@@ -438,17 +443,24 @@ impl AiProvider for ClaudeProvider {
         );
 
         Ok(text)
+        })
     }
 
-    async fn process_with_image(
+    fn process_with_image(
         &self,
         input: &str,
         image: Option<&crate::clipboard::ImageData>,
         system_prompt: Option<&str>,
-    ) -> Result<String> {
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        // Clone the data we need before moving into async block
+        let input = input.to_string();
+        let image = image.cloned();
+        let system_prompt = system_prompt.map(|s| s.to_string());
+
+        Box::pin(async move {
         // If no image provided, fall back to text-only
         let Some(image_data) = image else {
-            return self.process(input, system_prompt).await;
+            return self.process(&input, system_prompt.as_deref()).await;
         };
 
         debug!(
@@ -461,7 +473,7 @@ impl AiProvider for ClaudeProvider {
         );
 
         // Build vision request body
-        let request_body = self.build_vision_request(input, image_data, system_prompt);
+        let request_body = self.build_vision_request(&input, &image_data, system_prompt.as_deref());
 
         // Send POST request with Claude-specific headers
         let response = self
@@ -519,6 +531,7 @@ impl AiProvider for ClaudeProvider {
         );
 
         Ok(text)
+        })
     }
 
     fn supports_vision(&self) -> bool {
@@ -557,7 +570,7 @@ mod tests {
     #[test]
     fn test_new_provider_success() {
         let config = create_test_config();
-        let provider = ClaudeProvider::new(config);
+        let provider = ClaudeProvider::new("claude".to_string(), config);
         assert!(provider.is_ok());
     }
 
@@ -565,7 +578,7 @@ mod tests {
     fn test_new_provider_missing_api_key() {
         let mut config = create_test_config();
         config.api_key = None;
-        let result = ClaudeProvider::new(config);
+        let result = ClaudeProvider::new("claude".to_string(), config);
         assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
     }
 
@@ -573,7 +586,7 @@ mod tests {
     fn test_new_provider_empty_api_key() {
         let mut config = create_test_config();
         config.api_key = Some("".to_string());
-        let result = ClaudeProvider::new(config);
+        let result = ClaudeProvider::new("claude".to_string(), config);
         assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
     }
 
@@ -581,7 +594,7 @@ mod tests {
     fn test_new_provider_empty_model() {
         let mut config = create_test_config();
         config.model = "".to_string();
-        let result = ClaudeProvider::new(config);
+        let result = ClaudeProvider::new("claude".to_string(), config);
         assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
     }
 
@@ -589,14 +602,14 @@ mod tests {
     fn test_new_provider_zero_timeout() {
         let mut config = create_test_config();
         config.timeout_seconds = 0;
-        let result = ClaudeProvider::new(config);
+        let result = ClaudeProvider::new("claude".to_string(), config);
         assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
     }
 
     #[test]
     fn test_build_request_without_system_prompt() {
         let config = create_test_config();
-        let provider = ClaudeProvider::new(config).unwrap();
+        let provider = ClaudeProvider::new("claude".to_string(), config).unwrap();
 
         let request = provider.build_request("Hello", None);
 
@@ -612,7 +625,7 @@ mod tests {
     #[test]
     fn test_build_request_with_system_prompt() {
         let config = create_test_config();
-        let provider = ClaudeProvider::new(config).unwrap();
+        let provider = ClaudeProvider::new("claude".to_string(), config).unwrap();
 
         let request = provider.build_request("Hello", Some("You are a helpful assistant"));
 
@@ -629,7 +642,7 @@ mod tests {
     fn test_build_request_default_max_tokens() {
         let mut config = create_test_config();
         config.max_tokens = None;
-        let provider = ClaudeProvider::new(config).unwrap();
+        let provider = ClaudeProvider::new("claude".to_string(), config).unwrap();
 
         let request = provider.build_request("Hello", None);
 
@@ -639,7 +652,7 @@ mod tests {
     #[test]
     fn test_provider_metadata() {
         let config = create_test_config();
-        let provider = ClaudeProvider::new(config).unwrap();
+        let provider = ClaudeProvider::new("claude".to_string(), config).unwrap();
 
         assert_eq!(provider.name(), "claude");
         assert_eq!(provider.color(), "#d97757");
@@ -650,7 +663,7 @@ mod tests {
         let mut config = create_test_config();
         config.base_url = Some("https://custom.anthropic.com/".to_string());
 
-        let provider = ClaudeProvider::new(config).unwrap();
+        let provider = ClaudeProvider::new("claude".to_string(), config).unwrap();
         assert_eq!(
             provider.endpoint,
             "https://custom.anthropic.com/v1/messages"
@@ -660,7 +673,7 @@ mod tests {
     #[test]
     fn test_default_base_url() {
         let config = create_test_config();
-        let provider = ClaudeProvider::new(config).unwrap();
+        let provider = ClaudeProvider::new("claude".to_string(), config).unwrap();
         assert_eq!(provider.endpoint, "https://api.anthropic.com/v1/messages");
     }
 
