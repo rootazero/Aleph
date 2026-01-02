@@ -266,7 +266,8 @@ mod tests {
     fn test_watcher_file_change_detection() {
         // Create temporary config file
         let temp_file = NamedTempFile::new().unwrap();
-        let path = temp_file.path().to_path_buf();
+        // Canonicalize path to resolve symlinks (important on macOS where /var -> /private/var)
+        let path = temp_file.path().canonicalize().unwrap();
 
         // Write initial config
         let config = Config::default();
@@ -282,16 +283,17 @@ mod tests {
 
         watcher.start().unwrap();
 
-        // Wait for watcher to initialize
-        thread::sleep(Duration::from_millis(100));
+        // Wait for watcher to initialize and stabilize
+        thread::sleep(Duration::from_millis(200));
 
         // Modify config file
         let mut config = Config::default();
         config.default_hotkey = "Command+Shift+A".to_string();
         config.save_to_file(&path).unwrap();
 
-        // Wait for debounce + processing (500ms + margin)
-        thread::sleep(Duration::from_millis(800));
+        // Wait for debounce + processing (500ms + extra margin for macOS FSEvents)
+        // FSEvents on macOS can have additional latency, especially in test environments
+        thread::sleep(Duration::from_millis(1200));
 
         // Callback should have been called
         assert!(called.load(Ordering::SeqCst));
