@@ -286,6 +286,22 @@ impl AetherCore {
         self.config.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Ensures the memory database is initialized and returns a reference to it.
+    ///
+    /// This is a convenience wrapper to reduce boilerplate for memory DB null checks.
+    ///
+    /// # Returns
+    /// A reference to the memory database `Arc`.
+    ///
+    /// # Errors
+    /// Returns `AetherError::config` if the memory database is not initialized.
+    #[inline(always)]
+    fn require_memory_db(&self) -> Result<&Arc<VectorDatabase>> {
+        self.memory_db
+            .as_ref()
+            .ok_or_else(|| AetherError::config("Memory database not initialized"))
+    }
+
     /// Start listening for hotkey events (DEPRECATED - now handled by Swift layer)
     ///
     /// # IMPORTANT
@@ -527,10 +543,7 @@ impl AetherCore {
 
     /// Get memory database statistics
     pub fn get_memory_stats(&self) -> Result<MemoryStats> {
-        let db = self
-            .memory_db
-            .as_ref()
-            .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
+        let db = self.require_memory_db()?;
 
         self.runtime.block_on(db.get_stats())
     }
@@ -542,10 +555,7 @@ impl AetherCore {
         window_title: Option<String>,
         limit: u32,
     ) -> Result<Vec<MemoryEntryFFI>> {
-        let db = self
-            .memory_db
-            .as_ref()
-            .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
+        let db = self.require_memory_db()?;
 
         // Use empty window title if not provided
         let window = window_title.as_deref().unwrap_or("");
@@ -573,10 +583,7 @@ impl AetherCore {
 
     /// Delete specific memory by ID
     pub fn delete_memory(&self, id: String) -> Result<()> {
-        let db = self
-            .memory_db
-            .as_ref()
-            .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
+        let db = self.require_memory_db()?;
 
         self.runtime.block_on(db.delete_memory(&id))
     }
@@ -587,10 +594,7 @@ impl AetherCore {
         app_bundle_id: Option<String>,
         window_title: Option<String>,
     ) -> Result<u64> {
-        let db = self
-            .memory_db
-            .as_ref()
-            .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
+        let db = self.require_memory_db()?;
 
         self.runtime
             .block_on(db.clear_memories(app_bundle_id.as_deref(), window_title.as_deref()))
@@ -695,10 +699,7 @@ impl AetherCore {
         };
 
         // Get memory database
-        let db = self
-            .memory_db
-            .as_ref()
-            .ok_or_else(|| AetherError::config("Memory database not initialized"))?;
+        let db = self.require_memory_db()?;
 
         // Get embedding model directory
         let model_dir = Self::get_embedding_model_dir().map_err(|e| {
@@ -1535,6 +1536,14 @@ impl StorageHelper {
         self.config.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Ensures the memory database is initialized and returns a reference to it.
+    #[inline(always)]
+    fn require_memory_db(&self) -> Result<&Arc<VectorDatabase>> {
+        self.memory_db
+            .as_ref()
+            .ok_or_else(|| AetherError::config("Memory database not initialized"))
+    }
+
     /// Store interaction memory (used in async context)
     ///
     /// IMPORTANT: This is an async function because it's called from within
@@ -1571,11 +1580,7 @@ impl StorageHelper {
             };
 
             // Get memory database
-            let db = self
-                .memory_db
-                .as_ref()
-                .ok_or_else(|| AetherError::config("Memory database not initialized"))?
-                .clone();
+            let db = self.require_memory_db()?.clone();
 
             // Clone memory config for use after lock is dropped
             let memory_config = config.memory.clone();
