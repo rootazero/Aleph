@@ -555,16 +555,9 @@ mod tests {
     use super::*;
 
     fn create_test_config() -> ProviderConfig {
-        ProviderConfig {
-            provider_type: None,
-            api_key: Some("sk-ant-test-key".to_string()),
-            model: "claude-3-5-sonnet-20241022".to_string(),
-            base_url: None,
-            color: "#d97757".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
-        }
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet-20241022");
+        config.api_key = Some("sk-ant-test-key".to_string());
+        config
     }
 
     #[test]

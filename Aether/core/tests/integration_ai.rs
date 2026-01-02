@@ -83,30 +83,20 @@ fn create_test_config() -> Config {
     // Add mock OpenAI provider
     config.providers.insert(
         "openai".to_string(),
-        ProviderConfig {
-            provider_type: Some("mock".to_string()),
-            api_key: Some("test-key".to_string()),
-            model: "gpt-4o".to_string(),
-            base_url: None,
-            color: "#10a37f".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
+        {
+            let mut config = ProviderConfig::test_config("gpt-4o");
+            config.provider_type = Some("mock".to_string());
+            config
         },
     );
 
     // Add mock Claude provider
     config.providers.insert(
         "claude".to_string(),
-        ProviderConfig {
-            provider_type: Some("mock".to_string()),
-            api_key: Some("test-key".to_string()),
-            model: "claude-3-5-sonnet".to_string(),
-            base_url: None,
-            color: "#d97757".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
+        {
+            let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+            config.provider_type = Some("mock".to_string());
+            config
         },
     );
 
@@ -153,29 +143,19 @@ fn test_routing_priority() {
     // Add provider
     config.providers.insert(
         "provider1".to_string(),
-        ProviderConfig {
-            provider_type: Some("mock".to_string()),
-            api_key: Some("test".to_string()),
-            model: "test".to_string(),
-            base_url: None,
-            color: "#000000".to_string(),
-            timeout_seconds: 30,
-            max_tokens: None,
-            temperature: None,
+        {
+            let mut config = ProviderConfig::test_config("test");
+            config.provider_type = Some("mock".to_string());
+            config
         },
     );
 
     config.providers.insert(
         "provider2".to_string(),
-        ProviderConfig {
-            provider_type: Some("mock".to_string()),
-            api_key: Some("test".to_string()),
-            model: "test".to_string(),
-            base_url: None,
-            color: "#000000".to_string(),
-            timeout_seconds: 30,
-            max_tokens: None,
-            temperature: None,
+        {
+            let mut config = ProviderConfig::test_config("test");
+            config.provider_type = Some("mock".to_string());
+            config
         },
     );
 
@@ -206,15 +186,10 @@ fn test_default_provider_fallback() {
 
     config.providers.insert(
         "default".to_string(),
-        ProviderConfig {
-            provider_type: Some("mock".to_string()),
-            api_key: Some("test".to_string()),
-            model: "test".to_string(),
-            base_url: None,
-            color: "#000000".to_string(),
-            timeout_seconds: 30,
-            max_tokens: None,
-            temperature: None,
+        {
+            let mut config = ProviderConfig::test_config("test");
+            config.provider_type = Some("mock".to_string());
+            config
         },
     );
 
@@ -382,29 +357,22 @@ fn test_multiple_providers_same_type() {
     // Add multiple OpenAI-compatible providers
     config.providers.insert(
         "openai".to_string(),
-        ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: Some("key1".to_string()),
-            model: "gpt-4o".to_string(),
-            base_url: None,
-            color: "#10a37f".to_string(),
-            timeout_seconds: 30,
-            max_tokens: None,
-            temperature: None,
+        {
+            let mut config = ProviderConfig::test_config("gpt-4o");
+            config.provider_type = Some("openai".to_string());
+            config.api_key = Some("key1".to_string());
+            config
         },
     );
 
     config.providers.insert(
         "deepseek".to_string(),
-        ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: Some("key2".to_string()),
-            model: "deepseek-chat".to_string(),
-            base_url: Some("https://api.deepseek.com".to_string()),
-            color: "#0066cc".to_string(),
-            timeout_seconds: 30,
-            max_tokens: None,
-            temperature: None,
+        {
+            let mut config = ProviderConfig::test_config("deepseek-chat");
+            config.provider_type = Some("openai".to_string());
+            config.api_key = Some("key2".to_string());
+            config.base_url = Some("https://api.deepseek.com".to_string());
+            config
         },
     );
 
@@ -426,16 +394,9 @@ fn test_multiple_providers_same_type() {
 
 #[test]
 fn test_provider_type_inference() {
-    let config = ProviderConfig {
-        provider_type: None,
-        api_key: Some("key".to_string()),
-        model: "test".to_string(),
-        base_url: None,
-        color: "#000000".to_string(),
-        timeout_seconds: 30,
-        max_tokens: None,
-        temperature: None,
-    };
+    let mut config = ProviderConfig::test_config("test");
+    config.provider_type = None;
+    config.api_key = Some("key".to_string());
 
     // Should infer "openai" from provider name "openai"
     assert_eq!(config.infer_provider_type("openai"), "openai");

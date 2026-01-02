@@ -527,22 +527,16 @@ mod tests {
     use super::*;
 
     fn create_test_config() -> ProviderConfig {
-        ProviderConfig {
-            provider_type: None,
-            api_key: Some("sk-test-key".to_string()),
-            model: "gpt-4o".to_string(),
-            base_url: None,
-            color: "#10a37f".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(1000),
-            temperature: Some(0.7),
-        }
+        let mut config = ProviderConfig::test_config("gpt-4o");
+        config.max_tokens = Some(1000);
+        config.temperature = Some(0.7);
+        config
     }
 
     #[test]
     fn test_new_provider_success() {
         let config = create_test_config();
-        let provider = OpenAiProvider::new(config);
+        let provider = OpenAiProvider::new("openai".to_string(), config);
         assert!(provider.is_ok());
     }
 
@@ -550,7 +544,7 @@ mod tests {
     fn test_new_provider_missing_api_key() {
         let mut config = create_test_config();
         config.api_key = None;
-        let result = OpenAiProvider::new(config);
+        let result = OpenAiProvider::new("openai".to_string(), config);
         assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
     }
 
@@ -558,7 +552,7 @@ mod tests {
     fn test_new_provider_empty_api_key() {
         let mut config = create_test_config();
         config.api_key = Some("".to_string());
-        let result = OpenAiProvider::new(config);
+        let result = OpenAiProvider::new("openai".to_string(), config);
         assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
     }
 
@@ -566,7 +560,7 @@ mod tests {
     fn test_new_provider_empty_model() {
         let mut config = create_test_config();
         config.model = "".to_string();
-        let result = OpenAiProvider::new(config);
+        let result = OpenAiProvider::new("openai".to_string(), config);
         assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
     }
 
@@ -574,14 +568,14 @@ mod tests {
     fn test_new_provider_zero_timeout() {
         let mut config = create_test_config();
         config.timeout_seconds = 0;
-        let result = OpenAiProvider::new(config);
+        let result = OpenAiProvider::new("openai".to_string(), config);
         assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
     }
 
     #[test]
     fn test_build_request_without_system_prompt() {
         let config = create_test_config();
-        let provider = OpenAiProvider::new(config).unwrap();
+        let provider = OpenAiProvider::new("openai".to_string(), config).unwrap();
 
         let request = provider.build_request("Hello", None);
 
@@ -596,7 +590,7 @@ mod tests {
     #[test]
     fn test_build_request_with_system_prompt() {
         let config = create_test_config();
-        let provider = OpenAiProvider::new(config).unwrap();
+        let provider = OpenAiProvider::new("openai".to_string(), config).unwrap();
 
         let request = provider.build_request("Hello", Some("You are a helpful assistant"));
 
@@ -609,7 +603,7 @@ mod tests {
     #[test]
     fn test_provider_metadata() {
         let config = create_test_config();
-        let provider = OpenAiProvider::new(config).unwrap();
+        let provider = OpenAiProvider::new("openai".to_string(), config).unwrap();
 
         assert_eq!(provider.name(), "openai");
         assert_eq!(provider.color(), "#10a37f");
@@ -620,7 +614,7 @@ mod tests {
         let mut config = create_test_config();
         config.base_url = Some("https://custom.openai.com/v1/".to_string());
 
-        let provider = OpenAiProvider::new(config).unwrap();
+        let provider = OpenAiProvider::new("openai".to_string(), config).unwrap();
         assert_eq!(
             provider.endpoint,
             "https://custom.openai.com/v1/chat/completions"
@@ -630,7 +624,7 @@ mod tests {
     #[test]
     fn test_default_base_url() {
         let config = create_test_config();
-        let provider = OpenAiProvider::new(config).unwrap();
+        let provider = OpenAiProvider::new("openai".to_string(), config).unwrap();
         assert_eq!(
             provider.endpoint,
             "https://api.openai.com/v1/chat/completions"

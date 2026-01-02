@@ -49,22 +49,15 @@ fn create_test_config_with_providers() -> Config {
     // Add mock provider (uses openai type for testing)
     config.providers.insert(
         "mock".to_string(),
-        ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: Some("sk-mock-test-key".to_string()),
-            model: "gpt-4o".to_string(),
-            base_url: None,
-            color: "#10a37f".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
+        {
+            let mut provider_config = ProviderConfig::test_config("gpt-4o");
+            provider_config.provider_type = Some("openai".to_string());
+            provider_config
         },
     );
 
     // Set default provider
-    config.general = GeneralConfig {
-        default_provider: Some("mock".to_string()),
-    };
+    config.general.default_provider = Some("mock".to_string());
 
     // Add routing rules
     config.rules.push(RoutingRuleConfig {

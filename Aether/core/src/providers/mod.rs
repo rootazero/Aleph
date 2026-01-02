@@ -268,10 +268,10 @@ mod tests {
     // Simple test implementation to verify trait can be used as trait object
     struct TestProvider;
 
-    #[async_trait]
     impl AiProvider for TestProvider {
-        async fn process(&self, input: &str, _system_prompt: Option<&str>) -> Result<String> {
-            Ok(format!("Echo: {}", input))
+        fn process(&self, input: &str, _system_prompt: Option<&str>) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+            let response = format!("Echo: {}", input);
+            Box::pin(async move { Ok(response) })
         }
 
         fn name(&self) -> &str {
@@ -316,16 +316,7 @@ mod tests {
     // Factory function tests
     #[test]
     fn test_create_openai_provider() {
-        let config = ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: Some("sk-test".to_string()),
-            model: "gpt-4o".to_string(),
-            base_url: None,
-            color: "#10a37f".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
-        };
+        let config = ProviderConfig::test_config("gpt-4o");
 
         let provider = create_provider("openai", config);
         assert!(provider.is_ok());
@@ -334,16 +325,8 @@ mod tests {
 
     #[test]
     fn test_create_claude_provider() {
-        let config = ProviderConfig {
-            provider_type: Some("claude".to_string()),
-            api_key: Some("sk-ant-test".to_string()),
-            model: "claude-3-5-sonnet-20241022".to_string(),
-            base_url: None,
-            color: "#d97757".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
-        };
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet-20241022");
+        config.provider_type = Some("claude".to_string());
 
         let provider = create_provider("claude", config);
         assert!(provider.is_ok());
@@ -352,16 +335,10 @@ mod tests {
 
     #[test]
     fn test_create_ollama_provider() {
-        let config = ProviderConfig {
-            provider_type: Some("ollama".to_string()),
-            api_key: None,
-            model: "llama3.2".to_string(),
-            base_url: None,
-            color: "#0000ff".to_string(),
-            timeout_seconds: 60,
-            max_tokens: None,
-            temperature: None,
-        };
+        let mut config = ProviderConfig::test_config("llama3.2");
+        config.provider_type = Some("ollama".to_string());
+        config.api_key = None;
+        config.timeout_seconds = 60;
 
         let provider = create_provider("ollama", config);
         assert!(provider.is_ok());
@@ -371,16 +348,9 @@ mod tests {
     #[test]
     fn test_create_custom_openai_compatible_provider() {
         // DeepSeek as example
-        let config = ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: Some("sk-deepseek-test".to_string()),
-            model: "deepseek-chat".to_string(),
-            base_url: Some("https://api.deepseek.com".to_string()),
-            color: "#0066cc".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
-        };
+        let mut config = ProviderConfig::test_config("deepseek-chat");
+        config.provider_type = Some("openai".to_string());
+        config.base_url = Some("https://api.deepseek.com".to_string());
 
         let provider = create_provider("deepseek", config);
         assert!(provider.is_ok());
@@ -390,16 +360,8 @@ mod tests {
 
     #[test]
     fn test_infer_provider_type_explicit() {
-        let config = ProviderConfig {
-            provider_type: Some("claude".to_string()),
-            api_key: Some("sk-test".to_string()),
-            model: "gpt-4o".to_string(),
-            base_url: None,
-            color: "#10a37f".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
-        };
+        let mut config = ProviderConfig::test_config("gpt-4o");
+        config.provider_type = Some("claude".to_string());
 
         // Explicit provider_type should take precedence
         assert_eq!(config.infer_provider_type("openai"), "claude");
@@ -407,16 +369,8 @@ mod tests {
 
     #[test]
     fn test_infer_provider_type_from_name() {
-        let config = ProviderConfig {
-            provider_type: None,
-            api_key: Some("sk-test".to_string()),
-            model: "model".to_string(),
-            base_url: None,
-            color: "#000000".to_string(),
-            timeout_seconds: 30,
-            max_tokens: None,
-            temperature: None,
-        };
+        let mut config = ProviderConfig::test_config("model");
+        config.provider_type = None;
 
         // Infer from name
         assert_eq!(config.infer_provider_type("openai"), "openai");
@@ -428,16 +382,9 @@ mod tests {
 
     #[test]
     fn test_infer_provider_type_case_insensitive() {
-        let config = ProviderConfig {
-            provider_type: None,
-            api_key: None,
-            model: "model".to_string(),
-            base_url: None,
-            color: "#000000".to_string(),
-            timeout_seconds: 30,
-            max_tokens: None,
-            temperature: None,
-        };
+        let mut config = ProviderConfig::test_config("model");
+        config.provider_type = None;
+        config.api_key = None;
 
         // Case insensitive inference
         assert_eq!(config.infer_provider_type("CLAUDE"), "claude");
@@ -447,16 +394,8 @@ mod tests {
 
     #[test]
     fn test_create_unknown_provider_type() {
-        let config = ProviderConfig {
-            provider_type: Some("unknown".to_string()),
-            api_key: Some("sk-test".to_string()),
-            model: "model".to_string(),
-            base_url: None,
-            color: "#000000".to_string(),
-            timeout_seconds: 30,
-            max_tokens: None,
-            temperature: None,
-        };
+        let mut config = ProviderConfig::test_config("model");
+        config.provider_type = Some("unknown".to_string());
 
         let result = create_provider("test", config);
         assert!(result.is_err());
@@ -466,27 +405,14 @@ mod tests {
     #[test]
     fn test_multiple_custom_providers() {
         // Simulate configuring multiple custom providers
-        let deepseek_config = ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: Some("sk-deepseek".to_string()),
-            model: "deepseek-chat".to_string(),
-            base_url: Some("https://api.deepseek.com".to_string()),
-            color: "#0066cc".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
-        };
+        let mut deepseek_config = ProviderConfig::test_config("deepseek-chat");
+        deepseek_config.provider_type = Some("openai".to_string());
+        deepseek_config.base_url = Some("https://api.deepseek.com".to_string());
 
-        let moonshot_config = ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: Some("sk-moonshot".to_string()),
-            model: "moonshot-v1-8k".to_string(),
-            base_url: Some("https://api.moonshot.cn/v1".to_string()),
-            color: "#ff6b6b".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(8192),
-            temperature: Some(0.7),
-        };
+        let mut moonshot_config = ProviderConfig::test_config("moonshot-v1-8k");
+        moonshot_config.provider_type = Some("openai".to_string());
+        moonshot_config.base_url = Some("https://api.moonshot.cn/v1".to_string());
+        moonshot_config.max_tokens = Some(8192);
 
         let deepseek = create_provider("deepseek", deepseek_config);
         let moonshot = create_provider("moonshot", moonshot_config);

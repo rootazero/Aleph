@@ -290,22 +290,16 @@ mod tests {
     use super::*;
 
     fn create_test_config() -> ProviderConfig {
-        ProviderConfig {
-            provider_type: None,
-            api_key: None, // Not needed for Ollama
-            model: "llama3.2".to_string(),
-            base_url: None,
-            color: "#0000ff".to_string(),
-            timeout_seconds: 60,
-            max_tokens: None,
-            temperature: None,
-        }
+        let mut config = ProviderConfig::test_config("llama3.2");
+        config.api_key = None; // Not needed for Ollama
+        config.timeout_seconds = 60;
+        config
     }
 
     #[test]
     fn test_new_provider_success() {
         let config = create_test_config();
-        let provider = OllamaProvider::new(config);
+        let provider = OllamaProvider::new("ollama".to_string(), config);
         assert!(provider.is_ok());
     }
 
@@ -313,7 +307,7 @@ mod tests {
     fn test_new_provider_empty_model() {
         let mut config = create_test_config();
         config.model = "".to_string();
-        let result = OllamaProvider::new(config);
+        let result = OllamaProvider::new("ollama".to_string(), config);
         assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
     }
 
@@ -321,14 +315,14 @@ mod tests {
     fn test_new_provider_zero_timeout() {
         let mut config = create_test_config();
         config.timeout_seconds = 0;
-        let result = OllamaProvider::new(config);
+        let result = OllamaProvider::new("ollama".to_string(), config);
         assert!(matches!(result, Err(AetherError::InvalidConfig { .. })));
     }
 
     #[test]
     fn test_format_prompt_without_system() {
         let config = create_test_config();
-        let provider = OllamaProvider::new(config).unwrap();
+        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
 
         let prompt = provider.format_prompt("Hello", None);
         assert_eq!(prompt, "Hello");
@@ -337,7 +331,7 @@ mod tests {
     #[test]
     fn test_format_prompt_with_system() {
         let config = create_test_config();
-        let provider = OllamaProvider::new(config).unwrap();
+        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
 
         let prompt = provider.format_prompt("Hello", Some("You are a helpful assistant"));
         assert_eq!(prompt, "You are a helpful assistant\n\nHello");
@@ -346,7 +340,7 @@ mod tests {
     #[test]
     fn test_strip_ansi_codes() {
         let config = create_test_config();
-        let provider = OllamaProvider::new(config).unwrap();
+        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
 
         // Test with ANSI color codes
         let text_with_ansi = "\x1b[32mGreen text\x1b[0m normal text \x1b[1;31mRed bold\x1b[0m";
@@ -357,7 +351,7 @@ mod tests {
     #[test]
     fn test_strip_ansi_codes_no_ansi() {
         let config = create_test_config();
-        let provider = OllamaProvider::new(config).unwrap();
+        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
 
         let plain_text = "Hello world";
         let result = provider.strip_ansi_codes(plain_text);
@@ -367,7 +361,7 @@ mod tests {
     #[test]
     fn test_clean_output() {
         let config = create_test_config();
-        let provider = OllamaProvider::new(config).unwrap();
+        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
 
         // Test with ANSI codes and whitespace
         let raw = "  \n\x1b[32mHello\x1b[0m world\n  ";
@@ -378,7 +372,7 @@ mod tests {
     #[test]
     fn test_clean_output_multiline() {
         let config = create_test_config();
-        let provider = OllamaProvider::new(config).unwrap();
+        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
 
         let raw = "Line 1\nLine 2\nLine 3";
         let cleaned = provider.clean_output(raw);
@@ -388,7 +382,7 @@ mod tests {
     #[test]
     fn test_provider_metadata() {
         let config = create_test_config();
-        let provider = OllamaProvider::new(config).unwrap();
+        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
 
         assert_eq!(provider.name(), "ollama");
         assert_eq!(provider.color(), "#0000ff");
@@ -397,7 +391,7 @@ mod tests {
     #[test]
     fn test_timeout_value() {
         let config = create_test_config();
-        let provider = OllamaProvider::new(config).unwrap();
+        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
 
         assert_eq!(provider.timeout, Duration::from_secs(60));
     }

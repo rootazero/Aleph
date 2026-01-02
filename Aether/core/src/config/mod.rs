@@ -1104,17 +1104,8 @@ mod tests {
     fn test_config_validation_valid() {
         let mut config = Config::default();
 
-        // Add a provider
-        let provider = ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: Some("sk-test".to_string()),
-            model: "gpt-4o".to_string(),
-            base_url: None,
-            color: "#10a37f".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
-        };
+        // Add a provider using test_config helper
+        let provider = ProviderConfig::test_config("gpt-4o");
         config.providers.insert("openai".to_string(), provider);
         config.general.default_provider = Some("openai".to_string());
 
@@ -1136,16 +1127,8 @@ mod tests {
         let mut config = Config::default();
 
         // Add OpenAI provider without API key
-        let provider = ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: None,
-            model: "gpt-4o".to_string(),
-            base_url: None,
-            color: "#10a37f".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
-        };
+        let mut provider = ProviderConfig::test_config("gpt-4o");
+        provider.api_key = None;
         config.providers.insert("openai".to_string(), provider);
 
         // Should fail validation
@@ -1157,16 +1140,8 @@ mod tests {
         let mut config = Config::default();
 
         // Add provider with invalid temperature
-        let provider = ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: Some("sk-test".to_string()),
-            model: "gpt-4o".to_string(),
-            base_url: None,
-            color: "#10a37f".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(3.0), // Invalid: > 2.0
-        };
+        let mut provider = ProviderConfig::test_config("gpt-4o");
+        provider.temperature = Some(3.0); // Invalid: > 2.0
         config.providers.insert("openai".to_string(), provider);
 
         // Should fail validation
@@ -1177,17 +1152,8 @@ mod tests {
     fn test_config_validation_invalid_regex() {
         let mut config = Config::default();
 
-        // Add valid provider
-        let provider = ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: Some("sk-test".to_string()),
-            model: "gpt-4o".to_string(),
-            base_url: None,
-            color: "#10a37f".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
-        };
+        // Add valid provider using test_config helper
+        let provider = ProviderConfig::test_config("gpt-4o");
         config.providers.insert("openai".to_string(), provider);
 
         // Add rule with invalid regex
@@ -1259,17 +1225,8 @@ max_context_items = 5
 
         let mut config = Config::default();
 
-        // Add a provider
-        let provider = ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: Some("sk-test".to_string()),
-            model: "gpt-4o".to_string(),
-            base_url: None,
-            color: "#10a37f".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
-        };
+        // Add a provider using test_config helper
+        let provider = ProviderConfig::test_config("gpt-4o");
         config.providers.insert("openai".to_string(), provider);
         config.general.default_provider = Some("openai".to_string());
 
@@ -1293,16 +1250,9 @@ max_context_items = 5
         let mut config = Config::default();
 
         // Ollama provider doesn't need API key
-        let provider = ProviderConfig {
-            provider_type: Some("ollama".to_string()),
-            api_key: None,
-            model: "llama3.2".to_string(),
-            base_url: None,
-            color: "#0000ff".to_string(),
-            timeout_seconds: 60,
-            max_tokens: None,
-            temperature: None,
-        };
+        let mut provider = ProviderConfig::test_config("llama3.2");
+        provider.api_key = None; // Ollama doesn't need API key
+        provider.provider_type = Some("ollama".to_string());
         config.providers.insert("ollama".to_string(), provider);
 
         // Should pass validation (no API key needed for Ollama)
@@ -1315,17 +1265,8 @@ max_context_items = 5
     fn test_regex_validation_valid_patterns() {
         let mut config = Config::default();
 
-        // Add valid provider
-        let provider = ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: Some("sk-test".to_string()),
-            model: "gpt-4o".to_string(),
-            base_url: None,
-            color: "#10a37f".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
-        };
+        // Add valid provider using test_config helper
+        let provider = ProviderConfig::test_config("gpt-4o");
         config.providers.insert("openai".to_string(), provider);
 
         // Test various valid regex patterns
@@ -1357,17 +1298,8 @@ max_context_items = 5
     fn test_regex_validation_invalid_patterns() {
         let mut config = Config::default();
 
-        // Add valid provider
-        let provider = ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: Some("sk-test".to_string()),
-            model: "gpt-4o".to_string(),
-            base_url: None,
-            color: "#10a37f".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
-        };
+        // Add valid provider using test_config helper
+        let provider = ProviderConfig::test_config("gpt-4o");
         config.providers.insert("openai".to_string(), provider);
 
         // Test various invalid regex patterns
@@ -1475,16 +1407,8 @@ max_context_items = 5
         let mut config = Config::default();
 
         // Add provider with zero timeout
-        let provider = ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: Some("sk-test".to_string()),
-            model: "gpt-4o".to_string(),
-            base_url: None,
-            color: "#10a37f".to_string(),
-            timeout_seconds: 0,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
-        };
+        let mut provider = ProviderConfig::test_config("gpt-4o");
+        provider.timeout_seconds = 0; // Invalid: must be > 0
         config.providers.insert("openai".to_string(), provider);
 
         // Should fail validation
@@ -1526,16 +1450,8 @@ max_context_items = 5
 
     #[test]
     fn test_provider_type_inference() {
-        let provider = ProviderConfig {
-            provider_type: None,
-            api_key: Some("test".to_string()),
-            model: "test-model".to_string(),
-            base_url: None,
-            color: "#000000".to_string(),
-            timeout_seconds: 30,
-            max_tokens: None,
-            temperature: None,
-        };
+        let mut provider = ProviderConfig::test_config("test-model");
+        provider.provider_type = None; // Test inference
 
         // Test inference from provider name
         assert_eq!(provider.infer_provider_type("openai"), "openai");
@@ -1547,16 +1463,8 @@ max_context_items = 5
 
     #[test]
     fn test_provider_type_explicit_override() {
-        let provider = ProviderConfig {
-            provider_type: Some("custom".to_string()),
-            api_key: Some("test".to_string()),
-            model: "test-model".to_string(),
-            base_url: None,
-            color: "#000000".to_string(),
-            timeout_seconds: 30,
-            max_tokens: None,
-            temperature: None,
-        };
+        let mut provider = ProviderConfig::test_config("test-model");
+        provider.provider_type = Some("custom".to_string());
 
         // Explicit type should override inference
         assert_eq!(provider.infer_provider_type("openai"), "custom");
@@ -1566,29 +1474,12 @@ max_context_items = 5
     fn test_full_config_conversion() {
         let mut config = Config::default();
 
-        // Add providers
-        let provider1 = ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: Some("sk-test".to_string()),
-            model: "gpt-4o".to_string(),
-            base_url: None,
-            color: "#10a37f".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
-        };
+        // Add providers using test_config helper
+        let provider1 = ProviderConfig::test_config("gpt-4o");
         config.providers.insert("openai".to_string(), provider1);
 
-        let provider2 = ProviderConfig {
-            provider_type: Some("claude".to_string()),
-            api_key: Some("sk-ant-test".to_string()),
-            model: "claude-3-5-sonnet-20241022".to_string(),
-            base_url: None,
-            color: "#d97757".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
-        };
+        let mut provider2 = ProviderConfig::test_config("claude-3-5-sonnet-20241022");
+        provider2.provider_type = Some("claude".to_string());
         config.providers.insert("claude".to_string(), provider2);
 
         // Convert to FullConfig
@@ -1623,16 +1514,7 @@ max_context_items = 5
             pii_scrubbing_enabled: true,
         });
 
-        let provider = ProviderConfig {
-            provider_type: Some("openai".to_string()),
-            api_key: Some("sk-test".to_string()),
-            model: "gpt-4o".to_string(),
-            base_url: None,
-            color: "#10a37f".to_string(),
-            timeout_seconds: 30,
-            max_tokens: Some(4096),
-            temperature: Some(0.7),
-        };
+        let provider = ProviderConfig::test_config("gpt-4o");
         config.providers.insert("openai".to_string(), provider);
         config.general.default_provider = Some("openai".to_string());
 

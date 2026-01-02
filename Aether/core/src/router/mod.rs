@@ -542,16 +542,7 @@ mod tests {
         // Add OpenAI provider
         config.providers.insert(
             "openai".to_string(),
-            ProviderConfig {
-                provider_type: Some("openai".to_string()),
-                api_key: Some("sk-test".to_string()),
-                model: "gpt-4o".to_string(),
-                base_url: None,
-                color: "#10a37f".to_string(),
-                timeout_seconds: 30,
-                max_tokens: Some(4096),
-                temperature: Some(0.7),
-            },
+            ProviderConfig::test_config("gpt-4o"),
         );
 
         let router = Router::new(&config);
@@ -578,16 +569,7 @@ mod tests {
         // Add provider
         config.providers.insert(
             "openai".to_string(),
-            ProviderConfig {
-                provider_type: Some("openai".to_string()),
-                api_key: Some("sk-test".to_string()),
-                model: "gpt-4o".to_string(),
-                base_url: None,
-                color: "#10a37f".to_string(),
-                timeout_seconds: 30,
-                max_tokens: Some(4096),
-                temperature: Some(0.7),
-            },
+            ProviderConfig::test_config("gpt-4o"),
         );
 
         // Set default to non-existent provider
@@ -605,16 +587,7 @@ mod tests {
         // Add provider
         config.providers.insert(
             "openai".to_string(),
-            ProviderConfig {
-                provider_type: Some("openai".to_string()),
-                api_key: Some("sk-test".to_string()),
-                model: "gpt-4o".to_string(),
-                base_url: None,
-                color: "#10a37f".to_string(),
-                timeout_seconds: 30,
-                max_tokens: Some(4096),
-                temperature: Some(0.7),
-            },
+            ProviderConfig::test_config("gpt-4o"),
         );
 
         // Set valid default provider
@@ -638,16 +611,7 @@ mod tests {
         // Add provider but no default
         config.providers.insert(
             "openai".to_string(),
-            ProviderConfig {
-                provider_type: Some("openai".to_string()),
-                api_key: Some("sk-test".to_string()),
-                model: "gpt-4o".to_string(),
-                base_url: None,
-                color: "#10a37f".to_string(),
-                timeout_seconds: 30,
-                max_tokens: Some(4096),
-                temperature: Some(0.7),
-            },
+            ProviderConfig::test_config("gpt-4o"),
         );
 
         let router = Router::new(&config).unwrap();
@@ -663,16 +627,7 @@ mod tests {
 
         config.providers.insert(
             "openai".to_string(),
-            ProviderConfig {
-                provider_type: Some("openai".to_string()),
-                api_key: Some("sk-test".to_string()),
-                model: "gpt-4o".to_string(),
-                base_url: None,
-                color: "#10a37f".to_string(),
-                timeout_seconds: 30,
-                max_tokens: Some(4096),
-                temperature: Some(0.7),
-            },
+            ProviderConfig::test_config("gpt-4o"),
         );
 
         config.general.default_provider = Some("openai".to_string());
@@ -693,29 +648,15 @@ mod tests {
         // Add multiple providers
         config.providers.insert(
             "openai".to_string(),
-            ProviderConfig {
-                provider_type: Some("openai".to_string()),
-                api_key: Some("sk-test".to_string()),
-                model: "gpt-4o".to_string(),
-                base_url: None,
-                color: "#10a37f".to_string(),
-                timeout_seconds: 30,
-                max_tokens: Some(4096),
-                temperature: Some(0.7),
-            },
+            ProviderConfig::test_config("gpt-4o"),
         );
 
         config.providers.insert(
             "claude".to_string(),
-            ProviderConfig {
-                provider_type: Some("claude".to_string()),
-                api_key: Some("sk-ant-test".to_string()),
-                model: "claude-3-5-sonnet-20241022".to_string(),
-                base_url: None,
-                color: "#d97757".to_string(),
-                timeout_seconds: 30,
-                max_tokens: Some(4096),
-                temperature: Some(0.7),
+            {
+                let mut config = ProviderConfig::test_config("claude-3-5-sonnet-20241022");
+                config.provider_type = Some("claude".to_string());
+                config
             },
         );
 
@@ -733,29 +674,15 @@ mod tests {
         // Add providers
         config.providers.insert(
             "openai".to_string(),
-            ProviderConfig {
-                provider_type: Some("openai".to_string()),
-                api_key: Some("sk-test".to_string()),
-                model: "gpt-4o".to_string(),
-                base_url: None,
-                color: "#10a37f".to_string(),
-                timeout_seconds: 30,
-                max_tokens: Some(4096),
-                temperature: Some(0.7),
-            },
+            ProviderConfig::test_config("gpt-4o"),
         );
 
         config.providers.insert(
             "claude".to_string(),
-            ProviderConfig {
-                provider_type: Some("claude".to_string()),
-                api_key: Some("sk-ant-test".to_string()),
-                model: "claude-3-5-sonnet-20241022".to_string(),
-                base_url: None,
-                color: "#d97757".to_string(),
-                timeout_seconds: 30,
-                max_tokens: Some(4096),
-                temperature: Some(0.7),
+            {
+                let mut config = ProviderConfig::test_config("claude-3-5-sonnet-20241022");
+                config.provider_type = Some("claude".to_string());
+                config
             },
         );
 
@@ -784,29 +711,15 @@ mod tests {
         // Add providers
         config.providers.insert(
             "openai".to_string(),
-            ProviderConfig {
-                provider_type: Some("openai".to_string()),
-                api_key: Some("sk-test".to_string()),
-                model: "gpt-4o".to_string(),
-                base_url: None,
-                color: "#10a37f".to_string(),
-                timeout_seconds: 30,
-                max_tokens: Some(4096),
-                temperature: Some(0.7),
-            },
+            ProviderConfig::test_config("gpt-4o"),
         );
 
         config.providers.insert(
             "claude".to_string(),
-            ProviderConfig {
-                provider_type: Some("claude".to_string()),
-                api_key: Some("sk-ant-test".to_string()),
-                model: "claude-3-5-sonnet-20241022".to_string(),
-                base_url: None,
-                color: "#d97757".to_string(),
-                timeout_seconds: 30,
-                max_tokens: Some(4096),
-                temperature: Some(0.7),
+            {
+                let mut config = ProviderConfig::test_config("claude-3-5-sonnet-20241022");
+                config.provider_type = Some("claude".to_string());
+                config
             },
         );
 
@@ -847,16 +760,7 @@ mod tests {
         // Add only one provider
         config.providers.insert(
             "openai".to_string(),
-            ProviderConfig {
-                provider_type: Some("openai".to_string()),
-                api_key: Some("sk-test".to_string()),
-                model: "gpt-4o".to_string(),
-                base_url: None,
-                color: "#10a37f".to_string(),
-                timeout_seconds: 30,
-                max_tokens: Some(4096),
-                temperature: Some(0.7),
-            },
+            ProviderConfig::test_config("gpt-4o"),
         );
 
         // Add rule referencing non-existent provider
@@ -878,16 +782,7 @@ mod tests {
         // Add provider
         config.providers.insert(
             "openai".to_string(),
-            ProviderConfig {
-                provider_type: Some("openai".to_string()),
-                api_key: Some("sk-test".to_string()),
-                model: "gpt-4o".to_string(),
-                base_url: None,
-                color: "#10a37f".to_string(),
-                timeout_seconds: 30,
-                max_tokens: Some(4096),
-                temperature: Some(0.7),
-            },
+            ProviderConfig::test_config("gpt-4o"),
         );
 
         // Add rule with invalid regex
@@ -936,16 +831,7 @@ mod tests {
 
         config.providers.insert(
             "openai".to_string(),
-            ProviderConfig {
-                provider_type: Some("openai".to_string()),
-                api_key: Some("sk-test".to_string()),
-                model: "gpt-4o".to_string(),
-                base_url: None,
-                color: "#10a37f".to_string(),
-                timeout_seconds: 30,
-                max_tokens: Some(4096),
-                temperature: Some(0.7),
-            },
+            ProviderConfig::test_config("gpt-4o"),
         );
 
         config.rules.push(RoutingRuleConfig {
