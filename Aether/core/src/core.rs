@@ -1634,27 +1634,21 @@ mod tests {
         assert!(!core.is_listening());
     }
 
-    #[test]
-    fn test_clipboard_read() {
-        let handler = Box::new(MockEventHandler::new());
-        let core = AetherCore::new(handler).unwrap();
-
-        // Write test content to clipboard
-        core.clipboard_manager.write_text("test content").unwrap();
-
-        // Read it back via core
-        let content = core.get_clipboard_text().unwrap();
-        assert_eq!(content, "test content");
-    }
+    // REMOVED: test_clipboard_read
+    // Clipboard operations have been migrated to Swift layer (ClipboardManager.swift)
+    // See: refactor-native-api-separation proposal
 
     #[test]
     fn test_multiple_start_stop_cycles() {
         let handler = Box::new(MockEventHandler::new());
         let core = AetherCore::new(handler).unwrap();
 
+        // Note: start_listening() and stop_listening() are deprecated (now handled by Swift layer)
+        // but kept for API compatibility. They should not crash when called.
         for _ in 0..3 {
             core.start_listening().unwrap();
-            assert!(core.is_listening());
+            // is_listening() always returns false since hotkey monitoring is now in Swift
+            assert!(!core.is_listening());
 
             core.stop_listening().unwrap();
             assert!(!core.is_listening());
