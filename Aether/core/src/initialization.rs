@@ -54,9 +54,7 @@ pub fn is_fresh_install() -> Result<bool> {
     let has_config = config_file.exists();
 
     // Check for model files
-    let model_dir = get_model_dir()?;
-    let has_model = model_dir.join("model.onnx").exists()
-        && model_dir.join("tokenizer.json").exists();
+    let has_model = check_embedding_model_exists()?;
 
     // If both config and model exist, this is not a fresh install
     let is_fresh = !has_config || !has_model;
@@ -72,6 +70,80 @@ pub fn is_fresh_install() -> Result<bool> {
     }
 
     Ok(is_fresh)
+}
+
+/// Check if embedding model files exist and are valid
+pub fn check_embedding_model_exists() -> Result<bool> {
+    let model_dir = get_model_dir()?;
+    let model_file = model_dir.join("model.onnx");
+    let tokenizer_file = model_dir.join("tokenizer.json");
+
+    // Check if files exist
+    if !model_file.exists() || !tokenizer_file.exists() {
+        debug!("Embedding model files do not exist");
+        return Ok(false);
+    }
+
+    // Validate file sizes
+    match validate_model_files(&model_file, &tokenizer_file) {
+        Ok(valid) => {
+            if valid {
+                info!("✅ Embedding model files exist and are valid");
+            } else {
+                warn!("⚠️  Embedding model files exist but are invalid");
+            }
+            Ok(valid)
+        }
+        Err(e) => {
+            warn!("Failed to validate model files: {}", e);
+            Ok(false)
+        }
+    }
+}
+
+/// Download embedding model files standalone (for manual triggering)
+/// Returns true if download succeeded, false if failed
+pub fn download_embedding_model_standalone(
+    progress_callback: Option<Box<dyn InitializationProgressHandler>>,
+) -> Result<bool> {
+    info!("Starting standalone embedding model download");
+
+    let callback = progress_callback.as_ref();
+
+    // Notify start
+    if let Some(cb) = callback {
+        cb.on_init_started();
+        cb.on_step_started("Downloading embedding model".to_string(), 1, 1);
+    }
+
+    // Create a Tokio runtime for async operations
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| AetherError::config(format!("Failed to create Tokio runtime: {}", e)))?;
+
+    // Try to download the model
+    let result = runtime.block_on(async {
+        download_embedding_model(callback).await
+    });
+
+    match result {
+        Ok(()) => {
+            info!("✅ Standalone embedding model download succeeded");
+            if let Some(cb) = callback {
+                cb.on_step_completed("Downloading embedding model".to_string());
+                cb.on_init_completed();
+            }
+            Ok(true)
+        }
+        Err(e) => {
+            warn!("⚠️  Standalone embedding model download failed: {}", e);
+            if let Some(cb) = callback {
+                cb.on_init_failed(e.to_string());
+            }
+            Ok(false) // Return false instead of error to allow graceful handling
+        }
+    }
 }
 
 /// Get the config directory path
@@ -92,10 +164,11 @@ pub fn get_model_dir() -> Result<PathBuf> {
 /// Run first-time initialization
 ///
 /// This function will:
-/// 1. Create directory structure
-/// 2. Generate default config file
-/// 3. Download embedding model
-/// 4. Initialize memory database
+/// 1. Check disk space
+/// 2. Create directory structure
+/// 3. Generate default config file
+/// 4. Download embedding model
+/// 5. Initialize memory database
 ///
 /// # Arguments
 /// * `progress_callback` - Optional callback for progress updates
@@ -110,6 +183,9 @@ pub async fn run_first_time_init_async(
     if let Some(cb) = callback {
         cb.on_init_started();
     }
+
+    // Pre-check: Verify sufficient disk space
+    check_disk_space()?;
 
     const TOTAL_STEPS: u32 = 4;
     let mut current_step = 0;
@@ -152,7 +228,7 @@ pub async fn run_first_time_init_async(
         cb.on_step_completed("Generating default configuration".to_string());
     }
 
-    // Step 3: Download embedding model
+    // Step 3: Download embedding model (allow graceful fallback on failure)
     current_step += 1;
     if let Some(cb) = callback {
         cb.on_step_started(
@@ -162,18 +238,31 @@ pub async fn run_first_time_init_async(
         );
     }
 
-    download_embedding_model(callback).await.map_err(|e| {
-        if let Some(cb) = callback {
-            cb.on_init_failed(e.to_string());
+    // Try to download the model, but don't fail the entire initialization if it fails
+    let model_downloaded = match download_embedding_model(callback).await {
+        Ok(()) => {
+            info!("✅ Embedding model downloaded successfully");
+            true
         }
-        e
-    })?;
+        Err(e) => {
+            warn!("⚠️  Failed to download embedding model: {}", e);
+            warn!("Continuing initialization without memory functionality");
 
-    if let Some(cb) = callback {
-        cb.on_step_completed("Downloading embedding model".to_string());
+            // Notify callback about the warning
+            if let Some(cb) = callback {
+                cb.on_step_completed("Embedding model (skipped - offline mode)".to_string());
+            }
+            false
+        }
+    };
+
+    if model_downloaded {
+        if let Some(cb) = callback {
+            cb.on_step_completed("Downloading embedding model".to_string());
+        }
     }
 
-    // Step 4: Initialize memory database
+    // Step 4: Initialize memory database (only if model was downloaded)
     current_step += 1;
     if let Some(cb) = callback {
         cb.on_step_started(
@@ -183,15 +272,30 @@ pub async fn run_first_time_init_async(
         );
     }
 
-    initialize_memory_database().await.map_err(|e| {
-        if let Some(cb) = callback {
-            cb.on_init_failed(e.to_string());
-        }
-        e
-    })?;
+    if model_downloaded {
+        initialize_memory_database().await.map_err(|e| {
+            if let Some(cb) = callback {
+                cb.on_init_failed(e.to_string());
+            }
+            e
+        })?;
 
-    if let Some(cb) = callback {
-        cb.on_step_completed("Initializing memory database".to_string());
+        if let Some(cb) = callback {
+            cb.on_step_completed("Initializing memory database".to_string());
+        }
+    } else {
+        warn!("Skipping memory database initialization (no embedding model)");
+        if let Some(cb) = callback {
+            cb.on_step_completed("Memory database (skipped - offline mode)".to_string());
+        }
+    }
+
+    // Update config to disable memory if model wasn't downloaded
+    if !model_downloaded {
+        update_config_memory_setting(false).await?;
+        warn!(
+            "⚠️  Initialization completed in offline mode - memory functionality disabled"
+        );
     }
 
     // Notify completion
@@ -199,7 +303,37 @@ pub async fn run_first_time_init_async(
         cb.on_init_completed();
     }
 
-    info!("First-time initialization completed successfully");
+    if model_downloaded {
+        info!("✅ First-time initialization completed successfully");
+    } else {
+        info!("✅ First-time initialization completed in offline mode (memory disabled)");
+    }
+
+    Ok(())
+}
+
+/// Update the memory.enabled setting in config file
+async fn update_config_memory_setting(enabled: bool) -> Result<()> {
+    let config_path = get_config_dir()?.join("config.toml");
+
+    if !config_path.exists() {
+        return Ok(()); // Config not created yet, will be handled by default config
+    }
+
+    // Load existing config
+    let mut config = Config::load_from_file(&config_path)?;
+
+    // Update memory enabled setting
+    config.memory.enabled = enabled;
+
+    // Save back to file
+    config.save_to_file(&config_path)?;
+
+    info!(
+        "Updated config: memory.enabled = {}",
+        enabled
+    );
+
     Ok(())
 }
 
@@ -219,6 +353,78 @@ pub fn run_first_time_init(
 
     // Block on the async initialization
     runtime.block_on(run_first_time_init_async(progress_callback))
+}
+
+/// Check if there is sufficient disk space for initialization
+/// This is a lightweight check that attempts to create a test file
+fn check_disk_space() -> Result<()> {
+    const TEST_FILE_SIZE: usize = 100 * 1024 * 1024; // 100 MB test
+    const CHUNK_SIZE: usize = 1024 * 1024; // 1 MB chunks
+
+    let config_dir = get_config_dir()?;
+
+    // Get parent directory if config dir doesn't exist yet
+    let check_path = if config_dir.exists() {
+        config_dir.clone()
+    } else {
+        // Create parent directories if needed
+        if let Some(parent) = config_dir.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                AetherError::config(format!("Failed to create parent directory: {}", e))
+            })?;
+        }
+        config_dir.clone()
+    };
+
+    // Ensure the directory exists for the test
+    fs::create_dir_all(&check_path).map_err(|e| {
+        AetherError::config(format!("Failed to create test directory: {}", e))
+    })?;
+
+    let test_file = check_path.join(".disk_space_test.tmp");
+
+    debug!("Testing disk space with test file: {:?}", test_file);
+
+    // Try to write a test file to verify disk space
+    match std::fs::File::create(&test_file) {
+        Ok(mut file) => {
+            use std::io::Write;
+
+            let buffer = vec![0u8; CHUNK_SIZE];
+            let mut written = 0;
+
+            // Try to write up to 100MB in 1MB chunks
+            while written < TEST_FILE_SIZE {
+                match file.write(&buffer) {
+                    Ok(_) => written += CHUNK_SIZE,
+                    Err(e) => {
+                        let _ = std::fs::remove_file(&test_file);
+                        return Err(AetherError::config(format!(
+                            "Insufficient disk space (failed after {} MB): {}",
+                            written / (1024 * 1024),
+                            e
+                        )));
+                    }
+                }
+            }
+
+            // Clean up test file
+            drop(file);
+            let _ = std::fs::remove_file(&test_file);
+
+            info!(
+                "✅ Sufficient disk space available (verified {} MB)",
+                written / (1024 * 1024)
+            );
+            Ok(())
+        }
+        Err(e) => {
+            Err(AetherError::config(format!(
+                "Failed to create disk space test file: {}",
+                e
+            )))
+        }
+    }
 }
 
 /// Create the directory structure
@@ -264,6 +470,12 @@ async fn create_default_config() -> Result<()> {
     Ok(())
 }
 
+/// Expected file sizes for validation (approximate, in bytes)
+const EXPECTED_MODEL_SIZE_MIN: u64 = 80 * 1024 * 1024; // 80 MB
+const EXPECTED_MODEL_SIZE_MAX: u64 = 100 * 1024 * 1024; // 100 MB
+const EXPECTED_TOKENIZER_SIZE_MIN: u64 = 100 * 1024; // 100 KB
+const EXPECTED_TOKENIZER_SIZE_MAX: u64 = 2 * 1024 * 1024; // 2 MB
+
 /// Download embedding model files from HuggingFace
 async fn download_embedding_model(
     progress_callback: Option<&Box<dyn InitializationProgressHandler>>,
@@ -272,10 +484,17 @@ async fn download_embedding_model(
     let model_file = model_dir.join("model.onnx");
     let tokenizer_file = model_dir.join("tokenizer.json");
 
-    // Check if files already exist
+    // Check if files already exist and are valid
     if model_file.exists() && tokenizer_file.exists() {
-        warn!("Embedding model files already exist, skipping download");
-        return Ok(());
+        if validate_model_files(&model_file, &tokenizer_file)? {
+            warn!("Embedding model files already exist and are valid, skipping download");
+            return Ok(());
+        } else {
+            warn!("Existing model files are invalid, re-downloading...");
+            // Delete invalid files
+            let _ = std::fs::remove_file(&model_file);
+            let _ = std::fs::remove_file(&tokenizer_file);
+        }
     }
 
     const BASE_URL: &str = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main";
@@ -286,6 +505,9 @@ async fn download_embedding_model(
         info!("Downloading model.onnx from {}", url);
 
         download_file(&url, &model_file, progress_callback).await?;
+
+        // Validate downloaded file
+        validate_file_size(&model_file, EXPECTED_MODEL_SIZE_MIN, EXPECTED_MODEL_SIZE_MAX)?;
     }
 
     // Download tokenizer.json
@@ -294,20 +516,122 @@ async fn download_embedding_model(
         info!("Downloading tokenizer.json from {}", url);
 
         download_file(&url, &tokenizer_file, progress_callback).await?;
+
+        // Validate downloaded file
+        validate_file_size(&tokenizer_file, EXPECTED_TOKENIZER_SIZE_MIN, EXPECTED_TOKENIZER_SIZE_MAX)?;
     }
 
-    info!("✅ Embedding model downloaded successfully");
+    info!("✅ Embedding model downloaded and validated successfully");
     Ok(())
 }
 
-/// Download a file from URL to local path
+/// Validate model files exist and have reasonable sizes
+fn validate_model_files(model_file: &Path, tokenizer_file: &Path) -> Result<bool> {
+    if !model_file.exists() || !tokenizer_file.exists() {
+        return Ok(false);
+    }
+
+    // Check file sizes
+    match validate_file_size(model_file, EXPECTED_MODEL_SIZE_MIN, EXPECTED_MODEL_SIZE_MAX) {
+        Ok(_) => {},
+        Err(_) => return Ok(false),
+    }
+
+    match validate_file_size(tokenizer_file, EXPECTED_TOKENIZER_SIZE_MIN, EXPECTED_TOKENIZER_SIZE_MAX) {
+        Ok(_) => {},
+        Err(_) => return Ok(false),
+    }
+
+    Ok(true)
+}
+
+/// Validate file size is within expected range
+fn validate_file_size(path: &Path, min_size: u64, max_size: u64) -> Result<()> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| AetherError::config(format!("Failed to read file metadata: {}", e)))?;
+
+    let size = metadata.len();
+
+    if size < min_size {
+        return Err(AetherError::config(format!(
+            "File {} is too small ({} bytes, expected at least {} bytes). Download may be incomplete.",
+            path.file_name().unwrap().to_string_lossy(),
+            size,
+            min_size
+        )));
+    }
+
+    if size > max_size {
+        return Err(AetherError::config(format!(
+            "File {} is too large ({} bytes, expected at most {} bytes). File may be corrupted.",
+            path.file_name().unwrap().to_string_lossy(),
+            size,
+            max_size
+        )));
+    }
+
+    debug!(
+        "✅ File {} validated: {} bytes",
+        path.file_name().unwrap().to_string_lossy(),
+        size
+    );
+
+    Ok(())
+}
+
+/// Download a file from URL to local path with automatic retry
 async fn download_file(
     url: &str,
     dest_path: &Path,
     progress_callback: Option<&Box<dyn InitializationProgressHandler>>,
 ) -> Result<()> {
-    debug!("Downloading {} to {:?}", url, dest_path);
+    const MAX_RETRIES: u32 = 3;
+    const INITIAL_BACKOFF_MS: u64 = 1000; // 1 second
 
+    let mut last_error = None;
+
+    for attempt in 1..=MAX_RETRIES {
+        debug!(
+            "Downloading {} to {:?} (attempt {}/{})",
+            url, dest_path, attempt, MAX_RETRIES
+        );
+
+        match download_file_once(url, dest_path, progress_callback).await {
+            Ok(()) => {
+                info!(
+                    "✅ Successfully downloaded {} on attempt {}",
+                    dest_path.file_name().unwrap().to_string_lossy(),
+                    attempt
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                warn!(
+                    "Download attempt {}/{} failed: {}",
+                    attempt, MAX_RETRIES, e
+                );
+                last_error = Some(e);
+
+                // If not the last attempt, wait with exponential backoff
+                if attempt < MAX_RETRIES {
+                    let backoff_ms = INITIAL_BACKOFF_MS * 2u64.pow(attempt - 1);
+                    info!("Retrying in {} ms...", backoff_ms);
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                }
+            }
+        }
+    }
+
+    // All retries exhausted
+    Err(last_error.unwrap_or_else(|| AetherError::config("Download failed".to_string())))
+}
+
+/// Download a file from URL to local path (single attempt)
+async fn download_file_once(
+    url: &str,
+    dest_path: &Path,
+    progress_callback: Option<&Box<dyn InitializationProgressHandler>>,
+) -> Result<()> {
     // Create HTTP client
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300)) // 5 minute timeout
