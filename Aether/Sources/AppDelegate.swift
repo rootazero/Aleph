@@ -257,38 +257,48 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     // MARK: - Providers Menu Management (NEW for default provider management)
 
-    /// Rebuild the providers submenu with enabled providers
-    private func rebuildProvidersMenu() {
+    /// Generic menu rebuilder to eliminate duplication
+    ///
+    /// This helper method extracts the common pattern used by `rebuildProvidersMenu()`
+    /// and `rebuildInputModeMenu()` to reduce code duplication.
+    ///
+    /// - Parameters:
+    ///   - menuItemTitle: Localized title of the menu item containing the submenu
+    ///   - items: Array of (id, displayName) tuples representing menu items
+    ///   - currentSelection: Currently selected item ID (for checkmark)
+    ///   - action: Selector to invoke when an item is clicked
+    ///   - placeholderText: Optional text to show when items array is empty
+    private func rebuildMenu(
+        menuItemTitle: String,
+        items: [(id: String, displayName: String)],
+        currentSelection: String?,
+        action: Selector,
+        placeholderText: String? = nil
+    ) {
         guard let menu = statusItem?.menu else { return }
-        guard let core = core else { return }
 
-        // Find the "Default Provider" menu item (should be at index 2 after About + Separator)
-        guard let defaultProviderMenuItem = menu.items.first(where: { $0.title == NSLocalizedString("menu.default_provider", comment: "Default Provider menu item") }),
-              let submenu = defaultProviderMenuItem.submenu else {
-            print("[AppDelegate] ERROR: Default Provider submenu not found")
+        // Find the menu item
+        guard let targetMenuItem = menu.items.first(where: { $0.title == menuItemTitle }),
+              let submenu = targetMenuItem.submenu else {
+            print("[AppDelegate] ERROR: Menu item '\(menuItemTitle)' submenu not found")
             return
         }
 
         // Clear existing submenu items
         submenu.removeAllItems()
 
-        // Get enabled providers
-        let enabledProviders = core.getEnabledProviders()
-
-        if !enabledProviders.isEmpty {
-            // Get current default provider
-            let defaultProvider = try? core.getDefaultProvider()
-
-            // Add menu items for each enabled provider (sorted alphabetically)
-            for providerName in enabledProviders.sorted() {
+        if !items.isEmpty {
+            // Add menu items for each entry
+            for (id, displayName) in items {
                 let item = NSMenuItem(
-                    title: providerName,
-                    action: #selector(selectDefaultProvider(_:)),
+                    title: displayName,
+                    action: action,
                     keyEquivalent: ""
                 )
+                item.representedObject = id
 
-                // Add checkmark if this is the default provider
-                if let defaultProvider = defaultProvider, providerName == defaultProvider {
+                // Add checkmark if this is the current selection
+                if let currentSelection = currentSelection, id == currentSelection {
                     item.state = .on
                 } else {
                     item.state = .off
@@ -297,23 +307,46 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 submenu.addItem(item)
             }
 
-            // Enable the submenu
-            defaultProviderMenuItem.isEnabled = true
+            // Enable the parent menu item
+            targetMenuItem.isEnabled = true
 
-            print("[AppDelegate] Rebuilt providers submenu with \(enabledProviders.count) enabled providers")
+            print("[AppDelegate] Rebuilt '\(menuItemTitle)' submenu with \(items.count) items")
         } else {
-            // No enabled providers, add placeholder and disable submenu
-            let placeholderItem = NSMenuItem(
-                title: NSLocalizedString("menu.no_providers", comment: "No providers available"),
-                action: nil,
-                keyEquivalent: ""
-            )
-            placeholderItem.isEnabled = false
-            submenu.addItem(placeholderItem)
+            // No items available - handle empty state
+            if let placeholder = placeholderText {
+                let placeholderItem = NSMenuItem(
+                    title: placeholder,
+                    action: nil,
+                    keyEquivalent: ""
+                )
+                placeholderItem.isEnabled = false
+                submenu.addItem(placeholderItem)
+            }
 
-            defaultProviderMenuItem.isEnabled = false
-            print("[AppDelegate] No enabled providers, disabling submenu")
+            targetMenuItem.isEnabled = false
+            print("[AppDelegate] No items for '\(menuItemTitle)', disabling submenu")
         }
+    }
+
+    /// Rebuild the providers submenu with enabled providers
+    private func rebuildProvidersMenu() {
+        guard let core = core else { return }
+
+        // Get enabled providers and current default
+        let enabledProviders = core.getEnabledProviders().sorted()
+        let defaultProvider = try? core.getDefaultProvider()
+
+        // Map providers to (id, displayName) tuples
+        let items = enabledProviders.map { ($0, $0) }
+
+        // Use generic menu builder
+        rebuildMenu(
+            menuItemTitle: NSLocalizedString("menu.default_provider", comment: "Default Provider menu item"),
+            items: items,
+            currentSelection: defaultProvider,
+            action: #selector(selectDefaultProvider(_:)),
+            placeholderText: NSLocalizedString("menu.no_providers", comment: "No providers available")
+        )
     }
 
     /// Handle provider selection from menu bar (set as default)
@@ -353,18 +386,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Rebuild the input mode submenu with current selection
     private func rebuildInputModeMenu() {
-        guard let menu = statusItem?.menu else { return }
         guard let core = core else { return }
-
-        // Find the "Input Mode" menu item
-        guard let inputModeMenuItem = menu.items.first(where: { $0.title == NSLocalizedString("menu.input_mode", comment: "Input Mode menu item") }),
-              let submenu = inputModeMenuItem.submenu else {
-            print("[AppDelegate] ERROR: Input Mode submenu not found")
-            return
-        }
-
-        // Clear existing submenu items
-        submenu.removeAllItems()
 
         // Get current input mode from config
         var currentInputMode = "cut"  // Default value
@@ -377,32 +399,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             print("[AppDelegate] ⚠️ Failed to load config for input mode menu: \(error)")
         }
 
-        // Add menu items for each input mode
+        // Define input modes with localized display names
         let inputModes: [(String, String)] = [
             ("cut", NSLocalizedString("settings.behavior.input_mode_cut", comment: "Cut")),
             ("copy", NSLocalizedString("settings.behavior.input_mode_copy", comment: "Copy")),
             ("halo", NSLocalizedString("settings.behavior.input_mode_halo", comment: "Halo Selection"))
         ]
 
-        for (mode, displayName) in inputModes {
-            let item = NSMenuItem(
-                title: displayName,
-                action: #selector(selectInputMode(_:)),
-                keyEquivalent: ""
-            )
-            item.representedObject = mode
-
-            // Add checkmark if this is the current input mode
-            if mode == currentInputMode {
-                item.state = .on
-            } else {
-                item.state = .off
-            }
-
-            submenu.addItem(item)
-        }
-
-        print("[AppDelegate] Rebuilt input mode submenu, current mode: \(currentInputMode)")
+        // Use generic menu builder
+        rebuildMenu(
+            menuItemTitle: NSLocalizedString("menu.input_mode", comment: "Input Mode menu item"),
+            items: inputModes,
+            currentSelection: currentInputMode,
+            action: #selector(selectInputMode(_:))
+        )
     }
 
     /// Handle input mode selection from menu bar (set as current)
