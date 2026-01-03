@@ -1097,13 +1097,17 @@ impl AetherCore {
 
     /// Build routing context string from window context and clipboard content
     ///
-    /// Format: `[AppName] WindowTitle\nClipboardContent`
+    /// Format: `ClipboardContent\n---\n[AppName] WindowTitle`
+    ///
+    /// IMPORTANT: Clipboard content is placed FIRST to maintain backward compatibility
+    /// with rules like `^/en` that expect content to start with a command prefix.
     ///
     /// This combines window context with clipboard content to enable context-aware routing.
     /// Rules can match based on:
-    /// - Window context only (e.g., `^\[VSCode\]`)
-    /// - Clipboard content only (e.g., `/translate`)
-    /// - Both (e.g., `^\[Notes\].*TODO`)
+    /// - Clipboard content prefix (e.g., `^/en` - matches content starting with /en)
+    /// - Clipboard content anywhere (e.g., `/translate`)
+    /// - Window context (e.g., `\[VSCode\]` - matches VSCode app)
+    /// - Both (e.g., `TODO.*\[Notes\]`)
     ///
     /// # Arguments
     ///
@@ -1121,12 +1125,13 @@ impl AetherCore {
             .last()
             .unwrap_or("Unknown");
 
-        // Format: [AppName] WindowTitle\nClipboardContent
+        // Format: ClipboardContent\n---\n[AppName] WindowTitle
+        // Clipboard content is FIRST to preserve backward compatibility with ^/prefix rules
         format!(
-            "[{}] {}\n{}",
+            "{}\n---\n[{}] {}",
+            clipboard_content,
             app_name,
-            context.window_title.as_deref().unwrap_or(""),
-            clipboard_content
+            context.window_title.as_deref().unwrap_or("")
         )
     }
 
@@ -1157,12 +1162,13 @@ impl AetherCore {
                 suggestion: Some("Configure at least one AI provider in Settings → Providers".to_string()),
             })?;
 
-        // Step 1.5: Build routing context string (window context + clipboard content)
+        // Step 1.5: Build routing context string (clipboard content + window context)
         let routing_context = Self::build_routing_context(&context, &input);
-        debug!(
+        info!(
             context_length = routing_context.len(),
             app = %context.app_bundle_id,
             window = ?context.window_title,
+            context_preview = %routing_context.chars().take(100).collect::<String>(),
             "Built routing context for provider selection"
         );
 
@@ -1226,10 +1232,13 @@ impl AetherCore {
         let provider_name = provider.name().to_string();
         let provider_color = provider.color().to_string();
 
+        // Log routing decision with system prompt info
         info!(
             provider = %provider_name,
             color = %provider_color,
             has_fallback = fallback_provider.is_some(),
+            has_custom_system_prompt = system_prompt_override.is_some(),
+            system_prompt_preview = ?system_prompt_override.map(|s| s.chars().take(50).collect::<String>()),
             "Routed to AI provider"
         );
 
@@ -1242,6 +1251,13 @@ impl AetherCore {
         // Step 4: Call AI provider with retry and fallback logic (Task 10.1 & 10.2)
         let routing_time = start_time.elapsed();
         let system_prompt = system_prompt_override.unwrap_or(&base_system_prompt);
+
+        // Log the final system prompt being used
+        info!(
+            using_custom_prompt = system_prompt_override.is_some(),
+            system_prompt_preview = %system_prompt.chars().take(80).collect::<String>(),
+            "Final system prompt for AI request"
+        );
 
         // Try primary provider with retry
         let response = {

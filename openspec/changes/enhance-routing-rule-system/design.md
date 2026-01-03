@@ -59,19 +59,22 @@ AI Provider processes with final prompt
 
 **Method**: `build_routing_context(window_context: &CapturedContext, clipboard: &str) -> String`
 
+**IMPORTANT**: Clipboard content is placed FIRST to maintain backward compatibility with rules like `^/en` that expect content to start with a command prefix.
+
 **Implementation**:
 ```rust
 fn build_routing_context(
     window_context: &CapturedContext,
     clipboard_content: &str
 ) -> String {
-    // Format: "[AppName] WindowTitle\nClipboardContent"
+    // Format: "ClipboardContent\n---\n[AppName] WindowTitle"
+    // Clipboard content is FIRST for backward compatibility with ^/prefix rules
     let app_name = extract_app_name(&window_context.bundle_id);
     format!(
-        "[{}] {}\n{}",
+        "{}\n---\n[{}] {}",
+        clipboard_content,
         app_name,
-        window_context.window_title,
-        clipboard_content
+        window_context.window_title
     )
 }
 
@@ -84,15 +87,23 @@ fn extract_app_name(bundle_id: &str) -> &str {
 
 **Example Outputs**:
 ```
-[Notes] Meeting Notes.txt
 Discuss Q1 roadmap for Aether project
+---
+[Notes] Meeting Notes.txt
 
-[VSCode] main.rs - Aether
+/en 你好世界
+---
+[Notes] Translation.txt
+
 fn process_clipboard() { ... }
-
-[WeChat] Chat with Alice
-帮我翻译这段话
+---
+[VSCode] main.rs - Aether
 ```
+
+**Matching Rules**:
+- `^/en` - Matches content starting with `/en` (prefix command)
+- `\[VSCode\]` - Matches VSCode app context
+- `TODO.*\[Notes\]` - Matches TODO in Notes app
 
 ### 2. Router Enhancement
 

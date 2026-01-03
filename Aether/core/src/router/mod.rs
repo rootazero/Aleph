@@ -342,17 +342,29 @@ impl Router {
     /// # }
     /// ```
     pub fn route(&self, context: &str) -> Option<(&dyn AiProvider, Option<&str>)> {
-        debug!(context_length = context.len(), "Starting route decision with full context");
+        info!(
+            context_length = context.len(),
+            rules_count = self.rules.len(),
+            "Starting route decision with full context"
+        );
 
         // Iterate through rules in order (first match wins, subsequent rules ignored)
         for (index, rule) in self.rules.iter().enumerate() {
+            debug!(
+                rule_index = index,
+                pattern = %self.get_rule_pattern(index).unwrap_or("unknown"),
+                "Testing rule"
+            );
+
             if rule.matches(context) {
                 // Get provider by name
                 if let Some(provider) = self.providers.get(rule.provider_name()) {
                     info!(
                         rule_index = index,
+                        pattern = %self.get_rule_pattern(index).unwrap_or("unknown"),
                         provider = %rule.provider_name(),
                         has_custom_prompt = rule.system_prompt().is_some(),
+                        custom_prompt_preview = ?rule.system_prompt().map(|s| s.chars().take(50).collect::<String>()),
                         "Rule matched (first-match-stops), routing to provider"
                     );
                     // Return provider with rule's system prompt (if specified)
@@ -368,7 +380,11 @@ impl Router {
         }
 
         // No rule matched, fall back to default provider (if configured)
-        debug!("No rule matched, attempting default provider fallback");
+        info!(
+            rules_tested = self.rules.len(),
+            has_default = self.default_provider.is_some(),
+            "No rule matched, attempting default provider fallback"
+        );
         let result = self
             .default_provider
             .as_ref()
@@ -385,6 +401,11 @@ impl Router {
         }
 
         result
+    }
+
+    /// Get the regex pattern for a rule by index (for logging purposes)
+    fn get_rule_pattern(&self, index: usize) -> Option<&str> {
+        self.rules.get(index).map(|r| r.regex.as_str())
     }
 
     /// Get the number of configured routing rules
