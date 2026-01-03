@@ -197,8 +197,38 @@ struct GeneralSettingsView: View {
 
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
-            // User chose "Restart Now"
-            NSApp.terminate(nil)
+            // User chose "Restart Now" - restart the application
+            restartApplication()
+        }
+    }
+
+    /// Restart the application after language change
+    /// Uses NSWorkspace to launch a new instance before terminating current instance
+    private func restartApplication() {
+        print("[SettingsView] Restarting application for language change")
+
+        let url = URL(fileURLWithPath: Bundle.main.bundlePath)
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
+            if let error = error {
+                print("[SettingsView] ❌ Error restarting application: \(error)")
+                // Show error alert if restart fails
+                DispatchQueue.main.async {
+                    let errorAlert = NSAlert()
+                    errorAlert.messageText = NSLocalizedString("alert.restart.failed_title", comment: "Restart Failed")
+                    errorAlert.informativeText = String(format: NSLocalizedString("alert.restart.failed_message", comment: ""), error.localizedDescription)
+                    errorAlert.alertStyle = .warning
+                    errorAlert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
+                    errorAlert.runModal()
+                }
+            }
+
+            // Terminate current instance after new instance starts
+            DispatchQueue.main.async {
+                NSApp.terminate(nil)
+            }
         }
     }
 }
