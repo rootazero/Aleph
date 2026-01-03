@@ -20,15 +20,34 @@ struct ProviderIcon: View {
                 .aspectRatio(contentMode: .fit)
                 .frame(width: size, height: size)
         } else {
-            // Simple placeholder for unknown providers
-            Circle()
-                .fill(Color.gray.opacity(0.2))
-                .frame(width: size, height: size)
-                .overlay(
-                    Image(systemName: "questionmark")
-                        .font(.system(size: size * 0.4))
-                        .foregroundColor(.gray)
+            // Elegant gradient placeholder for custom providers
+            ZStack {
+                // Gradient background
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.04, green: 0.52, blue: 1.0).opacity(0.3),    // #0A84FF
+                        Color(red: 0.37, green: 0.36, blue: 0.9).opacity(0.3)     // #5E5CE6
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
                 )
+                .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+
+                // Sparkle icon instead of question mark
+                Image(systemName: "sparkle")
+                    .font(.system(size: size * 0.5, weight: .medium))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.04, green: 0.52, blue: 1.0),  // #0A84FF
+                                Color(red: 0.37, green: 0.36, blue: 0.9)   // #5E5CE6
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            }
+            .frame(width: size, height: size)
         }
     }
 
