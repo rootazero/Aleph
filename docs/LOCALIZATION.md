@@ -6,7 +6,7 @@ This guide explains how Aether implements internationalization (i18n) and how co
 
 Aether uses Apple's native localization infrastructure to support multiple languages:
 - **Base Language**: English (`en.lproj/`)
-- **Supported Languages**: Simplified Chinese (`zh-Hans.lproj/`)
+- **Supported Languages**: Simplified Chinese (`zh_CN.lproj/`)
 
 ## Architecture
 
@@ -17,7 +17,7 @@ Aether/Resources/
 ├── en.lproj/                       # English (base)
 │   ├── Localizable.strings        # UI text
 │   └── InfoPlist.strings          # App metadata & permissions
-└── zh-Hans.lproj/                 # Simplified Chinese
+└── zh_CN.lproj/                    # Simplified Chinese
     ├── Localizable.strings
     └── InfoPlist.strings
 ```
@@ -77,8 +77,9 @@ mkdir -p Aether/Resources/<lang-code>.lproj
 
 **Common Language Codes:**
 - `en` - English
-- `zh-Hans` - Simplified Chinese
-- `zh-Hant` - Traditional Chinese
+- `zh_CN` - Simplified Chinese (China)
+- `zh_TW` - Traditional Chinese (Taiwan)
+- `zh_HK` - Traditional Chinese (Hong Kong)
 - `ja` - Japanese
 - `ko` - Korean
 - `de` - German
@@ -124,7 +125,7 @@ info:
   properties:
     CFBundleLocalizations:
       - en
-      - zh-Hans
+      - zh_CN
       - <lang-code>  # Add your language code
 ```
 
@@ -200,7 +201,7 @@ chmod +x .git/hooks/pre-commit
 
 ```bash
 # Launch with Simplified Chinese
-open -a Aether --args -AppleLanguages '(zh-Hans)'
+open -a Aether --args -AppleLanguages '(zh_CN)'
 
 # Launch with Japanese
 open -a Aether --args -AppleLanguages '(ja)'
@@ -303,7 +304,7 @@ cp Aether/Resources/en.lproj/*.strings Aether/Resources/ja.lproj/
 # ...
 
 # 4. Update project.yml
-# CFBundleLocalizations: [en, zh-Hans, ja]
+# CFBundleLocalizations: [en, zh_CN, ja]
 
 # 5. Regenerate project
 xcodegen generate
@@ -333,7 +334,7 @@ Aether uses a three-tier approach to determine the UI language:
    - On first launch or when "System Default" is selected
    - Detects macOS system language from `Locale.preferredLanguages`
    - Maps system language to supported language:
-     - **Chinese variants** (`zh-Hans`, `zh-Hant`, `zh`, etc.) → `zh_CN`
+     - **Chinese variants** (`zh_CN`, `zh_TW`, `zh_HK`, `zh`, etc.) → `zh_CN`
      - **All other languages** (including unsupported) → `en` (English)
 
 3. **Fallback to English** (Lowest Priority)
@@ -373,7 +374,7 @@ On first installation:
 - **Applied On**: App launch in `AppDelegate.applicationDidFinishLaunching()`
 - **System Detection**: Uses `Locale.preferredLanguages.first` to detect system language
 - **Language Mapping**:
-  - `zh-Hans`, `zh-Hant`, `zh` → `zh_CN`
+  - `zh_CN`, `zh_TW`, `zh_HK`, `zh` → `zh_CN`
   - All other languages → `en`
 - **Validation**: Rust core logs warning for invalid codes (accepts `"en"` and `"zh_CN"`)
 

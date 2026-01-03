@@ -55,7 +55,7 @@ pub struct GeneralConfig {
     /// Enable performance logging (default: false)
     #[serde(default)]
     pub enable_performance_logging: bool,
-    /// Preferred language override (e.g., 'en', 'zh-Hans'). If None, use system language.
+    /// Preferred language override (e.g., 'en', 'zh_CN'). If None, use system language.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
 }

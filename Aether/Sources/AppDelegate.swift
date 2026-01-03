@@ -1542,7 +1542,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// Detect system language and return supported language code
     ///
     /// Returns:
-    /// - "zh_CN" if system language is any Chinese variant (zh-Hans, zh-Hant, zh, etc.)
+    /// - "zh_CN" if system language is any Chinese variant (zh_CN, zh_TW, zh_HK, zh, etc.)
     /// - "en" for all other languages (including unsupported ones)
     private func detectSystemLanguage() -> String {
         let preferredLanguages = Locale.preferredLanguages
@@ -1555,7 +1555,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         print("[AppDelegate] System primary language: \(primaryLanguage)")
 
         // Check if system language is Chinese (any variant)
-        // Possible values: zh-Hans, zh-Hant, zh-Hans-CN, zh-Hant-TW, zh, etc.
+        // Possible system values: zh_CN, zh_TW, zh_HK, zh, or variants with region codes
         if primaryLanguage.hasPrefix("zh") {
             print("[AppDelegate] Detected Chinese system language, using zh_CN")
             return "zh_CN"
