@@ -29,7 +29,7 @@ struct LogViewerView: View {
                 Spacer()
 
                 // Log level picker
-                Picker("Level:", selection: $logLevel) {
+                Picker("", selection: $logLevel) {
                     Text("Debug").tag("debug")
                     Text("Info").tag("info")
                     Text("Warn").tag("warn")

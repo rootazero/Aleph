@@ -45,16 +45,31 @@ def extract_svg_from_tsx(tsx_path: Path) -> Optional[str]:
         viewbox = viewbox_match.group(1) if viewbox_match else "0 0 24 24"
 
         # Clean up JSX syntax
-        # Replace dynamic fill IDs with static ones
-        svg_body = re.sub(r'\{[a-z]\.fill\}', 'url(#gradient1)', svg_body)
-        svg_body = re.sub(r'\{[a-z]\.id\}', 'gradient1', svg_body, count=1)
-        svg_body = re.sub(r'\{[a-z]\.id\}', 'gradient2', svg_body, count=1)
-        svg_body = re.sub(r'\{[a-z]\.id\}', 'gradient3', svg_body, count=1)
+        # Replace dynamic fill IDs with static ones (need to handle multiple gradients)
+        # First, replace gradient IDs in defs
+        gradient_counter = [0]  # Use list to allow modification in nested function
+        def replace_gradient_id(match):
+            gradient_counter[0] += 1
+            return f'id="gradient{gradient_counter[0]}"'
+        
+        # Replace gradient IDs in <linearGradient> tags
+        svg_body = re.sub(r'id=\{[a-z]\.id\}', replace_gradient_id, svg_body)
+        
+        # Replace fill references to gradients
+        gradient_counter[0] = 0  # Reset counter
+        def replace_fill_ref(match):
+            gradient_counter[0] += 1
+            return f'fill="url(#gradient{gradient_counter[0]})"'
+        
+        svg_body = re.sub(r'fill=\{[a-z]\.fill\}', replace_fill_ref, svg_body)
 
         # Convert JSX attributes to HTML attributes
         svg_body = re.sub(r'stopColor=', 'stop-color=', svg_body)
         svg_body = re.sub(r'stopOpacity=', 'stop-opacity=', svg_body)
         svg_body = re.sub(r'gradientUnits=', 'gradientUnits=', svg_body)
+        
+        # Replace {TITLE} placeholder
+        svg_body = re.sub(r'\{TITLE\}', tsx_path.parent.parent.name, svg_body)
 
         # Remove React-specific attributes
         svg_body = re.sub(r'\s*\{\.\.\.rest\}', '', svg_body)
@@ -110,7 +125,7 @@ def extract_all_icons(lobe_icons_path: Path, output_dir: Path):
 
 def main():
     # Paths
-    lobe_icons_path = Path.home() / "workspace" / "lobe-icons" / "src"
+    lobe_icons_path = Path(__file__).parent.parent / "icons"
     output_dir = Path(__file__).parent.parent / "Aether" / "Assets.xcassets" / "_extracted_icons"
 
     extract_all_icons(lobe_icons_path, output_dir)
