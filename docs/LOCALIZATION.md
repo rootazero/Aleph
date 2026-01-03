@@ -331,7 +331,7 @@ Aether now includes a **Language Selector** in General Settings (added in 2026-0
 
 3. **Behavior**:
    - Language preference is saved to `~/.config/aether/config.toml` under `[general]` section
-   - Format: `language = "en"` or `language = "zh-Hans"`
+   - Format: `language = "en"` or `language = "zh_CN"`
    - If "System Default" is selected, the language field is omitted from config
    - Language changes require app restart to take effect (macOS localization caching)
 
@@ -345,7 +345,7 @@ Aether now includes a **Language Selector** in General Settings (added in 2026-0
 - **Config Field**: `general.language: Option<String>` in Rust core
 - **Swift Override**: `UserDefaults.standard.set([language], forKey: "AppleLanguages")`
 - **Applied On**: App launch in `AppDelegate.applicationDidFinishLaunching()`
-- **Validation**: Only accepts `"en"` and `"zh-Hans"` (logs warning for invalid codes)
+- **Validation**: Only accepts `"en"` and `"zh_CN"` (logs warning for invalid codes)
 
 ### Testing Language Changes
 
@@ -353,11 +353,11 @@ Aether now includes a **Language Selector** in General Settings (added in 2026-0
 2. **Via Config**: Edit `~/.config/aether/config.toml`:
    ```toml
    [general]
-   language = "zh-Hans"  # or "en"
+   language = "zh_CN"  # or "en"
    ```
 3. **Via Command Line** (deprecated, use UI instead):
    ```bash
-   open -a Aether --args -AppleLanguages '(zh-Hans)'
+   open -a Aether --args -AppleLanguages '(zh_CN)'
    ```
 
 ---

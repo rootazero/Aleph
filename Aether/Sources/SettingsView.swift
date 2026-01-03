@@ -59,7 +59,7 @@ struct GeneralSettingsView: View {
                         Picker(LocalizedStringKey("settings.general.language_preference"), selection: $selectedLanguage) {
                             Text(LocalizedStringKey("settings.general.language_system_default")).tag(nil as String?)
                             Text("English").tag("en" as String?)
-                            Text("简体中文").tag("zh-Hans" as String?)
+                            Text("简体中文").tag("zh_CN" as String?)
                         }
                         .onChange(of: selectedLanguage) { oldValue, newValue in
                             saveLanguagePreference(newValue)
