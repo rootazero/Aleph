@@ -83,7 +83,7 @@ struct SidebarWithTrafficLights: View {
                 .padding(.bottom, 4)
 
                 // Navigation items
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 4) {
                     // Navigation tabs
                     ForEach(navigationItems, id: \.tab) { item in
                         SidebarNavigationItem(
@@ -235,7 +235,7 @@ private struct SidebarNavigationItem: View {
 
                 Spacer()
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, 8)
             .padding(.horizontal, 10)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
