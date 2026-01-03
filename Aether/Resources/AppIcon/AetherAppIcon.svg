@@ -26,8 +26,8 @@
     <path d="M55 15 C59 40 70 51 95 55 C70 59 59 70 55 95 C51 70 40 59 15 55 C40 51 51 40 55 15Z"
           fill="url(#mainGradient)" />
 
-    <!-- Satellite Star (1.5x larger) -->
-    <path d="M35 10 C36.2 17.5 38 20.5 47 22 C38 23.5 36.2 26.5 35 34 C33.8 26.5 32 23.5 23 22 C32 20.5 33.8 17.5 35 10Z"
+    <!-- Satellite Star (Original design size v3) -->
+    <path d="M35 14 C35.8 19 37 21 43 22 C37 23 35.8 25 35 30 C34.2 25 33 23 27 22 C33 21 34.2 19 35 14Z"
           fill="url(#satGradient)" />
   </g>
 </svg>
