@@ -205,11 +205,7 @@ struct RoutingView: View {
 
     /// Get the current default provider name
     private var defaultProviderName: String? {
-        do {
-            return try core.getDefaultProvider()
-        } catch {
-            return nil
-        }
+        return core.getDefaultProvider()
     }
 
     /// Get default provider color

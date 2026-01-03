@@ -195,7 +195,7 @@ struct InitializationProgressView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .padding(.top, 8)
-            } else if case .failed(let error) = viewModel.state {
+            } else if case .failed(_) = viewModel.state {
                 Button("Retry") {
                     runInitialization()
                 }

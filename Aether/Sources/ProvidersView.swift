@@ -287,13 +287,8 @@ struct ProvidersView: View {
 
     /// Load default provider from config (NEW for default provider management)
     private func loadDefaultProvider() {
-        do {
-            defaultProviderId = try core.getDefaultProvider()
-            print("[ProvidersView] Default provider loaded: \(defaultProviderId ?? "none")")
-        } catch {
-            print("[ProvidersView] Error loading default provider: \(error)")
-            defaultProviderId = nil
-        }
+        defaultProviderId = core.getDefaultProvider()
+        print("[ProvidersView] Default provider loaded: \(defaultProviderId ?? "none")")
     }
 
     /// Select a provider (preset or configured)
