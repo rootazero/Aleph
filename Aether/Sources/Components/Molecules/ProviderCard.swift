@@ -172,11 +172,11 @@ struct ProviderCard: View {
 
     // MARK: - View Builders
 
-    /// Provider icon based on type
+    /// Provider icon based on type - use provider.name (the ID) for correct icon
     @ViewBuilder
     private var providerIcon: some View {
         ProviderIcon(
-            providerType: provider.config.providerType ?? "",
+            providerType: provider.name,
             size: 44
         )
     }

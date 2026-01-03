@@ -246,9 +246,9 @@ struct ProviderEditPanel: View {
                                     .foregroundColor(.white)
                             }
                         } else {
-                            // Preset provider - use brand SVG icon
+                            // Preset provider - use brand SVG icon (use preset.id for correct icon)
                             ProviderIcon(
-                                providerType: preset.providerType,
+                                providerType: preset.id,
                                 size: 48
                             )
                         }

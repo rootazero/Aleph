@@ -27,9 +27,9 @@ struct SimpleProviderCard: View {
         VStack(alignment: .leading, spacing: 4) {
             // Main card content
             HStack(spacing: 10) {
-                // Provider icon
+                // Provider icon - use preset.id to get the correct brand icon
                 ProviderIcon(
-                    providerType: preset.providerType,
+                    providerType: preset.id,
                     size: 28
                 )
 

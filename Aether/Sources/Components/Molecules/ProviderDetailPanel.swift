@@ -61,9 +61,9 @@ struct ProviderDetailPanel: View {
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
             HStack(spacing: DesignTokens.Spacing.sm) {
-                // Provider icon with brand logo
+                // Provider icon with brand logo - use provider.name (the ID) for correct icon
                 ProviderIcon(
-                    providerType: provider.config.providerType ?? "",
+                    providerType: provider.name,
                     size: 32
                 )
 

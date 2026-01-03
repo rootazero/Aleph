@@ -35,26 +35,37 @@ struct ProviderIcon: View {
     // MARK: - Asset Names
 
     /// Asset name for the provider icon in Assets.xcassets
+    /// Supports both provider type (openai, claude) and preset ID (deepseek, moonshot)
     private var assetImageName: String? {
         switch providerType {
+        // OpenAI
         case "openai":
             return "ProviderIcon-OpenAI"
-        case "claude", "anthropic":
+        // Anthropic / Claude
+        case "claude", "anthropic", "claude-code-acp":
             return "ProviderIcon-Claude"
-        case "gemini", "google":
+        // Google Gemini
+        case "gemini", "google", "google-gemini":
             return "ProviderIcon-Gemini"
+        // Ollama (local)
         case "ollama":
             return "ProviderIcon-Ollama"
+        // DeepSeek
         case "deepseek":
             return "ProviderIcon-DeepSeek"
+        // Moonshot / Kimi
         case "moonshot", "kimi":
             return "ProviderIcon-Moonshot"
+        // OpenRouter
         case "openrouter":
             return "ProviderIcon-OpenRouter"
+        // Azure OpenAI
         case "azure", "azure-openai":
             return "ProviderIcon-Azure"
+        // GitHub Copilot
         case "github", "github-copilot":
             return "ProviderIcon-Github"
+        // Custom providers return nil to show placeholder
         default:
             return nil
         }
