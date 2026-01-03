@@ -1933,13 +1933,15 @@ public struct RoutingRuleConfig {
     public var regex: String
     public var provider: String
     public var systemPrompt: String?
+    public var stripPrefix: Bool?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(regex: String, provider: String, systemPrompt: String?) {
+    public init(regex: String, provider: String, systemPrompt: String?, stripPrefix: Bool?) {
         self.regex = regex
         self.provider = provider
         self.systemPrompt = systemPrompt
+        self.stripPrefix = stripPrefix
     }
 }
 
@@ -1956,6 +1958,9 @@ extension RoutingRuleConfig: Equatable, Hashable {
         if lhs.systemPrompt != rhs.systemPrompt {
             return false
         }
+        if lhs.stripPrefix != rhs.stripPrefix {
+            return false
+        }
         return true
     }
 
@@ -1963,6 +1968,7 @@ extension RoutingRuleConfig: Equatable, Hashable {
         hasher.combine(regex)
         hasher.combine(provider)
         hasher.combine(systemPrompt)
+        hasher.combine(stripPrefix)
     }
 }
 
@@ -1976,7 +1982,8 @@ public struct FfiConverterTypeRoutingRuleConfig: FfiConverterRustBuffer {
             try RoutingRuleConfig(
                 regex: FfiConverterString.read(from: &buf), 
                 provider: FfiConverterString.read(from: &buf), 
-                systemPrompt: FfiConverterOptionString.read(from: &buf)
+                systemPrompt: FfiConverterOptionString.read(from: &buf), 
+                stripPrefix: FfiConverterOptionBool.read(from: &buf)
         )
     }
 
@@ -1984,6 +1991,7 @@ public struct FfiConverterTypeRoutingRuleConfig: FfiConverterRustBuffer {
         FfiConverterString.write(value.regex, into: &buf)
         FfiConverterString.write(value.provider, into: &buf)
         FfiConverterOptionString.write(value.systemPrompt, into: &buf)
+        FfiConverterOptionBool.write(value.stripPrefix, into: &buf)
     }
 }
 
@@ -3108,6 +3116,30 @@ fileprivate struct FfiConverterOptionFloat: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterFloat.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionBool: FfiConverterRustBuffer {
+    typealias SwiftType = Bool?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterBool.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterBool.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }

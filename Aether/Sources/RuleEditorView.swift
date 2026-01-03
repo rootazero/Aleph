@@ -322,7 +322,8 @@ struct RuleEditorView: View {
                 let newRule = RoutingRuleConfig(
                     regex: pattern,
                     provider: selectedProvider,
-                    systemPrompt: systemPrompt.isEmpty ? nil : systemPrompt
+                    systemPrompt: systemPrompt.isEmpty ? nil : systemPrompt,
+                    stripPrefix: nil  // Auto-detect: true for ^/ patterns
                 )
 
                 // Update rules array

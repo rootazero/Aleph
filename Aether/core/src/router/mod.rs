@@ -80,10 +80,14 @@ pub type ProviderWithFallback<'a> = ((&'a dyn AiProvider, Option<&'a str>), Opti
 pub struct RoutingRule {
     /// Compiled regex pattern for matching input
     regex: Regex,
+    /// Original pattern string (for prefix stripping)
+    pattern: String,
     /// Name of the provider to use when this rule matches
     provider_name: String,
     /// Optional system prompt to guide AI behavior
     system_prompt: Option<String>,
+    /// Whether to strip the matched prefix from input before sending to AI
+    strip_prefix: bool,
 }
 
 impl RoutingRule {
@@ -94,6 +98,7 @@ impl RoutingRule {
     /// * `pattern` - Regex pattern string (compiled at creation time)
     /// * `provider_name` - Name of the provider to use
     /// * `system_prompt` - Optional system prompt override
+    /// * `strip_prefix` - Whether to strip the matched prefix (None = auto-detect for ^/ patterns)
     ///
     /// # Returns
     ///
@@ -108,20 +113,31 @@ impl RoutingRule {
     /// let rule = RoutingRule::new(
     ///     r"^/draw",
     ///     "openai",
-    ///     Some("You are DALL-E. Generate images.")
+    ///     Some("You are DALL-E. Generate images."),
+    ///     None  // Auto-detect: true for ^/ patterns
     /// )?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(pattern: &str, provider_name: &str, system_prompt: Option<&str>) -> Result<Self> {
+    pub fn new(
+        pattern: &str,
+        provider_name: &str,
+        system_prompt: Option<&str>,
+        strip_prefix: Option<bool>,
+    ) -> Result<Self> {
         let regex = Regex::new(pattern).map_err(|e| {
             AetherError::invalid_config(format!("Invalid regex pattern '{}': {}", pattern, e))
         })?;
 
+        // Auto-detect strip_prefix for command patterns (^/xxx)
+        let should_strip = strip_prefix.unwrap_or_else(|| pattern.starts_with("^/"));
+
         Ok(Self {
             regex,
+            pattern: pattern.to_string(),
             provider_name: provider_name.to_string(),
             system_prompt: system_prompt.map(|s| s.to_string()),
+            strip_prefix: should_strip,
         })
     }
 
@@ -140,7 +156,7 @@ impl RoutingRule {
     /// ```rust,no_run
     /// # use aethecore::router::RoutingRule;
     /// # fn example() -> aethecore::error::Result<()> {
-    /// let rule = RoutingRule::new(r"^/code", "claude", None)?;
+    /// let rule = RoutingRule::new(r"^/code", "claude", None, None)?;
     ///
     /// assert!(rule.matches("/code write a function"));
     /// assert!(!rule.matches("Hello world"));
@@ -159,6 +175,43 @@ impl RoutingRule {
     /// Get the system prompt override (if any)
     pub fn system_prompt(&self) -> Option<&str> {
         self.system_prompt.as_deref()
+    }
+
+    /// Check if this rule should strip the matched prefix
+    pub fn should_strip_prefix(&self) -> bool {
+        self.strip_prefix
+    }
+
+    /// Strip the matched prefix from input if strip_prefix is enabled
+    ///
+    /// For command patterns like `^/en`, this removes the `/en` prefix from the input.
+    /// The result is trimmed of leading whitespace after stripping.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use aethecore::router::RoutingRule;
+    /// # fn example() -> aethecore::error::Result<()> {
+    /// let rule = RoutingRule::new(r"^/en", "openai", None, Some(true))?;
+    /// let input = "/en Hello world";
+    /// let stripped = rule.strip_matched_prefix(input);
+    /// assert_eq!(stripped, "Hello world");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn strip_matched_prefix(&self, input: &str) -> String {
+        if !self.strip_prefix {
+            return input.to_string();
+        }
+
+        // Find the match and remove it
+        if let Some(mat) = self.regex.find(input) {
+            // Remove the matched portion and trim leading whitespace
+            let stripped = &input[mat.end()..];
+            stripped.trim_start().to_string()
+        } else {
+            input.to_string()
+        }
     }
 }
 
@@ -271,6 +324,7 @@ impl Router {
                 &rule_config.regex,
                 &rule_config.provider,
                 rule_config.system_prompt.as_deref(),
+                rule_config.strip_prefix,
             )?;
 
             // Validate that provider exists
@@ -510,6 +564,58 @@ impl Router {
     pub fn get_provider(&self, name: &str) -> Option<&dyn AiProvider> {
         self.providers.get(name).map(|p| p.as_ref())
     }
+
+    /// Strip command prefix from input based on matched routing rule
+    ///
+    /// This method finds the first matching rule and strips its matched prefix
+    /// if the rule has `strip_prefix` enabled. For command patterns like `^/en`,
+    /// this removes the `/en` prefix from the input.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - The routing context (clipboard content + window context)
+    /// * `input` - The original user input (clipboard content only)
+    ///
+    /// # Returns
+    ///
+    /// The input with command prefix stripped if applicable, or original input
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use aethecore::router::Router;
+    /// # use aethecore::config::Config;
+    /// # fn example() -> aethecore::error::Result<()> {
+    /// # let config = Config::default();
+    /// # let router = Router::new(&config)?;
+    /// let input = "/en Hello world";
+    /// let context = format!("{}\n---\n[App] Window", input);
+    /// let stripped = router.strip_command_prefix(&context, input);
+    /// // If a rule ^/en matched, stripped would be "Hello world"
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn strip_command_prefix(&self, context: &str, input: &str) -> String {
+        // Find the first matching rule
+        for rule in &self.rules {
+            if rule.matches(context) {
+                if rule.should_strip_prefix() {
+                    let stripped = rule.strip_matched_prefix(input);
+                    info!(
+                        original_length = input.len(),
+                        stripped_length = stripped.len(),
+                        pattern = %rule.pattern,
+                        "Stripped command prefix from input"
+                    );
+                    return stripped;
+                }
+                // Rule matched but strip_prefix is false
+                return input.to_string();
+            }
+        }
+        // No rule matched, return original
+        input.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -518,7 +624,7 @@ mod tests {
 
     #[test]
     fn test_routing_rule_creation() {
-        let rule = RoutingRule::new(r"^/code", "claude", Some("You are a coder"));
+        let rule = RoutingRule::new(r"^/code", "claude", Some("You are a coder"), None);
         assert!(rule.is_ok());
 
         let rule = rule.unwrap();
@@ -528,14 +634,14 @@ mod tests {
 
     #[test]
     fn test_routing_rule_invalid_regex() {
-        let rule = RoutingRule::new(r"[invalid(regex", "claude", None);
+        let rule = RoutingRule::new(r"[invalid(regex", "claude", None, None);
         assert!(rule.is_err());
         assert!(matches!(rule, Err(AetherError::InvalidConfig { .. })));
     }
 
     #[test]
     fn test_routing_rule_matching() {
-        let rule = RoutingRule::new(r"^/code", "claude", None).unwrap();
+        let rule = RoutingRule::new(r"^/code", "claude", None, None).unwrap();
 
         assert!(rule.matches("/code write a function"));
         assert!(rule.matches("/code"));
@@ -545,7 +651,7 @@ mod tests {
 
     #[test]
     fn test_routing_rule_complex_regex() {
-        let rule = RoutingRule::new(r"^/(code|rust|python)", "claude", None).unwrap();
+        let rule = RoutingRule::new(r"^/(code|rust|python)", "claude", None, None).unwrap();
 
         assert!(rule.matches("/code something"));
         assert!(rule.matches("/rust something"));
@@ -555,7 +661,7 @@ mod tests {
 
     #[test]
     fn test_routing_rule_case_sensitive() {
-        let rule = RoutingRule::new(r"^/Code", "claude", None).unwrap();
+        let rule = RoutingRule::new(r"^/Code", "claude", None, None).unwrap();
 
         assert!(rule.matches("/Code"));
         assert!(!rule.matches("/code")); // Case sensitive by default
@@ -563,7 +669,7 @@ mod tests {
 
     #[test]
     fn test_routing_rule_catch_all() {
-        let rule = RoutingRule::new(r".*", "openai", None).unwrap();
+        let rule = RoutingRule::new(r".*", "openai", None, None).unwrap();
 
         assert!(rule.matches("anything"));
         assert!(rule.matches(""));
@@ -726,12 +832,14 @@ mod tests {
             regex: r"^/code".to_string(),
             provider: "claude".to_string(),
             system_prompt: Some("You are a coder".to_string()),
+            strip_prefix: None,
         });
 
         config.rules.push(RoutingRuleConfig {
             regex: r".*".to_string(),
             provider: "openai".to_string(),
             system_prompt: None,
+            strip_prefix: None,
         });
 
         let router = Router::new(&config).unwrap();
@@ -763,12 +871,14 @@ mod tests {
             regex: r"^/code".to_string(),
             provider: "claude".to_string(),
             system_prompt: Some("You are a coder".to_string()),
+            strip_prefix: None,
         });
 
         config.rules.push(RoutingRuleConfig {
             regex: r".*".to_string(),
             provider: "openai".to_string(),
             system_prompt: None,
+            strip_prefix: None,
         });
 
         let router = Router::new(&config).unwrap();
@@ -803,6 +913,7 @@ mod tests {
             regex: r"^/code".to_string(),
             provider: "nonexistent".to_string(),
             system_prompt: None,
+            strip_prefix: None,
         });
 
         let result = Router::new(&config);
@@ -825,6 +936,7 @@ mod tests {
             regex: r"[invalid(regex".to_string(),
             provider: "openai".to_string(),
             system_prompt: None,
+            strip_prefix: None,
         });
 
         let result = Router::new(&config);
@@ -838,6 +950,7 @@ mod tests {
             regex: r"^/code".to_string(),
             provider: "claude".to_string(),
             system_prompt: Some("You are a coder".to_string()),
+            strip_prefix: None,
         };
 
         let json = serde_json::to_string(&rule).unwrap();
@@ -873,6 +986,7 @@ mod tests {
             regex: r"^/code".to_string(),
             provider: "openai".to_string(),
             system_prompt: Some("You are a coder".to_string()),
+            strip_prefix: None,
         });
 
         let json = serde_json::to_string(&config).unwrap();

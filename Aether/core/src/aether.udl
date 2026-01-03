@@ -345,6 +345,7 @@ dictionary RoutingRuleConfig {
   string regex;
   string provider;
   string? system_prompt;
+  boolean? strip_prefix;  // Whether to strip matched prefix before sending to AI (default: true for ^/ patterns)
 };
 
 // Shortcuts configuration (Phase 6 - Task 4.2)

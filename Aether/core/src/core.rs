@@ -19,7 +19,7 @@ use crate::memory::database::{MemoryStats, VectorDatabase};
 use crate::metrics::{StageTimer, TARGET_CLIPBOARD_TO_MEMORY_MS, TARGET_MEMORY_TO_AI_MS};
 use crate::router::Router;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use tokio::runtime::Runtime;
 use tracing::{debug, error, info, warn};
 
@@ -55,8 +55,8 @@ pub struct AetherCore {
     cleanup_service: Option<Arc<CleanupService>>,
     #[allow(dead_code)]
     cleanup_task_handle: Option<tokio::task::JoinHandle<()>>,
-    // AI routing
-    router: Option<Arc<Router>>,
+    // AI routing (RwLock allows hot-reload after config changes)
+    router: Arc<RwLock<Option<Arc<Router>>>>,
     // Config hot-reload (must be kept alive for file watching)
     #[allow(dead_code)]
     config_watcher: Option<Arc<ConfigWatcher>>,
@@ -119,9 +119,10 @@ impl AetherCore {
         }
 
         // Initialize router (if providers are configured)
+        // Wrapped in RwLock to allow hot-reload after config changes
         let router = {
             let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
-            if !cfg.providers.is_empty() {
+            let router_opt = if !cfg.providers.is_empty() {
                 match Router::new(&cfg) {
                     Ok(r) => Some(Arc::new(r)),
                     Err(e) => {
@@ -131,7 +132,8 @@ impl AetherCore {
                 }
             } else {
                 None
-            }
+            };
+            Arc::new(RwLock::new(router_opt))
         };
 
         // Initialize memory database and cleanup service if enabled
@@ -188,6 +190,7 @@ impl AetherCore {
         let config_watcher = {
             let handler_clone = Arc::clone(&event_handler);
             let config_clone = Arc::clone(&config);
+            let router_clone = Arc::clone(&router);
 
             let watcher = Arc::new(ConfigWatcher::new(move |config_result| {
                 match config_result {
@@ -196,7 +199,32 @@ impl AetherCore {
 
                         // Update config
                         if let Ok(mut cfg) = config_clone.lock() {
-                            *cfg = new_config;
+                            *cfg = new_config.clone();
+                        }
+
+                        // Reinitialize router with new config
+                        let new_router = if !new_config.providers.is_empty() {
+                            match Router::new(&new_config) {
+                                Ok(r) => {
+                                    log::info!(
+                                        "Router hot-reloaded with {} rules and {} providers",
+                                        new_config.rules.len(),
+                                        new_config.providers.len()
+                                    );
+                                    Some(Arc::new(r))
+                                }
+                                Err(e) => {
+                                    log::warn!("Failed to reinitialize router during hot-reload: {}", e);
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        };
+
+                        // Update router
+                        if let Ok(mut router_guard) = router_clone.write() {
+                            *router_guard = new_router;
                         }
 
                         // Notify Swift via callback
@@ -1155,12 +1183,16 @@ impl AetherCore {
         let _pipeline_timer = StageTimer::start("total_pipeline");
 
         // Step 1: Check if router is available
-        let router = self
-            .router
-            .as_ref()
-            .ok_or(AetherError::NoProviderAvailable {
-                suggestion: Some("Configure at least one AI provider in Settings → Providers".to_string()),
-            })?;
+        // Get a clone of the Arc<Router> to avoid holding the RwLock during AI processing
+        let router = {
+            let router_guard = self.router.read().unwrap_or_else(|e| e.into_inner());
+            router_guard
+                .as_ref()
+                .map(|r| Arc::clone(r))
+                .ok_or(AetherError::NoProviderAvailable {
+                    suggestion: Some("Configure at least one AI provider in Settings → Providers".to_string()),
+                })?
+        };
 
         // Step 1.5: Build routing context string (clipboard content + window context)
         let routing_context = Self::build_routing_context(&context, &input);
@@ -1252,10 +1284,17 @@ impl AetherCore {
         let routing_time = start_time.elapsed();
         let system_prompt = system_prompt_override.unwrap_or(&base_system_prompt);
 
+        // Strip command prefix from input if rule has strip_prefix enabled
+        // This removes patterns like "/en" from "/en Hello world" before sending to AI
+        let final_input = router.strip_command_prefix(&routing_context, &augmented_input);
+        let prefix_was_stripped = final_input.len() < augmented_input.len();
+
         // Log the final system prompt being used
         info!(
             using_custom_prompt = system_prompt_override.is_some(),
             system_prompt_preview = %system_prompt.chars().take(80).collect::<String>(),
+            prefix_stripped = prefix_was_stripped,
+            final_input_preview = %final_input.chars().take(50).collect::<String>(),
             "Final system prompt for AI request"
         );
 
@@ -1277,8 +1316,9 @@ impl AetherCore {
                 use crate::providers::retry_with_backoff;
 
                 // Attempt with primary provider (with retry)
+                // Use final_input which has command prefix stripped if applicable
                 let primary_result = retry_with_backoff(
-                    || provider.process(&augmented_input, Some(system_prompt)),
+                    || provider.process(&final_input, Some(system_prompt)),
                     Some(3),
                 )
                 .await;
@@ -1309,8 +1349,9 @@ impl AetherCore {
                                 .on_provider_fallback(provider_name.clone(), fallback_name.clone());
 
                             // Try fallback provider (with retry)
+                            // Also use final_input with command prefix stripped
                             retry_with_backoff(
-                                || fallback.process(&augmented_input, Some(system_prompt)),
+                                || fallback.process(&final_input, Some(system_prompt)),
                                 Some(3),
                             )
                             .await
@@ -1481,11 +1522,56 @@ impl AetherCore {
     }
 
     /// Update routing rules
+    ///
+    /// This method updates the routing rules in config AND reinitializes the router
+    /// to ensure the new rules take effect immediately.
     pub fn update_routing_rules(&self, rules: Vec<crate::config::RoutingRuleConfig>) -> Result<()> {
         let mut config = self.lock_config();
         config.rules = rules;
         config.validate()?;
         config.save()?;
+        drop(config); // Release lock before reloading router
+
+        // Reinitialize router with updated config
+        self.reload_router()?;
+
+        log::info!("Routing rules updated and router reinitialized");
+        Ok(())
+    }
+
+    /// Reload the router from current configuration
+    ///
+    /// This method reinitializes the router using the current config.
+    /// Called after config changes to ensure routing rules take effect immediately.
+    pub fn reload_router(&self) -> Result<()> {
+        let config = self.lock_config();
+
+        let new_router = if !config.providers.is_empty() {
+            match Router::new(&config) {
+                Ok(r) => {
+                    log::info!(
+                        "Router reloaded with {} rules and {} providers",
+                        config.rules.len(),
+                        config.providers.len()
+                    );
+                    Some(Arc::new(r))
+                }
+                Err(e) => {
+                    log::warn!("Failed to reinitialize router: {}", e);
+                    return Err(e);
+                }
+            }
+        } else {
+            log::warn!("No providers configured, router will be empty");
+            None
+        };
+
+        drop(config); // Release config lock before acquiring router lock
+
+        // Update router with write lock
+        let mut router_guard = self.router.write().unwrap_or_else(|e| e.into_inner());
+        *router_guard = new_router;
+
         Ok(())
     }
 

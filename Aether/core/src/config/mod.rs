@@ -179,6 +179,7 @@ impl From<Config> for FullConfig {
 /// - A regex pattern to match against user input
 /// - The provider to use when matched
 /// - An optional system prompt override
+/// - Whether to strip the matched prefix before sending to AI
 ///
 /// # Example TOML
 ///
@@ -187,6 +188,7 @@ impl From<Config> for FullConfig {
 /// regex = "^/code"
 /// provider = "claude"
 /// system_prompt = "You are a senior software engineer."
+/// strip_prefix = true  # Remove "/code" before sending to AI
 ///
 /// [[rules]]
 /// regex = ".*"
@@ -201,6 +203,10 @@ pub struct RoutingRuleConfig {
     /// Optional system prompt to guide AI behavior
     #[serde(default)]
     pub system_prompt: Option<String>,
+    /// Whether to strip the matched prefix from input before sending to AI
+    /// Defaults to true for patterns starting with "^/" (command patterns)
+    #[serde(default)]
+    pub strip_prefix: Option<bool>,
 }
 
 /// AI Provider configuration
@@ -1340,6 +1346,7 @@ mod tests {
             regex: "[invalid(".to_string(),
             provider: "openai".to_string(),
             system_prompt: None,
+            strip_prefix: None,
         });
 
         // Should fail validation
@@ -1355,6 +1362,7 @@ mod tests {
             regex: ".*".to_string(),
             provider: "nonexistent".to_string(),
             system_prompt: None,
+            strip_prefix: None,
         });
 
         // Should fail validation
@@ -1464,6 +1472,7 @@ max_context_items = 5
                 regex: pattern.to_string(),
                 provider: "openai".to_string(),
                 system_prompt: None,
+                strip_prefix: None,
             }];
             assert!(
                 config.validate().is_ok(),
@@ -1495,6 +1504,7 @@ max_context_items = 5
                 regex: pattern.to_string(),
                 provider: "openai".to_string(),
                 system_prompt: None,
+                strip_prefix: None,
             }];
             assert!(
                 config.validate().is_err(),
@@ -1701,6 +1711,7 @@ max_context_items = 5
             regex: "^/code".to_string(),
             provider: "openai".to_string(),
             system_prompt: Some("You are a coding assistant.".to_string()),
+            strip_prefix: None,
         });
 
         // Serialize to TOML

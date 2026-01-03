@@ -15,6 +15,7 @@ extension RoutingRuleConfig: Codable {
         case regex
         case provider
         case systemPrompt = "system_prompt"
+        case stripPrefix = "strip_prefix"
     }
 
     public init(from decoder: Decoder) throws {
@@ -22,8 +23,9 @@ extension RoutingRuleConfig: Codable {
         let regex = try container.decode(String.self, forKey: .regex)
         let provider = try container.decode(String.self, forKey: .provider)
         let systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
+        let stripPrefix = try container.decodeIfPresent(Bool.self, forKey: .stripPrefix)
 
-        self.init(regex: regex, provider: provider, systemPrompt: systemPrompt)
+        self.init(regex: regex, provider: provider, systemPrompt: systemPrompt, stripPrefix: stripPrefix)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -32,6 +34,9 @@ extension RoutingRuleConfig: Codable {
         try container.encode(provider, forKey: .provider)
         if let systemPrompt = systemPrompt {
             try container.encode(systemPrompt, forKey: .systemPrompt)
+        }
+        if let stripPrefix = stripPrefix {
+            try container.encode(stripPrefix, forKey: .stripPrefix)
         }
     }
 }
