@@ -313,8 +313,8 @@ struct RuleEditorView: View {
                     // Replace existing rule
                     updatedRules[index] = newRule
                 } else {
-                    // Add new rule
-                    updatedRules.append(newRule)
+                    // Add new rule at the beginning (highest priority)
+                    updatedRules.insert(newRule, at: 0)
                 }
 
                 // Save via Rust core (will validate and persist)
