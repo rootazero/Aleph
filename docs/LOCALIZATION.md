@@ -319,13 +319,32 @@ open -a Aether --args -AppleLanguages '(ja)'
 
 ## Language Selector Feature
 
-Aether now includes a **Language Selector** in General Settings (added in 2026-01-03), allowing users to override the system language preference.
+Aether now includes a **Language Selector** in General Settings (added in 2026-01-03), with intelligent language detection and fallback logic.
+
+### Language Selection Logic
+
+Aether uses a three-tier approach to determine the UI language:
+
+1. **User Preference** (Highest Priority)
+   - If user manually sets language in Settings → Language is saved to config
+   - This overrides system language until user selects "System Default"
+
+2. **System Language Detection** (Second Priority)
+   - On first launch or when "System Default" is selected
+   - Detects macOS system language from `Locale.preferredLanguages`
+   - Maps system language to supported language:
+     - **Chinese variants** (`zh-Hans`, `zh-Hant`, `zh`, etc.) → `zh_CN`
+     - **All other languages** (including unsupported) → `en` (English)
+
+3. **Fallback to English** (Lowest Priority)
+   - If any error occurs during detection → Falls back to English
+   - Ensures app always has a valid language
 
 ### How It Works
 
 1. **Location**: Settings → General → Language
 2. **Options**:
-   - "System Default" - Follows macOS system language (default)
+   - "System Default" - Auto-detects system language (with fallback to English)
    - "English" - Forces English UI
    - "简体中文" - Forces Simplified Chinese UI
 
@@ -340,12 +359,23 @@ Aether now includes a **Language Selector** in General Settings (added in 2026-0
    - Alert appears: "Language will change after restarting Aether. Restart now?"
    - User chooses "Restart Now" (immediate) or "Later" (next launch)
 
+### First Launch Experience
+
+On first installation:
+- **Chinese macOS users** → See Chinese UI automatically
+- **All other users** → See English UI automatically
+- Users can manually change language anytime in Settings
+
 ### Implementation Details
 
 - **Config Field**: `general.language: Option<String>` in Rust core
 - **Swift Override**: `UserDefaults.standard.set([language], forKey: "AppleLanguages")`
 - **Applied On**: App launch in `AppDelegate.applicationDidFinishLaunching()`
-- **Validation**: Only accepts `"en"` and `"zh_CN"` (logs warning for invalid codes)
+- **System Detection**: Uses `Locale.preferredLanguages.first` to detect system language
+- **Language Mapping**:
+  - `zh-Hans`, `zh-Hant`, `zh` → `zh_CN`
+  - All other languages → `en`
+- **Validation**: Rust core logs warning for invalid codes (accepts `"en"` and `"zh_CN"`)
 
 ### Testing Language Changes
 

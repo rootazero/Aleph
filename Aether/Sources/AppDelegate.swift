@@ -1480,50 +1480,90 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // MARK: - Language Preference
 
     /// Apply language preference from config on app launch
-    /// This reads the saved language setting and overrides macOS system language if needed
+    ///
+    /// Language Selection Logic:
+    /// 1. If user has manually set language in config → Use user's choice
+    /// 2. If no config exists or no language set → Use system language
+    /// 3. If system language not supported → Fallback to English
+    ///
+    /// Supported languages: en (English), zh_CN (Simplified Chinese)
     private func applyLanguagePreference() {
         do {
             // Try to load config from default path
             let configPath = NSHomeDirectory() + "/.config/aether/config.toml"
             let fileManager = FileManager.default
 
-            guard fileManager.fileExists(atPath: configPath) else {
-                // No config file yet, use system default
-                print("[AppDelegate] No config file found, using system language")
-                return
+            var configuredLanguage: String? = nil
+
+            // Check if config file exists and contains language preference
+            if fileManager.fileExists(atPath: configPath) {
+                let configContent = try String(contentsOfFile: configPath, encoding: .utf8)
+
+                // Simple regex to extract language field from [general] section
+                // Format: language = "en" or language = "zh_CN"
+                let pattern = #"language\s*=\s*"([^"]+)""#
+                if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+                   let match = regex.firstMatch(in: configContent, options: [], range: NSRange(configContent.startIndex..., in: configContent)),
+                   let languageRange = Range(match.range(at: 1), in: configContent) {
+                    configuredLanguage = String(configContent[languageRange])
+                    print("[AppDelegate] Found user-configured language: \(configuredLanguage!)")
+                }
             }
 
-            // Read config file to get language preference
-            // Note: We can't use AetherCore here because it hasn't been initialized yet
-            // So we read the TOML file directly
-            let configContent = try String(contentsOfFile: configPath, encoding: .utf8)
+            // Determine which language to use
+            let languageToUse: String
 
-            // Simple regex to extract language field from [general] section
-            // Format: language = "en" or language = "zh-Hans"
-            let pattern = #"language\s*=\s*"([^"]+)""#
-            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
-               let match = regex.firstMatch(in: configContent, options: [], range: NSRange(configContent.startIndex..., in: configContent)),
-               let languageRange = Range(match.range(at: 1), in: configContent) {
-                let language = String(configContent[languageRange])
-                print("[AppDelegate] Found language preference: \(language)")
-
-                // Apply language override
-                UserDefaults.standard.set([language], forKey: "AppleLanguages")
-                UserDefaults.standard.synchronize()
-
-                print("[AppDelegate] Applied language override: \(language)")
+            if let userLanguage = configuredLanguage {
+                // User has manually set a language preference
+                languageToUse = userLanguage
+                print("[AppDelegate] Using user-configured language: \(languageToUse)")
             } else {
-                // No language field in config, remove any existing override
-                UserDefaults.standard.removeObject(forKey: "AppleLanguages")
-                UserDefaults.standard.synchronize()
-                print("[AppDelegate] No language preference found, using system default")
+                // No user preference, detect system language
+                let systemLanguage = detectSystemLanguage()
+                languageToUse = systemLanguage
+                print("[AppDelegate] No user preference, using system language: \(languageToUse)")
             }
-        } catch {
-            print("[AppDelegate] Failed to apply language preference: \(error)")
-            // Fall back to system language on error
-            UserDefaults.standard.removeObject(forKey: "AppleLanguages")
+
+            // Apply the selected language
+            UserDefaults.standard.set([languageToUse], forKey: "AppleLanguages")
             UserDefaults.standard.synchronize()
+
+            print("[AppDelegate] ✅ Applied language: \(languageToUse)")
+
+        } catch {
+            print("[AppDelegate] ⚠️ Failed to apply language preference: \(error)")
+            // Fall back to English on error
+            UserDefaults.standard.set(["en"], forKey: "AppleLanguages")
+            UserDefaults.standard.synchronize()
+            print("[AppDelegate] Fallback to English due to error")
         }
+    }
+
+    /// Detect system language and return supported language code
+    ///
+    /// Returns:
+    /// - "zh_CN" if system language is any Chinese variant (zh-Hans, zh-Hant, zh, etc.)
+    /// - "en" for all other languages (including unsupported ones)
+    private func detectSystemLanguage() -> String {
+        let preferredLanguages = Locale.preferredLanguages
+
+        guard let primaryLanguage = preferredLanguages.first else {
+            print("[AppDelegate] No preferred language found, defaulting to English")
+            return "en"
+        }
+
+        print("[AppDelegate] System primary language: \(primaryLanguage)")
+
+        // Check if system language is Chinese (any variant)
+        // Possible values: zh-Hans, zh-Hant, zh-Hans-CN, zh-Hant-TW, zh, etc.
+        if primaryLanguage.hasPrefix("zh") {
+            print("[AppDelegate] Detected Chinese system language, using zh_CN")
+            return "zh_CN"
+        }
+
+        // For all other languages (including unsupported ones), use English
+        print("[AppDelegate] System language '\(primaryLanguage)' not specifically supported, using English")
+        return "en"
     }
 
     // MARK: - Application Lifecycle
