@@ -44,11 +44,6 @@ struct RuleEditorView: View {
         self.core = core
         self.providers = providers
         self.editingIndex = nil
-
-        // Set default provider if available
-        if let firstProvider = providers.first {
-            _selectedProvider = State(initialValue: firstProvider.name)
-        }
     }
 
     // Initialize for editing existing rule
@@ -57,12 +52,6 @@ struct RuleEditorView: View {
         self.core = core
         self.providers = providers
         self.editingIndex = index
-
-        // Load existing rule data
-        let rule = rules.wrappedValue[index]
-        _pattern = State(initialValue: rule.regex)
-        _selectedProvider = State(initialValue: rule.provider)
-        _systemPrompt = State(initialValue: rule.systemPrompt ?? "")
     }
 
     var body: some View {
@@ -244,8 +233,37 @@ struct RuleEditorView: View {
         }
         .frame(width: 600, height: 650)
         .onAppear {
-            validatePattern()
+            loadFormData()
         }
+    }
+
+    // MARK: - Data Loading
+
+    /// Load form data on appear to ensure correct state
+    private func loadFormData() {
+        if let index = editingIndex, index < rules.count {
+            // Load existing rule data
+            let rule = rules[index]
+            pattern = rule.regex
+            selectedProvider = rule.provider
+            systemPrompt = rule.systemPrompt ?? ""
+        } else {
+            // New rule: set default provider
+            pattern = ""
+            systemPrompt = ""
+            if let firstProvider = providers.first {
+                selectedProvider = firstProvider.name
+            } else {
+                selectedProvider = ""
+            }
+        }
+        // Reset test state
+        testInput = ""
+        testResult = nil
+        errorMessage = nil
+        isSaving = false
+        // Validate pattern after loading
+        validatePattern()
     }
 
     // MARK: - Validation
