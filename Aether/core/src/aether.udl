@@ -130,6 +130,10 @@ interface AetherCore {
   [Throws=AetherException]
   void update_memory_config(MemoryConfig config);
 
+  // Update general configuration (language preference, etc.)
+  [Throws=AetherException]
+  void update_general_config(GeneralConfig config);
+
   // Set current context (called from Swift when hotkey pressed)
   void set_current_context(CapturedContext context);
 
@@ -286,6 +290,7 @@ dictionary GeneralConfig {
   string? default_provider;
   u32 log_retention_days;
   boolean enable_performance_logging;
+  string? language;
 };
 
 dictionary MemoryConfig {

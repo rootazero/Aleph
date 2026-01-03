@@ -11,7 +11,7 @@
 /// - AI routing and provider calls
 /// - Memory retrieval and storage
 /// - Configuration management
-use crate::config::{Config, ConfigWatcher, MemoryConfig, TestConnectionResult};
+use crate::config::{Config, ConfigWatcher, GeneralConfig, MemoryConfig, TestConnectionResult};
 use crate::error::{AetherError, AetherException, Result};
 use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 use crate::memory::cleanup::CleanupService;
@@ -642,6 +642,28 @@ impl AetherCore {
         }
 
         // TODO: Persist config to file in Phase 4
+        Ok(())
+    }
+
+    /// Update general configuration (language preference, etc.)
+    ///
+    /// This method updates the general configuration section and persists to disk.
+    /// Used for settings like language preference that don't require service restart.
+    ///
+    /// # Arguments
+    /// * `new_config` - New general configuration
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error
+    pub fn update_general_config(&self, new_config: GeneralConfig) -> Result<()> {
+        let mut config = self.lock_config();
+        config.general = new_config;
+
+        // Persist config to disk
+        config
+            .save()
+            .map_err(|e| AetherError::config(format!("Failed to save general config: {}", e)))?;
+
         Ok(())
     }
 

@@ -32,6 +32,13 @@
 "settings.general.title" = "通用";
 "settings.general.sound" = "声音";
 "settings.general.sound_effects" = "声音效果";
+"settings.general.language" = "语言";
+"settings.general.language_preference" = "首选语言";
+"settings.general.language_system_default" = "系统默认";
+"settings.general.language_restart_title" = "需要重启";
+"settings.general.language_restart_message" = "语言将在重启 Aether 后生效。是否立即重启？";
+"settings.general.language_restart_now" = "立即重启";
+"settings.general.language_restart_later" = "稍后";
 "settings.general.updates" = "更新";
 "settings.general.check_updates" = "检查更新";
 "settings.general.check_updates_help" = "检查 Aether 更新";

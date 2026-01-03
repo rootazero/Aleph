@@ -600,6 +600,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func updateBehavior(behavior: BehaviorConfig) throws 
     
+    func updateGeneralConfig(config: GeneralConfig) throws 
+    
     func updateMemoryConfig(config: MemoryConfig) throws 
     
     func updateProvider(name: String, provider: ProviderConfig) throws 
@@ -868,6 +870,13 @@ open func testTypedError(errorType: ErrorType, message: String) {try! rustCall()
 open func updateBehavior(behavior: BehaviorConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_update_behavior(self.uniffiClonePointer(),
         FfiConverterTypeBehaviorConfig.lower(behavior),$0
+    )
+}
+}
+    
+open func updateGeneralConfig(config: GeneralConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_update_general_config(self.uniffiClonePointer(),
+        FfiConverterTypeGeneralConfig.lower(config),$0
     )
 }
 }
@@ -1288,13 +1297,15 @@ public struct GeneralConfig {
     public var defaultProvider: String?
     public var logRetentionDays: UInt32
     public var enablePerformanceLogging: Bool
+    public var language: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultProvider: String?, logRetentionDays: UInt32, enablePerformanceLogging: Bool) {
+    public init(defaultProvider: String?, logRetentionDays: UInt32, enablePerformanceLogging: Bool, language: String?) {
         self.defaultProvider = defaultProvider
         self.logRetentionDays = logRetentionDays
         self.enablePerformanceLogging = enablePerformanceLogging
+        self.language = language
     }
 }
 
@@ -1311,6 +1322,9 @@ extension GeneralConfig: Equatable, Hashable {
         if lhs.enablePerformanceLogging != rhs.enablePerformanceLogging {
             return false
         }
+        if lhs.language != rhs.language {
+            return false
+        }
         return true
     }
 
@@ -1318,6 +1332,7 @@ extension GeneralConfig: Equatable, Hashable {
         hasher.combine(defaultProvider)
         hasher.combine(logRetentionDays)
         hasher.combine(enablePerformanceLogging)
+        hasher.combine(language)
     }
 }
 
@@ -1331,7 +1346,8 @@ public struct FfiConverterTypeGeneralConfig: FfiConverterRustBuffer {
             try GeneralConfig(
                 defaultProvider: FfiConverterOptionString.read(from: &buf), 
                 logRetentionDays: FfiConverterUInt32.read(from: &buf), 
-                enablePerformanceLogging: FfiConverterBool.read(from: &buf)
+                enablePerformanceLogging: FfiConverterBool.read(from: &buf), 
+                language: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -1339,6 +1355,7 @@ public struct FfiConverterTypeGeneralConfig: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.defaultProvider, into: &buf)
         FfiConverterUInt32.write(value.logRetentionDays, into: &buf)
         FfiConverterBool.write(value.enablePerformanceLogging, into: &buf)
+        FfiConverterOptionString.write(value.language, into: &buf)
     }
 }
 
@@ -3448,6 +3465,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_behavior() != 46183) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_update_general_config() != 11598) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_memory_config() != 52192) {

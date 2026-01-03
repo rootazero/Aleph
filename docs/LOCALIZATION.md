@@ -317,8 +317,53 @@ open -a Aether --args -AppleLanguages '(ja)'
 
 ---
 
+## Language Selector Feature
+
+Aether now includes a **Language Selector** in General Settings (added in 2026-01-03), allowing users to override the system language preference.
+
+### How It Works
+
+1. **Location**: Settings → General → Language
+2. **Options**:
+   - "System Default" - Follows macOS system language (default)
+   - "English" - Forces English UI
+   - "简体中文" - Forces Simplified Chinese UI
+
+3. **Behavior**:
+   - Language preference is saved to `~/.config/aether/config.toml` under `[general]` section
+   - Format: `language = "en"` or `language = "zh-Hans"`
+   - If "System Default" is selected, the language field is omitted from config
+   - Language changes require app restart to take effect (macOS localization caching)
+
+4. **User Flow**:
+   - Select language from dropdown
+   - Alert appears: "Language will change after restarting Aether. Restart now?"
+   - User chooses "Restart Now" (immediate) or "Later" (next launch)
+
+### Implementation Details
+
+- **Config Field**: `general.language: Option<String>` in Rust core
+- **Swift Override**: `UserDefaults.standard.set([language], forKey: "AppleLanguages")`
+- **Applied On**: App launch in `AppDelegate.applicationDidFinishLaunching()`
+- **Validation**: Only accepts `"en"` and `"zh-Hans"` (logs warning for invalid codes)
+
+### Testing Language Changes
+
+1. **Via UI**: Settings → General → Language → Select language → Restart
+2. **Via Config**: Edit `~/.config/aether/config.toml`:
+   ```toml
+   [general]
+   language = "zh-Hans"  # or "en"
+   ```
+3. **Via Command Line** (deprecated, use UI instead):
+   ```bash
+   open -a Aether --args -AppleLanguages '(zh-Hans)'
+   ```
+
+---
+
 **Maintained by**: Aether Development Team
-**Last Updated**: 2025-12-29
-**Status**: ✅ Active (English + Simplified Chinese)
-**Translation Keys**: 249 keys (100% coverage)
+**Last Updated**: 2026-01-03
+**Status**: ✅ Active (English + Simplified Chinese) + Language Selector
+**Translation Keys**: 256 keys (100% coverage)
 **Translation Files**: Localizable.strings + InfoPlist.strings

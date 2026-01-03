@@ -33,6 +33,13 @@
 "settings.general.title" = "General";
 "settings.general.sound" = "Sound";
 "settings.general.sound_effects" = "Sound Effects";
+"settings.general.language" = "Language";
+"settings.general.language_preference" = "Preferred Language";
+"settings.general.language_system_default" = "System Default";
+"settings.general.language_restart_title" = "Restart Required";
+"settings.general.language_restart_message" = "Language will change after restarting Aether. Restart now?";
+"settings.general.language_restart_now" = "Restart Now";
+"settings.general.language_restart_later" = "Later";
 "settings.general.updates" = "Updates";
 "settings.general.check_updates" = "Check for Updates";
 "settings.general.check_updates_help" = "Check for Aether updates";

@@ -36,6 +36,7 @@ struct GeneralSettingsView: View {
 
     @State private var soundEnabled = false
     @State private var showingLogViewer = false
+    @State private var selectedLanguage: String? = nil
 
     private var appVersion: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
@@ -52,6 +53,17 @@ struct GeneralSettingsView: View {
                             .onChange(of: soundEnabled) { _, newValue in
                                 showComingSoonAlert(feature: NSLocalizedString("settings.general.sound_effects", comment: "Sound effects feature"))
                             }
+                    }
+
+                    Section(header: Text(LocalizedStringKey("settings.general.language"))) {
+                        Picker(LocalizedStringKey("settings.general.language_preference"), selection: $selectedLanguage) {
+                            Text(LocalizedStringKey("settings.general.language_system_default")).tag(nil as String?)
+                            Text("English").tag("en" as String?)
+                            Text("简体中文").tag("zh-Hans" as String?)
+                        }
+                        .onChange(of: selectedLanguage) { oldValue, newValue in
+                            saveLanguagePreference(newValue)
+                        }
                     }
 
                     Section(header: Text(LocalizedStringKey("settings.general.updates"))) {
@@ -98,6 +110,9 @@ struct GeneralSettingsView: View {
                 onSave: nil,
                 onCancel: nil
             )
+
+            // Load current language setting
+            loadLanguagePreference()
         }
     }
 
@@ -133,6 +148,57 @@ struct GeneralSettingsView: View {
             if let url = URL(string: "https://github.com/yourusername/aether/releases") {
                 NSWorkspace.shared.open(url)
             }
+        }
+    }
+
+    private func loadLanguagePreference() {
+        guard let core = core else { return }
+        do {
+            let config = try core.loadConfig()
+            selectedLanguage = config.general.language
+        } catch {
+            print("Failed to load language preference: \(error)")
+        }
+    }
+
+    private func saveLanguagePreference(_ language: String?) {
+        guard let core = core else { return }
+
+        do {
+            // Load current config
+            var config = try core.loadConfig()
+
+            // Update language field
+            config.general.language = language
+
+            // Save config using update_general_config
+            try core.updateGeneralConfig(config: config.general)
+
+            // Show restart alert
+            showRestartAlert()
+        } catch {
+            print("Failed to save language preference: \(error)")
+            let alert = NSAlert()
+            alert.messageText = NSLocalizedString("common.error", comment: "")
+            alert.informativeText = "Failed to save language preference: \(error.localizedDescription)"
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
+            alert.runModal()
+        }
+    }
+
+    private func showRestartAlert() {
+        let alert = NSAlert()
+        alert.messageText = NSLocalizedString("settings.general.language_restart_title", comment: "Restart required")
+        alert.informativeText = NSLocalizedString("settings.general.language_restart_message", comment: "Language will change after restart")
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: NSLocalizedString("settings.general.language_restart_now", comment: "Restart Now"))
+        alert.addButton(withTitle: NSLocalizedString("settings.general.language_restart_later", comment: "Later"))
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            // User chose "Restart Now"
+            NSApp.terminate(nil)
         }
     }
 }

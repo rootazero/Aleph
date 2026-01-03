@@ -65,6 +65,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Hide from Dock (menu bar only)
         NSApp.setActivationPolicy(.accessory)
 
+        // Apply language preference before UI initialization
+        applyLanguagePreference()
+
         // Set up menu bar
         setupMenuBar()
 
@@ -1471,6 +1474,55 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
         } else {
             print("[Aether] Accessibility permission already granted")
+        }
+    }
+
+    // MARK: - Language Preference
+
+    /// Apply language preference from config on app launch
+    /// This reads the saved language setting and overrides macOS system language if needed
+    private func applyLanguagePreference() {
+        do {
+            // Try to load config from default path
+            let configPath = NSHomeDirectory() + "/.config/aether/config.toml"
+            let fileManager = FileManager.default
+
+            guard fileManager.fileExists(atPath: configPath) else {
+                // No config file yet, use system default
+                print("[AppDelegate] No config file found, using system language")
+                return
+            }
+
+            // Read config file to get language preference
+            // Note: We can't use AetherCore here because it hasn't been initialized yet
+            // So we read the TOML file directly
+            let configContent = try String(contentsOfFile: configPath, encoding: .utf8)
+
+            // Simple regex to extract language field from [general] section
+            // Format: language = "en" or language = "zh-Hans"
+            let pattern = #"language\s*=\s*"([^"]+)""#
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+               let match = regex.firstMatch(in: configContent, options: [], range: NSRange(configContent.startIndex..., in: configContent)),
+               let languageRange = Range(match.range(at: 1), in: configContent) {
+                let language = String(configContent[languageRange])
+                print("[AppDelegate] Found language preference: \(language)")
+
+                // Apply language override
+                UserDefaults.standard.set([language], forKey: "AppleLanguages")
+                UserDefaults.standard.synchronize()
+
+                print("[AppDelegate] Applied language override: \(language)")
+            } else {
+                // No language field in config, remove any existing override
+                UserDefaults.standard.removeObject(forKey: "AppleLanguages")
+                UserDefaults.standard.synchronize()
+                print("[AppDelegate] No language preference found, using system default")
+            }
+        } catch {
+            print("[AppDelegate] Failed to apply language preference: \(error)")
+            // Fall back to system language on error
+            UserDefaults.standard.removeObject(forKey: "AppleLanguages")
+            UserDefaults.standard.synchronize()
         }
     }
 

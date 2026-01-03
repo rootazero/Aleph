@@ -55,6 +55,9 @@ pub struct GeneralConfig {
     /// Enable performance logging (default: false)
     #[serde(default)]
     pub enable_performance_logging: bool,
+    /// Preferred language override (e.g., 'en', 'zh-Hans'). If None, use system language.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 fn default_log_retention_days() -> u32 {
@@ -774,6 +777,24 @@ impl Config {
             similarity_threshold = self.memory.similarity_threshold,
             "Memory config validated"
         );
+
+        // Validate language preference
+        if let Some(ref language) = self.general.language {
+            // List of supported language codes
+            let supported_languages = vec!["en", "zh-Hans"];
+
+            if !supported_languages.contains(&language.as_str()) {
+                tracing::warn!(
+                    language = %language,
+                    supported = ?supported_languages,
+                    "Invalid language code '{}', falling back to system language. Supported languages: {:?}",
+                    language,
+                    supported_languages
+                );
+            } else {
+                debug!(language = %language, "Language preference validated");
+            }
+        }
 
         info!(
             providers_count = self.providers.len(),

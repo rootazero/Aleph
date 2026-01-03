@@ -551,6 +551,11 @@ void uniffi_aethecore_fn_method_aethercore_test_typed_error(void*_Nonnull ptr, R
 void uniffi_aethecore_fn_method_aethercore_update_behavior(void*_Nonnull ptr, RustBuffer behavior, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_GENERAL_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_GENERAL_CONFIG
+void uniffi_aethecore_fn_method_aethercore_update_general_config(void*_Nonnull ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_MEMORY_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_MEMORY_CONFIG
 void uniffi_aethecore_fn_method_aethercore_update_memory_config(void*_Nonnull ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
@@ -1071,6 +1076,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_test_typed_error(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_BEHAVIOR
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_BEHAVIOR
 uint16_t uniffi_aethecore_checksum_method_aethercore_update_behavior(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_GENERAL_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_GENERAL_CONFIG
+uint16_t uniffi_aethecore_checksum_method_aethercore_update_general_config(void
     
 );
 #endif
