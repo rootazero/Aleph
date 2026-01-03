@@ -292,23 +292,30 @@ impl Router {
         })
     }
 
-    /// Route input to the appropriate AI provider
+    /// Route context to the appropriate AI provider
     ///
     /// # Arguments
     ///
-    /// * `input` - The user input text to route
+    /// * `context` - The full context string (window context + clipboard content)
+    ///   Format: `[AppName] WindowTitle\nClipboardContent`
     ///
     /// # Returns
     ///
     /// * `Some((provider, system_prompt))` - Matched provider and optional system prompt
     /// * `None` - No provider available (no match and no default)
     ///
-    /// # Routing Logic
+    /// # Routing Logic (First-Match-Stops)
     ///
-    /// 1. Check each rule in order
-    /// 2. Return first matching rule's provider + system prompt
-    /// 3. If no match, return default provider (if configured)
+    /// 1. Iterate through rules in order (first match wins)
+    /// 2. Return first matching rule's provider + system prompt override
+    /// 3. If no match, return default provider with no system prompt override
     /// 4. If no default, return None
+    ///
+    /// # System Prompt Priority
+    ///
+    /// 1. Rule's `system_prompt` (highest priority) - returned as `Some(&str)`
+    /// 2. Provider's default prompt (if rule has no prompt) - returned as `None`, provider uses its default
+    /// 3. No prompt at all - returned as `None`
     ///
     /// # Example
     ///
@@ -319,32 +326,37 @@ impl Router {
     /// # let config = Config::default();
     /// let router = Router::new(&config)?;
     ///
-    /// // Route with rule match
-    /// if let Some((provider, sys_prompt)) = router.route("/code write a function") {
+    /// // Route with window context
+    /// let context = "[VSCode] main.rs\nfn main() {}";
+    /// if let Some((provider, sys_prompt)) = router.route(context) {
     ///     println!("Matched provider: {}", provider.name());
+    ///     println!("Custom system prompt: {:?}", sys_prompt);
     /// }
     ///
     /// // Route with default fallback
-    /// if let Some((provider, _)) = router.route("Hello") {
+    /// let context = "[Notes] Document.txt\nHello world";
+    /// if let Some((provider, _)) = router.route(context) {
     ///     println!("Using default provider: {}", provider.name());
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    pub fn route(&self, input: &str) -> Option<(&dyn AiProvider, Option<&str>)> {
-        debug!(input_length = input.len(), "Starting route decision");
+    pub fn route(&self, context: &str) -> Option<(&dyn AiProvider, Option<&str>)> {
+        debug!(context_length = context.len(), "Starting route decision with full context");
 
-        // Find first matching rule
+        // Iterate through rules in order (first match wins, subsequent rules ignored)
         for (index, rule) in self.rules.iter().enumerate() {
-            if rule.matches(input) {
+            if rule.matches(context) {
                 // Get provider by name
                 if let Some(provider) = self.providers.get(rule.provider_name()) {
                     info!(
                         rule_index = index,
                         provider = %rule.provider_name(),
-                        has_system_prompt = rule.system_prompt().is_some(),
-                        "Rule matched, routing to provider"
+                        has_custom_prompt = rule.system_prompt().is_some(),
+                        "Rule matched (first-match-stops), routing to provider"
                     );
+                    // Return provider with rule's system prompt (if specified)
+                    // This overrides the provider's default system prompt
                     return Some((provider.as_ref(), rule.system_prompt()));
                 }
                 // Rule matched but provider not found (should not happen due to validation)
@@ -355,13 +367,13 @@ impl Router {
             }
         }
 
-        // No rule matched, fall back to default provider
+        // No rule matched, fall back to default provider (if configured)
         debug!("No rule matched, attempting default provider fallback");
         let result = self
             .default_provider
             .as_ref()
             .and_then(|name| self.providers.get(name))
-            .map(|provider| (provider.as_ref(), None));
+            .map(|provider| (provider.as_ref(), None)); // None = use provider's default prompt
 
         if let Some((provider, _)) = &result {
             info!(
@@ -395,14 +407,15 @@ impl Router {
         self.default_provider.as_deref()
     }
 
-    /// Route input and provide fallback provider if requested provider fails
+    /// Route context and provide fallback provider if requested provider fails
     ///
     /// This method returns both the primary provider and a fallback provider
     /// (if different from primary). The fallback is the default provider.
     ///
     /// # Arguments
     ///
-    /// * `input` - The user input text to route
+    /// * `context` - The full context string (window context + clipboard content)
+    ///   Format: `[AppName] WindowTitle\nClipboardContent`
     ///
     /// # Returns
     ///
@@ -419,7 +432,8 @@ impl Router {
     /// # let config = Config::default();
     /// let router = Router::new(&config)?;
     ///
-    /// if let Some(((provider, sys_prompt), fallback)) = router.route_with_fallback("/code test") {
+    /// let context = "[VSCode] main.rs\nfn main() {}";
+    /// if let Some(((provider, sys_prompt), fallback)) = router.route_with_fallback(context) {
     ///     // Try primary provider
     ///     match try_process(provider, "input", sys_prompt) {
     ///         Ok(response) => println!("Success: {}", response),
@@ -438,10 +452,10 @@ impl Router {
     /// ```
     pub fn route_with_fallback(
         &self,
-        input: &str,
+        context: &str,
     ) -> Option<ProviderWithFallback<'_>> {
         // Get primary routing result
-        let (primary_provider, system_prompt) = self.route(input)?;
+        let (primary_provider, system_prompt) = self.route(context)?;
         let primary_name = primary_provider.name();
 
         // Determine fallback provider

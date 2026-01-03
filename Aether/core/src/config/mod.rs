@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 // Submodules
 pub mod watcher;
@@ -560,7 +560,25 @@ impl Config {
             "Starting config validation"
         );
 
-        // Validate default provider exists
+        // Warn if no default provider is configured
+        if self.general.default_provider.is_none() {
+            warn!(
+                "No default_provider configured. \
+                 Requests will fail if no routing rule matches. \
+                 Recommendation: Set general.default_provider in config"
+            );
+        }
+
+        // Warn if no routing rules are configured
+        if self.rules.is_empty() {
+            warn!(
+                "No routing rules configured. \
+                 All requests will use default_provider (if set). \
+                 Recommendation: Add routing rules to enable context-aware routing"
+            );
+        }
+
+        // Validate default provider exists (if configured)
         if let Some(ref default_provider) = self.general.default_provider {
             if !self.providers.contains_key(default_provider) {
                 error!(default_provider = %default_provider, "Default provider not found");
@@ -1032,6 +1050,146 @@ impl Config {
             .collect();
         providers.sort();
         providers
+    }
+
+    // ROUTING RULE MANAGEMENT METHODS
+
+    /// Add a new routing rule at the top of the list (highest priority)
+    ///
+    /// New rules are inserted at index 0 to give them the highest priority
+    /// in the first-match-stops routing algorithm.
+    ///
+    /// # Arguments
+    /// * `rule` - The routing rule configuration to add
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use aethecore::config::{Config, RoutingRuleConfig};
+    /// let mut config = Config::default();
+    /// config.add_rule_at_top(RoutingRuleConfig {
+    ///     regex: r"^\[VSCode\]".to_string(),
+    ///     provider: "claude".to_string(),
+    ///     system_prompt: Some("You are a coding assistant.".to_string()),
+    /// });
+    /// // This rule now has highest priority (index 0)
+    /// ```
+    pub fn add_rule_at_top(&mut self, rule: RoutingRuleConfig) {
+        self.rules.insert(0, rule);
+        debug!(rules_count = self.rules.len(), "Added rule at top (highest priority)");
+    }
+
+    /// Remove a routing rule by index
+    ///
+    /// # Arguments
+    /// * `index` - Index of the rule to remove (0-based)
+    ///
+    /// # Returns
+    /// * `Ok(())` - Rule removed successfully
+    /// * `Err(AetherError::InvalidConfig)` - Index out of bounds
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use aethecore::config::Config;
+    /// # fn example() -> aethecore::error::Result<()> {
+    /// let mut config = Config::default();
+    /// // Assuming rule exists at index 0
+    /// config.remove_rule(0)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn remove_rule(&mut self, index: usize) -> Result<()> {
+        if index < self.rules.len() {
+            let removed = self.rules.remove(index);
+            debug!(
+                index = index,
+                provider = %removed.provider,
+                rules_count = self.rules.len(),
+                "Removed routing rule"
+            );
+            Ok(())
+        } else {
+            error!(index = index, max_index = self.rules.len().saturating_sub(1), "Rule index out of bounds");
+            Err(AetherError::invalid_config(format!(
+                "Rule index {} out of bounds (valid range: 0-{})",
+                index,
+                self.rules.len().saturating_sub(1)
+            )))
+        }
+    }
+
+    /// Move a routing rule from one position to another
+    ///
+    /// This allows reordering rules to change their priority.
+    ///
+    /// # Arguments
+    /// * `from` - Current index of the rule
+    /// * `to` - Target index for the rule
+    ///
+    /// # Returns
+    /// * `Ok(())` - Rule moved successfully
+    /// * `Err(AetherError::InvalidConfig)` - Invalid indices
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use aethecore::config::Config;
+    /// # fn example() -> aethecore::error::Result<()> {
+    /// let mut config = Config::default();
+    /// // Move rule from index 2 to index 0 (highest priority)
+    /// config.move_rule(2, 0)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn move_rule(&mut self, from: usize, to: usize) -> Result<()> {
+        if from >= self.rules.len() {
+            error!(from_index = from, max_index = self.rules.len().saturating_sub(1), "Source rule index out of bounds");
+            return Err(AetherError::invalid_config(format!(
+                "Source index {} out of bounds (valid range: 0-{})",
+                from,
+                self.rules.len().saturating_sub(1)
+            )));
+        }
+        if to >= self.rules.len() {
+            error!(to_index = to, max_index = self.rules.len().saturating_sub(1), "Target rule index out of bounds");
+            return Err(AetherError::invalid_config(format!(
+                "Target index {} out of bounds (valid range: 0-{})",
+                to,
+                self.rules.len().saturating_sub(1)
+            )));
+        }
+
+        let rule = self.rules.remove(from);
+        self.rules.insert(to, rule);
+        debug!(from = from, to = to, "Moved routing rule");
+        Ok(())
+    }
+
+    /// Get a routing rule by index
+    ///
+    /// # Arguments
+    /// * `index` - Index of the rule to retrieve (0-based)
+    ///
+    /// # Returns
+    /// * `Some(&RoutingRuleConfig)` - Reference to the rule if found
+    /// * `None` - Index out of bounds
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # use aethecore::config::Config;
+    /// let config = Config::default();
+    /// if let Some(rule) = config.get_rule(0) {
+    ///     println!("First rule: {}", rule.regex);
+    /// }
+    /// ```
+    pub fn get_rule(&self, index: usize) -> Option<&RoutingRuleConfig> {
+        self.rules.get(index)
+    }
+
+    /// Get the number of routing rules
+    ///
+    /// # Returns
+    /// * `usize` - Number of routing rules configured
+    pub fn rule_count(&self) -> usize {
+        self.rules.len()
     }
 }
 

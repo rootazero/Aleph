@@ -104,7 +104,8 @@ struct RoutingView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                VStack(spacing: 0) {
+                // Use List for drag-and-drop reordering
+                List {
                     ForEach(Array(rules.enumerated()), id: \.offset) { index, rule in
                         RuleCard(
                             rule: rule,
@@ -113,9 +114,16 @@ struct RoutingView: View {
                             onEdit: { editRule(at: index) },
                             onDelete: { confirmDelete(at: index) }
                         )
-                        .padding(.vertical, DesignTokens.Spacing.xs)
+                        .listRowInsets(EdgeInsets(top: DesignTokens.Spacing.xs, leading: 0, bottom: DesignTokens.Spacing.xs, trailing: 0))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                     }
+                    .onMove(perform: moveRule)
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(Color.clear)
+                .disableWindowDrag()  // Prevent window dragging when reordering items
             }
 
             // Footer info

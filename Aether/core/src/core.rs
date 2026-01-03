@@ -1095,9 +1095,45 @@ impl AetherCore {
         result
     }
 
+    /// Build routing context string from window context and clipboard content
+    ///
+    /// Format: `[AppName] WindowTitle\nClipboardContent`
+    ///
+    /// This combines window context with clipboard content to enable context-aware routing.
+    /// Rules can match based on:
+    /// - Window context only (e.g., `^\[VSCode\]`)
+    /// - Clipboard content only (e.g., `/translate`)
+    /// - Both (e.g., `^\[Notes\].*TODO`)
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - Window context (app bundle ID and window title)
+    /// * `clipboard_content` - Content from clipboard
+    ///
+    /// # Returns
+    ///
+    /// Formatted context string for routing
+    fn build_routing_context(context: &CapturedContext, clipboard_content: &str) -> String {
+        // Extract app name from bundle ID (e.g., "com.apple.Notes" → "Notes")
+        let app_name = context
+            .app_bundle_id
+            .split('.')
+            .last()
+            .unwrap_or("Unknown");
+
+        // Format: [AppName] WindowTitle\nClipboardContent
+        format!(
+            "[{}] {}\n{}",
+            app_name,
+            context.window_title.as_deref().unwrap_or(""),
+            clipboard_content
+        )
+    }
+
     /// Internal implementation of AI processing pipeline (NEW ARCHITECTURE)
     ///
     /// This method now focuses ONLY on AI processing:
+    /// - Building routing context (window + clipboard)
     /// - Memory retrieval and prompt augmentation
     /// - AI routing and provider calls
     /// - Memory storage (async)
@@ -1107,7 +1143,7 @@ impl AetherCore {
     fn process_with_ai_internal(
         &self,
         input: String,
-        _context: CapturedContext,
+        context: CapturedContext,
         start_time: std::time::Instant,
     ) -> Result<String> {
         // Overall pipeline timer
@@ -1120,6 +1156,15 @@ impl AetherCore {
             .ok_or(AetherError::NoProviderAvailable {
                 suggestion: Some("Configure at least one AI provider in Settings → Providers".to_string()),
             })?;
+
+        // Step 1.5: Build routing context string (window context + clipboard content)
+        let routing_context = Self::build_routing_context(&context, &input);
+        debug!(
+            context_length = routing_context.len(),
+            app = %context.app_bundle_id,
+            window = ?context.window_title,
+            "Built routing context for provider selection"
+        );
 
         // Step 2: Retrieve memories and augment prompt (if enabled)
         let config = self.lock_config();
@@ -1140,8 +1185,8 @@ impl AetherCore {
                 Some(
                     StageTimer::start("memory_retrieval")
                         .with_target(TARGET_CLIPBOARD_TO_MEMORY_MS)
-                        .with_meta("app", &_context.app_bundle_id)
-                        .with_meta("window", _context.window_title.as_deref().unwrap_or("N/A"))
+                        .with_meta("app", &context.app_bundle_id)
+                        .with_meta("window", context.window_title.as_deref().unwrap_or("N/A"))
                 )
             } else {
                 None
@@ -1170,8 +1215,10 @@ impl AetherCore {
         );
 
         // Step 3: Route to appropriate provider with fallback support
+        // IMPORTANT: Use routing_context (window + clipboard) for routing decision
+        // This enables context-aware routing based on the active application
         let ((provider, system_prompt_override), fallback_provider) = router
-            .route_with_fallback(&input)
+            .route_with_fallback(&routing_context)
             .ok_or(AetherError::NoProviderAvailable {
                 suggestion: Some("No routing rules matched. Configure routing rules in Settings → Routing".to_string()),
             })?;
