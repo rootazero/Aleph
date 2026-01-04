@@ -1486,7 +1486,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// 2. If no config exists or no language set → Use system language
     /// 3. If system language not supported → Fallback to English
     ///
-    /// Supported languages: en (English), zh_CN (Simplified Chinese)
+    /// Supported languages: en (English), zh-Hans (Simplified Chinese)
     private func applyLanguagePreference() {
         do {
             // Try to load config from default path
@@ -1500,7 +1500,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 let configContent = try String(contentsOfFile: configPath, encoding: .utf8)
 
                 // Simple regex to extract language field from [general] section
-                // Format: language = "en" or language = "zh_CN"
+                // Format: language = "en" or language = "zh-Hans"
                 let pattern = #"language\s*=\s*"([^"]+)""#
                 if let regex = try? NSRegularExpression(pattern: pattern, options: []),
                    let match = regex.firstMatch(in: configContent, options: [], range: NSRange(configContent.startIndex..., in: configContent)),
@@ -1541,24 +1541,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Detect system language and return supported language code
     ///
+    /// Uses CFPreferencesCopyAppValue to get the REAL system language preference,
+    /// not the app-level UserDefaults which may have been overridden.
+    ///
     /// Returns:
-    /// - "zh_CN" if system language is any Chinese variant (zh_CN, zh_TW, zh_HK, zh, etc.)
+    /// - "zh-Hans" if system language is any Chinese variant (zh-Hans, zh-Hant, zh-Hant-TW, zh-Hant-HK)
     /// - "en" for all other languages (including unsupported ones)
     private func detectSystemLanguage() -> String {
-        let preferredLanguages = Locale.preferredLanguages
-
-        guard let primaryLanguage = preferredLanguages.first else {
-            print("[AppDelegate] No preferred language found, defaulting to English")
+        // Get the REAL system language using CFPreferences
+        // This bypasses any app-level UserDefaults overrides
+        guard let systemLanguages = CFPreferencesCopyAppValue(
+            "AppleLanguages" as CFString,
+            kCFPreferencesAnyApplication
+        ) as? [String],
+        let primaryLanguage = systemLanguages.first else {
+            print("[AppDelegate] No system language found, defaulting to English")
             return "en"
         }
 
-        print("[AppDelegate] System primary language: \(primaryLanguage)")
+        print("[AppDelegate] System primary language (from CFPreferences): \(primaryLanguage)")
 
         // Check if system language is Chinese (any variant)
-        // Possible system values: zh_CN, zh_TW, zh_HK, zh, or variants with region codes
+        // Possible system values: zh-Hans, zh-Hans-US, zh-Hant, zh-Hant-TW, zh-Hant-HK
         if primaryLanguage.hasPrefix("zh") {
-            print("[AppDelegate] Detected Chinese system language, using zh_CN")
-            return "zh_CN"
+            print("[AppDelegate] Detected Chinese system language, using zh-Hans")
+            return "zh-Hans"
         }
 
         // For all other languages (including unsupported ones), use English
