@@ -172,9 +172,7 @@ impl OpenAiProvider {
         }
 
         if config.model.is_empty() {
-            return Err(AetherError::invalid_config(
-                "Model name cannot be empty",
-            ));
+            return Err(AetherError::invalid_config("Model name cannot be empty"));
         }
 
         if config.timeout_seconds == 0 {
@@ -304,30 +302,28 @@ impl OpenAiProvider {
             let error_msg = error_response.error.message;
 
             return match status.as_u16() {
-                401 => AetherError::authentication(&self.name, &format!(
-                    "Invalid API key for {}: {}",
-                    self.name,
-                    error_msg
-                )),
+                401 => AetherError::authentication(
+                    &self.name,
+                    &format!("Invalid API key for {}: {}", self.name, error_msg),
+                ),
                 429 => AetherError::rate_limit(format!("{} rate limit: {}", self.name, error_msg)),
                 500..=599 => AetherError::provider(format!(
                     "{} server error ({}): {}",
-                    self.name,
-                    status,
-                    error_msg
+                    self.name, status, error_msg
                 )),
                 _ => AetherError::provider(format!(
                     "{} API error ({}): {}",
-                    self.name,
-                    status,
-                    error_msg
+                    self.name, status, error_msg
                 )),
             };
         }
 
         // Fallback if we can't parse the error response
         match status.as_u16() {
-            401 => AetherError::authentication(&self.name, &format!("Invalid API key for {}", self.name)),
+            401 => AetherError::authentication(
+                &self.name,
+                &format!("Invalid API key for {}", self.name),
+            ),
             429 => AetherError::rate_limit(format!("{} rate limit exceeded", self.name)),
             500..=599 => AetherError::provider(format!("{} server error: {}", self.name, status)),
             _ => AetherError::provider(format!("{} API error: {}", self.name, status)),
@@ -336,7 +332,11 @@ impl OpenAiProvider {
 }
 
 impl AiProvider for OpenAiProvider {
-    fn process(&self, input: &str, system_prompt: Option<&str>) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    fn process(
+        &self,
+        input: &str,
+        system_prompt: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
         // Clone the data we need before moving into async block
         let input = input.to_string();
         let system_prompt = system_prompt.map(|s| s.to_string());
@@ -352,8 +352,8 @@ impl AiProvider for OpenAiProvider {
             // Build request body
             let request_body = self.build_request(&input, system_prompt.as_deref());
 
-        // Send POST request
-        let response = self
+            // Send POST request
+            let response = self
             .client
             .post(&self.endpoint)
             .header(
@@ -382,37 +382,37 @@ impl AiProvider for OpenAiProvider {
                 }
             })?;
 
-        // Check status code
-        if !response.status().is_success() {
-            let status = response.status();
-            debug!(status = %status, "OpenAI request failed");
-            return Err(self.handle_error(response).await);
-        }
+            // Check status code
+            if !response.status().is_success() {
+                let status = response.status();
+                debug!(status = %status, "OpenAI request failed");
+                return Err(self.handle_error(response).await);
+            }
 
-        // Parse response
-        let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
-            error!(error = %e, "Failed to parse OpenAI response");
-            AetherError::provider(format!("Failed to parse OpenAI response: {}", e))
-        })?;
+            // Parse response
+            let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
+                error!(error = %e, "Failed to parse OpenAI response");
+                AetherError::provider(format!("Failed to parse OpenAI response: {}", e))
+            })?;
 
-        // Extract message content
-        let content = completion
-            .choices
-            .first()
-            .ok_or_else(|| {
-                error!("OpenAI returned no choices");
-                AetherError::provider("No response from OpenAI")
-            })?
-            .message
-            .content
-            .clone();
+            // Extract message content
+            let content = completion
+                .choices
+                .first()
+                .ok_or_else(|| {
+                    error!("OpenAI returned no choices");
+                    AetherError::provider("No response from OpenAI")
+                })?
+                .message
+                .content
+                .clone();
 
-        info!(
-            response_length = content.len(),
-            "OpenAI request completed successfully"
-        );
+            info!(
+                response_length = content.len(),
+                "OpenAI request completed successfully"
+            );
 
-        Ok(content)
+            Ok(content)
         })
     }
 
@@ -433,19 +433,20 @@ impl AiProvider for OpenAiProvider {
                 return self.process(&input, system_prompt.as_deref()).await;
             };
 
-        debug!(
-            model = "gpt-4o (vision)",
-            input_length = input.len(),
-            image_size_mb = image_data.size_mb(),
-            has_system_prompt = system_prompt.is_some(),
-            "Sending vision request to OpenAI"
-        );
+            debug!(
+                model = "gpt-4o (vision)",
+                input_length = input.len(),
+                image_size_mb = image_data.size_mb(),
+                has_system_prompt = system_prompt.is_some(),
+                "Sending vision request to OpenAI"
+            );
 
-        // Build vision request body
-        let request_body = self.build_vision_request(&input, &image_data, system_prompt.as_deref());
+            // Build vision request body
+            let request_body =
+                self.build_vision_request(&input, &image_data, system_prompt.as_deref());
 
-        // Send POST request
-        let response = self
+            // Send POST request
+            let response = self
             .client
             .post(&self.endpoint)
             .header(
@@ -474,37 +475,37 @@ impl AiProvider for OpenAiProvider {
                 }
             })?;
 
-        // Check status code
-        if !response.status().is_success() {
-            let status = response.status();
-            debug!(status = %status, "OpenAI vision request failed");
-            return Err(self.handle_error(response).await);
-        }
+            // Check status code
+            if !response.status().is_success() {
+                let status = response.status();
+                debug!(status = %status, "OpenAI vision request failed");
+                return Err(self.handle_error(response).await);
+            }
 
-        // Parse response
-        let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
-            error!(error = %e, "Failed to parse OpenAI vision response");
-            AetherError::provider(format!("Failed to parse OpenAI response: {}", e))
-        })?;
+            // Parse response
+            let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
+                error!(error = %e, "Failed to parse OpenAI vision response");
+                AetherError::provider(format!("Failed to parse OpenAI response: {}", e))
+            })?;
 
-        // Extract message content
-        let content = completion
-            .choices
-            .first()
-            .ok_or_else(|| {
-                error!("OpenAI returned no choices");
-                AetherError::provider("No response from OpenAI")
-            })?
-            .message
-            .content
-            .clone();
+            // Extract message content
+            let content = completion
+                .choices
+                .first()
+                .ok_or_else(|| {
+                    error!("OpenAI returned no choices");
+                    AetherError::provider("No response from OpenAI")
+                })?
+                .message
+                .content
+                .clone();
 
-        info!(
-            response_length = content.len(),
-            "OpenAI vision request completed successfully"
-        );
+            info!(
+                response_length = content.len(),
+                "OpenAI vision request completed successfully"
+            );
 
-        Ok(content)
+            Ok(content)
         })
     }
 

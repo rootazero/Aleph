@@ -96,11 +96,7 @@ impl PromptAugmenter {
     ///
     /// # Returns
     /// * User input string, optionally prefixed with memory context
-    pub fn augment_user_input(
-        &self,
-        memories: &[MemoryEntry],
-        current_input: &str,
-    ) -> String {
+    pub fn augment_user_input(&self, memories: &[MemoryEntry], current_input: &str) -> String {
         // If no memories, return just the user input (no prefix)
         if memories.is_empty() {
             return current_input.to_string();
@@ -117,8 +113,7 @@ impl PromptAugmenter {
         // The memory context is provided as background information, then the actual request follows
         format!(
             "Previous context for reference:\n{}\n\n---\n\n{}",
-            context_history,
-            current_input
+            context_history, current_input
         )
     }
 

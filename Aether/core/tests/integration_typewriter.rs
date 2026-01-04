@@ -5,8 +5,8 @@
 //! - Cancellation support
 //! - Special character handling
 
-use aethecore::{BehaviorConfig, InputSimulator, Result};
 use aethecore::input::EnigoSimulator;
+use aethecore::{BehaviorConfig, InputSimulator, Result};
 
 /// Test that typewriter mode configuration is correctly loaded
 #[test]
@@ -73,8 +73,8 @@ fn test_typing_speed_range() {
 /// Test typewriter timing accuracy
 #[tokio::test]
 async fn test_typewriter_timing_accuracy() {
-    use tokio_util::sync::CancellationToken;
     use std::time::Instant;
+    use tokio_util::sync::CancellationToken;
 
     let simulator = EnigoSimulator::new();
     let token = CancellationToken::new();
@@ -86,7 +86,9 @@ async fn test_typewriter_timing_accuracy() {
     let start = Instant::now();
 
     // This will likely fail in headless CI environment, but demonstrates the test approach
-    let result: Result<()> = simulator.type_string_animated(test_text, speed, token).await;
+    let result: Result<()> = simulator
+        .type_string_animated(test_text, speed, token)
+        .await;
 
     let elapsed = start.elapsed().as_millis();
 
@@ -109,8 +111,8 @@ async fn test_typewriter_timing_accuracy() {
 /// Test typewriter cancellation
 #[tokio::test]
 async fn test_typewriter_cancellation() {
-    use tokio_util::sync::CancellationToken;
     use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
 
     let simulator = EnigoSimulator::new();
     let token = CancellationToken::new();
@@ -118,7 +120,13 @@ async fn test_typewriter_cancellation() {
 
     // Start typing in background
     let typing_task = tokio::spawn(async move {
-        simulator.type_string_animated("This is a long test message that should be cancelled", 50, token_clone).await
+        simulator
+            .type_string_animated(
+                "This is a long test message that should be cancelled",
+                50,
+                token_clone,
+            )
+            .await
     });
 
     // Cancel after 100ms
@@ -144,7 +152,9 @@ async fn test_typewriter_unicode_support() {
     let unicode_text = "你好世界🌍";
 
     // This may fail in headless environment, but tests the API
-    let result: Result<()> = simulator.type_string_animated(unicode_text, 50, token).await;
+    let result: Result<()> = simulator
+        .type_string_animated(unicode_text, 50, token)
+        .await;
 
     // If display is available and simulation succeeds, verify no errors
     if result.is_ok() {
@@ -164,7 +174,9 @@ async fn test_typewriter_special_characters() {
     let special_text = "Line 1\nLine 2\tTabbed";
 
     // This may fail in headless environment
-    let result: Result<()> = simulator.type_string_animated(special_text, 50, token).await;
+    let result: Result<()> = simulator
+        .type_string_animated(special_text, 50, token)
+        .await;
 
     // Verify API doesn't panic on special characters
     if result.is_ok() {

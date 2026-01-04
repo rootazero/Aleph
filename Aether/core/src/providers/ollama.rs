@@ -96,9 +96,7 @@ impl OllamaProvider {
     /// - Timeout is zero
     pub fn new(name: String, config: ProviderConfig) -> Result<Self> {
         if config.model.is_empty() {
-            return Err(AetherError::invalid_config(
-                "Model name cannot be empty",
-            ));
+            return Err(AetherError::invalid_config("Model name cannot be empty"));
         }
 
         if config.timeout_seconds == 0 {
@@ -155,124 +153,126 @@ impl OllamaProvider {
 }
 
 impl AiProvider for OllamaProvider {
-    fn process(&self, input: &str, system_prompt: Option<&str>) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    fn process(
+        &self,
+        input: &str,
+        system_prompt: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
         // Clone the data we need before moving into async block
         let input = input.to_string();
         let system_prompt = system_prompt.map(|s| s.to_string());
 
         Box::pin(async move {
-        // Format prompt
-        let prompt = self.format_prompt(&input, system_prompt.as_deref());
+            // Format prompt
+            let prompt = self.format_prompt(&input, system_prompt.as_deref());
 
-        debug!(
-            model = %self.model,
-            input_length = input.len(),
-            prompt_length = prompt.len(),
-            has_system_prompt = system_prompt.is_some(),
-            timeout_seconds = self.timeout.as_secs(),
-            "Executing Ollama command"
-        );
+            debug!(
+                model = %self.model,
+                input_length = input.len(),
+                prompt_length = prompt.len(),
+                has_system_prompt = system_prompt.is_some(),
+                timeout_seconds = self.timeout.as_secs(),
+                "Executing Ollama command"
+            );
 
-        // Build command: ollama run <model> <prompt>
-        let mut cmd = Command::new("ollama");
-        cmd.arg("run")
-            .arg(&self.model)
-            .arg(&prompt)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            // Build command: ollama run <model> <prompt>
+            let mut cmd = Command::new("ollama");
+            cmd.arg("run")
+                .arg(&self.model)
+                .arg(&prompt)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
 
-        // Execute with timeout
-        let output_result = timeout(self.timeout, cmd.output()).await;
+            // Execute with timeout
+            let output_result = timeout(self.timeout, cmd.output()).await;
 
-        // Handle timeout
-        let output = match output_result {
-            Ok(result) => result.map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    error!("Ollama command not found in PATH");
-                    AetherError::provider(
+            // Handle timeout
+            let output = match output_result {
+                Ok(result) => result.map_err(|e| {
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        error!("Ollama command not found in PATH");
+                        AetherError::provider(
                         "Ollama command not found. Please install Ollama from https://ollama.ai"
                     )
-                } else {
-                    error!(error = %e, "Failed to execute Ollama command");
-                    AetherError::provider(format!("Failed to execute Ollama: {}", e))
-                }
-            })?,
-            Err(_) => {
-                error!(
-                    model = %self.model,
-                    timeout_seconds = self.timeout.as_secs(),
-                    "Ollama command timed out"
-                );
-                return Err(AetherError::Timeout {
+                    } else {
+                        error!(error = %e, "Failed to execute Ollama command");
+                        AetherError::provider(format!("Failed to execute Ollama: {}", e))
+                    }
+                })?,
+                Err(_) => {
+                    error!(
+                        model = %self.model,
+                        timeout_seconds = self.timeout.as_secs(),
+                        "Ollama command timed out"
+                    );
+                    return Err(AetherError::Timeout {
                     suggestion: Some("The Ollama model is taking too long. Try a smaller model or increase the timeout.".to_string()),
                 });
-            }
-        };
+                }
+            };
 
-        // Check exit status
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let exit_code = output.status.code().unwrap_or(-1);
+            // Check exit status
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let exit_code = output.status.code().unwrap_or(-1);
 
-            // Check for specific error patterns
-            if stderr.contains("model") && stderr.contains("not found") {
+                // Check for specific error patterns
+                if stderr.contains("model") && stderr.contains("not found") {
+                    error!(
+                        model = %self.model,
+                        exit_code = exit_code,
+                        stderr = %stderr,
+                        "Ollama model not found"
+                    );
+                    return Err(AetherError::provider(format!(
+                        "Ollama model '{}' not found. Run: ollama pull {}",
+                        self.model, self.model
+                    )));
+                }
+
                 error!(
                     model = %self.model,
                     exit_code = exit_code,
                     stderr = %stderr,
-                    "Ollama model not found"
+                    "Ollama command failed"
                 );
                 return Err(AetherError::provider(format!(
-                    "Ollama model '{}' not found. Run: ollama pull {}",
-                    self.model, self.model
+                    "Ollama command failed (exit {}): {}",
+                    exit_code, stderr
                 )));
             }
 
-            error!(
-                model = %self.model,
-                exit_code = exit_code,
-                stderr = %stderr,
-                "Ollama command failed"
-            );
-            return Err(AetherError::provider(format!(
-                "Ollama command failed (exit {}): {}",
-                exit_code, stderr
-            )));
-        }
+            // Parse stdout
+            let raw_output = String::from_utf8(output.stdout).map_err(|e| {
+                error!(error = %e, "Ollama output is not valid UTF-8");
+                AetherError::provider(format!("Ollama output is not valid UTF-8: {}", e))
+            })?;
 
-        // Parse stdout
-        let raw_output = String::from_utf8(output.stdout).map_err(|e| {
-            error!(error = %e, "Ollama output is not valid UTF-8");
-            AetherError::provider(format!("Ollama output is not valid UTF-8: {}", e))
-        })?;
-
-        debug!(
-            raw_output_length = raw_output.len(),
-            "Ollama command completed, cleaning output"
-        );
-
-        // Clean output
-        let cleaned = self.clean_output(&raw_output);
-
-        if cleaned.is_empty() {
-            warn!(
-                model = %self.model,
+            debug!(
                 raw_output_length = raw_output.len(),
-                "Ollama returned empty response after cleaning"
+                "Ollama command completed, cleaning output"
             );
-            return Err(AetherError::provider(
-                "Ollama returned empty response",
-            ));
-        }
 
-        info!(
-            model = %self.model,
-            response_length = cleaned.len(),
-            "Ollama request completed successfully"
-        );
+            // Clean output
+            let cleaned = self.clean_output(&raw_output);
 
-        Ok(cleaned)
+            if cleaned.is_empty() {
+                warn!(
+                    model = %self.model,
+                    raw_output_length = raw_output.len(),
+                    "Ollama returned empty response after cleaning"
+                );
+                return Err(AetherError::provider("Ollama returned empty response"));
+            }
+
+            info!(
+                model = %self.model,
+                response_length = cleaned.len(),
+                "Ollama request completed successfully"
+            );
+
+            Ok(cleaned)
         })
     }
 

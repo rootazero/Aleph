@@ -27,8 +27,12 @@ impl From<MockError> for AetherError {
             MockError::Authentication(msg) => AetherError::authentication("Mock".to_string(), msg),
             MockError::RateLimit(msg) => AetherError::rate_limit(msg),
             MockError::Provider(msg) => AetherError::provider(msg),
-            MockError::Timeout => AetherError::Timeout { suggestion: Some("Try again in a few moments".to_string()) },
-            MockError::NoProviderAvailable => AetherError::NoProviderAvailable { suggestion: Some("Configure a provider".to_string()) },
+            MockError::Timeout => AetherError::Timeout {
+                suggestion: Some("Try again in a few moments".to_string()),
+            },
+            MockError::NoProviderAvailable => AetherError::NoProviderAvailable {
+                suggestion: Some("Configure a provider".to_string()),
+            },
             MockError::InvalidConfig(msg) => AetherError::invalid_config(msg),
         }
     }
@@ -126,20 +130,24 @@ impl MockProvider {
 }
 
 impl AiProvider for MockProvider {
-    fn process(&self, _input: &str, _system_prompt: Option<&str>) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    fn process(
+        &self,
+        _input: &str,
+        _system_prompt: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
         Box::pin(async move {
-        // Simulate delay if configured
-        if let Some(delay) = self.delay {
-            tokio::time::sleep(delay).await;
-        }
+            // Simulate delay if configured
+            if let Some(delay) = self.delay {
+                tokio::time::sleep(delay).await;
+            }
 
-        // Return error if configured
-        if let Some(error) = &self.error {
-            return Err(error.clone().into());
-        }
+            // Return error if configured
+            if let Some(error) = &self.error {
+                return Err(error.clone().into());
+            }
 
-        // Return configured response
-        Ok(self.response.clone())
+            // Return configured response
+            Ok(self.response.clone())
         })
     }
 

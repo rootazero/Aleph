@@ -96,13 +96,11 @@ impl AetherCore {
             .map_err(|e| AetherError::other(format!("Failed to create tokio runtime: {}", e)))?;
 
         // Initialize configuration - load from file or use default
-        let config = Arc::new(Mutex::new(
-            Config::load().unwrap_or_else(|e| {
-                eprintln!("Warning: Failed to load config file: {}", e);
-                eprintln!("Using default configuration");
-                Config::default()
-            })
-        ));
+        let config = Arc::new(Mutex::new(Config::load().unwrap_or_else(|e| {
+            eprintln!("Warning: Failed to load config file: {}", e);
+            eprintln!("Using default configuration");
+            Config::default()
+        })));
 
         info!("Configuration loaded successfully");
 
@@ -214,7 +212,10 @@ impl AetherCore {
                                     Some(Arc::new(r))
                                 }
                                 Err(e) => {
-                                    log::warn!("Failed to reinitialize router during hot-reload: {}", e);
+                                    log::warn!(
+                                        "Failed to reinitialize router during hot-reload: {}",
+                                        e
+                                    );
                                     None
                                 }
                             }
@@ -243,14 +244,12 @@ impl AetherCore {
             let watcher_for_thread = Arc::clone(&watcher);
             std::thread::Builder::new()
                 .name("config-watcher-init".to_string())
-                .spawn(move || {
-                    match watcher_for_thread.start() {
-                        Ok(_) => {
-                            log::info!("Config watcher started successfully");
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to start config watcher: {}", e);
-                        }
+                .spawn(move || match watcher_for_thread.start() {
+                    Ok(_) => {
+                        log::info!("Config watcher started successfully");
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to start config watcher: {}", e);
                     }
                 })
                 .map_err(|e| log::warn!("Failed to spawn config watcher thread: {}", e))
@@ -340,7 +339,9 @@ impl AetherCore {
     /// The actual hotkey detection happens in Swift (GlobalHotkeyMonitor.swift) and triggers
     /// EventHandler.onHotkeyDetected() which processes clipboard content.
     pub fn start_listening(&self) -> Result<()> {
-        info!("[AetherCore] start_listening() called - hotkey monitoring now handled by Swift layer");
+        info!(
+            "[AetherCore] start_listening() called - hotkey monitoring now handled by Swift layer"
+        );
         info!("[AetherCore] See GlobalHotkeyMonitor.swift for implementation details");
         Ok(())
     }
@@ -939,7 +940,9 @@ impl AetherCore {
 
         // Get current context
         let current_context = self.current_context.lock().unwrap_or_else(|e| {
-            warn!("Mutex poisoned in current_context (retrieve_and_augment_user_input), recovering");
+            warn!(
+                "Mutex poisoned in current_context (retrieve_and_augment_user_input), recovering"
+            );
             e.into_inner()
         });
         let captured_context = match current_context.as_ref() {
@@ -990,10 +993,8 @@ impl AetherCore {
         );
 
         // Augment user input (without system prompt)
-        let augmenter = PromptAugmenter::with_config(
-            config.memory.max_context_items as usize,
-            false,
-        );
+        let augmenter =
+            PromptAugmenter::with_config(config.memory.max_context_items as usize, false);
         let augmented_input = augmenter.augment_user_input(&memories, &user_input);
 
         let total_time = start_time.elapsed();
@@ -1074,7 +1075,11 @@ impl AetherCore {
         AetherException::Error
     }
 
-    pub fn process_input(&self, user_input: String, context: CapturedContext) -> std::result::Result<String, AetherException> {
+    pub fn process_input(
+        &self,
+        user_input: String,
+        context: CapturedContext,
+    ) -> std::result::Result<String, AetherException> {
         use std::time::Instant;
         let start_time = Instant::now();
 
@@ -1147,11 +1152,7 @@ impl AetherCore {
     /// Formatted context string for routing
     fn build_routing_context(context: &CapturedContext, clipboard_content: &str) -> String {
         // Extract app name from bundle ID (e.g., "com.apple.Notes" → "Notes")
-        let app_name = context
-            .app_bundle_id
-            .split('.')
-            .last()
-            .unwrap_or("Unknown");
+        let app_name = context.app_bundle_id.split('.').next_back().unwrap_or("Unknown");
 
         // Format: ClipboardContent\n---\n[AppName] WindowTitle
         // Clipboard content is FIRST to preserve backward compatibility with ^/prefix rules
@@ -1186,12 +1187,13 @@ impl AetherCore {
         // Get a clone of the Arc<Router> to avoid holding the RwLock during AI processing
         let router = {
             let router_guard = self.router.read().unwrap_or_else(|e| e.into_inner());
-            router_guard
-                .as_ref()
-                .map(|r| Arc::clone(r))
-                .ok_or(AetherError::NoProviderAvailable {
-                    suggestion: Some("Configure at least one AI provider in Settings → Providers".to_string()),
-                })?
+            router_guard.as_ref().map(Arc::clone).ok_or(
+                AetherError::NoProviderAvailable {
+                    suggestion: Some(
+                        "Configure at least one AI provider in Settings → Providers".to_string(),
+                    ),
+                },
+            )?
         };
 
         // Step 1.5: Build routing context string (clipboard content + window context)
@@ -1224,7 +1226,7 @@ impl AetherCore {
                     StageTimer::start("memory_retrieval")
                         .with_target(TARGET_CLIPBOARD_TO_MEMORY_MS)
                         .with_meta("app", &context.app_bundle_id)
-                        .with_meta("window", context.window_title.as_deref().unwrap_or("N/A"))
+                        .with_meta("window", context.window_title.as_deref().unwrap_or("N/A")),
                 )
             } else {
                 None
@@ -1258,7 +1260,10 @@ impl AetherCore {
         let ((provider, system_prompt_override), fallback_provider) = router
             .route_with_fallback(&routing_context)
             .ok_or(AetherError::NoProviderAvailable {
-                suggestion: Some("No routing rules matched. Configure routing rules in Settings → Routing".to_string()),
+                suggestion: Some(
+                    "No routing rules matched. Configure routing rules in Settings → Routing"
+                        .to_string(),
+                ),
             })?;
 
         let provider_name = provider.name().to_string();
@@ -1306,7 +1311,7 @@ impl AetherCore {
                     StageTimer::start("ai_request")
                         .with_target(TARGET_MEMORY_TO_AI_MS)
                         .with_meta("provider", &provider_name)
-                        .with_meta("input_length", &input.len().to_string())
+                        .with_meta("input_length", &input.len().to_string()),
                 )
             } else {
                 None
@@ -1397,7 +1402,10 @@ impl AetherCore {
 
             // Spawn background task to store memory
             self.runtime.spawn(async move {
-                match core_clone.store_interaction_memory(user_input, ai_output).await {
+                match core_clone
+                    .store_interaction_memory(user_input, ai_output)
+                    .await
+                {
                     Ok(memory_id) => {
                         log::debug!("[AI Pipeline] Memory stored: {}", memory_id);
                     }
@@ -1474,14 +1482,11 @@ impl AetherCore {
         };
 
         let result = runtime.block_on(async {
-            provider
-                .process(test_prompt, None)
-                .await
-                .map_err(|e| {
-                    // During testing, show detailed error for debugging
-                    // (unlike production where we show user-friendly messages)
-                    format!("{}", e)
-                })
+            provider.process(test_prompt, None).await.map_err(|e| {
+                // During testing, show detailed error for debugging
+                // (unlike production where we show user-friendly messages)
+                format!("{}", e)
+            })
         });
 
         match result {
@@ -1506,7 +1511,11 @@ impl AetherCore {
     }
 
     /// Update provider configuration
-    pub fn update_provider(&self, name: String, provider: crate::config::ProviderConfig) -> Result<()> {
+    pub fn update_provider(
+        &self,
+        name: String,
+        provider: crate::config::ProviderConfig,
+    ) -> Result<()> {
         let mut config = self.lock_config();
         config.providers.insert(name, provider);
         config.save()?;
@@ -1719,7 +1728,11 @@ impl StorageHelper {
     /// IMPORTANT: This is an async function because it's called from within
     /// a tokio::spawn() task. Using block_on() inside an async context would
     /// cause a panic: "Cannot start a runtime from within a runtime".
-    async fn store_interaction_memory(&self, user_input: String, ai_output: String) -> Result<String> {
+    async fn store_interaction_memory(
+        &self,
+        user_input: String,
+        ai_output: String,
+    ) -> Result<String> {
         use crate::memory::context::ContextAnchor;
         use crate::memory::embedding::EmbeddingModel;
         use crate::memory::ingestion::MemoryIngestion;
@@ -1769,11 +1782,7 @@ impl StorageHelper {
         })?);
 
         // Create ingestion service
-        let ingestion = MemoryIngestion::new(
-            db,
-            embedding_model,
-            Arc::new(memory_config),
-        );
+        let ingestion = MemoryIngestion::new(db, embedding_model, Arc::new(memory_config));
 
         // Store memory - use await instead of block_on since we're in async context
         let result = ingestion

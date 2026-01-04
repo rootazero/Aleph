@@ -268,7 +268,11 @@ mod tests {
         let elapsed = timer.elapsed_ms();
 
         // Allow ±10% tolerance
-        assert!(elapsed >= 90 && elapsed <= 110, "Timer accuracy: {}ms", elapsed);
+        assert!(
+            elapsed >= 90 && elapsed <= 110,
+            "Timer accuracy: {}ms",
+            elapsed
+        );
     }
 
     #[test]
@@ -281,7 +285,10 @@ mod tests {
         assert_eq!(timer.metadata.len(), 3);
         assert_eq!(timer.metadata.get("provider"), Some(&"OpenAI".to_string()));
         assert_eq!(timer.metadata.get("model"), Some(&"gpt-4".to_string()));
-        assert_eq!(timer.metadata.get("app"), Some(&"com.apple.Notes".to_string()));
+        assert_eq!(
+            timer.metadata.get("app"),
+            Some(&"com.apple.Notes".to_string())
+        );
     }
 
     #[test]

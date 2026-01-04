@@ -48,7 +48,10 @@ use crate::config::{ProviderConfig, RoutingRuleConfig};
 
 // Type aliases for complex return types
 /// Primary provider with system prompt, and optional fallback provider
-pub type ProviderWithFallback<'a> = ((&'a dyn AiProvider, Option<&'a str>), Option<&'a dyn AiProvider>);
+pub type ProviderWithFallback<'a> = (
+    (&'a dyn AiProvider, Option<&'a str>),
+    Option<&'a dyn AiProvider>,
+);
 
 /// A routing rule that matches input patterns to AI providers
 ///
@@ -525,10 +528,7 @@ impl Router {
     /// # }
     /// # fn try_process(p: &dyn aethecore::providers::AiProvider, i: &str, s: Option<&str>) -> Result<String, ()> { Ok("".into()) }
     /// ```
-    pub fn route_with_fallback(
-        &self,
-        context: &str,
-    ) -> Option<ProviderWithFallback<'_>> {
+    pub fn route_with_fallback(&self, context: &str) -> Option<ProviderWithFallback<'_>> {
         // Get primary routing result
         let (primary_provider, system_prompt) = self.route(context)?;
         let primary_name = primary_provider.name();
@@ -681,10 +681,9 @@ mod tests {
         let mut config = Config::default();
 
         // Add OpenAI provider
-        config.providers.insert(
-            "openai".to_string(),
-            ProviderConfig::test_config("gpt-4o"),
-        );
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
         let router = Router::new(&config);
         assert!(router.is_ok());
@@ -708,10 +707,9 @@ mod tests {
         let mut config = Config::default();
 
         // Add provider
-        config.providers.insert(
-            "openai".to_string(),
-            ProviderConfig::test_config("gpt-4o"),
-        );
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
         // Set default to non-existent provider
         config.general.default_provider = Some("nonexistent".to_string());
@@ -726,10 +724,9 @@ mod tests {
         let mut config = Config::default();
 
         // Add provider
-        config.providers.insert(
-            "openai".to_string(),
-            ProviderConfig::test_config("gpt-4o"),
-        );
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
         // Set valid default provider
         config.general.default_provider = Some("openai".to_string());
@@ -750,10 +747,9 @@ mod tests {
         let mut config = Config::default();
 
         // Add provider but no default
-        config.providers.insert(
-            "openai".to_string(),
-            ProviderConfig::test_config("gpt-4o"),
-        );
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
         let router = Router::new(&config).unwrap();
 
@@ -766,10 +762,9 @@ mod tests {
     fn test_router_metadata() {
         let mut config = Config::default();
 
-        config.providers.insert(
-            "openai".to_string(),
-            ProviderConfig::test_config("gpt-4o"),
-        );
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
         config.general.default_provider = Some("openai".to_string());
 
@@ -787,19 +782,15 @@ mod tests {
         let mut config = Config::default();
 
         // Add multiple providers
-        config.providers.insert(
-            "openai".to_string(),
-            ProviderConfig::test_config("gpt-4o"),
-        );
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
-        config.providers.insert(
-            "claude".to_string(),
-            {
-                let mut config = ProviderConfig::test_config("claude-3-5-sonnet-20241022");
-                config.provider_type = Some("claude".to_string());
-                config
-            },
-        );
+        config.providers.insert("claude".to_string(), {
+            let mut config = ProviderConfig::test_config("claude-3-5-sonnet-20241022");
+            config.provider_type = Some("claude".to_string());
+            config
+        });
 
         let router = Router::new(&config).unwrap();
 
@@ -813,19 +804,15 @@ mod tests {
         let mut config = Config::default();
 
         // Add providers
-        config.providers.insert(
-            "openai".to_string(),
-            ProviderConfig::test_config("gpt-4o"),
-        );
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
-        config.providers.insert(
-            "claude".to_string(),
-            {
-                let mut config = ProviderConfig::test_config("claude-3-5-sonnet-20241022");
-                config.provider_type = Some("claude".to_string());
-                config
-            },
-        );
+        config.providers.insert("claude".to_string(), {
+            let mut config = ProviderConfig::test_config("claude-3-5-sonnet-20241022");
+            config.provider_type = Some("claude".to_string());
+            config
+        });
 
         // Add routing rules
         config.rules.push(RoutingRuleConfig {
@@ -852,19 +839,15 @@ mod tests {
         let mut config = Config::default();
 
         // Add providers
-        config.providers.insert(
-            "openai".to_string(),
-            ProviderConfig::test_config("gpt-4o"),
-        );
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
-        config.providers.insert(
-            "claude".to_string(),
-            {
-                let mut config = ProviderConfig::test_config("claude-3-5-sonnet-20241022");
-                config.provider_type = Some("claude".to_string());
-                config
-            },
-        );
+        config.providers.insert("claude".to_string(), {
+            let mut config = ProviderConfig::test_config("claude-3-5-sonnet-20241022");
+            config.provider_type = Some("claude".to_string());
+            config
+        });
 
         // Add routing rules (first match wins)
         config.rules.push(RoutingRuleConfig {
@@ -903,10 +886,9 @@ mod tests {
         let mut config = Config::default();
 
         // Add only one provider
-        config.providers.insert(
-            "openai".to_string(),
-            ProviderConfig::test_config("gpt-4o"),
-        );
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
         // Add rule referencing non-existent provider
         config.rules.push(RoutingRuleConfig {
@@ -926,10 +908,9 @@ mod tests {
         let mut config = Config::default();
 
         // Add provider
-        config.providers.insert(
-            "openai".to_string(),
-            ProviderConfig::test_config("gpt-4o"),
-        );
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
         // Add rule with invalid regex
         config.rules.push(RoutingRuleConfig {
@@ -977,10 +958,9 @@ mod tests {
     fn test_config_with_rules_serialization() {
         let mut config = Config::default();
 
-        config.providers.insert(
-            "openai".to_string(),
-            ProviderConfig::test_config("gpt-4o"),
-        );
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
         config.rules.push(RoutingRuleConfig {
             regex: r"^/code".to_string(),

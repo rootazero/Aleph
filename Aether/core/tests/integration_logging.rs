@@ -31,8 +31,11 @@ fn create_test_log_file(dir: &PathBuf, filename: &str, days_old: u64) -> PathBuf
 
     // Set modification time
     let modified_time = SystemTime::now() - Duration::from_secs(days_old * 24 * 60 * 60);
-    filetime::set_file_mtime(&log_file, filetime::FileTime::from_system_time(modified_time))
-        .expect("Failed to set file time");
+    filetime::set_file_mtime(
+        &log_file,
+        filetime::FileTime::from_system_time(modified_time),
+    )
+    .expect("Failed to set file time");
 
     log_file
 }

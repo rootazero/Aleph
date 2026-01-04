@@ -43,7 +43,8 @@ fn main() {
 
     // Example 4: Multiple PII types
     println!("\nExample 4: Multiple PII types in one string");
-    let complex_text = "Email: alice@test.org, Phone: (555) 123-4567, API: sk-test123456789012345678";
+    let complex_text =
+        "Email: alice@test.org, Phone: (555) 123-4567, API: sk-test123456789012345678";
     let scrubbed_complex = scrub_pii(complex_text);
     println!("Original: {}", complex_text);
     println!("Scrubbed: {}\n", scrubbed_complex);

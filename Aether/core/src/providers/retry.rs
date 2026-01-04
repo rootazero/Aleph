@@ -31,7 +31,10 @@ fn is_retryable(error: &AetherError) -> bool {
         AetherError::Timeout { .. } => true,
         AetherError::ProviderError { message, .. } => {
             // Retry on server errors (5xx)
-            message.contains("500") || message.contains("502") || message.contains("503") || message.contains("504")
+            message.contains("500")
+                || message.contains("502")
+                || message.contains("503")
+                || message.contains("504")
         }
         // Don't retry these errors
         AetherError::AuthenticationError { .. } => false,
@@ -68,10 +71,7 @@ fn is_retryable(error: &AetherError) -> bool {
 ///
 /// let result = retry_with_backoff(|| fetch_data(), None).await;
 /// ```
-pub async fn retry_with_backoff<F, Fut, T>(
-    mut operation: F,
-    max_retries: Option<u32>,
-) -> Result<T>
+pub async fn retry_with_backoff<F, Fut, T>(mut operation: F, max_retries: Option<u32>) -> Result<T>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T>>,
@@ -139,9 +139,7 @@ mod tests {
     #[test]
     fn test_is_retryable() {
         // Retryable errors
-        assert!(is_retryable(&AetherError::network(
-            "connection failed"
-        )));
+        assert!(is_retryable(&AetherError::network("connection failed")));
         assert!(is_retryable(&AetherError::Timeout { suggestion: None }));
         assert!(is_retryable(&AetherError::provider(
             "500 Internal Server Error"
@@ -152,17 +150,12 @@ mod tests {
 
         // Non-retryable errors
         assert!(!is_retryable(&AetherError::authentication(
-            "Test", "invalid key"
+            "Test",
+            "invalid key"
         )));
-        assert!(!is_retryable(&AetherError::rate_limit(
-            "quota exceeded"
-        )));
-        assert!(!is_retryable(&AetherError::invalid_config(
-            "bad config"
-        )));
-        assert!(!is_retryable(&AetherError::provider(
-            "400 Bad Request"
-        )));
+        assert!(!is_retryable(&AetherError::rate_limit("quota exceeded")));
+        assert!(!is_retryable(&AetherError::invalid_config("bad config")));
+        assert!(!is_retryable(&AetherError::provider("400 Bad Request")));
     }
 
     #[tokio::test]

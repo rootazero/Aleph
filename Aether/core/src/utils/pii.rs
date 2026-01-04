@@ -73,11 +73,17 @@ pub fn scrub_pii(text: &str) -> String {
     let mut scrubbed = text.to_string();
 
     // Apply scrubbing in order (API keys first to avoid partial matches)
-    scrubbed = patterns.api_key.replace_all(&scrubbed, "[REDACTED]").to_string();
+    scrubbed = patterns
+        .api_key
+        .replace_all(&scrubbed, "[REDACTED]")
+        .to_string();
     scrubbed = patterns.email.replace_all(&scrubbed, "[EMAIL]").to_string();
     scrubbed = patterns.phone.replace_all(&scrubbed, "[PHONE]").to_string();
     scrubbed = patterns.ssn.replace_all(&scrubbed, "[SSN]").to_string();
-    scrubbed = patterns.credit_card.replace_all(&scrubbed, "[CREDIT_CARD]").to_string();
+    scrubbed = patterns
+        .credit_card
+        .replace_all(&scrubbed, "[CREDIT_CARD]")
+        .to_string();
 
     scrubbed
 }
@@ -213,6 +219,10 @@ mod tests {
         let elapsed = start.elapsed();
 
         // Should complete in <50ms even for large text (more lenient for CI)
-        assert!(elapsed.as_millis() < 50, "Scrubbing took too long: {:?}", elapsed);
+        assert!(
+            elapsed.as_millis() < 50,
+            "Scrubbing took too long: {:?}",
+            elapsed
+        );
     }
 }

@@ -177,7 +177,11 @@ pub trait AiProvider: Send + Sync {
     /// ).await.unwrap();
     /// # }
     /// ```
-    fn process(&self, input: &str, system_prompt: Option<&str>) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>>;
+    fn process(
+        &self,
+        input: &str,
+        system_prompt: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>>;
 
     /// Process input with optional image and return AI-generated response
     ///
@@ -269,7 +273,11 @@ mod tests {
     struct TestProvider;
 
     impl AiProvider for TestProvider {
-        fn process(&self, input: &str, _system_prompt: Option<&str>) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        fn process(
+            &self,
+            input: &str,
+            _system_prompt: Option<&str>,
+        ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
             let response = format!("Echo: {}", input);
             Box::pin(async move { Ok(response) })
         }

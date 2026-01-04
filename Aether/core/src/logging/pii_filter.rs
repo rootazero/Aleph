@@ -195,9 +195,7 @@ mod tests {
     #[test]
     fn test_create_pii_scrubbing_layer() {
         // Test that we can create the layer
-        let _layer = create_pii_scrubbing_layer::<
-            tracing_subscriber::Registry,
-        >();
+        let _layer = create_pii_scrubbing_layer::<tracing_subscriber::Registry>();
     }
 
     #[test]
@@ -266,12 +264,11 @@ mod tests {
         };
 
         // Set up subscriber with PII scrubbing
-        let subscriber = tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_writer(move || writer.clone())
-                    .event_format(PiiScrubbingFormat),
-            );
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(move || writer.clone())
+                .event_format(PiiScrubbingFormat),
+        );
 
         // Use this subscriber for the test
         tracing::subscriber::with_default(subscriber, || {

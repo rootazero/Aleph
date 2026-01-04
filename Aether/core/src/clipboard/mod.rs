@@ -4,7 +4,6 @@
 /// These types are kept only for AI provider image encoding/decoding.
 ///
 /// See: refactor-native-api-separation proposal
-
 use crate::error::Result;
 
 /// Image format enumeration
@@ -88,11 +87,9 @@ impl ImageData {
             )));
         };
 
-        let decoded = general_purpose::STANDARD
-            .decode(base64_data)
-            .map_err(|e| {
-                crate::error::AetherError::other(format!("Base64 decoding failed: {}", e))
-            })?;
+        let decoded = general_purpose::STANDARD.decode(base64_data).map_err(|e| {
+            crate::error::AetherError::other(format!("Base64 decoding failed: {}", e))
+        })?;
 
         Ok(Self::new(decoded, format))
     }

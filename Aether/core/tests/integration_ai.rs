@@ -81,24 +81,18 @@ fn create_test_config() -> Config {
     let mut config = Config::default();
 
     // Add mock OpenAI provider
-    config.providers.insert(
-        "openai".to_string(),
-        {
-            let mut config = ProviderConfig::test_config("gpt-4o");
-            config.provider_type = Some("mock".to_string());
-            config
-        },
-    );
+    config.providers.insert("openai".to_string(), {
+        let mut config = ProviderConfig::test_config("gpt-4o");
+        config.provider_type = Some("mock".to_string());
+        config
+    });
 
     // Add mock Claude provider
-    config.providers.insert(
-        "claude".to_string(),
-        {
-            let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
-            config.provider_type = Some("mock".to_string());
-            config
-        },
-    );
+    config.providers.insert("claude".to_string(), {
+        let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+        config.provider_type = Some("mock".to_string());
+        config
+    });
 
     // Add routing rules
     config.rules.push(RoutingRuleConfig {
@@ -141,23 +135,17 @@ fn test_routing_priority() {
     let mut config = Config::default();
 
     // Add provider
-    config.providers.insert(
-        "provider1".to_string(),
-        {
-            let mut config = ProviderConfig::test_config("test");
-            config.provider_type = Some("mock".to_string());
-            config
-        },
-    );
+    config.providers.insert("provider1".to_string(), {
+        let mut config = ProviderConfig::test_config("test");
+        config.provider_type = Some("mock".to_string());
+        config
+    });
 
-    config.providers.insert(
-        "provider2".to_string(),
-        {
-            let mut config = ProviderConfig::test_config("test");
-            config.provider_type = Some("mock".to_string());
-            config
-        },
-    );
+    config.providers.insert("provider2".to_string(), {
+        let mut config = ProviderConfig::test_config("test");
+        config.provider_type = Some("mock".to_string());
+        config
+    });
 
     // First rule should match first
     config.rules.push(RoutingRuleConfig {
@@ -184,14 +172,11 @@ fn test_routing_priority() {
 fn test_default_provider_fallback() {
     let mut config = Config::default();
 
-    config.providers.insert(
-        "default".to_string(),
-        {
-            let mut config = ProviderConfig::test_config("test");
-            config.provider_type = Some("mock".to_string());
-            config
-        },
-    );
+    config.providers.insert("default".to_string(), {
+        let mut config = ProviderConfig::test_config("test");
+        config.provider_type = Some("mock".to_string());
+        config
+    });
 
     config.general.default_provider = Some("default".to_string());
 
@@ -240,7 +225,10 @@ async fn test_mock_provider_with_error() {
 
     let result = provider.process("Input", None).await;
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), AetherError::NetworkError { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        AetherError::NetworkError { .. }
+    ));
 }
 
 #[tokio::test]
@@ -355,26 +343,20 @@ fn test_multiple_providers_same_type() {
     let mut config = Config::default();
 
     // Add multiple OpenAI-compatible providers
-    config.providers.insert(
-        "openai".to_string(),
-        {
-            let mut config = ProviderConfig::test_config("gpt-4o");
-            config.provider_type = Some("openai".to_string());
-            config.api_key = Some("key1".to_string());
-            config
-        },
-    );
+    config.providers.insert("openai".to_string(), {
+        let mut config = ProviderConfig::test_config("gpt-4o");
+        config.provider_type = Some("openai".to_string());
+        config.api_key = Some("key1".to_string());
+        config
+    });
 
-    config.providers.insert(
-        "deepseek".to_string(),
-        {
-            let mut config = ProviderConfig::test_config("deepseek-chat");
-            config.provider_type = Some("openai".to_string());
-            config.api_key = Some("key2".to_string());
-            config.base_url = Some("https://api.deepseek.com".to_string());
-            config
-        },
-    );
+    config.providers.insert("deepseek".to_string(), {
+        let mut config = ProviderConfig::test_config("deepseek-chat");
+        config.provider_type = Some("openai".to_string());
+        config.api_key = Some("key2".to_string());
+        config.base_url = Some("https://api.deepseek.com".to_string());
+        config
+    });
 
     config.rules.push(RoutingRuleConfig {
         regex: "^/deep".to_string(),

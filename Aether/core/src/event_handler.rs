@@ -120,66 +120,108 @@ impl MockEventHandler {
     }
 
     pub fn get_state_changes(&self) -> Vec<ProcessingState> {
-        self.state_changes.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.state_changes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     // REMOVED: get_hotkey_events() - hotkey handling now in Swift layer
 
     pub fn get_errors(&self) -> Vec<String> {
-        self.errors.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.errors
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn get_response_chunks(&self) -> Vec<String> {
-        self.response_chunks.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.response_chunks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn get_typed_errors(&self) -> Vec<(ErrorType, String)> {
-        self.typed_errors.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.typed_errors
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn get_progress_updates(&self) -> Vec<f32> {
-        self.progress_updates.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.progress_updates
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn get_ai_processing_started(&self) -> Vec<(String, String)> {
-        self.ai_processing_started.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.ai_processing_started
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn get_ai_responses(&self) -> Vec<String> {
-        self.ai_responses.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.ai_responses
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn get_provider_fallbacks(&self) -> Vec<(String, String)> {
-        self.provider_fallbacks.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.provider_fallbacks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn get_config_change_count(&self) -> u32 {
-        *self.config_changes.lock().unwrap_or_else(|e| e.into_inner())
+        *self
+            .config_changes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn get_typewriter_progress(&self) -> Vec<f32> {
-        self.typewriter_progress.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.typewriter_progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn get_typewriter_cancelled_count(&self) -> u32 {
-        *self.typewriter_cancelled.lock().unwrap_or_else(|e| e.into_inner())
+        *self
+            .typewriter_cancelled
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 }
 
 #[cfg(test)]
 impl AetherEventHandler for MockEventHandler {
     fn on_state_changed(&self, state: ProcessingState) {
-        self.state_changes.lock().unwrap_or_else(|e| e.into_inner()).push(state);
+        self.state_changes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(state);
     }
 
     // REMOVED: on_hotkey_detected() - hotkey handling now in Swift layer
 
     fn on_error(&self, message: String, _suggestion: Option<String>) {
-        self.errors.lock().unwrap_or_else(|e| e.into_inner()).push(message);
+        self.errors
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(message);
     }
 
     fn on_response_chunk(&self, text: String) {
-        self.response_chunks.lock().unwrap_or_else(|e| e.into_inner()).push(text);
+        self.response_chunks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(text);
     }
 
     fn on_error_typed(&self, error_type: ErrorType, message: String) {
@@ -190,7 +232,10 @@ impl AetherEventHandler for MockEventHandler {
     }
 
     fn on_progress(&self, percent: f32) {
-        self.progress_updates.lock().unwrap_or_else(|e| e.into_inner()).push(percent);
+        self.progress_updates
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(percent);
     }
 
     fn on_ai_processing_started(&self, provider_name: String, provider_color: String) {
@@ -201,7 +246,10 @@ impl AetherEventHandler for MockEventHandler {
     }
 
     fn on_ai_response_received(&self, response_preview: String) {
-        self.ai_responses.lock().unwrap_or_else(|e| e.into_inner()).push(response_preview);
+        self.ai_responses
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(response_preview);
     }
 
     fn on_provider_fallback(&self, from_provider: String, to_provider: String) {
@@ -212,16 +260,25 @@ impl AetherEventHandler for MockEventHandler {
     }
 
     fn on_config_changed(&self) {
-        let mut count = self.config_changes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut count = self
+            .config_changes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *count += 1;
     }
 
     fn on_typewriter_progress(&self, percent: f32) {
-        self.typewriter_progress.lock().unwrap_or_else(|e| e.into_inner()).push(percent);
+        self.typewriter_progress
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(percent);
     }
 
     fn on_typewriter_cancelled(&self) {
-        let mut count = self.typewriter_cancelled.lock().unwrap_or_else(|e| e.into_inner());
+        let mut count = self
+            .typewriter_cancelled
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *count += 1;
     }
 }

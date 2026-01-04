@@ -49,7 +49,9 @@ pub fn init_file_logging() -> Result<(), Box<dyn std::error::Error>> {
 /// # Arguments
 ///
 /// * `retention_days` - Number of days to keep log files (1-30)
-pub fn init_file_logging_with_retention(retention_days: u32) -> Result<(), Box<dyn std::error::Error>> {
+pub fn init_file_logging_with_retention(
+    retention_days: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut result = Ok(());
 
     INIT.call_once(|| {
@@ -70,7 +72,9 @@ pub fn init_file_logging_with_retention(retention_days: u32) -> Result<(), Box<d
 }
 
 /// Internal function to set up logging infrastructure
-fn setup_logging(retention_days: u32) -> Result<tracing_appender::non_blocking::WorkerGuard, Box<dyn std::error::Error>> {
+fn setup_logging(
+    retention_days: u32,
+) -> Result<tracing_appender::non_blocking::WorkerGuard, Box<dyn std::error::Error>> {
     // Get log directory: ~/Library/Application Support/aether/logs/ on macOS
     let log_dir = get_log_directory()?;
 
@@ -79,18 +83,13 @@ fn setup_logging(retention_days: u32) -> Result<tracing_appender::non_blocking::
 
     // Create rolling file appender (daily rotation)
     // Creates files like: aether.log.2026-01-01
-    let file_appender = RollingFileAppender::new(
-        Rotation::DAILY,
-        &log_dir,
-        "aether.log",
-    );
+    let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "aether.log");
 
     // Create non-blocking writer for async logging
     let (non_blocking_file, guard) = tracing_appender::non_blocking(file_appender);
 
     // Set up environment filter
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     // Create console layer with PII scrubbing
     let console_layer = fmt::layer()
@@ -138,8 +137,7 @@ fn setup_logging(retention_days: u32) -> Result<tracing_appender::non_blocking::
 /// Returns `~/Library/Application Support/aether/logs/` on macOS
 /// (uses dirs::config_dir() which returns Application Support on macOS)
 pub fn get_log_directory() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let config_dir = dirs::config_dir()
-        .ok_or("Failed to get config directory")?;
+    let config_dir = dirs::config_dir().ok_or("Failed to get config directory")?;
 
     Ok(config_dir.join("aether").join("logs"))
 }

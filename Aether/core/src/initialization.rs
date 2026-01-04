@@ -123,9 +123,7 @@ pub fn download_embedding_model_standalone(
         .map_err(|e| AetherError::config(format!("Failed to create Tokio runtime: {}", e)))?;
 
     // Try to download the model
-    let result = runtime.block_on(async {
-        download_embedding_model(callback).await
-    });
+    let result = runtime.block_on(async { download_embedding_model(callback).await });
 
     match result {
         Ok(()) => {
@@ -156,9 +154,7 @@ pub fn get_config_dir() -> Result<PathBuf> {
 
 /// Get the model directory path
 pub fn get_model_dir() -> Result<PathBuf> {
-    Ok(get_config_dir()?
-        .join("models")
-        .join("all-MiniLM-L6-v2"))
+    Ok(get_config_dir()?.join("models").join("all-MiniLM-L6-v2"))
 }
 
 /// Run first-time initialization
@@ -193,14 +189,17 @@ pub async fn run_first_time_init_async(
     // Step 1: Create directory structure
     current_step += 1;
     if let Some(cb) = callback {
-        cb.on_step_started("Creating directories".to_string(), current_step, TOTAL_STEPS);
+        cb.on_step_started(
+            "Creating directories".to_string(),
+            current_step,
+            TOTAL_STEPS,
+        );
     }
 
-    create_directory_structure().await.map_err(|e| {
+    create_directory_structure().await.inspect_err(|e| {
         if let Some(cb) = callback {
             cb.on_init_failed(e.to_string());
         }
-        e
     })?;
 
     if let Some(cb) = callback {
@@ -217,11 +216,10 @@ pub async fn run_first_time_init_async(
         );
     }
 
-    create_default_config().await.map_err(|e| {
+    create_default_config().await.inspect_err(|e| {
         if let Some(cb) = callback {
             cb.on_init_failed(e.to_string());
         }
-        e
     })?;
 
     if let Some(cb) = callback {
@@ -273,11 +271,10 @@ pub async fn run_first_time_init_async(
     }
 
     if model_downloaded {
-        initialize_memory_database().await.map_err(|e| {
+        initialize_memory_database().await.inspect_err(|e| {
             if let Some(cb) = callback {
                 cb.on_init_failed(e.to_string());
             }
-            e
         })?;
 
         if let Some(cb) = callback {
@@ -293,9 +290,7 @@ pub async fn run_first_time_init_async(
     // Update config to disable memory if model wasn't downloaded
     if !model_downloaded {
         update_config_memory_setting(false).await?;
-        warn!(
-            "⚠️  Initialization completed in offline mode - memory functionality disabled"
-        );
+        warn!("⚠️  Initialization completed in offline mode - memory functionality disabled");
     }
 
     // Notify completion
@@ -329,10 +324,7 @@ async fn update_config_memory_setting(enabled: bool) -> Result<()> {
     // Save back to file
     config.save_to_file(&config_path)?;
 
-    info!(
-        "Updated config: memory.enabled = {}",
-        enabled
-    );
+    info!("Updated config: memory.enabled = {}", enabled);
 
     Ok(())
 }
@@ -377,9 +369,8 @@ fn check_disk_space() -> Result<()> {
     };
 
     // Ensure the directory exists for the test
-    fs::create_dir_all(&check_path).map_err(|e| {
-        AetherError::config(format!("Failed to create test directory: {}", e))
-    })?;
+    fs::create_dir_all(&check_path)
+        .map_err(|e| AetherError::config(format!("Failed to create test directory: {}", e)))?;
 
     let test_file = check_path.join(".disk_space_test.tmp");
 
@@ -396,7 +387,7 @@ fn check_disk_space() -> Result<()> {
             // Try to write up to 100MB in 1MB chunks
             while written < TEST_FILE_SIZE {
                 match file.write(&buffer) {
-                    Ok(_) => written += CHUNK_SIZE,
+                    Ok(bytes_written) => written += bytes_written,
                     Err(e) => {
                         let _ = std::fs::remove_file(&test_file);
                         return Err(AetherError::config(format!(
@@ -418,12 +409,10 @@ fn check_disk_space() -> Result<()> {
             );
             Ok(())
         }
-        Err(e) => {
-            Err(AetherError::config(format!(
-                "Failed to create disk space test file: {}",
-                e
-            )))
-        }
+        Err(e) => Err(AetherError::config(format!(
+            "Failed to create disk space test file: {}",
+            e
+        ))),
     }
 }
 
@@ -434,14 +423,12 @@ async fn create_directory_structure() -> Result<()> {
     let logs_dir = config_dir.join("logs");
 
     debug!("Creating config directory: {:?}", config_dir);
-    fs::create_dir_all(&config_dir).map_err(|e| {
-        AetherError::config(format!("Failed to create config directory: {}", e))
-    })?;
+    fs::create_dir_all(&config_dir)
+        .map_err(|e| AetherError::config(format!("Failed to create config directory: {}", e)))?;
 
     debug!("Creating model directory: {:?}", model_dir);
-    fs::create_dir_all(&model_dir).map_err(|e| {
-        AetherError::config(format!("Failed to create model directory: {}", e))
-    })?;
+    fs::create_dir_all(&model_dir)
+        .map_err(|e| AetherError::config(format!("Failed to create model directory: {}", e)))?;
 
     debug!("Creating logs directory: {:?}", logs_dir);
     fs::create_dir_all(&logs_dir)
@@ -497,7 +484,8 @@ async fn download_embedding_model(
         }
     }
 
-    const BASE_URL: &str = "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main";
+    const BASE_URL: &str =
+        "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main";
 
     // Download model.onnx
     if !model_file.exists() {
@@ -507,7 +495,11 @@ async fn download_embedding_model(
         download_file(&url, &model_file, progress_callback).await?;
 
         // Validate downloaded file
-        validate_file_size(&model_file, EXPECTED_MODEL_SIZE_MIN, EXPECTED_MODEL_SIZE_MAX)?;
+        validate_file_size(
+            &model_file,
+            EXPECTED_MODEL_SIZE_MIN,
+            EXPECTED_MODEL_SIZE_MAX,
+        )?;
     }
 
     // Download tokenizer.json
@@ -518,7 +510,11 @@ async fn download_embedding_model(
         download_file(&url, &tokenizer_file, progress_callback).await?;
 
         // Validate downloaded file
-        validate_file_size(&tokenizer_file, EXPECTED_TOKENIZER_SIZE_MIN, EXPECTED_TOKENIZER_SIZE_MAX)?;
+        validate_file_size(
+            &tokenizer_file,
+            EXPECTED_TOKENIZER_SIZE_MIN,
+            EXPECTED_TOKENIZER_SIZE_MAX,
+        )?;
     }
 
     info!("✅ Embedding model downloaded and validated successfully");
@@ -533,12 +529,16 @@ fn validate_model_files(model_file: &Path, tokenizer_file: &Path) -> Result<bool
 
     // Check file sizes
     match validate_file_size(model_file, EXPECTED_MODEL_SIZE_MIN, EXPECTED_MODEL_SIZE_MAX) {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => return Ok(false),
     }
 
-    match validate_file_size(tokenizer_file, EXPECTED_TOKENIZER_SIZE_MIN, EXPECTED_TOKENIZER_SIZE_MAX) {
-        Ok(_) => {},
+    match validate_file_size(
+        tokenizer_file,
+        EXPECTED_TOKENIZER_SIZE_MIN,
+        EXPECTED_TOKENIZER_SIZE_MAX,
+    ) {
+        Ok(_) => {}
         Err(_) => return Ok(false),
     }
 
@@ -606,10 +606,7 @@ async fn download_file(
                 return Ok(());
             }
             Err(e) => {
-                warn!(
-                    "Download attempt {}/{} failed: {}",
-                    attempt, MAX_RETRIES, e
-                );
+                warn!("Download attempt {}/{} failed: {}", attempt, MAX_RETRIES, e);
                 last_error = Some(e);
 
                 // If not the last attempt, wait with exponential backoff
@@ -668,9 +665,9 @@ async fn download_file_once(
 
     // Create temp file
     let temp_path = dest_path.with_extension("tmp");
-    let mut file = tokio::fs::File::create(&temp_path).await.map_err(|e| {
-        AetherError::config(format!("Failed to create temp file: {}", e))
-    })?;
+    let mut file = tokio::fs::File::create(&temp_path)
+        .await
+        .map_err(|e| AetherError::config(format!("Failed to create temp file: {}", e)))?;
 
     // Download with progress updates
     let mut downloaded: u64 = 0;
@@ -682,14 +679,14 @@ async fn download_file_once(
         let chunk = chunk
             .map_err(|e| AetherError::config(format!("Failed to read download chunk: {}", e)))?;
 
-        file.write_all(&chunk).await.map_err(|e| {
-            AetherError::config(format!("Failed to write to file: {}", e))
-        })?;
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| AetherError::config(format!("Failed to write to file: {}", e)))?;
 
         downloaded += chunk.len() as u64;
 
         // Update progress (every 1MB or at completion)
-        if downloaded % (1024 * 1024) == 0 || downloaded == total_size {
+        if downloaded.is_multiple_of(1024 * 1024) || downloaded == total_size {
             if let Some(cb) = progress_callback {
                 cb.on_download_progress(downloaded, total_size);
             }
@@ -739,9 +736,8 @@ async fn initialize_memory_database() -> Result<()> {
     // Import VectorDatabase to trigger schema creation
     use crate::memory::database::VectorDatabase;
 
-    let _db = VectorDatabase::new(db_path.clone()).map_err(|e| {
-        AetherError::config(format!("Failed to initialize memory database: {}", e))
-    })?;
+    let _db = VectorDatabase::new(db_path.clone())
+        .map_err(|e| AetherError::config(format!("Failed to initialize memory database: {}", e)))?;
 
     info!("✅ Memory database initialized");
     Ok(())
@@ -804,12 +800,27 @@ mod tests {
         // Create directory structure first
         create_directory_structure().await.unwrap();
 
+        // Verify config_file path
+        let config_file = temp_dir
+            .path()
+            .join(".config")
+            .join("aether")
+            .join("config.toml");
+
+        // Ensure config file doesn't exist before creation
+        if config_file.exists() {
+            std::fs::remove_file(&config_file).unwrap();
+        }
+
         // Create default config
         create_default_config().await.unwrap();
 
         // Verify config file exists
-        let config_file = temp_dir.path().join(".config").join("aether").join("config.toml");
-        assert!(config_file.exists());
+        assert!(
+            config_file.exists(),
+            "Config file should exist at {:?}",
+            config_file
+        );
 
         // Verify config can be loaded
         let config = Config::load_from_file(&config_file).unwrap();

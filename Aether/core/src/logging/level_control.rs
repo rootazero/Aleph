@@ -13,9 +13,11 @@ use tracing::Level;
 /// The Rust definition must match the UDL enum exactly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
+#[derive(Default)]
 pub enum LogLevel {
     Error,
     Warn,
+    #[default]
     Info,
     Debug,
     Trace,
@@ -80,11 +82,6 @@ impl LogLevel {
     }
 }
 
-impl Default for LogLevel {
-    fn default() -> Self {
-        LogLevel::Info
-    }
-}
 
 /// Global log level storage
 static CURRENT_LOG_LEVEL: AtomicU8 = AtomicU8::new(2); // Default to Info (2)
@@ -102,7 +99,7 @@ pub fn init_log_level() {
             let level_str = rust_log
                 .split(',')
                 .next()
-                .and_then(|s| s.split('=').last())
+                .and_then(|s| s.split('=').next_back())
                 .unwrap_or("info");
 
             if let Some(level) = LogLevel::from_str(level_str) {

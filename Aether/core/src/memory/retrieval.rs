@@ -73,7 +73,10 @@ impl MemoryRetrieval {
             AetherError::config(format!("Failed to generate query embedding: {}", e))
         })?;
 
-        debug!(embedding_dim = query_embedding.len(), "Query embedding generated");
+        debug!(
+            embedding_dim = query_embedding.len(),
+            "Query embedding generated"
+        );
 
         // 3. Search database with context filter
         let mut memories = self
@@ -86,10 +89,7 @@ impl MemoryRetrieval {
             )
             .await?;
 
-        debug!(
-            memories_found = memories.len(),
-            "Database search completed"
-        );
+        debug!(memories_found = memories.len(), "Database search completed");
 
         // 4. Filter by similarity threshold
         let original_count = memories.len();

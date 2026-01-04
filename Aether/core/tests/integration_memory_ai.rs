@@ -47,14 +47,11 @@ fn create_test_config_with_providers() -> Config {
     };
 
     // Add mock provider (uses openai type for testing)
-    config.providers.insert(
-        "mock".to_string(),
-        {
-            let mut provider_config = ProviderConfig::test_config("gpt-4o");
-            provider_config.provider_type = Some("openai".to_string());
-            provider_config
-        },
-    );
+    config.providers.insert("mock".to_string(), {
+        let mut provider_config = ProviderConfig::test_config("gpt-4o");
+        provider_config.provider_type = Some("openai".to_string());
+        provider_config
+    });
 
     // Set default provider
     config.general.default_provider = Some("mock".to_string());

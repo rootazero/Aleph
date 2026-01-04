@@ -30,7 +30,10 @@ use std::time::{Duration, SystemTime};
 /// let deleted = cleanup_old_logs(log_dir, 7).unwrap();
 /// println!("Deleted {} old log files", deleted);
 /// ```
-pub fn cleanup_old_logs(log_dir: &Path, retention_days: u32) -> Result<usize, Box<dyn std::error::Error>> {
+pub fn cleanup_old_logs(
+    log_dir: &Path,
+    retention_days: u32,
+) -> Result<usize, Box<dyn std::error::Error>> {
     // Validate retention_days (1-30)
     let retention_days = retention_days.clamp(1, 30);
 
@@ -57,9 +60,7 @@ pub fn cleanup_old_logs(log_dir: &Path, retention_days: u32) -> Result<usize, Bo
         }
 
         // Skip non-log files (only process .log* files)
-        let file_name = path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         if !file_name.starts_with("aether") || !file_name.contains(".log") {
             continue;
@@ -82,7 +83,7 @@ pub fn cleanup_old_logs(log_dir: &Path, retention_days: u32) -> Result<usize, Bo
                 Ok(_) => {
                     tracing::info!(
                         file = %path.display(),
-                        age_days = %((SystemTime::now().duration_since(modified).unwrap_or_default().as_secs() / 86400)),
+                        age_days = %(SystemTime::now().duration_since(modified).unwrap_or_default().as_secs() / 86400),
                         "Deleted old log file"
                     );
                     deleted_count += 1;

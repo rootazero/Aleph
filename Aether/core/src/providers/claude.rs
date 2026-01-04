@@ -124,8 +124,8 @@ enum ClaudeContentBlock {
 struct ImageSource {
     #[serde(rename = "type")]
     source_type: String, // Always "base64"
-    media_type: String,  // "image/png", "image/jpeg", "image/gif"
-    data: String,        // Base64 encoded image data (without data URI prefix)
+    media_type: String, // "image/png", "image/jpeg", "image/gif"
+    data: String,       // Base64 encoded image data (without data URI prefix)
 }
 
 /// Response from Claude Messages API
@@ -190,9 +190,7 @@ impl ClaudeProvider {
         }
 
         if config.model.is_empty() {
-            return Err(AetherError::invalid_config(
-                "Model name cannot be empty",
-            ));
+            return Err(AetherError::invalid_config("Model name cannot be empty"));
         }
 
         if config.timeout_seconds == 0 {
@@ -326,10 +324,10 @@ impl ClaudeProvider {
             let aether_error = match status.as_u16() {
                 401 => {
                     error!(status = 401, error = %error_msg, "Claude authentication failed");
-                    AetherError::authentication("Claude", &format!(
-                        "Invalid Claude API key: {}",
-                        error_msg
-                    ))
+                    AetherError::authentication(
+                        "Claude",
+                        &format!("Invalid Claude API key: {}", error_msg),
+                    )
                 }
                 429 => {
                     error!(status = 429, error = %error_msg, "Claude rate limit exceeded");
@@ -348,10 +346,7 @@ impl ClaudeProvider {
                 }
                 _ => {
                     error!(status = status.as_u16(), error = %error_msg, "Claude API error");
-                    AetherError::provider(format!(
-                        "Claude API error ({}): {}",
-                        status, error_msg
-                    ))
+                    AetherError::provider(format!("Claude API error ({}): {}", status, error_msg))
                 }
             };
 
@@ -359,7 +354,10 @@ impl ClaudeProvider {
         }
 
         // Fallback if we can't parse the error response
-        error!(status = status.as_u16(), "Claude request failed (unable to parse error response)");
+        error!(
+            status = status.as_u16(),
+            "Claude request failed (unable to parse error response)"
+        );
         match status.as_u16() {
             401 => AetherError::authentication("Claude", "Invalid Claude API key"),
             429 => AetherError::rate_limit("Claude rate limit exceeded"),
@@ -371,78 +369,84 @@ impl ClaudeProvider {
 }
 
 impl AiProvider for ClaudeProvider {
-    fn process(&self, input: &str, system_prompt: Option<&str>) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    fn process(
+        &self,
+        input: &str,
+        system_prompt: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
         // Clone the data we need before moving into async block
         let input = input.to_string();
         let system_prompt = system_prompt.map(|s| s.to_string());
 
         Box::pin(async move {
-        debug!(
-            model = %self.config.model,
-            input_length = input.len(),
-            has_system_prompt = system_prompt.is_some(),
-            "Sending request to Claude"
-        );
+            debug!(
+                model = %self.config.model,
+                input_length = input.len(),
+                has_system_prompt = system_prompt.is_some(),
+                "Sending request to Claude"
+            );
 
-        // Build request body
-        let request_body = self.build_request(&input, system_prompt.as_deref());
+            // Build request body
+            let request_body = self.build_request(&input, system_prompt.as_deref());
 
-        // Send POST request with Claude-specific headers
-        let response = self
-            .client
-            .post(&self.endpoint)
-            .header(
-                "x-api-key",
-                self.config.api_key.as_ref().unwrap_or(&String::new()),
-            )
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    error!("Claude request timed out");
-                    AetherError::Timeout { suggestion: Some("Try again in a few moments".to_string()) }
-                } else if e.is_connect() {
-                    error!(error = %e, "Failed to connect to Claude");
-                    AetherError::network(format!("Failed to connect to Claude: {}", e))
-                } else {
-                    error!(error = %e, "Claude network error");
-                    AetherError::network(format!("Network error: {}", e))
-                }
+            // Send POST request with Claude-specific headers
+            let response = self
+                .client
+                .post(&self.endpoint)
+                .header(
+                    "x-api-key",
+                    self.config.api_key.as_ref().unwrap_or(&String::new()),
+                )
+                .header("anthropic-version", ANTHROPIC_VERSION)
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await
+                .map_err(|e| {
+                    if e.is_timeout() {
+                        error!("Claude request timed out");
+                        AetherError::Timeout {
+                            suggestion: Some("Try again in a few moments".to_string()),
+                        }
+                    } else if e.is_connect() {
+                        error!(error = %e, "Failed to connect to Claude");
+                        AetherError::network(format!("Failed to connect to Claude: {}", e))
+                    } else {
+                        error!(error = %e, "Claude network error");
+                        AetherError::network(format!("Network error: {}", e))
+                    }
+                })?;
+
+            // Check status code
+            if !response.status().is_success() {
+                let status = response.status();
+                debug!(status = %status, "Claude request failed");
+                return Err(self.handle_error(response).await);
+            }
+
+            // Parse response
+            let messages_response: MessagesResponse = response.json().await.map_err(|e| {
+                error!(error = %e, "Failed to parse Claude response");
+                AetherError::provider(format!("Failed to parse Claude response: {}", e))
             })?;
 
-        // Check status code
-        if !response.status().is_success() {
-            let status = response.status();
-            debug!(status = %status, "Claude request failed");
-            return Err(self.handle_error(response).await);
-        }
+            // Extract text from first content block
+            let text = messages_response
+                .content
+                .first()
+                .ok_or_else(|| {
+                    error!("Claude returned no content");
+                    AetherError::provider("No response from Claude")
+                })?
+                .text
+                .clone();
 
-        // Parse response
-        let messages_response: MessagesResponse = response.json().await.map_err(|e| {
-            error!(error = %e, "Failed to parse Claude response");
-            AetherError::provider(format!("Failed to parse Claude response: {}", e))
-        })?;
+            info!(
+                response_length = text.len(),
+                "Claude request completed successfully"
+            );
 
-        // Extract text from first content block
-        let text = messages_response
-            .content
-            .first()
-            .ok_or_else(|| {
-                error!("Claude returned no content");
-                AetherError::provider("No response from Claude")
-            })?
-            .text
-            .clone();
-
-        info!(
-            response_length = text.len(),
-            "Claude request completed successfully"
-        );
-
-        Ok(text)
+            Ok(text)
         })
     }
 
@@ -458,79 +462,82 @@ impl AiProvider for ClaudeProvider {
         let system_prompt = system_prompt.map(|s| s.to_string());
 
         Box::pin(async move {
-        // If no image provided, fall back to text-only
-        let Some(image_data) = image else {
-            return self.process(&input, system_prompt.as_deref()).await;
-        };
+            // If no image provided, fall back to text-only
+            let Some(image_data) = image else {
+                return self.process(&input, system_prompt.as_deref()).await;
+            };
 
-        debug!(
-            model = %self.config.model,
-            input_length = input.len(),
-            image_size_mb = image_data.size_mb(),
-            image_format = ?image_data.format,
-            has_system_prompt = system_prompt.is_some(),
-            "Sending vision request to Claude"
-        );
+            debug!(
+                model = %self.config.model,
+                input_length = input.len(),
+                image_size_mb = image_data.size_mb(),
+                image_format = ?image_data.format,
+                has_system_prompt = system_prompt.is_some(),
+                "Sending vision request to Claude"
+            );
 
-        // Build vision request body
-        let request_body = self.build_vision_request(&input, &image_data, system_prompt.as_deref());
+            // Build vision request body
+            let request_body =
+                self.build_vision_request(&input, &image_data, system_prompt.as_deref());
 
-        // Send POST request with Claude-specific headers
-        let response = self
-            .client
-            .post(&self.endpoint)
-            .header(
-                "x-api-key",
-                self.config.api_key.as_ref().unwrap_or(&String::new()),
-            )
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    error!("Claude vision request timed out");
-                    AetherError::Timeout { suggestion: Some("Try again in a few moments".to_string()) }
-                } else if e.is_connect() {
-                    error!(error = %e, "Failed to connect to Claude");
-                    AetherError::network(format!("Failed to connect to Claude: {}", e))
-                } else {
-                    error!(error = %e, "Claude network error");
-                    AetherError::network(format!("Network error: {}", e))
-                }
+            // Send POST request with Claude-specific headers
+            let response = self
+                .client
+                .post(&self.endpoint)
+                .header(
+                    "x-api-key",
+                    self.config.api_key.as_ref().unwrap_or(&String::new()),
+                )
+                .header("anthropic-version", ANTHROPIC_VERSION)
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await
+                .map_err(|e| {
+                    if e.is_timeout() {
+                        error!("Claude vision request timed out");
+                        AetherError::Timeout {
+                            suggestion: Some("Try again in a few moments".to_string()),
+                        }
+                    } else if e.is_connect() {
+                        error!(error = %e, "Failed to connect to Claude");
+                        AetherError::network(format!("Failed to connect to Claude: {}", e))
+                    } else {
+                        error!(error = %e, "Claude network error");
+                        AetherError::network(format!("Network error: {}", e))
+                    }
+                })?;
+
+            // Check status code
+            if !response.status().is_success() {
+                let status = response.status();
+                debug!(status = %status, "Claude vision request failed");
+                return Err(self.handle_error(response).await);
+            }
+
+            // Parse response
+            let messages_response: MessagesResponse = response.json().await.map_err(|e| {
+                error!(error = %e, "Failed to parse Claude vision response");
+                AetherError::provider(format!("Failed to parse Claude vision response: {}", e))
             })?;
 
-        // Check status code
-        if !response.status().is_success() {
-            let status = response.status();
-            debug!(status = %status, "Claude vision request failed");
-            return Err(self.handle_error(response).await);
-        }
+            // Extract text from first content block
+            let text = messages_response
+                .content
+                .first()
+                .ok_or_else(|| {
+                    error!("Claude returned no content");
+                    AetherError::provider("No response from Claude")
+                })?
+                .text
+                .clone();
 
-        // Parse response
-        let messages_response: MessagesResponse = response.json().await.map_err(|e| {
-            error!(error = %e, "Failed to parse Claude vision response");
-            AetherError::provider(format!("Failed to parse Claude vision response: {}", e))
-        })?;
+            info!(
+                response_length = text.len(),
+                "Claude vision request completed successfully"
+            );
 
-        // Extract text from first content block
-        let text = messages_response
-            .content
-            .first()
-            .ok_or_else(|| {
-                error!("Claude returned no content");
-                AetherError::provider("No response from Claude")
-            })?
-            .text
-            .clone();
-
-        info!(
-            response_length = text.len(),
-            "Claude vision request completed successfully"
-        );
-
-        Ok(text)
+            Ok(text)
         })
     }
 

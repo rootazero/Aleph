@@ -3,7 +3,6 @@
 /// This component implements the "Assembler" pattern from the structured context protocol.
 /// It takes user input, parses intent, applies middleware transformations, and builds
 /// the final payload ready for AI provider consumption.
-
 use super::{AgentIntent, AgentPayload, AppContext};
 use crate::config::RoutingRuleConfig;
 use crate::error::{AetherError, Result};
@@ -119,9 +118,16 @@ impl PromptAssembler {
         // If rule has a system prompt, add it to templates
         let template_id = if let Some(ref system_prompt) = rule.system_prompt {
             // Generate template ID from pattern (sanitize for HashMap key)
-            let template_id = format!("custom_{}", rule.regex.replace(['/', '^', '$', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '\\'], "_"));
+            let template_id = format!(
+                "custom_{}",
+                rule.regex.replace(
+                    ['/', '^', '$', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '\\'],
+                    "_"
+                )
+            );
 
-            self.templates.insert(template_id.clone(), system_prompt.clone());
+            self.templates
+                .insert(template_id.clone(), system_prompt.clone());
             template_id
         } else {
             // No custom prompt, use default
@@ -131,7 +137,9 @@ impl PromptAssembler {
         let command = CustomCommand {
             pattern,
             template_id,
-            strip_prefix: rule.strip_prefix.unwrap_or_else(|| rule.regex.starts_with("^/")),
+            strip_prefix: rule
+                .strip_prefix
+                .unwrap_or_else(|| rule.regex.starts_with("^/")),
             temperature: None, // TODO: Extract from rule config if available
         };
 
@@ -347,10 +355,8 @@ mod tests {
     fn test_memory_augmentation() {
         let assembler = PromptAssembler::new();
 
-        let mut payload = AgentPayload::new(
-            "What did we discuss?".to_string(),
-            AgentIntent::GeneralChat,
-        );
+        let mut payload =
+            AgentPayload::new("What did we discuss?".to_string(), AgentIntent::GeneralChat);
 
         let memories = vec![
             "Previous topic: Rust programming".to_string(),

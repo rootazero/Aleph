@@ -13,7 +13,6 @@
 /// - Extensibility for future features (search, MCP, skills)
 /// - Type-safe communication between Rust and Swift via UniFFI
 /// - Flexible prompt composition based on context
-
 pub mod assembler;
 
 use serde::{Deserialize, Serialize};
@@ -206,10 +205,18 @@ impl AgentPayload {
         // TODO: Load from template library/database
         // For now, match based on template_id and intent
         match self.config.system_template_id.as_str() {
-            "trans_en" => "You are a professional translator. Translate user input to English.".to_string(),
-            "trans_zh" => "You are a professional translator. Translate user input to Chinese.".to_string(),
-            "code_expert" => "You are a senior software engineer. Provide code assistance.".to_string(),
-            "search_assistant" => "You are a research assistant. Answer based on the provided context.".to_string(),
+            "trans_en" => {
+                "You are a professional translator. Translate user input to English.".to_string()
+            }
+            "trans_zh" => {
+                "You are a professional translator. Translate user input to Chinese.".to_string()
+            }
+            "code_expert" => {
+                "You are a senior software engineer. Provide code assistance.".to_string()
+            }
+            "search_assistant" => {
+                "You are a research assistant. Answer based on the provided context.".to_string()
+            }
             _ => "You are a helpful AI assistant.".to_string(),
         }
     }
@@ -267,10 +274,7 @@ mod tests {
 
     #[test]
     fn test_agent_payload_creation() {
-        let payload = AgentPayload::new(
-            "Hello world".to_string(),
-            AgentIntent::GeneralChat,
-        );
+        let payload = AgentPayload::new("Hello world".to_string(), AgentIntent::GeneralChat);
 
         assert_eq!(payload.user_input, "Hello world");
         assert_eq!(payload.meta.intent, AgentIntent::GeneralChat);
@@ -281,7 +285,9 @@ mod tests {
     fn test_build_messages_basic() {
         let payload = AgentPayload::new(
             "Translate this".to_string(),
-            AgentIntent::Translation { target_lang: "English".to_string() },
+            AgentIntent::Translation {
+                target_lang: "English".to_string(),
+            },
         );
 
         let messages = payload.build_messages();
@@ -293,19 +299,14 @@ mod tests {
 
     #[test]
     fn test_context_augmentation() {
-        let mut payload = AgentPayload::new(
-            "What is AI?".to_string(),
-            AgentIntent::WebSearch,
-        );
+        let mut payload = AgentPayload::new("What is AI?".to_string(), AgentIntent::WebSearch);
 
         // Add search results
-        payload.context.search_results = Some(vec![
-            SearchResult {
-                title: "AI Wiki".to_string(),
-                url: "https://example.com".to_string(),
-                snippet: "Artificial Intelligence is...".to_string(),
-            },
-        ]);
+        payload.context.search_results = Some(vec![SearchResult {
+            title: "AI Wiki".to_string(),
+            url: "https://example.com".to_string(),
+            snippet: "Artificial Intelligence is...".to_string(),
+        }]);
 
         let messages = payload.build_messages();
         let system_prompt = messages[0]["content"].as_str().unwrap();
@@ -316,10 +317,7 @@ mod tests {
 
     #[test]
     fn test_memory_augmentation() {
-        let mut payload = AgentPayload::new(
-            "继续之前的话题".to_string(),
-            AgentIntent::GeneralChat,
-        );
+        let mut payload = AgentPayload::new("继续之前的话题".to_string(), AgentIntent::GeneralChat);
 
         // Add memory snippets
         payload.context.memory_snippets = Some(vec![

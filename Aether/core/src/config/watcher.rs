@@ -173,7 +173,10 @@ impl ConfigWatcher {
             .watch(&watch_path, RecursiveMode::NonRecursive)
             .map_err(|e| AetherError::config(format!("Failed to watch config file: {}", e)))?;
 
-        log::info!("Started watching config file: {}", self.config_path.display());
+        log::info!(
+            "Started watching config file: {}",
+            self.config_path.display()
+        );
 
         // Store debouncer to keep it alive
         *debouncer_lock = Some(debouncer);
@@ -210,7 +213,10 @@ impl ConfigWatcher {
     /// Check if the watcher is currently running (test only)
     #[cfg(test)]
     pub fn is_running(&self) -> bool {
-        self.debouncer.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+        self.debouncer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
     }
 }
 

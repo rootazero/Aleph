@@ -121,7 +121,9 @@ impl AetherError {
     pub fn clipboard<S: Into<String>>(msg: S) -> Self {
         AetherError::ClipboardError {
             message: msg.into(),
-            suggestion: Some("Ensure you have copied text or an image before pressing Cmd+~".to_string()),
+            suggestion: Some(
+                "Ensure you have copied text or an image before pressing Cmd+~".to_string(),
+            ),
         }
     }
 
@@ -145,7 +147,9 @@ impl AetherError {
     pub fn config<S: Into<String>>(msg: S) -> Self {
         AetherError::ConfigError {
             message: msg.into(),
-            suggestion: Some("Check your configuration file at ~/.config/aether/config.toml".to_string()),
+            suggestion: Some(
+                "Check your configuration file at ~/.config/aether/config.toml".to_string(),
+            ),
         }
     }
 
@@ -182,7 +186,9 @@ impl AetherError {
     pub fn provider<S: Into<String>>(msg: S) -> Self {
         AetherError::ProviderError {
             message: msg.into(),
-            suggestion: Some("Try switching to a different AI provider in Settings → Providers".to_string()),
+            suggestion: Some(
+                "Try switching to a different AI provider in Settings → Providers".to_string(),
+            ),
         }
     }
 
@@ -190,7 +196,10 @@ impl AetherError {
     pub fn invalid_config<S: Into<String>>(msg: S) -> Self {
         AetherError::InvalidConfig {
             message: msg.into(),
-            suggestion: Some("Edit your configuration in Settings or check ~/.config/aether/config.toml".to_string()),
+            suggestion: Some(
+                "Edit your configuration in Settings or check ~/.config/aether/config.toml"
+                    .to_string(),
+            ),
         }
     }
 
@@ -277,7 +286,10 @@ impl AetherError {
                     .to_string()
             }
             AetherError::InvalidConfig { message, .. } => {
-                format!("Configuration error: {}. Please check your settings.", message)
+                format!(
+                    "Configuration error: {}. Please check your settings.",
+                    message
+                )
             }
             AetherError::ProviderError { message, .. } => {
                 // Check if it's a server error (5xx)
@@ -322,7 +334,10 @@ impl AetherError {
                 )
             }
             AetherError::CallbackError { message, .. } => {
-                format!("Internal error: {}. Please restart the application.", message)
+                format!(
+                    "Internal error: {}. Please restart the application.",
+                    message
+                )
             }
             AetherError::Other { message, .. } => {
                 format!("An error occurred: {}. Please try again.", message)

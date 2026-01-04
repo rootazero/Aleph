@@ -418,7 +418,7 @@ impl Default for MemoryConfig {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            default_hotkey: "Grave".to_string(),  // Single ` key (backtick) for quick access
+            default_hotkey: "Grave".to_string(), // Single ` key (backtick) for quick access
             general: GeneralConfig::default(),
             memory: MemoryConfig::default(),
             providers: HashMap::new(),
@@ -788,7 +788,10 @@ impl Config {
         }
 
         if !(0.0..=1.0).contains(&self.memory.similarity_threshold) {
-            error!(threshold = self.memory.similarity_threshold, "Invalid similarity threshold");
+            error!(
+                threshold = self.memory.similarity_threshold,
+                "Invalid similarity threshold"
+            );
             return Err(AetherError::invalid_config(format!(
                 "memory.similarity_threshold must be between 0.0 and 1.0, got {}",
                 self.memory.similarity_threshold
@@ -1081,7 +1084,10 @@ impl Config {
     /// ```
     pub fn add_rule_at_top(&mut self, rule: RoutingRuleConfig) {
         self.rules.insert(0, rule);
-        debug!(rules_count = self.rules.len(), "Added rule at top (highest priority)");
+        debug!(
+            rules_count = self.rules.len(),
+            "Added rule at top (highest priority)"
+        );
     }
 
     /// Remove a routing rule by index
@@ -1114,7 +1120,11 @@ impl Config {
             );
             Ok(())
         } else {
-            error!(index = index, max_index = self.rules.len().saturating_sub(1), "Rule index out of bounds");
+            error!(
+                index = index,
+                max_index = self.rules.len().saturating_sub(1),
+                "Rule index out of bounds"
+            );
             Err(AetherError::invalid_config(format!(
                 "Rule index {} out of bounds (valid range: 0-{})",
                 index,
@@ -1147,7 +1157,11 @@ impl Config {
     /// ```
     pub fn move_rule(&mut self, from: usize, to: usize) -> Result<()> {
         if from >= self.rules.len() {
-            error!(from_index = from, max_index = self.rules.len().saturating_sub(1), "Source rule index out of bounds");
+            error!(
+                from_index = from,
+                max_index = self.rules.len().saturating_sub(1),
+                "Source rule index out of bounds"
+            );
             return Err(AetherError::invalid_config(format!(
                 "Source index {} out of bounds (valid range: 0-{})",
                 from,
@@ -1155,7 +1169,11 @@ impl Config {
             )));
         }
         if to >= self.rules.len() {
-            error!(to_index = to, max_index = self.rules.len().saturating_sub(1), "Target rule index out of bounds");
+            error!(
+                to_index = to,
+                max_index = self.rules.len().saturating_sub(1),
+                "Target rule index out of bounds"
+            );
             return Err(AetherError::invalid_config(format!(
                 "Target index {} out of bounds (valid range: 0-{})",
                 to,
@@ -1206,14 +1224,14 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.default_hotkey, "Grave");  // Single ` key
+        assert_eq!(config.default_hotkey, "Grave"); // Single ` key
         assert!(config.memory.enabled);
     }
 
     #[test]
     fn test_new_config() {
         let config = Config::new();
-        assert_eq!(config.default_hotkey, "Grave");  // Single ` key
+        assert_eq!(config.default_hotkey, "Grave"); // Single ` key
     }
 
     #[test]
@@ -1396,7 +1414,7 @@ max_context_items = 5
 "##;
 
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.default_hotkey, "Grave");  // Single ` key
+        assert_eq!(config.default_hotkey, "Grave"); // Single ` key
         assert_eq!(config.general.default_provider, Some("openai".to_string()));
         assert!(config.providers.contains_key("openai"));
         assert_eq!(config.rules.len(), 1);
@@ -1458,13 +1476,13 @@ max_context_items = 5
 
         // Test various valid regex patterns
         let valid_patterns = vec![
-            ".*",                    // Match all
-            "^/code",                // Start with /code
-            "\\d+",                  // One or more digits
-            "hello|world",           // Alternatives
-            "[a-zA-Z]+",             // Character class
-            "^test$",                // Exact match
-            "(foo|bar)\\s+\\w+",     // Groups and word characters
+            ".*",                // Match all
+            "^/code",            // Start with /code
+            "\\d+",              // One or more digits
+            "hello|world",       // Alternatives
+            "[a-zA-Z]+",         // Character class
+            "^test$",            // Exact match
+            "(foo|bar)\\s+\\w+", // Groups and word characters
         ];
 
         for pattern in valid_patterns {
@@ -1492,11 +1510,11 @@ max_context_items = 5
 
         // Test various invalid regex patterns
         let invalid_patterns = vec![
-            "[invalid(",          // Unclosed bracket
-            "(unclosed",          // Unclosed parenthesis
-            "**",                 // Invalid quantifier
-            "(?P<invalid",        // Unclosed named group
-            "[z-a]",              // Invalid range
+            "[invalid(",   // Unclosed bracket
+            "(unclosed",   // Unclosed parenthesis
+            "**",          // Invalid quantifier
+            "(?P<invalid", // Unclosed named group
+            "[z-a]",       // Invalid range
         ];
 
         for pattern in invalid_patterns {
@@ -1676,14 +1694,8 @@ max_context_items = 5
 
         // Verify conversion
         assert_eq!(full_config.providers.len(), 2);
-        assert!(full_config
-            .providers
-            .iter()
-            .any(|p| p.name == "openai"));
-        assert!(full_config
-            .providers
-            .iter()
-            .any(|p| p.name == "claude"));
+        assert!(full_config.providers.iter().any(|p| p.name == "openai"));
+        assert!(full_config.providers.iter().any(|p| p.name == "claude"));
     }
 
     #[test]
@@ -1726,10 +1738,7 @@ max_context_items = 5
             deserialized.shortcuts.as_ref().unwrap().summon,
             "Command+Shift+A"
         );
-        assert_eq!(
-            deserialized.behavior.as_ref().unwrap().input_mode,
-            "copy"
-        );
+        assert_eq!(deserialized.behavior.as_ref().unwrap().input_mode, "copy");
         assert_eq!(deserialized.providers.len(), 1);
         assert_eq!(deserialized.rules.len(), 1);
         assert!(deserialized.validate().is_ok());

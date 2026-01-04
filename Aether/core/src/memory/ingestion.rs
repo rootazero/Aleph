@@ -9,8 +9,8 @@ use crate::memory::database::VectorDatabase;
 use crate::memory::embedding::EmbeddingModel;
 use crate::utils::pii::scrub_pii;
 use std::sync::Arc;
-use uuid::Uuid;
 use tracing::{debug, info};
+use uuid::Uuid;
 
 /// Memory ingestion service for storing new interactions
 #[derive(Clone)]
@@ -94,7 +94,10 @@ impl MemoryIngestion {
 
         // 4. Generate embedding for concatenated text
         let combined_text = format!("{}\n\n{}", scrubbed_input, scrubbed_output);
-        debug!(combined_len = combined_text.len(), "Generating embedding for memory");
+        debug!(
+            combined_len = combined_text.len(),
+            "Generating embedding for memory"
+        );
 
         let embedding = self
             .embedding_model
@@ -102,7 +105,10 @@ impl MemoryIngestion {
             .await
             .map_err(|e| AetherError::config(format!("Failed to generate embedding: {}", e)))?;
 
-        debug!(embedding_dim = embedding.len(), "Embedding generated successfully");
+        debug!(
+            embedding_dim = embedding.len(),
+            "Embedding generated successfully"
+        );
 
         // 5. Create memory entry
         let memory_id = Uuid::new_v4().to_string();

@@ -89,16 +89,15 @@ pub mod utils;
 // NOTE: ImageData/ImageFormat still exported for AI provider image encoding
 pub use crate::clipboard::{ImageData, ImageFormat};
 pub use crate::config::{
-    BehaviorConfig, Config, FullConfig, GeneralConfig, MemoryConfig,
-    ProviderConfig, ProviderConfigEntry, RoutingRuleConfig, ShortcutsConfig,
-    TestConnectionResult,
+    BehaviorConfig, Config, FullConfig, GeneralConfig, MemoryConfig, ProviderConfig,
+    ProviderConfigEntry, RoutingRuleConfig, ShortcutsConfig, TestConnectionResult,
 };
 pub use crate::core::{AetherCore, AppMemoryInfo, CapturedContext, MemoryEntryFFI as MemoryEntry};
 pub use crate::error::{AetherError, AetherException, Result};
 pub use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 pub use crate::initialization::{
-    check_embedding_model_exists, download_embedding_model_standalone,
-    is_fresh_install, run_first_time_init, InitializationProgressHandler,
+    check_embedding_model_exists, download_embedding_model_standalone, is_fresh_install,
+    run_first_time_init, InitializationProgressHandler,
 };
 pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer};
 pub use crate::memory::database::MemoryStats;
@@ -146,8 +145,8 @@ pub fn init_logging() {
 
         static INIT: std::sync::Once = std::sync::Once::new();
         INIT.call_once(|| {
-            let filter = EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info"));
+            let filter =
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
             tracing_subscriber::registry()
                 .with(filter)

@@ -39,13 +39,21 @@ fn main() {
         action = "login",
         "User logged in successfully"
     );
-    info!(provider = "openai", model = "gpt-4", latency_ms = 450, "AI request completed");
+    info!(
+        provider = "openai",
+        model = "gpt-4",
+        latency_ms = 450,
+        "AI request completed"
+    );
     println!();
 
     // Example 3: PII in logs (will be scrubbed)
     println!("Example 3: PII in logs (automatically scrubbed)");
     info!(user_email = "john@example.com", "User registered");
-    warn!(api_key = "sk-proj1234567890abcdefghijklmnopqrstuvwxyz", "API key detected in request");
+    warn!(
+        api_key = "sk-proj1234567890abcdefghijklmnopqrstuvwxyz",
+        "API key detected in request"
+    );
     error!(
         sensitive_data = "SSN: 123-45-6789, Phone: (555) 123-4567",
         "Sensitive data in error"
