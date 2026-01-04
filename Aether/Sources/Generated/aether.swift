@@ -1195,10 +1195,11 @@ public struct FullConfig {
     public var rules: [RoutingRuleConfig]
     public var shortcuts: ShortcutsConfig?
     public var behavior: BehaviorConfig?
+    public var search: SearchConfig?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultHotkey: String, general: GeneralConfig, memory: MemoryConfig, providers: [ProviderConfigEntry], rules: [RoutingRuleConfig], shortcuts: ShortcutsConfig?, behavior: BehaviorConfig?) {
+    public init(defaultHotkey: String, general: GeneralConfig, memory: MemoryConfig, providers: [ProviderConfigEntry], rules: [RoutingRuleConfig], shortcuts: ShortcutsConfig?, behavior: BehaviorConfig?, search: SearchConfig?) {
         self.defaultHotkey = defaultHotkey
         self.general = general
         self.memory = memory
@@ -1206,6 +1207,7 @@ public struct FullConfig {
         self.rules = rules
         self.shortcuts = shortcuts
         self.behavior = behavior
+        self.search = search
     }
 }
 
@@ -1234,6 +1236,9 @@ extension FullConfig: Equatable, Hashable {
         if lhs.behavior != rhs.behavior {
             return false
         }
+        if lhs.search != rhs.search {
+            return false
+        }
         return true
     }
 
@@ -1245,6 +1250,7 @@ extension FullConfig: Equatable, Hashable {
         hasher.combine(rules)
         hasher.combine(shortcuts)
         hasher.combine(behavior)
+        hasher.combine(search)
     }
 }
 
@@ -1262,7 +1268,8 @@ public struct FfiConverterTypeFullConfig: FfiConverterRustBuffer {
                 providers: FfiConverterSequenceTypeProviderConfigEntry.read(from: &buf), 
                 rules: FfiConverterSequenceTypeRoutingRuleConfig.read(from: &buf), 
                 shortcuts: FfiConverterOptionTypeShortcutsConfig.read(from: &buf), 
-                behavior: FfiConverterOptionTypeBehaviorConfig.read(from: &buf)
+                behavior: FfiConverterOptionTypeBehaviorConfig.read(from: &buf), 
+                search: FfiConverterOptionTypeSearchConfig.read(from: &buf)
         )
     }
 
@@ -1274,6 +1281,7 @@ public struct FfiConverterTypeFullConfig: FfiConverterRustBuffer {
         FfiConverterSequenceTypeRoutingRuleConfig.write(value.rules, into: &buf)
         FfiConverterOptionTypeShortcutsConfig.write(value.shortcuts, into: &buf)
         FfiConverterOptionTypeBehaviorConfig.write(value.behavior, into: &buf)
+        FfiConverterOptionTypeSearchConfig.write(value.search, into: &buf)
     }
 }
 
@@ -1934,14 +1942,30 @@ public struct RoutingRuleConfig {
     public var provider: String
     public var systemPrompt: String?
     public var stripPrefix: Bool?
+    public var capabilities: [String]?
+    public var intentType: String?
+    public var contextFormat: String?
+    public var skillId: String?
+    public var skillVersion: String?
+    public var workflow: String?
+    public var tools: String?
+    public var knowledgeBase: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(regex: String, provider: String, systemPrompt: String?, stripPrefix: Bool?) {
+    public init(regex: String, provider: String, systemPrompt: String?, stripPrefix: Bool?, capabilities: [String]?, intentType: String?, contextFormat: String?, skillId: String?, skillVersion: String?, workflow: String?, tools: String?, knowledgeBase: String?) {
         self.regex = regex
         self.provider = provider
         self.systemPrompt = systemPrompt
         self.stripPrefix = stripPrefix
+        self.capabilities = capabilities
+        self.intentType = intentType
+        self.contextFormat = contextFormat
+        self.skillId = skillId
+        self.skillVersion = skillVersion
+        self.workflow = workflow
+        self.tools = tools
+        self.knowledgeBase = knowledgeBase
     }
 }
 
@@ -1961,6 +1985,30 @@ extension RoutingRuleConfig: Equatable, Hashable {
         if lhs.stripPrefix != rhs.stripPrefix {
             return false
         }
+        if lhs.capabilities != rhs.capabilities {
+            return false
+        }
+        if lhs.intentType != rhs.intentType {
+            return false
+        }
+        if lhs.contextFormat != rhs.contextFormat {
+            return false
+        }
+        if lhs.skillId != rhs.skillId {
+            return false
+        }
+        if lhs.skillVersion != rhs.skillVersion {
+            return false
+        }
+        if lhs.workflow != rhs.workflow {
+            return false
+        }
+        if lhs.tools != rhs.tools {
+            return false
+        }
+        if lhs.knowledgeBase != rhs.knowledgeBase {
+            return false
+        }
         return true
     }
 
@@ -1969,6 +2017,14 @@ extension RoutingRuleConfig: Equatable, Hashable {
         hasher.combine(provider)
         hasher.combine(systemPrompt)
         hasher.combine(stripPrefix)
+        hasher.combine(capabilities)
+        hasher.combine(intentType)
+        hasher.combine(contextFormat)
+        hasher.combine(skillId)
+        hasher.combine(skillVersion)
+        hasher.combine(workflow)
+        hasher.combine(tools)
+        hasher.combine(knowledgeBase)
     }
 }
 
@@ -1983,7 +2039,15 @@ public struct FfiConverterTypeRoutingRuleConfig: FfiConverterRustBuffer {
                 regex: FfiConverterString.read(from: &buf), 
                 provider: FfiConverterString.read(from: &buf), 
                 systemPrompt: FfiConverterOptionString.read(from: &buf), 
-                stripPrefix: FfiConverterOptionBool.read(from: &buf)
+                stripPrefix: FfiConverterOptionBool.read(from: &buf), 
+                capabilities: FfiConverterOptionSequenceString.read(from: &buf), 
+                intentType: FfiConverterOptionString.read(from: &buf), 
+                contextFormat: FfiConverterOptionString.read(from: &buf), 
+                skillId: FfiConverterOptionString.read(from: &buf), 
+                skillVersion: FfiConverterOptionString.read(from: &buf), 
+                workflow: FfiConverterOptionString.read(from: &buf), 
+                tools: FfiConverterOptionString.read(from: &buf), 
+                knowledgeBase: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -1992,6 +2056,14 @@ public struct FfiConverterTypeRoutingRuleConfig: FfiConverterRustBuffer {
         FfiConverterString.write(value.provider, into: &buf)
         FfiConverterOptionString.write(value.systemPrompt, into: &buf)
         FfiConverterOptionBool.write(value.stripPrefix, into: &buf)
+        FfiConverterOptionSequenceString.write(value.capabilities, into: &buf)
+        FfiConverterOptionString.write(value.intentType, into: &buf)
+        FfiConverterOptionString.write(value.contextFormat, into: &buf)
+        FfiConverterOptionString.write(value.skillId, into: &buf)
+        FfiConverterOptionString.write(value.skillVersion, into: &buf)
+        FfiConverterOptionString.write(value.workflow, into: &buf)
+        FfiConverterOptionString.write(value.tools, into: &buf)
+        FfiConverterOptionString.write(value.knowledgeBase, into: &buf)
     }
 }
 
@@ -2008,6 +2080,252 @@ public func FfiConverterTypeRoutingRuleConfig_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeRoutingRuleConfig_lower(_ value: RoutingRuleConfig) -> RustBuffer {
     return FfiConverterTypeRoutingRuleConfig.lower(value)
+}
+
+
+public struct SearchBackendConfig {
+    public var providerType: String
+    public var apiKey: String?
+    public var baseUrl: String?
+    public var engineId: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(providerType: String, apiKey: String?, baseUrl: String?, engineId: String?) {
+        self.providerType = providerType
+        self.apiKey = apiKey
+        self.baseUrl = baseUrl
+        self.engineId = engineId
+    }
+}
+
+
+
+extension SearchBackendConfig: Equatable, Hashable {
+    public static func ==(lhs: SearchBackendConfig, rhs: SearchBackendConfig) -> Bool {
+        if lhs.providerType != rhs.providerType {
+            return false
+        }
+        if lhs.apiKey != rhs.apiKey {
+            return false
+        }
+        if lhs.baseUrl != rhs.baseUrl {
+            return false
+        }
+        if lhs.engineId != rhs.engineId {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(providerType)
+        hasher.combine(apiKey)
+        hasher.combine(baseUrl)
+        hasher.combine(engineId)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSearchBackendConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SearchBackendConfig {
+        return
+            try SearchBackendConfig(
+                providerType: FfiConverterString.read(from: &buf), 
+                apiKey: FfiConverterOptionString.read(from: &buf), 
+                baseUrl: FfiConverterOptionString.read(from: &buf), 
+                engineId: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SearchBackendConfig, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.providerType, into: &buf)
+        FfiConverterOptionString.write(value.apiKey, into: &buf)
+        FfiConverterOptionString.write(value.baseUrl, into: &buf)
+        FfiConverterOptionString.write(value.engineId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchBackendConfig_lift(_ buf: RustBuffer) throws -> SearchBackendConfig {
+    return try FfiConverterTypeSearchBackendConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchBackendConfig_lower(_ value: SearchBackendConfig) -> RustBuffer {
+    return FfiConverterTypeSearchBackendConfig.lower(value)
+}
+
+
+public struct SearchBackendEntry {
+    public var name: String
+    public var config: SearchBackendConfig
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(name: String, config: SearchBackendConfig) {
+        self.name = name
+        self.config = config
+    }
+}
+
+
+
+extension SearchBackendEntry: Equatable, Hashable {
+    public static func ==(lhs: SearchBackendEntry, rhs: SearchBackendEntry) -> Bool {
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.config != rhs.config {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+        hasher.combine(config)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSearchBackendEntry: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SearchBackendEntry {
+        return
+            try SearchBackendEntry(
+                name: FfiConverterString.read(from: &buf), 
+                config: FfiConverterTypeSearchBackendConfig.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SearchBackendEntry, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterTypeSearchBackendConfig.write(value.config, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchBackendEntry_lift(_ buf: RustBuffer) throws -> SearchBackendEntry {
+    return try FfiConverterTypeSearchBackendEntry.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchBackendEntry_lower(_ value: SearchBackendEntry) -> RustBuffer {
+    return FfiConverterTypeSearchBackendEntry.lower(value)
+}
+
+
+public struct SearchConfig {
+    public var enabled: Bool
+    public var defaultProvider: String
+    public var fallbackProviders: [String]?
+    public var maxResults: UInt64
+    public var timeoutSeconds: UInt64
+    public var backends: [SearchBackendEntry]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(enabled: Bool, defaultProvider: String, fallbackProviders: [String]?, maxResults: UInt64, timeoutSeconds: UInt64, backends: [SearchBackendEntry]) {
+        self.enabled = enabled
+        self.defaultProvider = defaultProvider
+        self.fallbackProviders = fallbackProviders
+        self.maxResults = maxResults
+        self.timeoutSeconds = timeoutSeconds
+        self.backends = backends
+    }
+}
+
+
+
+extension SearchConfig: Equatable, Hashable {
+    public static func ==(lhs: SearchConfig, rhs: SearchConfig) -> Bool {
+        if lhs.enabled != rhs.enabled {
+            return false
+        }
+        if lhs.defaultProvider != rhs.defaultProvider {
+            return false
+        }
+        if lhs.fallbackProviders != rhs.fallbackProviders {
+            return false
+        }
+        if lhs.maxResults != rhs.maxResults {
+            return false
+        }
+        if lhs.timeoutSeconds != rhs.timeoutSeconds {
+            return false
+        }
+        if lhs.backends != rhs.backends {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(enabled)
+        hasher.combine(defaultProvider)
+        hasher.combine(fallbackProviders)
+        hasher.combine(maxResults)
+        hasher.combine(timeoutSeconds)
+        hasher.combine(backends)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSearchConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SearchConfig {
+        return
+            try SearchConfig(
+                enabled: FfiConverterBool.read(from: &buf), 
+                defaultProvider: FfiConverterString.read(from: &buf), 
+                fallbackProviders: FfiConverterOptionSequenceString.read(from: &buf), 
+                maxResults: FfiConverterUInt64.read(from: &buf), 
+                timeoutSeconds: FfiConverterUInt64.read(from: &buf), 
+                backends: FfiConverterSequenceTypeSearchBackendEntry.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SearchConfig, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterString.write(value.defaultProvider, into: &buf)
+        FfiConverterOptionSequenceString.write(value.fallbackProviders, into: &buf)
+        FfiConverterUInt64.write(value.maxResults, into: &buf)
+        FfiConverterUInt64.write(value.timeoutSeconds, into: &buf)
+        FfiConverterSequenceTypeSearchBackendEntry.write(value.backends, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchConfig_lift(_ buf: RustBuffer) throws -> SearchConfig {
+    return try FfiConverterTypeSearchConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchConfig_lower(_ value: SearchConfig) -> RustBuffer {
+    return FfiConverterTypeSearchConfig.lower(value)
 }
 
 
@@ -3196,6 +3514,30 @@ fileprivate struct FfiConverterOptionTypeBehaviorConfig: FfiConverterRustBuffer 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeSearchConfig: FfiConverterRustBuffer {
+    typealias SwiftType = SearchConfig?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeSearchConfig.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeSearchConfig.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeShortcutsConfig: FfiConverterRustBuffer {
     typealias SwiftType = ShortcutsConfig?
 
@@ -3236,6 +3578,30 @@ fileprivate struct FfiConverterOptionCallbackInterfaceInitializationProgressHand
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterCallbackInterfaceInitializationProgressHandler.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionSequenceString: FfiConverterRustBuffer {
+    typealias SwiftType = [String]?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterSequenceString.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterSequenceString.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -3361,6 +3727,31 @@ fileprivate struct FfiConverterSequenceTypeRoutingRuleConfig: FfiConverterRustBu
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeRoutingRuleConfig.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeSearchBackendEntry: FfiConverterRustBuffer {
+    typealias SwiftType = [SearchBackendEntry]
+
+    public static func write(_ value: [SearchBackendEntry], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSearchBackendEntry.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SearchBackendEntry] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SearchBackendEntry]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSearchBackendEntry.read(from: &buf))
         }
         return seq
     }

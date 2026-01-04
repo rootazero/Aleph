@@ -323,7 +323,15 @@ struct RuleEditorView: View {
                     regex: pattern,
                     provider: selectedProvider,
                     systemPrompt: systemPrompt.isEmpty ? nil : systemPrompt,
-                    stripPrefix: nil  // Auto-detect: true for ^/ patterns
+                    stripPrefix: nil,  // Auto-detect: true for ^/ patterns
+                    capabilities: nil,
+                    intentType: nil,
+                    contextFormat: nil,
+                    skillId: nil,
+                    skillVersion: nil,
+                    workflow: nil,
+                    tools: nil,
+                    knowledgeBase: nil
                 )
 
                 // Update rules array
