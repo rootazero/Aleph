@@ -2,7 +2,7 @@
 //  BehaviorSettingsView.swift
 //  Aether
 //
-//  Behavior settings tab for input/output modes, typing speed, and PII scrubbing.
+//  Behavior settings tab for input/output modes and typing speed.
 //
 
 import SwiftUI
@@ -17,15 +17,11 @@ struct BehaviorSettingsView: View {
     @State private var inputMode: InputMode = .cut
     @State private var outputMode: OutputMode = .typewriter
     @State private var typingSpeed: Double = 50.0
-    @State private var piiScrubbingEnabled: Bool = false
-    @State private var piiTypes: Set<PIIType> = []
 
     // Saved state (for comparison)
     @State private var savedInputMode: InputMode = .cut
     @State private var savedOutputMode: OutputMode = .typewriter
     @State private var savedTypingSpeed: Double = 50.0
-    @State private var savedPiiScrubbingEnabled: Bool = false
-    @State private var savedPiiTypes: Set<PIIType> = []
 
     // UI state
     @State private var showingPreview = false
@@ -43,8 +39,6 @@ struct BehaviorSettingsView: View {
                 if outputMode == .typewriter {
                     typingSpeedCard
                 }
-
-                piiScrubbingCard
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .padding(DesignTokens.Spacing.lg)
@@ -61,8 +55,6 @@ struct BehaviorSettingsView: View {
         .onChange(of: inputMode) { _, _ in updateSaveBarState() }
         .onChange(of: outputMode) { _, _ in updateSaveBarState() }
         .onChange(of: typingSpeed) { _, _ in updateSaveBarState() }
-        .onChange(of: piiScrubbingEnabled) { _, _ in updateSaveBarState() }
-        .onChange(of: piiTypes) { _, _ in updateSaveBarState() }
         .onChange(of: isSaving) { _, _ in updateSaveBarState() }
     }
 
@@ -213,76 +205,13 @@ struct BehaviorSettingsView: View {
                     .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
     }
 
-    private var piiScrubbingCard: some View {
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                    Label(LocalizedStringKey("settings.behavior.pii_scrubbing"), systemImage: "lock.shield")
-                        .font(DesignTokens.Typography.heading)
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
-
-                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                        Toggle(LocalizedStringKey("settings.behavior.pii_scrubbing_enable"), isOn: $piiScrubbingEnabled)
-                            .toggleStyle(.switch)
-                            .font(DesignTokens.Typography.body)
-
-                        Text(LocalizedStringKey("settings.behavior.pii_scrubbing_description"))
-                            .font(DesignTokens.Typography.caption)
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                        if piiScrubbingEnabled {
-                            Divider()
-
-                            Text(LocalizedStringKey("settings.behavior.pii_types_label"))
-                                .font(DesignTokens.Typography.caption)
-                                .fontWeight(.semibold)
-                                .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                            VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-                                ForEach(PIIType.allCases, id: \.self) { type in
-                                    Toggle(isOn: Binding(
-                                        get: { piiTypes.contains(type) },
-                                        set: { isOn in
-                                            if isOn {
-                                                piiTypes.insert(type)
-                                            } else {
-                                                piiTypes.remove(type)
-                                            }
-                                        }
-                                    )) {
-                                        HStack(spacing: DesignTokens.Spacing.sm) {
-                                            Image(systemName: type.iconName)
-                                                .foregroundColor(DesignTokens.Colors.warning)
-                                                .frame(width: 20)
-
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text(type.displayName)
-                                                    .font(DesignTokens.Typography.body)
-                                                Text(type.example)
-                                                    .font(DesignTokens.Typography.caption)
-                                                    .foregroundColor(DesignTokens.Colors.textSecondary)
-                                            }
-                                        }
-                                    }
-                                    .toggleStyle(.checkbox)
-                                }
-                            }
-                            .padding(.leading, DesignTokens.Spacing.sm)
-                        }
-                    }
-                }
-                .padding(DesignTokens.Spacing.md)
-                .background(DesignTokens.Colors.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
-    }
-
     // MARK: - Computed Properties
 
     /// Check if current state differs from saved state
     private var hasUnsavedChanges: Bool {
         return inputMode != savedInputMode ||
                outputMode != savedOutputMode ||
-               abs(typingSpeed - savedTypingSpeed) > 0.1 ||
-               piiScrubbingEnabled != savedPiiScrubbingEnabled ||
-               piiTypes != savedPiiTypes
+               abs(typingSpeed - savedTypingSpeed) > 0.1
     }
 
     /// Status message for UnifiedSaveBar
@@ -334,14 +263,6 @@ struct BehaviorSettingsView: View {
                         // Load typing speed
                         typingSpeed = Double(behavior.typingSpeed)
                         savedTypingSpeed = typingSpeed
-
-                        // Load PII scrubbing settings
-                        piiScrubbingEnabled = behavior.piiScrubbingEnabled
-                        savedPiiScrubbingEnabled = piiScrubbingEnabled
-
-                        // Note: PII types are not stored in config yet
-                        // For now, just sync the saved state
-                        savedPiiTypes = piiTypes
                     }
                 }
             } catch {
@@ -369,7 +290,7 @@ struct BehaviorSettingsView: View {
                 inputMode: inputMode.rawValue,
                 outputMode: outputMode.rawValue,
                 typingSpeed: UInt32(typingSpeed),
-                piiScrubbingEnabled: piiScrubbingEnabled
+                piiScrubbingEnabled: false  // PII settings moved to SearchSettingsView
             )
 
             // Update via Rust core
@@ -379,15 +300,12 @@ struct BehaviorSettingsView: View {
             print("  Input Mode: \(inputMode.rawValue)")
             print("  Output Mode: \(outputMode.rawValue)")
             print("  Typing Speed: \(Int(typingSpeed))")
-            print("  PII Scrubbing: \(piiScrubbingEnabled)")
 
             await MainActor.run {
                 // Update saved state to match current state
                 savedInputMode = inputMode
                 savedOutputMode = outputMode
                 savedTypingSpeed = typingSpeed
-                savedPiiScrubbingEnabled = piiScrubbingEnabled
-                savedPiiTypes = piiTypes
 
                 isSaving = false
                 errorMessage = nil
@@ -406,8 +324,6 @@ struct BehaviorSettingsView: View {
         inputMode = savedInputMode
         outputMode = savedOutputMode
         typingSpeed = savedTypingSpeed
-        piiScrubbingEnabled = savedPiiScrubbingEnabled
-        piiTypes = savedPiiTypes
         errorMessage = nil
     }
 
@@ -493,42 +409,6 @@ enum OutputMode: String, CaseIterable {
 
     static func from(string: String) -> OutputMode {
         OutputMode(rawValue: string.lowercased()) ?? .typewriter
-    }
-}
-
-// MARK: - PII Type
-
-enum PIIType: String, CaseIterable {
-    case email = "email"
-    case phone = "phone"
-    case ssn = "ssn"
-    case creditCard = "credit_card"
-
-    var displayName: String {
-        switch self {
-        case .email: return NSLocalizedString("settings.behavior.pii_type_email", comment: "")
-        case .phone: return NSLocalizedString("settings.behavior.pii_type_phone", comment: "")
-        case .ssn: return NSLocalizedString("settings.behavior.pii_type_ssn", comment: "")
-        case .creditCard: return NSLocalizedString("settings.behavior.pii_type_credit_card", comment: "")
-        }
-    }
-
-    var iconName: String {
-        switch self {
-        case .email: return "envelope"
-        case .phone: return "phone"
-        case .ssn: return "lock.shield"
-        case .creditCard: return "creditcard"
-        }
-    }
-
-    var example: String {
-        switch self {
-        case .email: return NSLocalizedString("settings.behavior.pii_example_email", comment: "")
-        case .phone: return NSLocalizedString("settings.behavior.pii_example_phone", comment: "")
-        case .ssn: return NSLocalizedString("settings.behavior.pii_example_ssn", comment: "")
-        case .creditCard: return NSLocalizedString("settings.behavior.pii_example_credit_card", comment: "")
-        }
     }
 }
 

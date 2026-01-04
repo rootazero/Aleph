@@ -63,6 +63,9 @@ enum DesignTokens {
         /// Border color for cards and inputs
         static let border = Color.gray.opacity(0.2)
 
+        /// Border color on hover
+        static let borderHover = Color.gray.opacity(0.4)
+
         /// Border color for selected/focused elements
         static let borderSelected = accentBlue
 

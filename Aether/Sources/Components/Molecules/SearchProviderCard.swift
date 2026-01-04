@@ -74,11 +74,11 @@ struct SearchProviderCard: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md)
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
                 .fill(DesignTokens.Colors.cardBackground)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md)
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
                 .strokeBorder(
                     isHovered ? DesignTokens.Colors.borderHover : DesignTokens.Colors.border,
                     lineWidth: 1

@@ -94,7 +94,9 @@ struct SearchSettingsView: View {
                     SearchProviderCard(
                         preset: preset,
                         fieldValues: bindingForProvider(preset.id),
-                        onTestConnection: testProvider
+                        onTestConnection: { providerId, fields in
+                            await testProvider(providerId, fields)
+                        }
                     )
                 }
             }
@@ -157,7 +159,7 @@ struct SearchSettingsView: View {
             }
             .padding(DesignTokens.Spacing.md)
             .background(DesignTokens.Colors.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
         }
     }
 
@@ -199,7 +201,7 @@ struct SearchSettingsView: View {
                 .padding(DesignTokens.Spacing.md)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(DesignTokens.Colors.cardBackground.opacity(0.5))
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.md, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
         }
     }
 
@@ -251,16 +253,7 @@ struct SearchSettingsView: View {
             )
         }
 
-        do {
-            return try await core.testSearchProvider(providerName: providerId)
-        } catch {
-            return ProviderTestResult(
-                success: false,
-                latencyMs: 0,
-                errorMessage: error.localizedDescription,
-                errorType: "network"
-            )
-        }
+        return await core.testSearchProvider(providerName: providerId)
     }
 
     /// Load settings from config
@@ -269,7 +262,7 @@ struct SearchSettingsView: View {
             guard let core = core else { return }
 
             do {
-                let config = try core.getFullConfig()
+                let config = try core.loadConfig()
 
                 await MainActor.run {
                     // Load search config
@@ -317,7 +310,7 @@ struct SearchSettingsView: View {
 
     /// Save settings to config
     private func saveSettings() async {
-        guard let core = core else {
+        guard core != nil else {
             await MainActor.run {
                 errorMessage = NSLocalizedString("error.core_not_initialized", comment: "")
             }
@@ -329,46 +322,38 @@ struct SearchSettingsView: View {
             errorMessage = nil
         }
 
-        do {
-            // TODO: Implement search config save when backend support is ready
-            // For now, save PII settings only
+        // TODO: Implement search config save when backend support is ready
+        // For now, just log the settings that would be saved
 
-            let piiConfig = PiiConfig(
-                enabled: piiEnabled,
-                scrubEmail: piiScrubEmail,
-                scrubPhone: piiScrubPhone,
-                scrubSsn: piiScrubSSN,
-                scrubCreditCard: piiScrubCreditCard
-            )
+        // let piiConfig = PiiConfig(
+        //     enabled: piiEnabled,
+        //     scrubEmail: piiScrubEmail,
+        //     scrubPhone: piiScrubPhone,
+        //     scrubSsn: piiScrubSSN,
+        //     scrubCreditCard: piiScrubCreditCard
+        // )
 
-            // Note: This will require adding updateSearchPii() method to AetherCore
-            // try core.updateSearchPii(pii: piiConfig)
+        // Note: This will require adding updateSearchConfig() method to AetherCore
+        // try core.updateSearchConfig(search: searchConfig)
 
-            print("Search settings saved successfully:")
-            print("  PII Enabled: \(piiEnabled)")
-            print("  PII Scrub Email: \(piiScrubEmail)")
-            print("  PII Scrub Phone: \(piiScrubPhone)")
-            print("  PII Scrub SSN: \(piiScrubSSN)")
-            print("  PII Scrub Credit Card: \(piiScrubCreditCard)")
+        print("Search settings saved successfully:")
+        print("  PII Enabled: \(piiEnabled)")
+        print("  PII Scrub Email: \(piiScrubEmail)")
+        print("  PII Scrub Phone: \(piiScrubPhone)")
+        print("  PII Scrub SSN: \(piiScrubSSN)")
+        print("  PII Scrub Credit Card: \(piiScrubCreditCard)")
 
-            await MainActor.run {
-                // Update saved state to match current state
-                savedProviderFields = providerFields
-                savedPiiEnabled = piiEnabled
-                savedPiiScrubEmail = piiScrubEmail
-                savedPiiScrubPhone = piiScrubPhone
-                savedPiiScrubSSN = piiScrubSSN
-                savedPiiScrubCreditCard = piiScrubCreditCard
+        await MainActor.run {
+            // Update saved state to match current state
+            savedProviderFields = providerFields
+            savedPiiEnabled = piiEnabled
+            savedPiiScrubEmail = piiScrubEmail
+            savedPiiScrubPhone = piiScrubPhone
+            savedPiiScrubSSN = piiScrubSSN
+            savedPiiScrubCreditCard = piiScrubCreditCard
 
-                isSaving = false
-                errorMessage = nil
-            }
-        } catch {
-            print("Failed to save search settings: \(error)")
-            await MainActor.run {
-                errorMessage = "Failed to save: \(error.localizedDescription)"
-                isSaving = false
-            }
+            isSaving = false
+            errorMessage = nil
         }
     }
 
