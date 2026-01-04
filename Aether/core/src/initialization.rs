@@ -123,7 +123,7 @@ pub fn download_embedding_model_standalone(
         .map_err(|e| AetherError::config(format!("Failed to create Tokio runtime: {}", e)))?;
 
     // Try to download the model
-    let result = runtime.block_on(async { download_embedding_model(callback).await });
+    let result = runtime.block_on(async { download_embedding_model(callback.map(|v| &**v)).await });
 
     match result {
         Ok(()) => {
@@ -237,7 +237,7 @@ pub async fn run_first_time_init_async(
     }
 
     // Try to download the model, but don't fail the entire initialization if it fails
-    let model_downloaded = match download_embedding_model(callback).await {
+    let model_downloaded = match download_embedding_model(callback.map(|v| &**v)).await {
         Ok(()) => {
             info!("✅ Embedding model downloaded successfully");
             true
@@ -465,7 +465,7 @@ const EXPECTED_TOKENIZER_SIZE_MAX: u64 = 2 * 1024 * 1024; // 2 MB
 
 /// Download embedding model files from HuggingFace
 async fn download_embedding_model(
-    progress_callback: Option<&Box<dyn InitializationProgressHandler>>,
+    progress_callback: Option<&dyn InitializationProgressHandler>,
 ) -> Result<()> {
     let model_dir = get_model_dir()?;
     let model_file = model_dir.join("model.onnx");
@@ -583,7 +583,7 @@ fn validate_file_size(path: &Path, min_size: u64, max_size: u64) -> Result<()> {
 async fn download_file(
     url: &str,
     dest_path: &Path,
-    progress_callback: Option<&Box<dyn InitializationProgressHandler>>,
+    progress_callback: Option<&dyn InitializationProgressHandler>,
 ) -> Result<()> {
     const MAX_RETRIES: u32 = 3;
     const INITIAL_BACKOFF_MS: u64 = 1000; // 1 second
@@ -627,7 +627,7 @@ async fn download_file(
 async fn download_file_once(
     url: &str,
     dest_path: &Path,
-    progress_callback: Option<&Box<dyn InitializationProgressHandler>>,
+    progress_callback: Option<&dyn InitializationProgressHandler>,
 ) -> Result<()> {
     // Create HTTP client
     let client = reqwest::Client::builder()
@@ -746,6 +746,7 @@ async fn initialize_memory_database() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn test_get_config_dir() {
@@ -760,6 +761,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_create_directory_structure() {
         use tempfile::TempDir;
 
@@ -788,6 +790,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_create_default_config() {
         use tempfile::TempDir;
 

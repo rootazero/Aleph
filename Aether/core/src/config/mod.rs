@@ -281,7 +281,7 @@ impl RoutingRuleConfig {
             .as_ref()
             .map(|caps| {
                 caps.iter()
-                    .filter_map(|s| Capability::from_str(s).ok())
+                    .filter_map(|s| Capability::parse(s).ok())
                     .collect()
             })
             .unwrap_or_default()
@@ -298,7 +298,7 @@ impl RoutingRuleConfig {
 
         self.context_format
             .as_ref()
-            .and_then(|s| ContextFormat::from_str(s).ok())
+            .and_then(|s| ContextFormat::parse(s).ok())
             .unwrap_or(ContextFormat::Markdown)
     }
 

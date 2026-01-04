@@ -15,7 +15,7 @@ pub enum ContextFormat {
 
 impl ContextFormat {
     /// Parse from string (for config files)
-    pub fn from_str(s: &str) -> Result<Self, String> {
+    pub fn parse(s: &str) -> Result<Self, String> {
         match s.to_lowercase().as_str() {
             "markdown" | "md" => Ok(ContextFormat::Markdown),
             "xml" => Ok(ContextFormat::Xml),
@@ -46,21 +46,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_context_format_from_str() {
+    fn test_context_format_parse() {
         assert_eq!(
-            ContextFormat::from_str("markdown").unwrap(),
+            ContextFormat::parse("markdown").unwrap(),
             ContextFormat::Markdown
         );
         assert_eq!(
-            ContextFormat::from_str("MD").unwrap(),
+            ContextFormat::parse("MD").unwrap(),
             ContextFormat::Markdown
         );
-        assert_eq!(ContextFormat::from_str("xml").unwrap(), ContextFormat::Xml);
+        assert_eq!(ContextFormat::parse("xml").unwrap(), ContextFormat::Xml);
         assert_eq!(
-            ContextFormat::from_str("JSON").unwrap(),
+            ContextFormat::parse("JSON").unwrap(),
             ContextFormat::Json
         );
-        assert!(ContextFormat::from_str("invalid").is_err());
+        assert!(ContextFormat::parse("invalid").is_err());
     }
 
     #[test]

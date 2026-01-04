@@ -15,7 +15,7 @@ pub enum Capability {
 
 impl Capability {
     /// Parse from string (for config files)
-    pub fn from_str(s: &str) -> Result<Self, String> {
+    pub fn parse(s: &str) -> Result<Self, String> {
         match s.to_lowercase().as_str() {
             "memory" => Ok(Capability::Memory),
             "search" => Ok(Capability::Search),
@@ -52,11 +52,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_capability_from_str() {
-        assert_eq!(Capability::from_str("memory").unwrap(), Capability::Memory);
-        assert_eq!(Capability::from_str("SEARCH").unwrap(), Capability::Search);
-        assert_eq!(Capability::from_str("Mcp").unwrap(), Capability::Mcp);
-        assert!(Capability::from_str("invalid").is_err());
+    fn test_capability_parse() {
+        assert_eq!(Capability::parse("memory").unwrap(), Capability::Memory);
+        assert_eq!(Capability::parse("SEARCH").unwrap(), Capability::Search);
+        assert_eq!(Capability::parse("Mcp").unwrap(), Capability::Mcp);
+        assert!(Capability::parse("invalid").is_err());
     }
 
     #[test]

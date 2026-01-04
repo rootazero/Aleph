@@ -47,7 +47,7 @@ impl LogLevel {
     }
 
     /// Parse from string (case-insensitive)
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "error" => Some(LogLevel::Error),
             "warn" | "warning" => Some(LogLevel::Warn),
@@ -59,7 +59,7 @@ impl LogLevel {
     }
 
     /// Convert to u8 for atomic storage
-    fn to_u8(&self) -> u8 {
+    fn to_u8(self) -> u8 {
         match self {
             LogLevel::Error => 0,
             LogLevel::Warn => 1,
@@ -101,7 +101,7 @@ pub fn init_log_level() {
                 .and_then(|s| s.split('=').next_back())
                 .unwrap_or("info");
 
-            if let Some(level) = LogLevel::from_str(level_str) {
+            if let Some(level) = LogLevel::parse(level_str) {
                 CURRENT_LOG_LEVEL.store(level.to_u8(), Ordering::SeqCst);
                 tracing::debug!(level = ?level, "Initialized log level from RUST_LOG");
             }
@@ -156,15 +156,15 @@ mod tests {
     }
 
     #[test]
-    fn test_log_level_from_str() {
-        assert_eq!(LogLevel::from_str("error"), Some(LogLevel::Error));
-        assert_eq!(LogLevel::from_str("ERROR"), Some(LogLevel::Error));
-        assert_eq!(LogLevel::from_str("warn"), Some(LogLevel::Warn));
-        assert_eq!(LogLevel::from_str("warning"), Some(LogLevel::Warn));
-        assert_eq!(LogLevel::from_str("info"), Some(LogLevel::Info));
-        assert_eq!(LogLevel::from_str("debug"), Some(LogLevel::Debug));
-        assert_eq!(LogLevel::from_str("trace"), Some(LogLevel::Trace));
-        assert_eq!(LogLevel::from_str("invalid"), None);
+    fn test_log_level_parse() {
+        assert_eq!(LogLevel::parse("error"), Some(LogLevel::Error));
+        assert_eq!(LogLevel::parse("ERROR"), Some(LogLevel::Error));
+        assert_eq!(LogLevel::parse("warn"), Some(LogLevel::Warn));
+        assert_eq!(LogLevel::parse("warning"), Some(LogLevel::Warn));
+        assert_eq!(LogLevel::parse("info"), Some(LogLevel::Info));
+        assert_eq!(LogLevel::parse("debug"), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::parse("trace"), Some(LogLevel::Trace));
+        assert_eq!(LogLevel::parse("invalid"), None);
     }
 
     #[test]

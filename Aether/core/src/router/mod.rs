@@ -258,6 +258,8 @@ impl RoutingRule {
 pub struct Router {
     /// Ordered list of routing rules (first match wins)
     rules: Vec<RoutingRule>,
+    /// Rule configurations (parallel to rules, for accessing capabilities/intent)
+    rule_configs: Vec<crate::config::RoutingRuleConfig>,
     /// Registry of available providers (name → provider instance)
     providers: HashMap<String, Arc<dyn AiProvider>>,
     /// Optional default provider name (fallback when no rule matches)
@@ -326,6 +328,7 @@ impl Router {
 
         // Load routing rules from config
         let mut rules = Vec::new();
+        let mut rule_configs = Vec::new();
         for rule_config in &config.rules {
             // Create RoutingRule from config
             let rule = RoutingRule::new(
@@ -345,10 +348,12 @@ impl Router {
             }
 
             rules.push(rule);
+            rule_configs.push(rule_config.clone());
         }
 
         Ok(Self {
             rules,
+            rule_configs,
             providers,
             default_provider: config.general.default_provider.clone(),
         })
@@ -605,8 +610,6 @@ impl Router {
     /// # }
     /// ```
     pub fn route_with_extended_info<'a>(&'a self, context: &str) -> Option<RoutingDecision<'a>> {
-        use crate::config::RoutingRuleConfig;
-
         info!(
             context_length = context.len(),
             rules_count = self.rules.len(),
@@ -629,26 +632,13 @@ impl Router {
                         }
                     });
 
-                    // Convert RoutingRule to RoutingRuleConfig for decision
-                    let rule_config = RoutingRuleConfig {
-                        regex: rule.pattern.clone(),
-                        provider: rule.provider_name.clone(),
-                        system_prompt: rule.system_prompt.clone(),
-                        strip_prefix: Some(rule.strip_prefix),
-                        capabilities: None,   // Rules don't have this yet
-                        intent_type: None,    // Rules don't have this yet
-                        context_format: None, // Rules don't have this yet
-                        skill_id: None,
-                        skill_version: None,
-                        workflow: None,
-                        tools: None,
-                        knowledge_base: None,
-                    };
+                    // Use the actual rule configuration (has capabilities, intent_type, etc.)
+                    let rule_config = &self.rule_configs[index];
 
                     let decision = RoutingDecision::from_rule(
                         provider.as_ref(),
                         rule.provider_name.clone(),
-                        &rule_config,
+                        rule_config,
                         fallback,
                     );
 
