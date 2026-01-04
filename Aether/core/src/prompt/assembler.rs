@@ -304,6 +304,14 @@ mod tests {
             provider: "openai".to_string(),
             system_prompt: Some("Custom translation prompt".to_string()),
             strip_prefix: Some(true),
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
         };
 
         let result = assembler.add_custom_command_from_rule(&rule);
@@ -323,6 +331,14 @@ mod tests {
             provider: "openai".to_string(),
             system_prompt: Some("Translate to English".to_string()),
             strip_prefix: Some(true),
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
         };
 
         assembler.add_custom_command_from_rule(&rule).unwrap();

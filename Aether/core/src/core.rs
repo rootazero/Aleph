@@ -299,6 +299,60 @@ impl AetherCore {
         Ok(model_dir)
     }
 
+    /// Build and enrich AgentPayload using new payload architecture
+    ///
+    /// This method implements the structured context protocol:
+    /// 1. Creates AgentPayload using PayloadBuilder
+    /// 2. Executes CapabilityExecutor to enrich context (memory, search, MCP)
+    /// 3. Returns enriched payload ready for prompt assembly
+    ///
+    /// # Arguments
+    ///
+    /// * `user_input` - User's input text
+    /// * `context` - Captured application context
+    /// * `provider_name` - Target provider name
+    /// * `capabilities` - List of capabilities to execute
+    ///
+    /// # Returns
+    ///
+    /// Enriched AgentPayload with context data populated
+    async fn build_enriched_payload(
+        &self,
+        user_input: String,
+        context: CapturedContext,
+        provider_name: String,
+        capabilities: Vec<crate::payload::Capability>,
+    ) -> Result<crate::payload::AgentPayload> {
+        use crate::capability::CapabilityExecutor;
+        use crate::payload::{ContextAnchor, ContextFormat, Intent, PayloadBuilder};
+
+        // Create context anchor from captured context
+        let anchor = ContextAnchor::from_captured_context(&context);
+
+        // Get config for context format
+        let context_format = ContextFormat::Markdown; // MVP uses Markdown format
+
+        // Build initial payload
+        let payload = PayloadBuilder::new()
+            .meta(
+                Intent::GeneralChat, // MVP uses GeneralChat intent
+                chrono::Utc::now().timestamp(),
+                anchor,
+            )
+            .config(provider_name, capabilities.clone(), context_format)
+            .user_input(user_input)
+            .build()
+            .map_err(|e| AetherError::config(format!("Failed to build payload: {}", e)))?;
+
+        // Execute capabilities to enrich payload
+        let executor = CapabilityExecutor::new(self.memory_db.as_ref().map(Arc::clone), {
+            let cfg = self.lock_config();
+            Some(Arc::new(cfg.memory.clone()))
+        });
+
+        executor.execute_all(payload).await
+    }
+
     // === Private Helper Methods ===
 
     /// Acquires the config mutex lock with poison recovery.
@@ -1152,7 +1206,11 @@ impl AetherCore {
     /// Formatted context string for routing
     fn build_routing_context(context: &CapturedContext, clipboard_content: &str) -> String {
         // Extract app name from bundle ID (e.g., "com.apple.Notes" → "Notes")
-        let app_name = context.app_bundle_id.split('.').next_back().unwrap_or("Unknown");
+        let app_name = context
+            .app_bundle_id
+            .split('.')
+            .next_back()
+            .unwrap_or("Unknown");
 
         // Format: ClipboardContent\n---\n[AppName] WindowTitle
         // Clipboard content is FIRST to preserve backward compatibility with ^/prefix rules
@@ -1187,13 +1245,14 @@ impl AetherCore {
         // Get a clone of the Arc<Router> to avoid holding the RwLock during AI processing
         let router = {
             let router_guard = self.router.read().unwrap_or_else(|e| e.into_inner());
-            router_guard.as_ref().map(Arc::clone).ok_or(
-                AetherError::NoProviderAvailable {
+            router_guard
+                .as_ref()
+                .map(Arc::clone)
+                .ok_or(AetherError::NoProviderAvailable {
                     suggestion: Some(
                         "Configure at least one AI provider in Settings → Providers".to_string(),
                     ),
-                },
-            )?
+                })?
         };
 
         // Step 1.5: Build routing context string (clipboard content + window context)
@@ -1206,24 +1265,30 @@ impl AetherCore {
             "Built routing context for provider selection"
         );
 
-        // Step 2: Retrieve memories and augment prompt (if enabled)
+        // Step 2: Build and enrich AgentPayload using new architecture
         let config = self.lock_config();
         let base_system_prompt = "You are a helpful AI assistant.".to_string();
         let perf_logging_enabled = config.general.enable_performance_logging;
+        let memory_enabled = config.memory.enabled;
         drop(config); // Release lock before async operations
 
-        // FIXED: Only include user input in augmented_input, NOT the system prompt
-        // The system prompt is passed separately to provider.process()
-        // Including it here was causing the AI to respond in conversation format
-        let augmented_input = if self.memory_db.is_some() {
+        // Determine capabilities to execute (MVP: only Memory)
+        let capabilities = if memory_enabled {
+            vec![crate::payload::Capability::Memory]
+        } else {
+            vec![]
+        };
+
+        // NEW ARCHITECTURE: Build enriched payload with CapabilityExecutor
+        let enriched_payload = if !capabilities.is_empty() {
             // Notify UI that we're retrieving memory
             self.event_handler
                 .on_state_changed(ProcessingState::RetrievingMemory);
 
-            // Performance monitoring for memory retrieval
+            // Performance monitoring for payload enrichment
             let _memory_timer = if perf_logging_enabled {
                 Some(
-                    StageTimer::start("memory_retrieval")
+                    StageTimer::start("payload_enrichment")
                         .with_target(TARGET_CLIPBOARD_TO_MEMORY_MS)
                         .with_meta("app", &context.app_bundle_id)
                         .with_meta("window", context.window_title.as_deref().unwrap_or("N/A")),
@@ -1232,20 +1297,43 @@ impl AetherCore {
                 None
             };
 
-            match self.retrieve_and_augment_user_input(input.clone()) {
-                Ok(augmented) => {
-                    debug!("Memory augmentation succeeded");
-                    augmented
+            // Get provider name from routing (temporary - we'll get it from router later)
+            let temp_provider = "temp".to_string();
+
+            match self.runtime.block_on(self.build_enriched_payload(
+                input.clone(),
+                context.clone(),
+                temp_provider,
+                capabilities,
+            )) {
+                Ok(payload) => {
+                    debug!(
+                        memory_count = payload
+                            .context
+                            .memory_snippets
+                            .as_ref()
+                            .map(|m| m.len())
+                            .unwrap_or(0),
+                        "Payload enrichment succeeded"
+                    );
+                    Some(payload)
                 }
                 Err(e) => {
-                    warn!(error = %e, "Memory augmentation failed, using original input");
-                    // Fallback to original input (no system prompt, no "User:" prefix)
-                    input.clone()
+                    warn!(error = %e, "Payload enrichment failed, using original input");
+                    None
                 }
             }
         } else {
-            // No memory - just use the original input directly
-            input.clone()
+            None
+        };
+
+        // Assemble system prompt using PromptAssembler
+        use crate::payload::PromptAssembler;
+        let assembled_system_prompt = if let Some(ref payload) = enriched_payload {
+            let assembler = PromptAssembler::new(crate::payload::ContextFormat::Markdown);
+            assembler.assemble_system_prompt(&base_system_prompt, payload)
+        } else {
+            base_system_prompt.clone()
         };
 
         let memory_time = start_time.elapsed();
@@ -1287,12 +1375,14 @@ impl AetherCore {
 
         // Step 4: Call AI provider with retry and fallback logic (Task 10.1 & 10.2)
         let routing_time = start_time.elapsed();
-        let system_prompt = system_prompt_override.unwrap_or(&base_system_prompt);
+
+        // Use custom system prompt from routing rule, or assembled prompt with memory context
+        let system_prompt = system_prompt_override.unwrap_or(&assembled_system_prompt);
 
         // Strip command prefix from input if rule has strip_prefix enabled
         // This removes patterns like "/en" from "/en Hello world" before sending to AI
-        let final_input = router.strip_command_prefix(&routing_context, &augmented_input);
-        let prefix_was_stripped = final_input.len() < augmented_input.len();
+        let final_input = router.strip_command_prefix(&routing_context, &input);
+        let prefix_was_stripped = final_input.len() < input.len();
 
         // Log the final system prompt being used
         info!(

@@ -71,6 +71,7 @@
 // Module declarations
 // NOTE: clipboard module retained for ImageData/ImageFormat types (used by AI providers)
 // Clipboard operations are handled by Swift ClipboardManager
+pub mod capability;
 mod clipboard;
 mod config;
 mod core;
@@ -80,10 +81,11 @@ pub mod initialization;
 pub mod logging;
 pub mod memory;
 pub mod metrics;
-pub mod prompt; // NEW: Structured context protocol
+pub mod payload; // NEW: Complete payload module with structured protocol
+pub mod prompt; // LEGACY: Initial structured context protocol implementation
 pub mod providers;
 pub mod router;
-pub mod utils;
+pub mod utils; // NEW: Capability executor for enriching payloads
 
 // Re-export public types
 // NOTE: ImageData/ImageFormat still exported for AI provider image encoding

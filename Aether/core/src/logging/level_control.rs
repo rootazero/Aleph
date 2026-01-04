@@ -82,7 +82,6 @@ impl LogLevel {
     }
 }
 
-
 /// Global log level storage
 static CURRENT_LOG_LEVEL: AtomicU8 = AtomicU8::new(2); // Default to Info (2)
 

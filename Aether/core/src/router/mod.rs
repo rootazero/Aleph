@@ -34,6 +34,8 @@
 /// # Ok(())
 /// # }
 /// ```
+pub mod decision;
+
 use crate::config::Config;
 use crate::error::{AetherError, Result};
 use crate::providers::{create_provider, AiProvider};
@@ -41,6 +43,9 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+
+// Re-export
+pub use decision::RoutingDecision;
 
 // Import for tests
 #[cfg(test)]
@@ -565,6 +570,121 @@ impl Router {
         self.providers.get(name).map(|p| p.as_ref())
     }
 
+    /// Route with extended decision information (new API)
+    ///
+    /// This is the enhanced routing method that returns a `RoutingDecision` with
+    /// additional information about capabilities, intent, and context format.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - The routing context (clipboard content + window context)
+    /// * `rule_config` - The matched routing rule configuration
+    ///
+    /// # Returns
+    ///
+    /// * `Some(RoutingDecision)` - Extended routing decision with full context
+    /// * `None` - No provider found
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use aethecore::router::Router;
+    /// # use aethecore::config::Config;
+    /// # fn example() -> aethecore::error::Result<()> {
+    /// # let config = Config::default();
+    /// let router = Router::new(&config)?;
+    ///
+    /// // Get routing decision with extended info
+    /// if let Some(decision) = router.route_with_extended_info("[VSCode] main.rs") {
+    ///     println!("Provider: {}", decision.provider_name);
+    ///     println!("Intent: {:?}", decision.intent);
+    ///     println!("Capabilities: {:?}", decision.capabilities);
+    ///     println!("Format: {:?}", decision.context_format);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn route_with_extended_info<'a>(&'a self, context: &str) -> Option<RoutingDecision<'a>> {
+        use crate::config::RoutingRuleConfig;
+
+        info!(
+            context_length = context.len(),
+            rules_count = self.rules.len(),
+            "Starting extended route decision"
+        );
+
+        // Find the first matching rule
+        for (index, rule) in self.rules.iter().enumerate() {
+            if rule.matches(context) {
+                // Get provider by name
+                if let Some(provider) = self.providers.get(rule.provider_name()) {
+                    // Get fallback provider (if different from primary)
+                    let fallback = self.default_provider.as_ref().and_then(|default_name| {
+                        if default_name != rule.provider_name() {
+                            self.providers
+                                .get(default_name)
+                                .map(|p| p.as_ref() as &dyn AiProvider)
+                        } else {
+                            None
+                        }
+                    });
+
+                    // Convert RoutingRule to RoutingRuleConfig for decision
+                    let rule_config = RoutingRuleConfig {
+                        regex: rule.pattern.clone(),
+                        provider: rule.provider_name.clone(),
+                        system_prompt: rule.system_prompt.clone(),
+                        strip_prefix: Some(rule.strip_prefix),
+                        capabilities: None,   // Rules don't have this yet
+                        intent_type: None,    // Rules don't have this yet
+                        context_format: None, // Rules don't have this yet
+                        skill_id: None,
+                        skill_version: None,
+                        workflow: None,
+                        tools: None,
+                        knowledge_base: None,
+                    };
+
+                    let decision = RoutingDecision::from_rule(
+                        provider.as_ref(),
+                        rule.provider_name.clone(),
+                        &rule_config,
+                        fallback,
+                    );
+
+                    info!(
+                        rule_index = index,
+                        provider = %decision.provider_name,
+                        intent = %decision.intent,
+                        capabilities_count = decision.capabilities.len(),
+                        "Extended routing decision created"
+                    );
+
+                    return Some(decision);
+                }
+            }
+        }
+
+        // Fallback to default provider if available
+        if let Some(default_name) = &self.default_provider {
+            if let Some(provider) = self.providers.get(default_name) {
+                info!(
+                    provider = %default_name,
+                    "Using default provider (no rules matched)"
+                );
+
+                return Some(RoutingDecision::basic(
+                    provider.as_ref(),
+                    default_name.clone(),
+                    "You are a helpful AI assistant.".to_string(),
+                ));
+            }
+        }
+
+        warn!("No provider found (no rules matched and no default configured)");
+        None
+    }
+
     /// Strip command prefix from input based on matched routing rule
     ///
     /// This method finds the first matching rule and strips its matched prefix
@@ -820,6 +940,14 @@ mod tests {
             provider: "claude".to_string(),
             system_prompt: Some("You are a coder".to_string()),
             strip_prefix: None,
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
         });
 
         config.rules.push(RoutingRuleConfig {
@@ -827,6 +955,14 @@ mod tests {
             provider: "openai".to_string(),
             system_prompt: None,
             strip_prefix: None,
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
         });
 
         let router = Router::new(&config).unwrap();
@@ -855,6 +991,14 @@ mod tests {
             provider: "claude".to_string(),
             system_prompt: Some("You are a coder".to_string()),
             strip_prefix: None,
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
         });
 
         config.rules.push(RoutingRuleConfig {
@@ -862,6 +1006,14 @@ mod tests {
             provider: "openai".to_string(),
             system_prompt: None,
             strip_prefix: None,
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
         });
 
         let router = Router::new(&config).unwrap();
@@ -896,6 +1048,14 @@ mod tests {
             provider: "nonexistent".to_string(),
             system_prompt: None,
             strip_prefix: None,
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
         });
 
         let result = Router::new(&config);
@@ -918,6 +1078,14 @@ mod tests {
             provider: "openai".to_string(),
             system_prompt: None,
             strip_prefix: None,
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
         });
 
         let result = Router::new(&config);
@@ -932,6 +1100,14 @@ mod tests {
             provider: "claude".to_string(),
             system_prompt: Some("You are a coder".to_string()),
             strip_prefix: None,
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
         };
 
         let json = serde_json::to_string(&rule).unwrap();
@@ -967,6 +1143,14 @@ mod tests {
             provider: "openai".to_string(),
             system_prompt: Some("You are a coder".to_string()),
             strip_prefix: None,
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
         });
 
         let json = serde_json::to_string(&config).unwrap();

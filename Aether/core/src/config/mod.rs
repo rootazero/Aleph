@@ -196,6 +196,7 @@ impl From<Config> for FullConfig {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingRuleConfig {
+    // ===== Existing fields (backward compatible) =====
     /// Regex pattern to match against user input
     pub regex: String,
     /// Provider name to use when this rule matches
@@ -207,6 +208,124 @@ pub struct RoutingRuleConfig {
     /// Defaults to true for patterns starting with "^/" (command patterns)
     #[serde(default)]
     pub strip_prefix: Option<bool>,
+
+    // ===== 🆕 New fields (MVP implementation) =====
+    /// Required capabilities (e.g., ["memory", "search", "mcp"])
+    /// Default: [] (no capabilities)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Vec<String>>,
+
+    /// Intent type identifier (for logging and UI display)
+    /// Examples: "translation", "research", "code_generation", "skills:build-macos-apps"
+    /// Default: "general"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent_type: Option<String>,
+
+    /// Context data injection format
+    /// Options: "markdown", "xml", "json"
+    /// Default: "markdown"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_format: Option<String>,
+
+    // ===== 🔮 Skills fields (Solution C reserved) =====
+    /// Skills ID (e.g., "build-macos-apps", "pdf")
+    /// Only valid when intent_type = "skills:xxx"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_id: Option<String>,
+
+    /// Skills version number (semantic versioning, e.g., "1.0.0")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_version: Option<String>,
+
+    /// Skills workflow definition (JSON string)
+    /// Example: '{"steps": [{"type": "tool_call", "tool": "read_files"}, ...]}'
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
+
+    /// Skills available tools list (JSON string array)
+    /// Example: '["read_files", "write_files", "swift_compile"]'
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<String>,
+
+    /// Skills knowledge base path or URL
+    /// Example: "~/.aether/skills/build-macos-apps/knowledge"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub knowledge_base: Option<String>,
+}
+
+impl RoutingRuleConfig {
+    /// Create a test config (for tests only)
+    #[cfg(test)]
+    pub fn test_config(regex: &str, provider: &str) -> Self {
+        Self {
+            regex: regex.to_string(),
+            provider: provider.to_string(),
+            system_prompt: None,
+            strip_prefix: None,
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
+        }
+    }
+
+    /// Get capabilities (with default value)
+    pub fn get_capabilities(&self) -> Vec<crate::payload::Capability> {
+        use crate::payload::Capability;
+
+        self.capabilities
+            .as_ref()
+            .map(|caps| {
+                caps.iter()
+                    .filter_map(|s| Capability::from_str(s).ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get intent type (with default value)
+    pub fn get_intent_type(&self) -> &str {
+        self.intent_type.as_deref().unwrap_or("general")
+    }
+
+    /// Get context format (with default value)
+    pub fn get_context_format(&self) -> crate::payload::ContextFormat {
+        use crate::payload::ContextFormat;
+
+        self.context_format
+            .as_ref()
+            .and_then(|s| ContextFormat::from_str(s).ok())
+            .unwrap_or(ContextFormat::Markdown)
+    }
+
+    // 🔮 Skills related helper methods (reserved for Solution C)
+
+    /// Check if this is a Skills routing rule
+    pub fn is_skills_rule(&self) -> bool {
+        self.intent_type
+            .as_ref()
+            .map(|s| s.starts_with("skills:"))
+            .unwrap_or(false)
+    }
+
+    /// Get Skills workflow definition (parse JSON)
+    pub fn get_workflow_definition(&self) -> Option<serde_json::Value> {
+        self.workflow
+            .as_ref()
+            .and_then(|json_str| serde_json::from_str(json_str).ok())
+    }
+
+    /// Get Skills tools list (parse JSON)
+    pub fn get_tools_list(&self) -> Vec<String> {
+        self.tools
+            .as_ref()
+            .and_then(|json_str| serde_json::from_str::<Vec<String>>(json_str).ok())
+            .unwrap_or_default()
+    }
 }
 
 /// AI Provider configuration
@@ -1365,6 +1484,14 @@ mod tests {
             provider: "openai".to_string(),
             system_prompt: None,
             strip_prefix: None,
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
         });
 
         // Should fail validation
@@ -1381,6 +1508,14 @@ mod tests {
             provider: "nonexistent".to_string(),
             system_prompt: None,
             strip_prefix: None,
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
         });
 
         // Should fail validation
@@ -1491,6 +1626,14 @@ max_context_items = 5
                 provider: "openai".to_string(),
                 system_prompt: None,
                 strip_prefix: None,
+                capabilities: None,
+                intent_type: None,
+                context_format: None,
+                skill_id: None,
+                skill_version: None,
+                workflow: None,
+                tools: None,
+                knowledge_base: None,
             }];
             assert!(
                 config.validate().is_ok(),
@@ -1523,6 +1666,14 @@ max_context_items = 5
                 provider: "openai".to_string(),
                 system_prompt: None,
                 strip_prefix: None,
+                capabilities: None,
+                intent_type: None,
+                context_format: None,
+                skill_id: None,
+                skill_version: None,
+                workflow: None,
+                tools: None,
+                knowledge_base: None,
             }];
             assert!(
                 config.validate().is_err(),
@@ -1724,6 +1875,14 @@ max_context_items = 5
             provider: "openai".to_string(),
             system_prompt: Some("You are a coding assistant.".to_string()),
             strip_prefix: None,
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
         });
 
         // Serialize to TOML
