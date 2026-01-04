@@ -92,7 +92,7 @@ pub mod utils; // NEW: Capability executor for enriching payloads
 // NOTE: ImageData/ImageFormat still exported for AI provider image encoding
 pub use crate::clipboard::{ImageData, ImageFormat};
 pub use crate::config::{
-    BehaviorConfig, Config, FullConfig, GeneralConfig, MemoryConfig, ProviderConfig,
+    BehaviorConfig, Config, FullConfig, GeneralConfig, MemoryConfig, PIIConfig, ProviderConfig,
     ProviderConfigEntry, RoutingRuleConfig, SearchBackendConfig, SearchBackendEntry, SearchConfig,
     SearchConfigInternal, ShortcutsConfig, TestConnectionResult,
 };

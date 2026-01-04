@@ -401,6 +401,17 @@ dictionary SearchBackendEntry {
   SearchBackendConfig config;
 };
 
+// PII (Personally Identifiable Information) scrubbing configuration
+// Migrated from behavior.pii_scrubbing_enabled to search.pii
+// (integrate-search-registry)
+dictionary PIIConfig {
+  boolean enabled;
+  boolean scrub_email;
+  boolean scrub_phone;
+  boolean scrub_ssn;
+  boolean scrub_credit_card;
+};
+
 // Search configuration (add-search-capability-integration)
 // Note: This is a simplified view for UniFFI - backends HashMap is converted to sequence
 dictionary SearchConfig {
@@ -410,6 +421,7 @@ dictionary SearchConfig {
   u64 max_results;
   u64 timeout_seconds;
   sequence<SearchBackendEntry> backends;
+  PIIConfig? pii;
 };
 
 // Full configuration (all settings combined)

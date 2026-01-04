@@ -564,6 +564,10 @@ pub struct SearchConfigInternal {
 
     /// Backend configurations
     pub backends: HashMap<String, SearchBackendConfig>,
+
+    /// PII scrubbing configuration (migrate from behavior.pii_scrubbing_enabled)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pii: Option<PIIConfig>,
 }
 
 fn default_search_max_results() -> usize {
@@ -576,6 +580,49 @@ fn default_search_max_results_u64() -> u64 {
 
 fn default_search_timeout() -> u64 {
     10
+}
+
+/// PII (Personally Identifiable Information) scrubbing configuration
+///
+/// Migrated from behavior.pii_scrubbing_enabled to search.pii
+/// (integrate-search-registry proposal)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PIIConfig {
+    /// Enable PII scrubbing (email, phone, SSN, etc.)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Scrub email addresses
+    #[serde(default = "default_true")]
+    pub scrub_email: bool,
+
+    /// Scrub phone numbers
+    #[serde(default = "default_true")]
+    pub scrub_phone: bool,
+
+    /// Scrub SSN (Social Security Numbers)
+    #[serde(default = "default_true")]
+    pub scrub_ssn: bool,
+
+    /// Scrub credit card numbers
+    #[serde(default = "default_true")]
+    pub scrub_credit_card: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for PIIConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            scrub_email: true,
+            scrub_phone: true,
+            scrub_ssn: true,
+            scrub_credit_card: true,
+        }
+    }
 }
 
 /// Search backend configuration
@@ -616,6 +663,8 @@ pub struct SearchConfig {
     #[serde(default = "default_search_timeout")]
     pub timeout_seconds: u64,
     pub backends: Vec<SearchBackendEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pii: Option<PIIConfig>,
 }
 
 impl From<SearchConfigInternal> for SearchConfig {
@@ -633,6 +682,7 @@ impl From<SearchConfigInternal> for SearchConfig {
             max_results: config.max_results as u64,
             timeout_seconds: config.timeout_seconds,
             backends,
+            pii: config.pii,
         }
     }
 }
@@ -762,7 +812,7 @@ impl Config {
         );
 
         // Parse TOML
-        let config: Config = toml::from_str(&contents).map_err(|e| {
+        let mut config: Config = toml::from_str(&contents).map_err(|e| {
             error!(path = %path.display(), error = %e, "Failed to parse config TOML");
             AetherError::invalid_config(format!(
                 "Failed to parse config file {}: {}",
@@ -775,8 +825,17 @@ impl Config {
             path = %path.display(),
             providers_count = config.providers.len(),
             rules_count = config.rules.len(),
-            "Config parsed successfully, validating"
+            "Config parsed successfully, checking for migrations"
         );
+
+        // Migrate PII config from behavior to search (integrate-search-registry)
+        if config.migrate_pii_config() {
+            info!("Migrated PII config from behavior.pii_scrubbing_enabled to search.pii.enabled");
+            // Auto-save migrated config
+            if let Err(e) = config.save() {
+                warn!(error = %e, "Failed to auto-save migrated config");
+            }
+        }
 
         // Validate config
         config.validate()?;
@@ -1402,6 +1461,71 @@ impl Config {
     /// ```
     pub fn save(&self) -> Result<()> {
         self.save_to_file(Self::default_path())
+    }
+
+    /// Migrate PII config from behavior to search (integrate-search-registry)
+    ///
+    /// This method performs automatic migration of PII settings:
+    /// 1. Detects old `behavior.pii_scrubbing_enabled` field
+    /// 2. Creates `search.pii.enabled` if missing
+    /// 3. Removes old field from behavior config
+    ///
+    /// # Returns
+    /// * `true` - Migration was performed
+    /// * `false` - No migration needed (already migrated or no old config)
+    fn migrate_pii_config(&mut self) -> bool {
+        // Check if migration is needed
+        let needs_migration = if let Some(ref behavior) = self.behavior {
+            // Old field exists, check if new config is missing
+            behavior.pii_scrubbing_enabled
+                && self.search.as_ref().and_then(|s| s.pii.as_ref()).is_none()
+        } else {
+            false
+        };
+
+        if !needs_migration {
+            return false;
+        }
+
+        // Get old PII value
+        let pii_enabled = self
+            .behavior
+            .as_ref()
+            .map(|b| b.pii_scrubbing_enabled)
+            .unwrap_or(false);
+
+        debug!(
+            pii_enabled = pii_enabled,
+            "Migrating PII config from behavior to search"
+        );
+
+        // Initialize search config if missing
+        if self.search.is_none() {
+            self.search = Some(SearchConfigInternal {
+                enabled: false,
+                default_provider: String::new(),
+                fallback_providers: None,
+                max_results: 5,
+                timeout_seconds: 10,
+                backends: HashMap::new(),
+                pii: None,
+            });
+        }
+
+        // Set PII config in search
+        if let Some(ref mut search_config) = self.search {
+            search_config.pii = Some(PIIConfig {
+                enabled: pii_enabled,
+                ..Default::default()
+            });
+        }
+
+        // Remove old field from behavior (by replacing with default)
+        if let Some(ref mut behavior) = self.behavior {
+            behavior.pii_scrubbing_enabled = false;
+        }
+
+        true
     }
 
     /// Get the default provider if it exists and is enabled

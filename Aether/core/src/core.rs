@@ -566,10 +566,18 @@ impl AetherCore {
                 cfg.search.as_ref().map(Self::get_search_options_from_config)
             },
             {
+                // Read PII config from search.pii.enabled (integrate-search-registry)
+                // Fallback to behavior.pii_scrubbing_enabled for backward compatibility
                 let cfg = self.lock_config();
-                cfg.behavior
+                cfg.search
                     .as_ref()
-                    .map(|b| b.pii_scrubbing_enabled)
+                    .and_then(|s| s.pii.as_ref())
+                    .map(|p| p.enabled)
+                    .or_else(|| {
+                        cfg.behavior
+                            .as_ref()
+                            .map(|b| b.pii_scrubbing_enabled)
+                    })
                     .unwrap_or(false)
             },
         );
