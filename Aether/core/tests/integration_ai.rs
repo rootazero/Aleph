@@ -49,9 +49,7 @@ impl AetherEventHandler for TestEventHandler {
         self.states.lock().unwrap().push(state);
     }
 
-    fn on_hotkey_detected(&self, _clipboard_content: String) {}
-
-    fn on_error(&self, message: String) {
+    fn on_error(&self, message: String, _suggestion: Option<String>) {
         self.errors.lock().unwrap().push(message);
     }
 
@@ -95,17 +93,13 @@ fn create_test_config() -> Config {
     });
 
     // Add routing rules
-    config.rules.push(RoutingRuleConfig {
-        regex: "^/code".to_string(),
-        provider: "claude".to_string(),
-        system_prompt: Some("You are a coding assistant.".to_string()),
+    config.rules.push({
+        let mut rule = RoutingRuleConfig::test_config("^/code", "claude");
+        rule.system_prompt = Some("You are a coding assistant.".to_string());
+        rule
     });
 
-    config.rules.push(RoutingRuleConfig {
-        regex: ".*".to_string(),
-        provider: "openai".to_string(),
-        system_prompt: None,
-    });
+    config.rules.push(RoutingRuleConfig::test_config(".*", "openai"));
 
     config.general.default_provider = Some("openai".to_string());
 
@@ -148,17 +142,17 @@ fn test_routing_priority() {
     });
 
     // First rule should match first
-    config.rules.push(RoutingRuleConfig {
-        regex: "^test".to_string(),
-        provider: "provider1".to_string(),
-        system_prompt: Some("prompt1".to_string()),
+    config.rules.push({
+        let mut rule = RoutingRuleConfig::test_config("^test", "provider1");
+        rule.system_prompt = Some("prompt1".to_string());
+        rule
     });
 
     // This rule also matches but should not be used
-    config.rules.push(RoutingRuleConfig {
-        regex: "test".to_string(),
-        provider: "provider2".to_string(),
-        system_prompt: Some("prompt2".to_string()),
+    config.rules.push({
+        let mut rule = RoutingRuleConfig::test_config("test", "provider2");
+        rule.system_prompt = Some("prompt2".to_string());
+        rule
     });
 
     let router = Router::new(&config).unwrap();
@@ -250,22 +244,14 @@ fn test_config_validation_comprehensive() {
     assert!(config.validate().is_ok());
 
     // Missing provider in rule
-    config.rules.push(RoutingRuleConfig {
-        regex: "test".to_string(),
-        provider: "nonexistent".to_string(),
-        system_prompt: None,
-    });
+    config.rules.push(RoutingRuleConfig::test_config("test", "nonexistent"));
     assert!(config.validate().is_err());
 
     // Reset rules
     config.rules.pop();
 
     // Invalid regex
-    config.rules.push(RoutingRuleConfig {
-        regex: "[invalid(".to_string(),
-        provider: "openai".to_string(),
-        system_prompt: None,
-    });
+    config.rules.push(RoutingRuleConfig::test_config("[invalid(", "openai"));
     assert!(config.validate().is_err());
 }
 
@@ -358,17 +344,9 @@ fn test_multiple_providers_same_type() {
         config
     });
 
-    config.rules.push(RoutingRuleConfig {
-        regex: "^/deep".to_string(),
-        provider: "deepseek".to_string(),
-        system_prompt: None,
-    });
+    config.rules.push(RoutingRuleConfig::test_config("^/deep", "deepseek"));
 
-    config.rules.push(RoutingRuleConfig {
-        regex: ".*".to_string(),
-        provider: "openai".to_string(),
-        system_prompt: None,
-    });
+    config.rules.push(RoutingRuleConfig::test_config(".*", "openai"));
 
     // Should validate successfully
     assert!(config.validate().is_ok());

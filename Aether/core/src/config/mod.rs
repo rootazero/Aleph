@@ -263,7 +263,6 @@ pub struct RoutingRuleConfig {
 
 impl RoutingRuleConfig {
     /// Create a test config (for tests only)
-    #[cfg(test)]
     pub fn test_config(regex: &str, provider: &str) -> Self {
         Self {
             regex: regex.to_string(),
@@ -448,7 +447,6 @@ impl ProviderConfig {
     ///
     /// This is a helper for tests to avoid specifying all optional fields.
     /// All optional advanced parameters (like frequency_penalty, media_resolution, etc.) are set to None.
-    #[cfg(test)]
     pub fn test_config(model: impl Into<String>) -> Self {
         Self {
             provider_type: None,

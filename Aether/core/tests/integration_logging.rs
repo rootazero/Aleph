@@ -311,13 +311,13 @@ fn test_log_level_invalid_values_handled_gracefully() {
     // Test that the system handles invalid log level strings gracefully
 
     // Valid levels
-    assert!(LogLevel::from_str("debug").is_some());
-    assert!(LogLevel::from_str("info").is_some());
-    assert!(LogLevel::from_str("warn").is_some());
-    assert!(LogLevel::from_str("error").is_some());
+    assert!(LogLevel::parse("debug").is_some());
+    assert!(LogLevel::parse("info").is_some());
+    assert!(LogLevel::parse("warn").is_some());
+    assert!(LogLevel::parse("error").is_some());
 
     // Invalid levels
-    assert!(LogLevel::from_str("invalid").is_none());
-    assert!(LogLevel::from_str("").is_none());
-    assert!(LogLevel::from_str("trace").is_some()); // Trace is supported
+    assert!(LogLevel::parse("invalid").is_none());
+    assert!(LogLevel::parse("").is_none());
+    assert!(LogLevel::parse("trace").is_some()); // Trace is supported
 }
