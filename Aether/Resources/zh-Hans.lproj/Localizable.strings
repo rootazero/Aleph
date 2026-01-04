@@ -245,6 +245,31 @@
 "settings.behavior.pii_example_ssn" = "例如：123-45-6789";
 "settings.behavior.pii_example_credit_card" = "例如：1234-5678-9012-3456";
 
+// MARK: - Settings Window - Search Tab (搜索设置)
+"settings.search.title" = "搜索";
+"settings.search.description" = "配置用于 AI 增强信息检索的网络搜索提供商。";
+"settings.search.providers" = "搜索提供商";
+"settings.search.providers_description" = "为每个搜索提供商配置 API 凭据。点击提供商卡片展开配置。";
+"settings.search.pii_scrubbing" = "隐私保护";
+"settings.search.pii_scrubbing_enable" = "启用 PII 清理";
+"settings.search.pii_scrubbing_description" = "在发送到外部服务之前，自动从搜索查询中删除个人身份信息。";
+"settings.search.pii_types_label" = "选择要清理的 PII 类型：";
+"settings.search.pii_type_email" = "电子邮件地址";
+"settings.search.pii_example_email" = "例如：user@example.com";
+"settings.search.pii_type_phone" = "电话号码";
+"settings.search.pii_example_phone" = "例如：(555) 123-4567";
+"settings.search.pii_type_ssn" = "社会安全号码";
+"settings.search.pii_example_ssn" = "例如：123-45-6789";
+"settings.search.pii_type_credit_card" = "信用卡号码";
+"settings.search.pii_example_credit_card" = "例如：1234-5678-9012-3456";
+"settings.search.fallback_order" = "备用顺序";
+"settings.search.fallback_order_placeholder" = "拖动提供商以设置备用优先级（即将推出）";
+"settings.search.status.not_configured" = "未配置";
+"settings.search.status.testing" = "测试中...";
+"settings.search.status.available" = "可用";
+"settings.search.test_connection" = "测试连接";
+"settings.search.documentation" = "文档";
+
 // MARK: - Settings Window - Memory Tab
 "settings.memory.title" = "记忆管理";
 "settings.memory.description" = "Aether 会记住过去的交互以提供上下文感知的响应。所有数据都存储在本地，永远不会离开您的设备。";

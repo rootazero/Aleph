@@ -246,6 +246,31 @@
 "settings.behavior.pii_example_ssn" = "e.g., 123-45-6789";
 "settings.behavior.pii_example_credit_card" = "e.g., 1234-5678-9012-3456";
 
+// MARK: - Settings Window - Search Tab
+"settings.search.title" = "Search";
+"settings.search.description" = "Configure web search providers for AI-augmented information retrieval.";
+"settings.search.providers" = "Search Providers";
+"settings.search.providers_description" = "Configure API credentials for each search provider. Click a provider card to expand configuration.";
+"settings.search.pii_scrubbing" = "Privacy Protection";
+"settings.search.pii_scrubbing_enable" = "Enable PII Scrubbing";
+"settings.search.pii_scrubbing_description" = "Automatically remove personally identifiable information from search queries before sending to external services.";
+"settings.search.pii_types_label" = "Select types of PII to scrub:";
+"settings.search.pii_type_email" = "Email Addresses";
+"settings.search.pii_example_email" = "e.g., user@example.com";
+"settings.search.pii_type_phone" = "Phone Numbers";
+"settings.search.pii_example_phone" = "e.g., (555) 123-4567";
+"settings.search.pii_type_ssn" = "Social Security Numbers";
+"settings.search.pii_example_ssn" = "e.g., 123-45-6789";
+"settings.search.pii_type_credit_card" = "Credit Card Numbers";
+"settings.search.pii_example_credit_card" = "e.g., 1234-5678-9012-3456";
+"settings.search.fallback_order" = "Fallback Order";
+"settings.search.fallback_order_placeholder" = "Drag providers to set fallback priority (coming soon)";
+"settings.search.status.not_configured" = "Not Configured";
+"settings.search.status.testing" = "Testing...";
+"settings.search.status.available" = "Available";
+"settings.search.test_connection" = "Test Connection";
+"settings.search.documentation" = "Docs";
+
 // MARK: - Settings Window - Memory Tab
 "settings.memory.title" = "Memory Management";
 "settings.memory.description" = "Aether remembers past interactions to provide context-aware responses. All data is stored locally and never leaves your device.";
