@@ -57,6 +57,9 @@ pub struct AetherCore {
     cleanup_task_handle: Option<tokio::task::JoinHandle<()>>,
     // AI routing (RwLock allows hot-reload after config changes)
     router: Arc<RwLock<Option<Arc<Router>>>>,
+    // Search capability (integrate-search-registry)
+    // RwLock allows hot-reload when search config changes
+    search_registry: Arc<RwLock<Option<Arc<crate::search::SearchRegistry>>>>,
     // Config hot-reload (must be kept alive for file watching)
     #[allow(dead_code)]
     config_watcher: Option<Arc<ConfigWatcher>>,
@@ -134,6 +137,33 @@ impl AetherCore {
             Arc::new(RwLock::new(router_opt))
         };
 
+        // Initialize SearchRegistry (if search enabled) - integrate-search-registry
+        // Wrapped in RwLock to allow hot-reload after config changes
+        let search_registry = {
+            let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
+            let registry_opt = if let Some(ref search_config) = cfg.search {
+                if search_config.enabled {
+                    match Self::create_search_registry_from_config(search_config) {
+                        Ok(registry) => {
+                            info!("SearchRegistry initialized successfully");
+                            Some(Arc::new(registry))
+                        }
+                        Err(e) => {
+                            warn!("Failed to initialize SearchRegistry: {}", e);
+                            None
+                        }
+                    }
+                } else {
+                    debug!("Search capability disabled in config");
+                    None
+                }
+            } else {
+                debug!("No search configuration found");
+                None
+            };
+            Arc::new(RwLock::new(registry_opt))
+        };
+
         // Initialize memory database and cleanup service if enabled
         let (memory_db, cleanup_service, cleanup_task_handle) = {
             let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
@@ -189,6 +219,7 @@ impl AetherCore {
             let handler_clone = Arc::clone(&event_handler);
             let config_clone = Arc::clone(&config);
             let router_clone = Arc::clone(&router);
+            let search_registry_clone = Arc::clone(&search_registry);
 
             let watcher = Arc::new(ConfigWatcher::new(move |config_result| {
                 match config_result {
@@ -226,6 +257,33 @@ impl AetherCore {
                         // Update router
                         if let Ok(mut router_guard) = router_clone.write() {
                             *router_guard = new_router;
+                        }
+
+                        // Reinitialize SearchRegistry with new config (integrate-search-registry)
+                        let new_search_registry = if let Some(ref search_config) = new_config.search {
+                            if search_config.enabled {
+                                match Self::create_search_registry_from_config(search_config) {
+                                    Ok(registry) => {
+                                        log::info!("SearchRegistry hot-reloaded successfully");
+                                        Some(Arc::new(registry))
+                                    }
+                                    Err(e) => {
+                                        log::warn!("Failed to reinitialize SearchRegistry during hot-reload: {}", e);
+                                        None
+                                    }
+                                }
+                            } else {
+                                log::debug!("Search capability disabled in new config");
+                                None
+                            }
+                        } else {
+                            log::debug!("No search configuration in new config");
+                            None
+                        };
+
+                        // Update search_registry
+                        if let Ok(mut registry_guard) = search_registry_clone.write() {
+                            *registry_guard = new_search_registry;
                         }
 
                         // Notify Swift via callback
@@ -268,6 +326,7 @@ impl AetherCore {
             cleanup_service,
             cleanup_task_handle,
             router,
+            search_registry,
             config_watcher,
         })
     }
@@ -297,6 +356,151 @@ impl AetherCore {
             .map_err(|e| AetherError::config(format!("Failed to create model directory: {}", e)))?;
 
         Ok(model_dir)
+    }
+
+    /// Extract SearchOptions from search configuration (integrate-search-registry)
+    ///
+    /// Converts SearchConfigInternal to SearchOptions for use in capability executor.
+    ///
+    /// # Arguments
+    ///
+    /// * `search_config` - Search configuration from Config
+    ///
+    /// # Returns
+    ///
+    /// * `crate::search::SearchOptions` - Configured search options
+    fn get_search_options_from_config(
+        search_config: &crate::config::SearchConfigInternal,
+    ) -> crate::search::SearchOptions {
+        use crate::search::SearchOptions;
+
+        // Create SearchOptions with defaults, override from config
+        SearchOptions {
+            max_results: search_config.max_results,
+            timeout_seconds: search_config.timeout_seconds,
+            // Use default values for other fields (None or false)
+            ..Default::default()
+        }
+    }
+
+    /// Create SearchRegistry from search configuration (integrate-search-registry)
+    ///
+    /// This method initializes a SearchRegistry with configured backends and fallback chain.
+    ///
+    /// # Arguments
+    ///
+    /// * `search_config` - Search configuration from Config
+    ///
+    /// # Returns
+    ///
+    /// * `Result<crate::search::SearchRegistry>` - Initialized registry or error
+    fn create_search_registry_from_config(
+        search_config: &crate::config::SearchConfigInternal,
+    ) -> Result<crate::search::SearchRegistry> {
+        use crate::search::providers::*;
+        use crate::search::SearchProvider;
+
+        info!(
+            enabled = search_config.enabled,
+            default_provider = %search_config.default_provider,
+            backend_count = search_config.backends.len(),
+            "Creating SearchRegistry from config"
+        );
+
+        // Create providers from backend configurations
+        let mut providers: Vec<(String, Box<dyn SearchProvider>)> = Vec::new();
+
+        for (name, backend_config) in &search_config.backends {
+            let provider: Box<dyn SearchProvider> = match backend_config.provider_type.as_str() {
+                "tavily" => {
+                    let api_key = backend_config
+                        .api_key
+                        .as_ref()
+                        .ok_or_else(|| AetherError::config("Tavily requires api_key"))?;
+                    Box::new(TavilyProvider::new(api_key.clone())?)
+                }
+                "searxng" => {
+                    let base_url = backend_config
+                        .base_url
+                        .as_ref()
+                        .ok_or_else(|| AetherError::config("SearXNG requires base_url"))?;
+                    Box::new(SearxngProvider::new(base_url.clone())?)
+                }
+                "google" => {
+                    let api_key = backend_config
+                        .api_key
+                        .as_ref()
+                        .ok_or_else(|| AetherError::config("Google CSE requires api_key"))?;
+                    let engine_id = backend_config.engine_id.as_ref().ok_or_else(|| {
+                        AetherError::config("Google CSE requires engine_id")
+                    })?;
+                    Box::new(GoogleProvider::new(api_key.clone(), engine_id.clone())?)
+                }
+                "bing" => {
+                    let api_key = backend_config
+                        .api_key
+                        .as_ref()
+                        .ok_or_else(|| AetherError::config("Bing requires api_key"))?;
+                    Box::new(BingProvider::new(api_key.clone())?)
+                }
+                "brave" => {
+                    let api_key = backend_config
+                        .api_key
+                        .as_ref()
+                        .ok_or_else(|| AetherError::config("Brave requires api_key"))?;
+                    Box::new(BraveProvider::new(api_key.clone())?)
+                }
+                "exa" => {
+                    let api_key = backend_config
+                        .api_key
+                        .as_ref()
+                        .ok_or_else(|| AetherError::config("Exa requires api_key"))?;
+                    Box::new(ExaProvider::new(api_key.clone())?)
+                }
+                _ => {
+                    warn!(
+                        provider_type = %backend_config.provider_type,
+                        "Unknown search provider type, skipping"
+                    );
+                    continue;
+                }
+            };
+
+            providers.push((name.clone(), provider));
+        }
+
+        if providers.is_empty() {
+            return Err(AetherError::config(
+                "No search providers configured in backends",
+            ));
+        }
+
+        // Build fallback chain
+        let fallback_chain = search_config
+            .fallback_providers
+            .clone()
+            .unwrap_or_default();
+
+        // Create registry
+        let mut registry =
+            crate::search::SearchRegistry::new(search_config.default_provider.clone());
+
+        // Add all providers
+        let provider_count = providers.len();
+        for (name, provider) in providers {
+            // Provider is already Box<dyn SearchProvider>, wrap in Arc
+            registry.add_provider(name, Arc::from(provider));
+        }
+
+        // Set fallback chain
+        registry.set_fallback_providers(fallback_chain);
+
+        info!(
+            provider_count = provider_count,
+            "SearchRegistry created successfully"
+        );
+
+        Ok(registry)
     }
 
     /// Build and enrich AgentPayload using new payload architecture
@@ -351,8 +555,16 @@ impl AetherCore {
                 let cfg = self.lock_config();
                 Some(Arc::new(cfg.memory.clone()))
             },
-            None, // TODO: Add SearchRegistry from config
-            None, // TODO: Add SearchOptions from config
+            {
+                // Pass SearchRegistry from persistent field (integrate-search-registry)
+                let registry = self.search_registry.read().unwrap_or_else(|e| e.into_inner());
+                registry.as_ref().map(Arc::clone)
+            },
+            {
+                // Pass SearchOptions from config (integrate-search-registry)
+                let cfg = self.lock_config();
+                cfg.search.as_ref().map(Self::get_search_options_from_config)
+            },
             {
                 let cfg = self.lock_config();
                 cfg.behavior
@@ -1797,6 +2009,60 @@ impl AetherCore {
     pub fn get_enabled_providers(&self) -> Vec<String> {
         let config = self.lock_config();
         config.get_enabled_providers()
+    }
+
+    // ========== SEARCH CAPABILITY METHODS (integrate-search-registry) ==========
+
+    /// Test a search provider connection (integrate-search-registry)
+    ///
+    /// This method delegates to SearchRegistry.test_search_provider() to validate
+    /// provider configuration and connectivity. Results are cached for 5 minutes.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider_name` - Name of the search provider to test
+    ///
+    /// # Returns
+    ///
+    /// * `ProviderTestResult` - Test result with success status, latency, and error details
+    ///
+    /// # Example (from Swift)
+    ///
+    /// ```swift
+    /// let result = await core.testSearchProvider("tavily")
+    /// if result.success {
+    ///     print("✓ Provider test successful: \(result.latency_ms)ms")
+    /// } else {
+    ///     print("✗ Provider test failed: \(result.error_message)")
+    /// }
+    /// ```
+    pub async fn test_search_provider(
+        &self,
+        provider_name: String,
+    ) -> crate::search::ProviderTestResult {
+        use crate::search::ProviderTestResult;
+
+        // Clone Arc from registry (must drop lock before await)
+        let registry_arc = {
+            let registry_guard = self.search_registry.read().unwrap_or_else(|e| e.into_inner());
+            registry_guard.as_ref().map(Arc::clone)
+        }; // Lock is dropped here
+
+        match registry_arc {
+            Some(reg) => {
+                // Delegate to registry's test method
+                reg.test_search_provider(&provider_name).await
+            }
+            None => {
+                // Search capability not enabled
+                ProviderTestResult {
+                    success: false,
+                    latency_ms: 0,
+                    error_message: "Search capability not enabled in configuration".to_string(),
+                    error_type: "config".to_string(),
+                }
+            }
+        }
     }
 }
 

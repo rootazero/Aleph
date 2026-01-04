@@ -218,10 +218,9 @@ interface AetherCore {
   [Throws=AetherException]
   string get_log_directory();
 
-  // SEARCH PROVIDER TESTING (add-search-settings-ui)
-  // TODO: Implement test_search_provider after SearchRegistry integration
-  // [Async]
-  // ProviderTestResult test_search_provider(string provider_name);
+  // SEARCH PROVIDER TESTING (integrate-search-registry)
+  [Async]
+  ProviderTestResult test_search_provider(string provider_name);
 };
 
 // Callback interface for events from Rust to client
