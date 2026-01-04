@@ -2,7 +2,6 @@
 ///
 /// This module defines the unified `SearchResult` struct that represents
 /// search results from all providers (Tavily, Google, Bing, SearXNG, etc.)
-
 use serde::{Deserialize, Serialize};
 
 /// Search result entry returned by all providers

@@ -8,8 +8,8 @@
 /// 5. Provider execution
 /// 6. Memory storage
 use aethecore::{
-    AetherCore, AetherEventHandler, CapturedContext, Config, MemoryConfig,
-    ProcessingState, ProviderConfig, RoutingRuleConfig,
+    AetherCore, AetherEventHandler, CapturedContext, Config, MemoryConfig, ProcessingState,
+    ProviderConfig, RoutingRuleConfig,
 };
 
 // Mock event handler for testing (since MockEventHandler is only available in lib tests)
@@ -62,7 +62,9 @@ fn create_test_config_with_providers() -> Config {
         rule
     });
 
-    config.rules.push(RoutingRuleConfig::test_config(r".*", "mock"));
+    config
+        .rules
+        .push(RoutingRuleConfig::test_config(r".*", "mock"));
 
     config
 }

@@ -371,7 +371,8 @@ mod tests {
             SearchResult {
                 title: "Rust Programming Language".to_string(),
                 url: "https://www.rust-lang.org".to_string(),
-                snippet: "A language empowering everyone to build reliable and efficient software.".to_string(),
+                snippet: "A language empowering everyone to build reliable and efficient software."
+                    .to_string(),
                 published_date: Some(1609459200), // 2021-01-01
                 relevance_score: Some(0.95),
                 source_type: Some("web".to_string()),
@@ -404,7 +405,9 @@ mod tests {
         assert!(formatted.contains("Source: tavily"));
 
         // Check second result
-        assert!(formatted.contains("2. [Getting Started with Rust](https://doc.rust-lang.org/book/)"));
+        assert!(
+            formatted.contains("2. [Getting Started with Rust](https://doc.rust-lang.org/book/)")
+        );
         assert!(formatted.contains("Learn Rust with The Rust Programming Language book"));
         assert!(formatted.contains("Source: brave"));
     }
@@ -452,7 +455,10 @@ mod tests {
     #[test]
     fn test_escape_markdown() {
         assert_eq!(escape_markdown("Normal text"), "Normal text");
-        assert_eq!(escape_markdown("Text with [brackets]"), "Text with \\[brackets\\]");
+        assert_eq!(
+            escape_markdown("Text with [brackets]"),
+            "Text with \\[brackets\\]"
+        );
         assert_eq!(
             escape_markdown("Link: [Title](url)"),
             "Link: \\[Title\\]\\(url\\)"

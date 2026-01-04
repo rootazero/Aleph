@@ -217,6 +217,11 @@ interface AetherCore {
   // Get log directory path
   [Throws=AetherException]
   string get_log_directory();
+
+  // SEARCH PROVIDER TESTING (add-search-settings-ui)
+  // TODO: Implement test_search_provider after SearchRegistry integration
+  // [Async]
+  // ProviderTestResult test_search_provider(string provider_name);
 };
 
 // Callback interface for events from Rust to client
@@ -338,6 +343,14 @@ dictionary ProviderConfig {
 dictionary TestConnectionResult {
   boolean success;
   string message;
+};
+
+// Provider test result for search providers (add-search-settings-ui)
+dictionary ProviderTestResult {
+  boolean success;
+  u32 latency_ms;
+  string error_message;
+  string error_type;  // "auth", "network", "config", or empty if success
 };
 
 // Routing rule configuration (Phase 6 - Task 1.5)

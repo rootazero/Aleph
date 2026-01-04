@@ -1,12 +1,11 @@
+use crate::error::{AetherError, Result};
+use crate::search::{SearchOptions, SearchProvider, SearchResult};
 /// Google Custom Search Engine provider
 ///
 /// Google CSE provides comprehensive search coverage
-
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
-use crate::error::{AetherError, Result};
-use crate::search::{SearchProvider, SearchResult, SearchOptions};
 
 pub struct GoogleProvider {
     api_key: String,
@@ -34,7 +33,9 @@ impl GoogleProvider {
             return Err(AetherError::invalid_config("Google API key is required"));
         }
         if engine_id.is_empty() {
-            return Err(AetherError::invalid_config("Google Custom Search Engine ID is required"));
+            return Err(AetherError::invalid_config(
+                "Google Custom Search Engine ID is required",
+            ));
         }
 
         Ok(Self {
@@ -50,11 +51,7 @@ impl GoogleProvider {
 
 #[async_trait]
 impl SearchProvider for GoogleProvider {
-    async fn search(
-        &self,
-        query: &str,
-        options: &SearchOptions,
-    ) -> Result<Vec<SearchResult>> {
+    async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         let response = self
             .client
             .get("https://www.googleapis.com/customsearch/v1")
@@ -76,10 +73,9 @@ impl SearchProvider for GoogleProvider {
             )));
         }
 
-        let google_response: GoogleResponse = response
-            .json()
-            .await
-            .map_err(|e| AetherError::provider(format!("Failed to parse Google response: {}", e)))?;
+        let google_response: GoogleResponse = response.json().await.map_err(|e| {
+            AetherError::provider(format!("Failed to parse Google response: {}", e))
+        })?;
 
         let results = google_response
             .items
@@ -115,11 +111,8 @@ mod tests {
 
     #[test]
     fn test_google_provider_creation() {
-        let provider = GoogleProvider::new(
-            "AIza_test_key".to_string(),
-            "cx_test_engine".to_string(),
-        )
-        .unwrap();
+        let provider =
+            GoogleProvider::new("AIza_test_key".to_string(), "cx_test_engine".to_string()).unwrap();
         assert_eq!(provider.name(), "google");
         assert!(provider.is_available());
     }

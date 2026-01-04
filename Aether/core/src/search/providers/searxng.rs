@@ -1,12 +1,11 @@
+use crate::error::{AetherError, Result};
+use crate::search::{SearchOptions, SearchProvider, SearchResult};
 /// SearXNG search provider
 ///
 /// SearXNG is a privacy-first, self-hosted metasearch engine
-
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
-use crate::error::{AetherError, Result};
-use crate::search::{SearchProvider, SearchResult, SearchOptions};
 
 pub struct SearxngProvider {
     base_url: String,
@@ -44,11 +43,7 @@ impl SearxngProvider {
 
 #[async_trait]
 impl SearchProvider for SearxngProvider {
-    async fn search(
-        &self,
-        query: &str,
-        options: &SearchOptions,
-    ) -> Result<Vec<SearchResult>> {
+    async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         let url = format!("{}/search", self.base_url);
 
         let response = self
@@ -67,10 +62,9 @@ impl SearchProvider for SearxngProvider {
             )));
         }
 
-        let searxng_response: SearxngResponse = response
-            .json()
-            .await
-            .map_err(|e| AetherError::provider(format!("Failed to parse SearXNG response: {}", e)))?;
+        let searxng_response: SearxngResponse = response.json().await.map_err(|e| {
+            AetherError::provider(format!("Failed to parse SearXNG response: {}", e))
+        })?;
 
         // Convert to unified format
         let results = searxng_response

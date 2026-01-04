@@ -1,12 +1,11 @@
+use crate::error::{AetherError, Result};
+use crate::search::{SearchOptions, SearchProvider, SearchResult};
 /// Bing Web Search API provider
 ///
 /// Bing provides cost-effective search
-
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
-use crate::error::{AetherError, Result};
-use crate::search::{SearchProvider, SearchResult, SearchOptions};
 
 pub struct BingProvider {
     api_key: String,
@@ -50,11 +49,7 @@ impl BingProvider {
 
 #[async_trait]
 impl SearchProvider for BingProvider {
-    async fn search(
-        &self,
-        query: &str,
-        options: &SearchOptions,
-    ) -> Result<Vec<SearchResult>> {
+    async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         let response = self
             .client
             .get("https://api.bing.microsoft.com/v7.0/search")

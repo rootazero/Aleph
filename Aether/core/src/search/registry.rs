@@ -1,12 +1,12 @@
+use crate::error::{AetherError, Result};
+use crate::search::providers::*;
+use crate::search::{ProviderTestResult, SearchOptions, SearchProvider, SearchResult};
 /// Search provider registry and router
 ///
 /// This module manages multiple search providers and routes requests
-
 use std::collections::HashMap;
-use std::sync::Arc;
-use crate::error::{AetherError, Result};
-use crate::search::{SearchProvider, SearchResult, SearchOptions};
-use crate::search::providers::*;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// Registry for managing multiple search providers
 ///
@@ -16,6 +16,8 @@ pub struct SearchRegistry {
     providers: HashMap<String, Arc<dyn SearchProvider>>,
     default_provider: String,
     fallback_providers: Vec<String>,
+    /// Cache for provider test results (name -> (result, timestamp))
+    test_cache: Arc<Mutex<HashMap<String, (ProviderTestResult, Instant)>>>,
 }
 
 impl SearchRegistry {
@@ -25,6 +27,7 @@ impl SearchRegistry {
             providers: HashMap::new(),
             default_provider,
             fallback_providers: Vec::new(),
+            test_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -46,11 +49,7 @@ impl SearchRegistry {
     /// Execute search with fallback logic
     ///
     /// Tries default provider first, then falls back to alternatives if it fails
-    pub async fn search(
-        &self,
-        query: &str,
-        options: &SearchOptions,
-    ) -> Result<Vec<SearchResult>> {
+    pub async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         // Try default provider
         if let Some(provider) = self.providers.get(&self.default_provider) {
             match provider.search(query, options).await {
@@ -72,7 +71,10 @@ impl SearchRegistry {
             if let Some(provider) = self.providers.get(provider_name) {
                 match provider.search(query, options).await {
                     Ok(results) => {
-                        log::info!("Search succeeded with fallback provider '{}'", provider_name);
+                        log::info!(
+                            "Search succeeded with fallback provider '{}'",
+                            provider_name
+                        );
                         return Ok(results);
                     }
                     Err(e) => {
@@ -86,6 +88,98 @@ impl SearchRegistry {
             "All search providers failed for query: {}",
             query
         )))
+    }
+
+    /// Test a search provider connection
+    ///
+    /// Executes a minimal test query to validate API key and connectivity.
+    /// Results are cached for 5 minutes to avoid excessive API calls.
+    ///
+    /// # Arguments
+    /// * `name` - Provider name to test
+    ///
+    /// # Returns
+    /// * `ProviderTestResult` - Test result with latency or error information
+    pub async fn test_search_provider(&self, name: &str) -> ProviderTestResult {
+        const CACHE_TTL: Duration = Duration::from_secs(5 * 60); // 5 minutes
+
+        // Check cache first
+        {
+            let cache = self.test_cache.lock().unwrap();
+            if let Some((result, timestamp)) = cache.get(name) {
+                if timestamp.elapsed() < CACHE_TTL {
+                    log::debug!("Returning cached test result for provider '{}'", name);
+                    return result.clone();
+                }
+            }
+        }
+
+        // Provider not found
+        let provider = match self.providers.get(name) {
+            Some(p) => p,
+            None => {
+                let result = ProviderTestResult {
+                    success: false,
+                    latency_ms: 0,
+                    error_message: format!("Provider '{}' not found in registry", name),
+                    error_type: "config".to_string(),
+                };
+                return result;
+            }
+        };
+
+        // Execute test search
+        let test_options = SearchOptions {
+            max_results: 1,
+            timeout_seconds: 5,
+            ..Default::default()
+        };
+
+        let start = Instant::now();
+        let result = match provider.search("test", &test_options).await {
+            Ok(_) => {
+                let latency = start.elapsed().as_millis() as u32;
+                ProviderTestResult {
+                    success: true,
+                    latency_ms: latency,
+                    error_message: String::new(),
+                    error_type: String::new(),
+                }
+            }
+            Err(e) => {
+                // Classify error type
+                let error_str = e.to_string().to_lowercase();
+                let error_type = if error_str.contains("auth")
+                    || error_str.contains("401")
+                    || error_str.contains("403")
+                    || error_str.contains("unauthorized")
+                {
+                    "auth"
+                } else if error_str.contains("network")
+                    || error_str.contains("timeout")
+                    || error_str.contains("connection")
+                {
+                    "network"
+                } else {
+                    "config"
+                };
+
+                ProviderTestResult {
+                    success: false,
+                    latency_ms: 0,
+                    error_message: e.to_string(),
+                    error_type: error_type.to_string(),
+                }
+            }
+        };
+
+        // Cache result
+        {
+            let mut cache = self.test_cache.lock().unwrap();
+            cache.insert(name.to_string(), (result.clone(), Instant::now()));
+        }
+
+        result
     }
 }
 
@@ -102,24 +196,30 @@ pub fn create_provider_from_type(
 ) -> Result<Arc<dyn SearchProvider>> {
     match provider_type {
         "tavily" => {
-            let key = api_key.ok_or_else(|| AetherError::invalid_config("Tavily requires api_key"))?;
+            let key =
+                api_key.ok_or_else(|| AetherError::invalid_config("Tavily requires api_key"))?;
             Ok(Arc::new(TavilyProvider::new(key)?))
         }
         "searxng" => {
-            let url = base_url.ok_or_else(|| AetherError::invalid_config("SearXNG requires base_url"))?;
+            let url =
+                base_url.ok_or_else(|| AetherError::invalid_config("SearXNG requires base_url"))?;
             Ok(Arc::new(SearxngProvider::new(url)?))
         }
         "brave" => {
-            let key = api_key.ok_or_else(|| AetherError::invalid_config("Brave requires api_key"))?;
+            let key =
+                api_key.ok_or_else(|| AetherError::invalid_config("Brave requires api_key"))?;
             Ok(Arc::new(BraveProvider::new(key)?))
         }
         "google" => {
-            let key = api_key.ok_or_else(|| AetherError::invalid_config("Google requires api_key"))?;
-            let id = engine_id.ok_or_else(|| AetherError::invalid_config("Google requires engine_id"))?;
+            let key =
+                api_key.ok_or_else(|| AetherError::invalid_config("Google requires api_key"))?;
+            let id = engine_id
+                .ok_or_else(|| AetherError::invalid_config("Google requires engine_id"))?;
             Ok(Arc::new(GoogleProvider::new(key, id)?))
         }
         "bing" => {
-            let key = api_key.ok_or_else(|| AetherError::invalid_config("Bing requires api_key"))?;
+            let key =
+                api_key.ok_or_else(|| AetherError::invalid_config("Bing requires api_key"))?;
             Ok(Arc::new(BingProvider::new(key)?))
         }
         "exa" => {
@@ -323,12 +423,8 @@ mod tests {
 
     #[test]
     fn test_create_provider_from_type_tavily() {
-        let provider = create_provider_from_type(
-            "tavily",
-            Some("test-key".to_string()),
-            None,
-            None,
-        );
+        let provider =
+            create_provider_from_type("tavily", Some("test-key".to_string()), None, None);
         assert!(provider.is_ok());
     }
 
@@ -345,12 +441,7 @@ mod tests {
 
     #[test]
     fn test_create_provider_from_type_invalid() {
-        let result = create_provider_from_type(
-            "unknown",
-            Some("key".to_string()),
-            None,
-            None,
-        );
+        let result = create_provider_from_type("unknown", Some("key".to_string()), None, None);
         assert!(result.is_err());
     }
 }

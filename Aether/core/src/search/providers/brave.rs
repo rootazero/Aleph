@@ -1,12 +1,11 @@
+use crate::error::{AetherError, Result};
+use crate::search::{SearchOptions, SearchProvider, SearchResult};
 /// Brave Search API provider
 ///
 /// Brave provides privacy-focused search with own index
-
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
-use crate::error::{AetherError, Result};
-use crate::search::{SearchProvider, SearchResult, SearchOptions};
 
 pub struct BraveProvider {
     api_key: String,
@@ -49,11 +48,7 @@ impl BraveProvider {
 
 #[async_trait]
 impl SearchProvider for BraveProvider {
-    async fn search(
-        &self,
-        query: &str,
-        options: &SearchOptions,
-    ) -> Result<Vec<SearchResult>> {
+    async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         let response = self
             .client
             .get("https://api.search.brave.com/res/v1/web/search")

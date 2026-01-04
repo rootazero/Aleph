@@ -93,8 +93,8 @@ pub mod utils; // NEW: Capability executor for enriching payloads
 pub use crate::clipboard::{ImageData, ImageFormat};
 pub use crate::config::{
     BehaviorConfig, Config, FullConfig, GeneralConfig, MemoryConfig, ProviderConfig,
-    ProviderConfigEntry, RoutingRuleConfig, SearchBackendConfig, SearchBackendEntry,
-    SearchConfig, SearchConfigInternal, ShortcutsConfig, TestConnectionResult,
+    ProviderConfigEntry, RoutingRuleConfig, SearchBackendConfig, SearchBackendEntry, SearchConfig,
+    SearchConfigInternal, ShortcutsConfig, TestConnectionResult,
 };
 pub use crate::core::{AetherCore, AppMemoryInfo, CapturedContext, MemoryEntryFFI as MemoryEntry};
 pub use crate::error::{AetherError, AetherException, Result};
@@ -108,6 +108,7 @@ pub use crate::memory::database::MemoryStats;
 pub use crate::metrics::StageTimer;
 pub use crate::providers::AiProvider;
 pub use crate::router::{Router, RoutingRule};
+pub use crate::search::ProviderTestResult;
 pub use crate::utils::pii;
 
 // Test-only exports

@@ -1,7 +1,6 @@
 /// Search options configuration
 ///
 /// This module defines options passed to search providers
-
 use serde::{Deserialize, Serialize};
 
 /// Search options passed to providers

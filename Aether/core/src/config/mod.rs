@@ -644,7 +644,54 @@ impl Default for Config {
             general: GeneralConfig::default(),
             memory: MemoryConfig::default(),
             providers: HashMap::new(),
-            rules: Vec::new(),
+            // Preset routing rules for builtin commands (add-search-settings-ui)
+            rules: vec![
+                // /search command - web search capability
+                RoutingRuleConfig {
+                    regex: r"^/search\s+".to_string(),
+                    provider: "openai".to_string(), // Default, user can override
+                    system_prompt: Some("You are a helpful search assistant. Use the search capability to find up-to-date information.".to_string()),
+                    strip_prefix: Some(true),
+                    capabilities: Some(vec!["search".to_string()]),
+                    intent_type: Some("builtin_search".to_string()),
+                    context_format: Some("markdown".to_string()),
+                    skill_id: None,
+                    skill_version: None,
+                    workflow: None,
+                    tools: None,
+                    knowledge_base: None,
+                },
+                // /mcp command - Model Context Protocol integration (reserved for future)
+                RoutingRuleConfig {
+                    regex: r"^/mcp\s+".to_string(),
+                    provider: "openai".to_string(),
+                    system_prompt: Some("You are an MCP integration assistant. (Feature not yet implemented)".to_string()),
+                    strip_prefix: Some(true),
+                    capabilities: None, // Will add ["mcp"] when implemented
+                    intent_type: Some("builtin_mcp".to_string()),
+                    context_format: Some("markdown".to_string()),
+                    skill_id: None,
+                    skill_version: None,
+                    workflow: None,
+                    tools: None,
+                    knowledge_base: None,
+                },
+                // /skill command - Skills workflow execution (reserved for future)
+                RoutingRuleConfig {
+                    regex: r"^/skill\s+".to_string(),
+                    provider: "openai".to_string(),
+                    system_prompt: Some("You are a skills execution assistant. (Feature not yet implemented)".to_string()),
+                    strip_prefix: Some(true),
+                    capabilities: None, // Will add ["skills"] when implemented
+                    intent_type: Some("skills".to_string()),
+                    context_format: Some("markdown".to_string()),
+                    skill_id: None,
+                    skill_version: None,
+                    workflow: None,
+                    tools: None,
+                    knowledge_base: None,
+                },
+            ],
             shortcuts: Some(ShortcutsConfig::default()),
             behavior: Some(BehaviorConfig::default()),
             search: None,
@@ -1050,7 +1097,10 @@ impl Config {
         if let Some(ref search_config) = self.search {
             if search_config.enabled {
                 // Validate default provider exists
-                if !search_config.backends.contains_key(&search_config.default_provider) {
+                if !search_config
+                    .backends
+                    .contains_key(&search_config.default_provider)
+                {
                     error!(
                         default_provider = %search_config.default_provider,
                         "Search default provider not found in backends"
@@ -1081,7 +1131,7 @@ impl Config {
                 if search_config.max_results == 0 {
                     error!("Search max_results cannot be 0");
                     return Err(AetherError::invalid_config(
-                        "Search max_results must be greater than 0".to_string()
+                        "Search max_results must be greater than 0".to_string(),
                     ));
                 }
 
@@ -1096,7 +1146,7 @@ impl Config {
                 if search_config.timeout_seconds == 0 {
                     error!("Search timeout cannot be 0");
                     return Err(AetherError::invalid_config(
-                        "Search timeout_seconds must be greater than 0".to_string()
+                        "Search timeout_seconds must be greater than 0".to_string(),
                     ));
                 }
 

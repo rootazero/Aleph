@@ -99,7 +99,9 @@ fn create_test_config() -> Config {
         rule
     });
 
-    config.rules.push(RoutingRuleConfig::test_config(".*", "openai"));
+    config
+        .rules
+        .push(RoutingRuleConfig::test_config(".*", "openai"));
 
     config.general.default_provider = Some("openai".to_string());
 
@@ -244,14 +246,18 @@ fn test_config_validation_comprehensive() {
     assert!(config.validate().is_ok());
 
     // Missing provider in rule
-    config.rules.push(RoutingRuleConfig::test_config("test", "nonexistent"));
+    config
+        .rules
+        .push(RoutingRuleConfig::test_config("test", "nonexistent"));
     assert!(config.validate().is_err());
 
     // Reset rules
     config.rules.pop();
 
     // Invalid regex
-    config.rules.push(RoutingRuleConfig::test_config("[invalid(", "openai"));
+    config
+        .rules
+        .push(RoutingRuleConfig::test_config("[invalid(", "openai"));
     assert!(config.validate().is_err());
 }
 
@@ -344,9 +350,13 @@ fn test_multiple_providers_same_type() {
         config
     });
 
-    config.rules.push(RoutingRuleConfig::test_config("^/deep", "deepseek"));
+    config
+        .rules
+        .push(RoutingRuleConfig::test_config("^/deep", "deepseek"));
 
-    config.rules.push(RoutingRuleConfig::test_config(".*", "openai"));
+    config
+        .rules
+        .push(RoutingRuleConfig::test_config(".*", "openai"));
 
     // Should validate successfully
     assert!(config.validate().is_ok());

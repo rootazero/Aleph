@@ -1,12 +1,11 @@
+use crate::error::{AetherError, Result};
+use crate::search::{SearchOptions, SearchProvider, SearchResult};
 /// Tavily AI search provider
 ///
 /// Tavily provides AI-optimized search results with clean, structured data
-
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use crate::error::{AetherError, Result};
-use crate::search::{SearchProvider, SearchResult, SearchOptions};
 
 pub struct TavilyProvider {
     api_key: String,
@@ -58,11 +57,7 @@ impl TavilyProvider {
 
 #[async_trait]
 impl SearchProvider for TavilyProvider {
-    async fn search(
-        &self,
-        query: &str,
-        options: &SearchOptions,
-    ) -> Result<Vec<SearchResult>> {
+    async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         let request_body = TavilyRequest {
             api_key: self.api_key.clone(),
             query: query.to_string(),
@@ -96,10 +91,9 @@ impl SearchProvider for TavilyProvider {
             )));
         }
 
-        let tavily_response: TavilyResponse = response
-            .json()
-            .await
-            .map_err(|e| AetherError::provider(format!("Failed to parse Tavily response: {}", e)))?;
+        let tavily_response: TavilyResponse = response.json().await.map_err(|e| {
+            AetherError::provider(format!("Failed to parse Tavily response: {}", e))
+        })?;
 
         // Convert to unified format
         let results = tavily_response
@@ -154,7 +148,10 @@ mod tests {
         let provider = TavilyProvider::new(api_key).unwrap();
         let options = SearchOptions::default();
 
-        let results = provider.search("Rust programming language", &options).await.unwrap();
+        let results = provider
+            .search("Rust programming language", &options)
+            .await
+            .unwrap();
 
         assert!(!results.is_empty());
         assert!(results[0].url.starts_with("http"));

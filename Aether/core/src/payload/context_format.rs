@@ -1,6 +1,5 @@
 /// ContextFormat enumeration - Context data injection format
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContextFormat {
     /// Markdown format (default, implemented in MVP)
     #[default]
@@ -34,7 +33,6 @@ impl ContextFormat {
     }
 }
 
-
 impl std::fmt::Display for ContextFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
@@ -51,15 +49,9 @@ mod tests {
             ContextFormat::parse("markdown").unwrap(),
             ContextFormat::Markdown
         );
-        assert_eq!(
-            ContextFormat::parse("MD").unwrap(),
-            ContextFormat::Markdown
-        );
+        assert_eq!(ContextFormat::parse("MD").unwrap(), ContextFormat::Markdown);
         assert_eq!(ContextFormat::parse("xml").unwrap(), ContextFormat::Xml);
-        assert_eq!(
-            ContextFormat::parse("JSON").unwrap(),
-            ContextFormat::Json
-        );
+        assert_eq!(ContextFormat::parse("JSON").unwrap(), ContextFormat::Json);
         assert!(ContextFormat::parse("invalid").is_err());
     }
 

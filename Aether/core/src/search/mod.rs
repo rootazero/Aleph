@@ -1,3 +1,7 @@
+mod options;
+mod provider;
+pub mod providers;
+mod registry;
 /// Search capability implementation
 ///
 /// This module provides real-time web search functionality for Aether Agent,
@@ -41,16 +45,26 @@
 ///     Ok(())
 /// }
 /// ```
-
 // Core modules
 mod result;
-mod options;
-mod provider;
-pub mod providers;
-mod registry;
 
 // Re-exports
-pub use result::SearchResult;
-pub use options::{SearchOptions, QuotaInfo};
+pub use options::{QuotaInfo, SearchOptions};
 pub use provider::SearchProvider;
 pub use registry::SearchRegistry;
+pub use result::SearchResult;
+
+/// Result of testing a search provider connection
+///
+/// Used by the UI to display provider status and validate configuration.
+#[derive(Debug, Clone)]
+pub struct ProviderTestResult {
+    /// Whether the test was successful
+    pub success: bool,
+    /// Response time in milliseconds (0 if failed)
+    pub latency_ms: u32,
+    /// Error message (empty if success)
+    pub error_message: String,
+    /// Error type: "auth", "network", "config", or empty if success
+    pub error_type: String,
+}

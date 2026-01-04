@@ -1,10 +1,9 @@
+use crate::error::Result;
+use crate::search::{QuotaInfo, SearchOptions, SearchResult};
 /// Search provider trait abstraction
 ///
 /// This module defines the `SearchProvider` trait which all search backends implement
-
 use async_trait::async_trait;
-use crate::error::Result;
-use crate::search::{SearchResult, SearchOptions, QuotaInfo};
 
 /// Unified interface for search providers
 ///
@@ -33,11 +32,7 @@ pub trait SearchProvider: Send + Sync {
     /// let results = provider.search("Rust async", &options).await.unwrap();
     /// # }
     /// ```
-    async fn search(
-        &self,
-        query: &str,
-        options: &SearchOptions,
-    ) -> Result<Vec<SearchResult>>;
+    async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>>;
 
     /// Get provider name (for logging/debugging)
     fn name(&self) -> &str;
@@ -66,11 +61,7 @@ mod tests {
 
     #[async_trait]
     impl SearchProvider for MockSearchProvider {
-        async fn search(
-            &self,
-            query: &str,
-            _options: &SearchOptions,
-        ) -> Result<Vec<SearchResult>> {
+        async fn search(&self, query: &str, _options: &SearchOptions) -> Result<Vec<SearchResult>> {
             Ok(vec![SearchResult::new(
                 "Mock Title".to_string(),
                 "https://mock.com".to_string(),

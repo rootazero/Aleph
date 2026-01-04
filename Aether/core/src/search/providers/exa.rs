@@ -1,12 +1,11 @@
+use crate::error::{AetherError, Result};
+use crate::search::{SearchOptions, SearchProvider, SearchResult};
 /// Exa.ai (formerly Metaphor) search provider
 ///
 /// Exa provides semantic search capabilities
-
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use crate::error::{AetherError, Result};
-use crate::search::{SearchProvider, SearchResult, SearchOptions};
 
 pub struct ExaProvider {
     api_key: String,
@@ -58,11 +57,7 @@ impl ExaProvider {
 
 #[async_trait]
 impl SearchProvider for ExaProvider {
-    async fn search(
-        &self,
-        query: &str,
-        options: &SearchOptions,
-    ) -> Result<Vec<SearchResult>> {
+    async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         let request_body = ExaRequest {
             query: query.to_string(),
             num_results: options.max_results,

@@ -158,10 +158,7 @@ impl CapabilityExecutor {
         // Convert payload::ContextAnchor to memory::ContextAnchor
         let memory_anchor = MemoryContextAnchor::with_timestamp(
             anchor.app_bundle_id.clone(),
-            anchor
-                .window_title
-                .clone()
-                .unwrap_or_default(),
+            anchor.window_title.clone().unwrap_or_default(),
             payload.meta.timestamp,
         );
 
@@ -492,13 +489,7 @@ mod tests {
         registry.add_provider("mock".to_string(), Arc::new(provider));
 
         // Create capability executor with search registry
-        let executor = CapabilityExecutor::new(
-            None,
-            None,
-            Some(Arc::new(registry)),
-            None,
-            false,
-        );
+        let executor = CapabilityExecutor::new(None, None, Some(Arc::new(registry)), None, false);
 
         let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
 
@@ -535,13 +526,7 @@ mod tests {
         registry.add_provider("mock".to_string(), Arc::new(provider));
 
         // Create capability executor with search (no memory for simplicity)
-        let executor = CapabilityExecutor::new(
-            None,
-            None,
-            Some(Arc::new(registry)),
-            None,
-            false,
-        );
+        let executor = CapabilityExecutor::new(None, None, Some(Arc::new(registry)), None, false);
 
         let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
 
@@ -618,13 +603,7 @@ mod tests {
         let provider = MockSearchProvider::new("mock", 1);
         registry.add_provider("mock".to_string(), Arc::new(provider));
 
-        let executor = CapabilityExecutor::new(
-            None,
-            None,
-            Some(Arc::new(registry)),
-            None,
-            false,
-        );
+        let executor = CapabilityExecutor::new(None, None, Some(Arc::new(registry)), None, false);
 
         let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
 
@@ -656,13 +635,7 @@ mod tests {
         let provider = MockSearchProvider::new("mock", 1);
         registry.add_provider("mock".to_string(), Arc::new(provider));
 
-        let executor = CapabilityExecutor::new(
-            None,
-            None,
-            Some(Arc::new(registry)),
-            None,
-            false,
-        );
+        let executor = CapabilityExecutor::new(None, None, Some(Arc::new(registry)), None, false);
 
         let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
 
