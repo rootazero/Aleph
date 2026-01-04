@@ -95,49 +95,57 @@
 
 ---
 
-## Phase 3: Swift UI - Provider Presets (3h)
+## Phase 3: Swift UI - Provider Presets (3h) ✅ COMPLETED
 
-### Task 3.1: Create SearchProviderPreset struct (1h)
-- [ ] Create `Aether/Sources/Models/SearchProviderPreset.swift`
-- [ ] Define structs:
+### Task 3.1: Create SearchProviderPreset struct (1h) ✅
+- [x] Create `Aether/Sources/Models/SearchProviderPreset.swift`
+- [x] Define structs:
   ```swift
   struct SearchProviderPreset {
       let id: String
       let displayName: String
-      let icon: String
-      let fields: [PresetField]
+      let iconName: String
+      let color: String
+      let providerType: String
+      let fields: [SearchPresetField]
       let docsURL: URL
+      let description: String
   }
 
-  struct PresetField {
+  struct SearchPresetField {
       let key: String
       let displayName: String
-      let type: FieldType
+      let type: SearchFieldType
       let required: Bool
       let defaultValue: String?
       let options: [String]?
+      let placeholder: String?
   }
 
-  enum FieldType {
+  enum SearchFieldType {
       case secureText, text, picker
   }
   ```
 
-**Validation**: Struct compiles
+**Validation**: ✅ Struct compiles
 
 ---
 
-### Task 3.2: Define 6 provider presets (2h)
-- [ ] Create `let searchProviderPresets: [SearchProviderPreset]` array with:
+### Task 3.2: Define 6 provider presets (2h) ✅
+- [x] Create `SearchProviderPresets.all: [SearchProviderPreset]` array with:
   1. **Tavily**: API Key (required), Search Depth (picker: basic/advanced)
   2. **SearXNG**: Instance URL (required, default: `https://searx.be`)
   3. **Google**: API Key (required), Custom Search Engine ID (required)
   4. **Bing**: API Key (required)
   5. **Brave**: API Key (required)
   6. **Exa**: API Key (required)
-- [ ] Add documentation URLs for each provider
+- [x] Add documentation URLs for each provider
+- [x] Add icons and colors for each provider
+- [x] Add descriptions for each provider
 
-**Validation**: All 6 presets defined with correct fields
+**Validation**: ✅ All 6 presets defined with correct fields
+
+**Commit**: 7101141
 
 ---
 
