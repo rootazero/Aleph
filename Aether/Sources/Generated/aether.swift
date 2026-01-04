@@ -594,6 +594,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func testProviderConnectionWithConfig(providerName: String, providerConfig: ProviderConfig)  -> TestConnectionResult
     
+    func testSearchProvider(providerName: String) async  -> ProviderTestResult
+    
     func testStreamingResponse() 
     
     func testTypedError(errorType: ErrorType, message: String) 
@@ -851,6 +853,24 @@ open func testProviderConnectionWithConfig(providerName: String, providerConfig:
         FfiConverterTypeProviderConfig.lower(providerConfig),$0
     )
 })
+}
+    
+open func testSearchProvider(providerName: String)async  -> ProviderTestResult {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_aethecore_fn_method_aethercore_test_search_provider(
+                    self.uniffiClonePointer(),
+                    FfiConverterString.lower(providerName)
+                )
+            },
+            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
+            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
+            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeProviderTestResult.lift,
+            errorHandler: nil
+            
+        )
 }
     
 open func testStreamingResponse() {try! rustCall() {
@@ -1685,6 +1705,96 @@ public func FfiConverterTypeMemoryStats_lower(_ value: MemoryStats) -> RustBuffe
 }
 
 
+public struct PiiConfig {
+    public var enabled: Bool
+    public var scrubEmail: Bool
+    public var scrubPhone: Bool
+    public var scrubSsn: Bool
+    public var scrubCreditCard: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(enabled: Bool, scrubEmail: Bool, scrubPhone: Bool, scrubSsn: Bool, scrubCreditCard: Bool) {
+        self.enabled = enabled
+        self.scrubEmail = scrubEmail
+        self.scrubPhone = scrubPhone
+        self.scrubSsn = scrubSsn
+        self.scrubCreditCard = scrubCreditCard
+    }
+}
+
+
+
+extension PiiConfig: Equatable, Hashable {
+    public static func ==(lhs: PiiConfig, rhs: PiiConfig) -> Bool {
+        if lhs.enabled != rhs.enabled {
+            return false
+        }
+        if lhs.scrubEmail != rhs.scrubEmail {
+            return false
+        }
+        if lhs.scrubPhone != rhs.scrubPhone {
+            return false
+        }
+        if lhs.scrubSsn != rhs.scrubSsn {
+            return false
+        }
+        if lhs.scrubCreditCard != rhs.scrubCreditCard {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(enabled)
+        hasher.combine(scrubEmail)
+        hasher.combine(scrubPhone)
+        hasher.combine(scrubSsn)
+        hasher.combine(scrubCreditCard)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePIIConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PiiConfig {
+        return
+            try PiiConfig(
+                enabled: FfiConverterBool.read(from: &buf), 
+                scrubEmail: FfiConverterBool.read(from: &buf), 
+                scrubPhone: FfiConverterBool.read(from: &buf), 
+                scrubSsn: FfiConverterBool.read(from: &buf), 
+                scrubCreditCard: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PiiConfig, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterBool.write(value.scrubEmail, into: &buf)
+        FfiConverterBool.write(value.scrubPhone, into: &buf)
+        FfiConverterBool.write(value.scrubSsn, into: &buf)
+        FfiConverterBool.write(value.scrubCreditCard, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePIIConfig_lift(_ buf: RustBuffer) throws -> PiiConfig {
+    return try FfiConverterTypePIIConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePIIConfig_lower(_ value: PiiConfig) -> RustBuffer {
+    return FfiConverterTypePIIConfig.lower(value)
+}
+
+
 public struct ProviderConfig {
     public var providerType: String?
     public var apiKey: String?
@@ -1934,6 +2044,88 @@ public func FfiConverterTypeProviderConfigEntry_lift(_ buf: RustBuffer) throws -
 #endif
 public func FfiConverterTypeProviderConfigEntry_lower(_ value: ProviderConfigEntry) -> RustBuffer {
     return FfiConverterTypeProviderConfigEntry.lower(value)
+}
+
+
+public struct ProviderTestResult {
+    public var success: Bool
+    public var latencyMs: UInt32
+    public var errorMessage: String
+    public var errorType: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(success: Bool, latencyMs: UInt32, errorMessage: String, errorType: String) {
+        self.success = success
+        self.latencyMs = latencyMs
+        self.errorMessage = errorMessage
+        self.errorType = errorType
+    }
+}
+
+
+
+extension ProviderTestResult: Equatable, Hashable {
+    public static func ==(lhs: ProviderTestResult, rhs: ProviderTestResult) -> Bool {
+        if lhs.success != rhs.success {
+            return false
+        }
+        if lhs.latencyMs != rhs.latencyMs {
+            return false
+        }
+        if lhs.errorMessage != rhs.errorMessage {
+            return false
+        }
+        if lhs.errorType != rhs.errorType {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(success)
+        hasher.combine(latencyMs)
+        hasher.combine(errorMessage)
+        hasher.combine(errorType)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProviderTestResult: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProviderTestResult {
+        return
+            try ProviderTestResult(
+                success: FfiConverterBool.read(from: &buf), 
+                latencyMs: FfiConverterUInt32.read(from: &buf), 
+                errorMessage: FfiConverterString.read(from: &buf), 
+                errorType: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ProviderTestResult, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.success, into: &buf)
+        FfiConverterUInt32.write(value.latencyMs, into: &buf)
+        FfiConverterString.write(value.errorMessage, into: &buf)
+        FfiConverterString.write(value.errorType, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProviderTestResult_lift(_ buf: RustBuffer) throws -> ProviderTestResult {
+    return try FfiConverterTypeProviderTestResult.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProviderTestResult_lower(_ value: ProviderTestResult) -> RustBuffer {
+    return FfiConverterTypeProviderTestResult.lower(value)
 }
 
 
@@ -2238,16 +2430,18 @@ public struct SearchConfig {
     public var maxResults: UInt64
     public var timeoutSeconds: UInt64
     public var backends: [SearchBackendEntry]
+    public var pii: PiiConfig?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(enabled: Bool, defaultProvider: String, fallbackProviders: [String]?, maxResults: UInt64, timeoutSeconds: UInt64, backends: [SearchBackendEntry]) {
+    public init(enabled: Bool, defaultProvider: String, fallbackProviders: [String]?, maxResults: UInt64, timeoutSeconds: UInt64, backends: [SearchBackendEntry], pii: PiiConfig?) {
         self.enabled = enabled
         self.defaultProvider = defaultProvider
         self.fallbackProviders = fallbackProviders
         self.maxResults = maxResults
         self.timeoutSeconds = timeoutSeconds
         self.backends = backends
+        self.pii = pii
     }
 }
 
@@ -2273,6 +2467,9 @@ extension SearchConfig: Equatable, Hashable {
         if lhs.backends != rhs.backends {
             return false
         }
+        if lhs.pii != rhs.pii {
+            return false
+        }
         return true
     }
 
@@ -2283,6 +2480,7 @@ extension SearchConfig: Equatable, Hashable {
         hasher.combine(maxResults)
         hasher.combine(timeoutSeconds)
         hasher.combine(backends)
+        hasher.combine(pii)
     }
 }
 
@@ -2299,7 +2497,8 @@ public struct FfiConverterTypeSearchConfig: FfiConverterRustBuffer {
                 fallbackProviders: FfiConverterOptionSequenceString.read(from: &buf), 
                 maxResults: FfiConverterUInt64.read(from: &buf), 
                 timeoutSeconds: FfiConverterUInt64.read(from: &buf), 
-                backends: FfiConverterSequenceTypeSearchBackendEntry.read(from: &buf)
+                backends: FfiConverterSequenceTypeSearchBackendEntry.read(from: &buf), 
+                pii: FfiConverterOptionTypePIIConfig.read(from: &buf)
         )
     }
 
@@ -2310,6 +2509,7 @@ public struct FfiConverterTypeSearchConfig: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.maxResults, into: &buf)
         FfiConverterUInt64.write(value.timeoutSeconds, into: &buf)
         FfiConverterSequenceTypeSearchBackendEntry.write(value.backends, into: &buf)
+        FfiConverterOptionTypePIIConfig.write(value.pii, into: &buf)
     }
 }
 
@@ -3514,6 +3714,30 @@ fileprivate struct FfiConverterOptionTypeBehaviorConfig: FfiConverterRustBuffer 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypePIIConfig: FfiConverterRustBuffer {
+    typealias SwiftType = PiiConfig?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypePIIConfig.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypePIIConfig.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeSearchConfig: FfiConverterRustBuffer {
     typealias SwiftType = SearchConfig?
 
@@ -3756,6 +3980,52 @@ fileprivate struct FfiConverterSequenceTypeSearchBackendEntry: FfiConverterRustB
         return seq
     }
 }
+private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
+private let UNIFFI_RUST_FUTURE_POLL_MAYBE_READY: Int8 = 1
+
+fileprivate let uniffiContinuationHandleMap = UniffiHandleMap<UnsafeContinuation<Int8, Never>>()
+
+fileprivate func uniffiRustCallAsync<F, T>(
+    rustFutureFunc: () -> UInt64,
+    pollFunc: (UInt64, @escaping UniffiRustFutureContinuationCallback, UInt64) -> (),
+    completeFunc: (UInt64, UnsafeMutablePointer<RustCallStatus>) -> F,
+    freeFunc: (UInt64) -> (),
+    liftFunc: (F) throws -> T,
+    errorHandler: ((RustBuffer) throws -> Swift.Error)?
+) async throws -> T {
+    // Make sure to call uniffiEnsureInitialized() since future creation doesn't have a
+    // RustCallStatus param, so doesn't use makeRustCall()
+    uniffiEnsureInitialized()
+    let rustFuture = rustFutureFunc()
+    defer {
+        freeFunc(rustFuture)
+    }
+    var pollResult: Int8;
+    repeat {
+        pollResult = await withUnsafeContinuation {
+            pollFunc(
+                rustFuture,
+                uniffiFutureContinuationCallback,
+                uniffiContinuationHandleMap.insert(obj: $0)
+            )
+        }
+    } while pollResult != UNIFFI_RUST_FUTURE_POLL_READY
+
+    return try liftFunc(makeRustCall(
+        { completeFunc(rustFuture, $0) },
+        errorHandler: errorHandler
+    ))
+}
+
+// Callback handlers for an async calls.  These are invoked by Rust when the future is ready.  They
+// lift the return value or error and resume the suspended function.
+fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: Int8) {
+    if let continuation = try? uniffiContinuationHandleMap.remove(handle: handle) {
+        continuation.resume(returning: pollResult)
+    } else {
+        print("uniffiFutureContinuationCallback invalid handle")
+    }
+}
 public func checkEmbeddingModelExists()throws  -> Bool {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_func_check_embedding_model_exists($0
@@ -3879,6 +4149,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_test_provider_connection_with_config() != 26018) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_test_search_provider() != 57532) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_test_streaming_response() != 24597) {
