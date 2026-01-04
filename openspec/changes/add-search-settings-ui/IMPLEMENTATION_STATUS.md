@@ -4,13 +4,62 @@
 
 This document tracks the implementation status of the `add-search-settings-ui` proposal.
 
-**Current Status**: Partially Implemented (Phase 7 completed)
+**Current Status**: Phase 1, 5, and 7 completed via `integrate-search-registry` proposal
 
 **Last Updated**: 2026-01-04
 
 ---
 
 ## Completed Phases
+
+### ✅ Phase 1: Rust Core - Provider Testing API (Completed via integrate-search-registry)
+
+**Tasks Completed**:
+- [x] Created `ProviderTestResult` struct in `Aether/core/src/search/mod.rs`
+- [x] Implemented `test_search_provider()` method in `SearchRegistry`
+  - [x] Minimal test query execution (`"test"` with `max_results = 1`)
+  - [x] Latency measurement with `Instant::now()`
+  - [x] 5-minute TTL caching to avoid API quota abuse
+  - [x] Error classification (auth, network, config)
+- [x] Exported `ProviderTestResult` via UniFFI (dictionary definition in `.udl`)
+- [x] Integrated `SearchRegistry` into `AetherCore` as persistent field
+- [x] Implemented `test_search_provider()` method in `AetherCore`
+- [x] Regenerated Swift bindings with `uniffi-bindgen generate`
+
+**Files Modified**:
+- `Aether/core/src/search/mod.rs` - Added `ProviderTestResult` struct
+- `Aether/core/src/search/registry.rs` - Implemented `test_search_provider()`
+- `Aether/core/src/core.rs` - Added `search_registry` field and `test_search_provider()` method
+- `Aether/core/src/aether.udl` - Added `ProviderTestResult` dictionary and async method
+- `Aether/core/src/lib.rs` - Exported `ProviderTestResult`
+
+**Commits**: 1f28fa6, 47aea26 (via integrate-search-registry)
+
+---
+
+### ✅ Phase 5: Configuration & Migration (Completed via integrate-search-registry)
+
+**Tasks Completed**:
+- [x] Added `PIIConfig` struct to `config.rs`
+- [x] Added `pii: PIIConfig` field to `SearchConfig` and `SearchConfigInternal`
+- [x] Implemented config migration in `Config::load_from_file()`
+  - [x] Detect `behavior.pii_scrubbing_enabled`
+  - [x] Migrate to `search.pii.enabled`
+  - [x] Auto-save migrated config
+- [x] Updated PII scrubbing to read from new location (with backward compatibility)
+- [x] Exported `PIIConfig` via UniFFI
+
+**Files Modified**:
+- `Aether/core/src/config/mod.rs` - Added `PIIConfig`, migration logic
+- `Aether/core/src/core.rs` - Updated PII config reading
+- `Aether/core/src/aether.udl` - Added `PIIConfig` dictionary
+- `Aether/core/src/lib.rs` - Exported `PIIConfig`
+
+**Commits**: 6853f15 (via integrate-search-registry)
+
+**Note**: PII UI migration to SearchSettingsView is pending (Swift UI work)
+
+---
 
 ### ✅ Phase 7: Preset Routing Rules (Completed)
 
@@ -30,42 +79,6 @@ This document tracks the implementation status of the `add-search-settings-ui` p
 - `Aether/core/src/config/mod.rs` - Updated `Config::default()` to include 3 preset rules
 
 **Commit**: bc20fa4
-
----
-
-## Partially Completed Phases
-
-### ⚠️ Phase 1: Rust Core - Provider Testing API (Partially Completed)
-
-**Completed**:
-- [x] Created `ProviderTestResult` struct in `Aether/core/src/search/mod.rs`
-- [x] Implemented `test_search_provider()` method in `SearchRegistry`
-  - [x] Minimal test query execution (`"test"` with `max_results = 1`)
-  - [x] Latency measurement with `Instant::now()`
-  - [x] 5-minute TTL caching to avoid API quota abuse
-  - [x] Error classification (auth, network, config)
-- [x] Exported `ProviderTestResult` via UniFFI (dictionary definition in `.udl`)
-
-**Pending**:
-- [ ] Integrate `SearchRegistry` into `AetherCore`
-  - Currently `SearchRegistry` is created temporarily in capability executor
-  - Need to add as persistent field in `AetherCore` struct
-- [ ] Implement `test_search_provider()` method in `AetherCore`
-  - Requires access to `SearchRegistry` instance
-  - Should delegate to `registry.test_search_provider(name).await`
-- [ ] Regenerate Swift bindings with `uniffi-bindgen generate`
-- [ ] Unit tests for provider testing logic
-
-**Blockers**:
-- `SearchRegistry` is not yet integrated into `AetherCore` as a persistent field
-- Current architecture creates `SearchRegistry` on-demand in capability executor
-- Refactoring needed to store `SearchRegistry` in `AetherCore` for testing access
-
-**Files Modified**:
-- `Aether/core/src/search/mod.rs` - Added `ProviderTestResult` struct
-- `Aether/core/src/search/registry.rs` - Implemented `test_search_provider()`
-- `Aether/core/src/aether.udl` - Added `ProviderTestResult` dictionary (commented out method)
-- `Aether/core/src/lib.rs` - Exported `ProviderTestResult`
 
 ---
 
@@ -129,25 +142,7 @@ This document tracks the implementation status of the `add-search-settings-ui` p
 
 **Estimated Time**: 8 hours
 
-**Dependencies**: Phase 1 must be completed (test_search_provider API)
-
----
-
-### 📋 Phase 5: Configuration & Migration
-
-**Status**: Not Started
-
-**Required Work**:
-- [ ] Add `PIIConfig` struct to `config.rs`
-- [ ] Add `pii: PIIConfig` field to `SearchConfig`
-- [ ] Implement config migration in `Config::load()`
-  - Detect `behavior.pii_scrubbing_enabled`
-  - Migrate to `search.pii.enabled`
-  - Save migrated config
-- [ ] Move PII UI from `BehaviorSettingsView` to `SearchSettingsView`
-- [ ] Update localization keys: `settings.behavior.pii_*` → `settings.search.pii_*`
-
-**Estimated Time**: 4 hours
+**Dependencies**: Phase 1 completed ✅
 
 ---
 
@@ -177,7 +172,7 @@ This document tracks the implementation status of the `add-search-settings-ui` p
 **Required Work**:
 - [ ] Rust unit tests:
   - Command validation tests
-  - Provider testing tests
+  - Provider testing tests (basic tests exist)
   - Config migration tests
 - [ ] Manual testing with all 6 search providers
 - [ ] Update documentation:
@@ -189,71 +184,68 @@ This document tracks the implementation status of the `add-search-settings-ui` p
 
 ---
 
+## Next Steps
+
+### Immediate:
+
+1. **Phase 3: Swift UI Provider Presets** (3h)
+   - Create SearchProviderPreset model
+   - Define 6 provider configurations with fields and docs URLs
+
+2. **Phase 4: Swift UI Components** (8h)
+   - Build ProviderCard component
+   - Create SearchSettingsView
+   - Migrate PII UI from BehaviorSettingsView
+
+### Medium-term:
+
+3. **Phase 2: Command Validation** (4h)
+   - Add ValidationError type
+   - Implement validation logic
+   - Add UniFFI callback
+
+4. **Phase 6: Halo Validation Hints** (2h)
+   - Update HaloView for validation state
+   - Implement Swift callback
+
+### Long-term:
+
+5. **Phase 8: Testing & Documentation** (6h)
+   - Write unit tests
+   - Manual testing
+   - Update docs
+
+---
+
 ## Architecture Notes
 
-### SearchRegistry Integration
+### SearchRegistry Integration (✅ Completed)
 
-**Current Architecture**:
+**Current Architecture** (after integrate-search-registry):
 ```rust
-// AetherCore does NOT have SearchRegistry as field
 pub struct AetherCore {
     event_handler: Arc<dyn AetherEventHandler>,
     runtime: Arc<Runtime>,
     config: Arc<Mutex<Config>>,
     memory_db: Option<Arc<VectorDatabase>>,
     router: Arc<RwLock<Option<Arc<Router>>>>,
-    // SearchRegistry missing!
-}
-
-// SearchRegistry created on-demand in capability executor
-impl CapabilityExecutor {
-    pub fn execute_search(&self, query: &str) -> Result<String> {
-        let registry = Self::create_search_registry_from_config(config)?;
-        registry.search(query, &options).await?
-    }
-}
-```
-
-**Required Refactoring**:
-```rust
-pub struct AetherCore {
-    // ... existing fields ...
-    search_registry: Arc<RwLock<Option<Arc<SearchRegistry>>>>, // ADD THIS
+    search_registry: Arc<RwLock<Option<Arc<SearchRegistry>>>>, // ✅ ADDED
 }
 
 impl AetherCore {
-    pub fn new(event_handler: Box<dyn AetherEventHandler>) -> Result<Self> {
-        // ... existing code ...
-
-        // Initialize SearchRegistry from config
-        let search_registry = {
-            let cfg = config.lock().unwrap();
-            if let Some(search_config) = &cfg.search {
-                if search_config.enabled {
-                    Some(Arc::new(Self::create_search_registry(search_config)?))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+    // ✅ Async method for provider testing
+    pub async fn test_search_provider(&self, provider_name: String) -> ProviderTestResult {
+        let registry_arc = {
+            let registry_guard = self.search_registry.read().unwrap_or_else(|e| e.into_inner());
+            registry_guard.as_ref().map(Arc::clone)
         };
 
-        Ok(Self {
-            // ... existing fields ...
-            search_registry: Arc::new(RwLock::new(search_registry)),
-        })
-    }
-
-    // NEW: Async method for provider testing
-    pub async fn test_search_provider(&self, provider_name: String) -> ProviderTestResult {
-        let registry = self.search_registry.read().unwrap();
-        match registry.as_ref() {
+        match registry_arc {
             Some(reg) => reg.test_search_provider(&provider_name).await,
             None => ProviderTestResult {
                 success: false,
                 latency_ms: 0,
-                error_message: "Search capability not enabled".to_string(),
+                error_message: "Search capability not enabled in configuration".to_string(),
                 error_type: "config".to_string(),
             }
         }
@@ -263,42 +255,10 @@ impl AetherCore {
 
 ---
 
-## Next Steps
-
-### Immediate (for next session):
-
-1. **Refactor AetherCore to include SearchRegistry**:
-   - Add `search_registry` field to struct
-   - Initialize from config in constructor
-   - Implement `test_search_provider()` method
-   - Update `.udl` to uncomment method declaration
-
-2. **Complete Phase 1**:
-   - Regenerate Swift bindings
-   - Write unit tests for provider testing
-
-3. **Start Phase 3 (Swift UI Presets)**:
-   - Create preset models
-   - Define 6 provider configurations
-
-### Medium-term:
-
-4. **Implement Phase 2 (Command Validation)**
-5. **Implement Phase 4 (Swift UI Components)**
-6. **Implement Phase 5 (Configuration Migration)**
-
-### Long-term:
-
-7. **Complete Phase 6 (Halo Validation Hints)**
-8. **Complete Phase 8 (Testing & Documentation)**
-
----
-
 ## Known Issues
 
-1. **UniFFI Async Methods**: Need to verify Swift async/await compatibility with UniFFI-generated code
-2. **Config Hot-Reload**: SearchRegistry won't update if config changes - need reload mechanism
-3. **Fallback Order UI**: Drag-to-reorder not yet designed/implemented (placeholder in Phase 4)
+1. **Fallback Order UI**: Drag-to-reorder not yet designed/implemented (placeholder in Phase 4)
+2. **PII UI Migration**: Swift UI component migration from BehaviorSettingsView to SearchSettingsView pending
 
 ---
 
@@ -307,4 +267,5 @@ impl AetherCore {
 - Proposal: `openspec/changes/add-search-settings-ui/proposal.md`
 - Design: `openspec/changes/add-search-settings-ui/design.md`
 - Tasks: `openspec/changes/add-search-settings-ui/tasks.md`
-- Commit: bc20fa4
+- Related Proposal: `openspec/changes/integrate-search-registry/proposal.md` (completed)
+- Commits: bc20fa4, 1f28fa6, 6853f15, 47aea26
