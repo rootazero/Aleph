@@ -4,9 +4,11 @@
 
 This document tracks the implementation status of the `add-search-settings-ui` proposal.
 
-**Current Status**: Phase 1, 5, and 7 completed via `integrate-search-registry` proposal
+**Current Status**: Phase 1, 3, 4, 5, and 7 completed
 
 **Last Updated**: 2026-01-04
+
+**Progress**: 5/8 phases completed (62.5%)
 
 ---
 
@@ -57,7 +59,7 @@ This document tracks the implementation status of the `add-search-settings-ui` p
 
 **Commits**: 6853f15 (via integrate-search-registry)
 
-**Note**: PII UI migration to SearchSettingsView is pending (Swift UI work)
+**Note**: PII UI migration completed in Phase 4
 
 ---
 
@@ -82,6 +84,72 @@ This document tracks the implementation status of the `add-search-settings-ui` p
 
 ---
 
+### ✅ Phase 3: Swift UI - Provider Presets (Completed)
+
+**Tasks Completed**:
+- [x] Created `SearchProviderPreset.swift` model with complete data structures
+- [x] Defined `SearchFieldType` enum (secureText, text, picker)
+- [x] Defined `SearchPresetField` struct with all field properties
+- [x] Defined `SearchProviderPreset` struct (Identifiable, Equatable)
+- [x] Created preset array with 6 search providers:
+  1. **Tavily** - AI-optimized search (API Key, Search Depth picker)
+  2. **SearXNG** - Privacy-first metasearch (Instance URL)
+  3. **Google CSE** - Comprehensive coverage (API Key, Engine ID)
+  4. **Bing** - Cost-effective (API Key)
+  5. **Brave** - Privacy + quality balance (API Key)
+  6. **Exa** - Semantic search (API Key)
+- [x] Added documentation URLs for each provider
+- [x] Added icons and colors for each provider
+
+**Files Created**:
+- `Aether/Sources/Models/SearchProviderPreset.swift`
+
+**Commits**: 7101141, cf3ce75
+
+---
+
+### ✅ Phase 4: Swift UI - Components (Completed)
+
+**Tasks Completed**:
+- [x] Created `SearchProviderCard.swift` component
+  - Expandable card with header (icon, name, status badge)
+  - Dynamic field rendering based on preset configuration
+  - Three field types: SecureField, TextField, Picker
+  - Footer with test connection button and documentation link
+  - Hover states and smooth animations
+  - Status management: notConfigured → testing → available/error
+- [x] Implemented async `testConnection()` function
+  - Integrates with UniFFI `testSearchProvider` API
+  - Updates status badge with latency display
+  - Proper error handling
+- [x] Created `SearchSettingsView.swift`
+  - Header section with title and description
+  - Provider configuration section (6 cards)
+  - PII scrubbing section (migrated from BehaviorSettingsView)
+  - Fallback order placeholder section
+  - UnifiedSaveBar integration
+  - State management for provider fields and PII settings
+- [x] Migrated PII UI from BehaviorSettingsView
+  - Removed all PII-related state variables
+  - Removed piiScrubbingCard view
+  - Removed PIIType enum
+  - Updated BehaviorConfig to set piiScrubbingEnabled: false
+- [x] Fixed compilation errors
+  - Added `Colors.borderHover` to DesignTokens
+  - Fixed CornerRadius references (.md → .medium)
+  - Fixed `loadConfig()` method call
+  - Fixed Sendable protocol errors with async closures
+
+**Files Created/Modified**:
+- `Aether/Sources/Components/Molecules/SearchProviderCard.swift` (created)
+- `Aether/Sources/SearchSettingsView.swift` (created)
+- `Aether/Sources/BehaviorSettingsView.swift` (PII removed)
+- `Aether/Sources/DesignSystem/DesignTokens.swift` (borderHover added)
+
+**Commits**: 0ca7c32, d501df5
+
+---
+
 ## Pending Phases
 
 ### 📋 Phase 2: Rust Core - Command Validation
@@ -98,51 +166,6 @@ This document tracks the implementation status of the `add-search-settings-ui` p
 - [ ] Unit tests for command validation logic
 
 **Estimated Time**: 4 hours
-
----
-
-### 📋 Phase 3: Swift UI - Provider Presets
-
-**Status**: Not Started
-
-**Required Work**:
-- [ ] Create `SearchProviderPreset.swift` model
-- [ ] Define `PresetField` enum (SecureText, Text, Picker)
-- [ ] Create preset array with 6 providers:
-  - Tavily (API Key, Search Depth)
-  - SearXNG (Instance URL)
-  - Google (API Key, Engine ID)
-  - Bing (API Key)
-  - Brave (API Key)
-  - Exa (API Key)
-- [ ] Add documentation URLs for each provider
-
-**Estimated Time**: 3 hours
-
----
-
-### 📋 Phase 4: Swift UI - Components
-
-**Status**: Not Started
-
-**Required Work**:
-- [ ] Create `ProviderCard.swift` component
-  - Header: Icon, Name, Status Badge
-  - Body: Dynamic fields from preset
-  - Footer: Test button, Docs link
-- [ ] Implement `testConnection()` async function
-  - Call `core.testSearchProvider(name)`
-  - Update status badge based on result
-  - Show toast notification
-- [ ] Create `SearchSettingsView.swift`
-  - Provider configuration section (6 cards)
-  - Fallback order section (placeholder)
-  - PII scrubbing section (migrated from Behavior)
-  - Integrate `UnifiedSaveBar`
-
-**Estimated Time**: 8 hours
-
-**Dependencies**: Phase 1 completed ✅
 
 ---
 
@@ -188,32 +211,28 @@ This document tracks the implementation status of the `add-search-settings-ui` p
 
 ### Immediate:
 
-1. **Phase 3: Swift UI Provider Presets** (3h)
-   - Create SearchProviderPreset model
-   - Define 6 provider configurations with fields and docs URLs
+1. **Phase 2: Rust Core - Command Validation** (4h)
+   - Add ValidationError type to error.rs
+   - Implement validate_command_format() in Router
+   - Add on_validation_hint() callback to AetherEventHandler
+   - Integrate validation into process_input()
+   - Unit tests for command validation
 
-2. **Phase 4: Swift UI Components** (8h)
-   - Build ProviderCard component
-   - Create SearchSettingsView
-   - Migrate PII UI from BehaviorSettingsView
-
-### Medium-term:
-
-3. **Phase 2: Command Validation** (4h)
-   - Add ValidationError type
-   - Implement validation logic
-   - Add UniFFI callback
-
-4. **Phase 6: Halo Validation Hints** (2h)
-   - Update HaloView for validation state
-   - Implement Swift callback
+2. **Phase 6: Halo Validation Hints UI** (2h)
+   - Add ValidationHint state to HaloView
+   - Implement amber border for validation hints
+   - Add 2-second auto-dismiss timer
+   - Implement on_validation_hint() callback in Swift
 
 ### Long-term:
 
-5. **Phase 8: Testing & Documentation** (6h)
-   - Write unit tests
-   - Manual testing
-   - Update docs
+3. **Phase 8: Testing & Documentation** (6h)
+   - Write Rust unit tests (command validation, config migration)
+   - Manual testing with all 6 search providers
+   - Update documentation:
+     - `docs/ARCHITECTURE.md` - Add Search Settings UI section
+     - `CLAUDE.md` - Add command validation rules
+     - `docs/ui-design-guide.md` - Add screenshots
 
 ---
 
