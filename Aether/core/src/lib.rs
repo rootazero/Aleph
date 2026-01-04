@@ -80,6 +80,7 @@ pub mod initialization;
 pub mod logging;
 pub mod memory;
 pub mod metrics;
+pub mod prompt; // NEW: Structured context protocol
 pub mod providers;
 pub mod router;
 pub mod utils;
