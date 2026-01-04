@@ -16,6 +16,7 @@ pub use context_format::ContextFormat;
 pub use intent::Intent;
 
 use crate::memory::MemoryEntry;
+use crate::search::SearchResult;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -136,57 +137,6 @@ pub struct AgentContext {
 
 // ====== Reserved structures for future stages ======
 
-/// Search result (Stage 2 implementation)
-///
-/// **Detailed design**: See [07_SEARCH_INTERFACE_RESERVATION.md](../../agentstructure/07_SEARCH_INTERFACE_RESERVATION.md)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SearchResult {
-    /// Search result title
-    pub title: String,
-
-    /// Search result URL
-    pub url: String,
-
-    /// Search result snippet
-    pub snippet: String,
-
-    /// Search timestamp (Unix seconds)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<i64>,
-
-    /// Relevance score (0.0-1.0, provided by search engine)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub relevance_score: Option<f32>,
-
-    /// Source type (web/news/academic/image)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_type: Option<String>,
-
-    /// Published date (Unix seconds, if provided by search engine)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub published_date: Option<i64>,
-
-    /// Full web page content (optional, requires additional fetching)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub full_content: Option<String>,
-}
-
-impl SearchResult {
-    /// Create basic search result
-    pub fn new(title: String, url: String, snippet: String) -> Self {
-        Self {
-            title,
-            url,
-            snippet,
-            timestamp: None,
-            relevance_score: None,
-            source_type: None,
-            published_date: None,
-            full_content: None,
-        }
-    }
-}
-
 /// 🔮 Workflow state (reserved for Solution C)
 ///
 /// **Detailed design**: See [06_SKILLS_INTERFACE_RESERVATION.md](../../agentstructure/06_SKILLS_INTERFACE_RESERVATION.md)
@@ -237,20 +187,6 @@ mod tests {
         assert_eq!(anchor.app_bundle_id, "com.apple.Notes");
         assert_eq!(anchor.app_name, "Notes");
         assert_eq!(anchor.window_title, Some("Document.txt".to_string()));
-    }
-
-    #[test]
-    fn test_search_result_creation() {
-        let result = SearchResult::new(
-            "Test Title".to_string(),
-            "https://example.com".to_string(),
-            "Test snippet".to_string(),
-        );
-
-        assert_eq!(result.title, "Test Title");
-        assert_eq!(result.url, "https://example.com");
-        assert_eq!(result.snippet, "Test snippet");
-        assert!(result.timestamp.is_none());
     }
 
     #[test]

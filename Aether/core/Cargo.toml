@@ -48,6 +48,8 @@ notify-debouncer-full = "0.3"
 image = { version = "0.24", default-features = false, features = ["png", "jpeg", "gif"] }
 # For Base64 encoding of images (still used in AI provider integration)
 base64 = "0.21"
+# For async trait methods
+async-trait = "0.1"
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }

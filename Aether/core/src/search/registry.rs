@@ -1,0 +1,356 @@
+/// Search provider registry and router
+///
+/// This module manages multiple search providers and routes requests
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use crate::error::{AetherError, Result};
+use crate::search::{SearchProvider, SearchResult, SearchOptions};
+use crate::search::providers::*;
+
+/// Registry for managing multiple search providers
+///
+/// Maintains a pool of configured providers and routes search requests
+/// to the appropriate backend based on configuration.
+pub struct SearchRegistry {
+    providers: HashMap<String, Arc<dyn SearchProvider>>,
+    default_provider: String,
+    fallback_providers: Vec<String>,
+}
+
+impl SearchRegistry {
+    /// Create an empty registry
+    pub fn new(default_provider: String) -> Self {
+        Self {
+            providers: HashMap::new(),
+            default_provider,
+            fallback_providers: Vec::new(),
+        }
+    }
+
+    /// Add a provider to the registry
+    pub fn add_provider(&mut self, name: String, provider: Arc<dyn SearchProvider>) {
+        self.providers.insert(name, provider);
+    }
+
+    /// Set fallback providers
+    pub fn set_fallback_providers(&mut self, providers: Vec<String>) {
+        self.fallback_providers = providers;
+    }
+
+    /// Get a provider by name
+    pub fn get_provider(&self, name: &str) -> Option<&Arc<dyn SearchProvider>> {
+        self.providers.get(name)
+    }
+
+    /// Execute search with fallback logic
+    ///
+    /// Tries default provider first, then falls back to alternatives if it fails
+    pub async fn search(
+        &self,
+        query: &str,
+        options: &SearchOptions,
+    ) -> Result<Vec<SearchResult>> {
+        // Try default provider
+        if let Some(provider) = self.providers.get(&self.default_provider) {
+            match provider.search(query, options).await {
+                Ok(results) => return Ok(results),
+                Err(e) => {
+                    log::warn!(
+                        "Search failed with provider '{}': {}",
+                        self.default_provider,
+                        e
+                    );
+                }
+            }
+        } else {
+            log::error!("Default provider '{}' not found", self.default_provider);
+        }
+
+        // Try fallback providers
+        for provider_name in &self.fallback_providers {
+            if let Some(provider) = self.providers.get(provider_name) {
+                match provider.search(query, options).await {
+                    Ok(results) => {
+                        log::info!("Search succeeded with fallback provider '{}'", provider_name);
+                        return Ok(results);
+                    }
+                    Err(e) => {
+                        log::warn!("Fallback provider '{}' failed: {}", provider_name, e);
+                    }
+                }
+            }
+        }
+
+        Err(AetherError::provider(format!(
+            "All search providers failed for query: {}",
+            query
+        )))
+    }
+}
+
+/// Create a provider from type and config
+///
+/// This is a public API for dynamic provider creation, reserved for future use
+/// when search configuration is loaded from TOML files.
+#[allow(dead_code)]
+pub fn create_provider_from_type(
+    provider_type: &str,
+    api_key: Option<String>,
+    base_url: Option<String>,
+    engine_id: Option<String>,
+) -> Result<Arc<dyn SearchProvider>> {
+    match provider_type {
+        "tavily" => {
+            let key = api_key.ok_or_else(|| AetherError::invalid_config("Tavily requires api_key"))?;
+            Ok(Arc::new(TavilyProvider::new(key)?))
+        }
+        "searxng" => {
+            let url = base_url.ok_or_else(|| AetherError::invalid_config("SearXNG requires base_url"))?;
+            Ok(Arc::new(SearxngProvider::new(url)?))
+        }
+        "brave" => {
+            let key = api_key.ok_or_else(|| AetherError::invalid_config("Brave requires api_key"))?;
+            Ok(Arc::new(BraveProvider::new(key)?))
+        }
+        "google" => {
+            let key = api_key.ok_or_else(|| AetherError::invalid_config("Google requires api_key"))?;
+            let id = engine_id.ok_or_else(|| AetherError::invalid_config("Google requires engine_id"))?;
+            Ok(Arc::new(GoogleProvider::new(key, id)?))
+        }
+        "bing" => {
+            let key = api_key.ok_or_else(|| AetherError::invalid_config("Bing requires api_key"))?;
+            Ok(Arc::new(BingProvider::new(key)?))
+        }
+        "exa" => {
+            let key = api_key.ok_or_else(|| AetherError::invalid_config("Exa requires api_key"))?;
+            Ok(Arc::new(ExaProvider::new(key)?))
+        }
+        _ => Err(AetherError::invalid_config(format!(
+            "Unknown search provider type: {}",
+            provider_type
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Mock provider for testing
+    struct MockProvider {
+        name: String,
+        should_fail: bool,
+        result_count: usize,
+    }
+
+    impl MockProvider {
+        fn new(name: &str, should_fail: bool, result_count: usize) -> Self {
+            Self {
+                name: name.to_string(),
+                should_fail,
+                result_count,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SearchProvider for MockProvider {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
+            if self.should_fail {
+                return Err(AetherError::network("Mock provider failure"));
+            }
+
+            let mut results = Vec::new();
+            for i in 0..self.result_count.min(options.max_results) {
+                results.push(SearchResult {
+                    title: format!("{} - Result {}", query, i + 1),
+                    url: format!("https://example.com/{}", i + 1),
+                    snippet: format!("Snippet for result {}", i + 1),
+                    full_content: None,
+                    source_type: None,
+                    provider: Some(self.name.clone()),
+                    published_date: None,
+                    relevance_score: Some(1.0 - (i as f32 * 0.1)),
+                });
+            }
+            Ok(results)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_registry_creation() {
+        let registry = SearchRegistry::new("tavily".to_string());
+        assert_eq!(registry.default_provider, "tavily");
+        assert!(registry.providers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_registry_add_provider() {
+        let mut registry = SearchRegistry::new("tavily".to_string());
+        let provider = TavilyProvider::new("test-key".to_string()).unwrap();
+
+        registry.add_provider("tavily".to_string(), Arc::new(provider));
+
+        assert!(registry.get_provider("tavily").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_registry_search_with_mock_provider() {
+        let mut registry = SearchRegistry::new("mock".to_string());
+        let provider = MockProvider::new("mock", false, 5);
+        registry.add_provider("mock".to_string(), Arc::new(provider));
+
+        let options = SearchOptions {
+            max_results: 3,
+            timeout_seconds: 5,
+            ..Default::default()
+        };
+
+        let results = registry.search("test query", &options).await.unwrap();
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].title, "test query - Result 1");
+        assert_eq!(results[0].provider, Some("mock".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_registry_search_no_provider() {
+        let registry = SearchRegistry::new("nonexistent".to_string());
+        let options = SearchOptions::default();
+
+        let result = registry.search("test", &options).await;
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("All search providers failed"));
+    }
+
+    #[tokio::test]
+    async fn test_registry_fallback_to_default() {
+        let mut registry = SearchRegistry::new("default".to_string());
+
+        // Add default provider that succeeds
+        let default_provider = MockProvider::new("default", false, 3);
+        registry.add_provider("default".to_string(), Arc::new(default_provider));
+
+        // Set fallback to nonexistent provider
+        registry.set_fallback_providers(vec!["nonexistent".to_string()]);
+
+        let options = SearchOptions::default();
+        let results = registry.search("test", &options).await.unwrap();
+
+        // Should get results from default provider
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].provider, Some("default".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_registry_fallback_chain() {
+        let mut registry = SearchRegistry::new("primary".to_string());
+
+        // Primary provider fails
+        let primary = MockProvider::new("primary", true, 0);
+        registry.add_provider("primary".to_string(), Arc::new(primary));
+
+        // First fallback fails
+        let fallback1 = MockProvider::new("fallback1", true, 0);
+        registry.add_provider("fallback1".to_string(), Arc::new(fallback1));
+
+        // Second fallback succeeds
+        let fallback2 = MockProvider::new("fallback2", false, 2);
+        registry.add_provider("fallback2".to_string(), Arc::new(fallback2));
+
+        registry.set_fallback_providers(vec!["fallback1".to_string(), "fallback2".to_string()]);
+
+        let options = SearchOptions::default();
+        let results = registry.search("test", &options).await.unwrap();
+
+        // Should get results from second fallback
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].provider, Some("fallback2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_registry_all_providers_fail() {
+        let mut registry = SearchRegistry::new("primary".to_string());
+
+        // All providers fail
+        let primary = MockProvider::new("primary", true, 0);
+        registry.add_provider("primary".to_string(), Arc::new(primary));
+
+        let fallback = MockProvider::new("fallback", true, 0);
+        registry.add_provider("fallback".to_string(), Arc::new(fallback));
+
+        registry.set_fallback_providers(vec!["fallback".to_string()]);
+
+        let options = SearchOptions::default();
+        let result = registry.search("test", &options).await;
+
+        // Should fail when all providers fail
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_registry_respects_max_results() {
+        let mut registry = SearchRegistry::new("mock".to_string());
+
+        // Provider can return 10 results
+        let provider = MockProvider::new("mock", false, 10);
+        registry.add_provider("mock".to_string(), Arc::new(provider));
+
+        let options = SearchOptions {
+            max_results: 5,
+            timeout_seconds: 5,
+            ..Default::default()
+        };
+
+        let results = registry.search("test", &options).await.unwrap();
+
+        // Should only get max_results
+        assert_eq!(results.len(), 5);
+    }
+
+    #[test]
+    fn test_create_provider_from_type_tavily() {
+        let provider = create_provider_from_type(
+            "tavily",
+            Some("test-key".to_string()),
+            None,
+            None,
+        );
+        assert!(provider.is_ok());
+    }
+
+    #[test]
+    fn test_create_provider_from_type_google() {
+        let provider = create_provider_from_type(
+            "google",
+            Some("test-key".to_string()),
+            None,
+            Some("test-engine".to_string()),
+        );
+        assert!(provider.is_ok());
+    }
+
+    #[test]
+    fn test_create_provider_from_type_invalid() {
+        let result = create_provider_from_type(
+            "unknown",
+            Some("key".to_string()),
+            None,
+            None,
+        );
+        assert!(result.is_err());
+    }
+}

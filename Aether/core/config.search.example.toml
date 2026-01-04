@@ -1,0 +1,133 @@
+# Example Aether Configuration with Search Capability
+# Copy this file to ~/.config/aether/config.toml and customize
+
+default_hotkey = "Grave"  # Backtick key
+
+[general]
+default_provider = "openai"
+log_retention_days = 30
+enable_performance_logging = false
+language = "zh_CN"
+
+[memory]
+enabled = true
+embedding_model = "all-MiniLM-L6-v2"
+max_context_items = 5
+retention_days = 90
+vector_db = "sqlite-vec"
+similarity_threshold = 0.7
+excluded_apps = []
+
+[shortcuts]
+summon = "Command+Grave"
+cancel = "Escape"
+
+[behavior]
+input_mode = "cut"
+output_mode = "typewriter"
+typing_speed = 50
+pii_scrubbing_enabled = true
+
+# ============================================================================
+# SEARCH CONFIGURATION (New in add-search-capability-integration)
+# ============================================================================
+[search]
+enabled = true
+default_provider = "tavily"
+fallback_providers = ["brave", "searxng"]
+max_results = 5
+timeout_seconds = 10
+
+# Tavily - AI-optimized search with clean, structured data
+[search.backends.tavily]
+provider_type = "tavily"
+api_key = "tvly-YOUR_API_KEY_HERE"  # Get at https://tavily.com
+
+# Brave Search - Privacy-focused, independent search index
+[search.backends.brave]
+provider_type = "brave"
+api_key = "BSA_YOUR_API_KEY_HERE"  # Get at https://brave.com/search/api
+
+# SearXNG - Privacy-first, self-hosted metasearch engine
+[search.backends.searxng]
+provider_type = "searxng"
+base_url = "http://localhost:8080"  # Your SearXNG instance URL
+
+# Google Custom Search Engine
+[search.backends.google]
+provider_type = "google"
+api_key = "YOUR_GOOGLE_API_KEY"  # Get at https://console.cloud.google.com
+engine_id = "YOUR_SEARCH_ENGINE_ID"  # Get at https://programmablesearchengine.google.com
+
+# Bing Web Search API
+[search.backends.bing]
+provider_type = "bing"
+api_key = "YOUR_BING_SUBSCRIPTION_KEY"  # Get at https://portal.azure.com
+
+# Exa.ai - Semantic search for developers
+[search.backends.exa]
+provider_type = "exa"
+api_key = "YOUR_EXA_API_KEY"  # Get at https://exa.ai
+
+# ============================================================================
+# AI PROVIDERS
+# ============================================================================
+[providers.openai]
+api_key = "sk-YOUR_OPENAI_API_KEY"
+model = "gpt-4o"
+base_url = "https://api.openai.com/v1"
+color = "#10a37f"
+timeout_seconds = 30
+enabled = true
+
+[providers.claude]
+api_key = "sk-ant-YOUR_ANTHROPIC_API_KEY"
+model = "claude-3-5-sonnet-20241022"
+color = "#d97757"
+timeout_seconds = 30
+enabled = true
+
+# ============================================================================
+# ROUTING RULES WITH SEARCH CAPABILITY
+# ============================================================================
+
+# Research tasks automatically use search
+[[rules]]
+regex = "^/research"
+provider = "claude"
+system_prompt = "You are a research assistant with real-time search access."
+capabilities = ["memory", "search"]
+intent_type = "research"
+context_format = "markdown"
+
+# Web queries use search
+[[rules]]
+regex = "^/web"
+provider = "openai"
+system_prompt = "You are a web research assistant. Use search results to provide accurate, up-to-date information."
+capabilities = ["search"]
+intent_type = "web_search"
+context_format = "markdown"
+
+# News queries use search with recency
+[[rules]]
+regex = "^/(news|latest)"
+provider = "tavily"
+system_prompt = "You are a news analyst. Provide latest news and updates."
+capabilities = ["search"]
+intent_type = "news"
+context_format = "markdown"
+
+# Translation (no search needed)
+[[rules]]
+regex = "^/translate"
+provider = "claude"
+system_prompt = "You are a professional translator."
+capabilities = ["memory"]
+intent_type = "translation"
+
+# Catch-all with memory
+[[rules]]
+regex = ".*"
+provider = "openai"
+capabilities = ["memory"]

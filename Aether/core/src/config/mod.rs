@@ -41,6 +41,9 @@ pub struct Config {
     /// Behavior configuration (Phase 6)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behavior: Option<BehaviorConfig>,
+    /// Search configuration (Search Capability Integration)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<SearchConfigInternal>,
 }
 
 /// General configuration settings
@@ -151,6 +154,8 @@ pub struct FullConfig {
     pub shortcuts: Option<ShortcutsConfig>,
     #[serde(default)]
     pub behavior: Option<BehaviorConfig>,
+    #[serde(default)]
+    pub search: Option<SearchConfig>,
 }
 
 impl From<Config> for FullConfig {
@@ -161,6 +166,8 @@ impl From<Config> for FullConfig {
             .map(|(name, config)| ProviderConfigEntry { name, config })
             .collect();
 
+        let search = config.search.map(|s| s.into());
+
         Self {
             default_hotkey: config.default_hotkey,
             general: config.general,
@@ -169,6 +176,7 @@ impl From<Config> for FullConfig {
             rules: config.rules,
             shortcuts: config.shortcuts,
             behavior: config.behavior,
+            search,
         }
     }
 }
@@ -534,6 +542,103 @@ impl Default for MemoryConfig {
     }
 }
 
+/// Search module configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchConfigInternal {
+    /// Enable/disable search functionality
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Default search provider
+    pub default_provider: String,
+
+    /// Fallback providers (tried in order if default fails)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_providers: Option<Vec<String>>,
+
+    /// Maximum number of results to return (default: 5)
+    #[serde(default = "default_search_max_results")]
+    pub max_results: usize,
+
+    /// Search timeout in seconds (default: 10)
+    #[serde(default = "default_search_timeout")]
+    pub timeout_seconds: u64,
+
+    /// Backend configurations
+    pub backends: HashMap<String, SearchBackendConfig>,
+}
+
+fn default_search_max_results() -> usize {
+    5
+}
+
+fn default_search_max_results_u64() -> u64 {
+    5
+}
+
+fn default_search_timeout() -> u64 {
+    10
+}
+
+/// Search backend configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchBackendConfig {
+    /// Provider type: "tavily", "searxng", "brave", "google", "bing", "exa"
+    pub provider_type: String,
+
+    /// API key (required for most providers except SearXNG)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+
+    /// Base URL (required for SearXNG, optional for others)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+
+    /// Search engine ID (required for Google CSE only)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_id: Option<String>,
+}
+
+/// Search backend entry (name + config) - used for UniFFI serialization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchBackendEntry {
+    pub name: String,
+    pub config: SearchBackendConfig,
+}
+
+/// Search configuration for UniFFI (backends as Vec instead of HashMap)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchConfig {
+    pub enabled: bool,
+    pub default_provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_providers: Option<Vec<String>>,
+    #[serde(default = "default_search_max_results_u64")]
+    pub max_results: u64,
+    #[serde(default = "default_search_timeout")]
+    pub timeout_seconds: u64,
+    pub backends: Vec<SearchBackendEntry>,
+}
+
+impl From<SearchConfigInternal> for SearchConfig {
+    fn from(config: SearchConfigInternal) -> Self {
+        let backends = config
+            .backends
+            .into_iter()
+            .map(|(name, config)| SearchBackendEntry { name, config })
+            .collect();
+
+        Self {
+            enabled: config.enabled,
+            default_provider: config.default_provider,
+            fallback_providers: config.fallback_providers,
+            max_results: config.max_results as u64,
+            timeout_seconds: config.timeout_seconds,
+            backends,
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -544,6 +649,7 @@ impl Default for Config {
             rules: Vec::new(),
             shortcuts: Some(ShortcutsConfig::default()),
             behavior: Some(BehaviorConfig::default()),
+            search: None,
         }
     }
 }
@@ -939,6 +1045,151 @@ impl Config {
                 );
             } else {
                 debug!(language = %language, "Language preference validated");
+            }
+        }
+
+        // Validate search configuration
+        if let Some(ref search_config) = self.search {
+            if search_config.enabled {
+                // Validate default provider exists
+                if !search_config.backends.contains_key(&search_config.default_provider) {
+                    error!(
+                        default_provider = %search_config.default_provider,
+                        "Search default provider not found in backends"
+                    );
+                    return Err(AetherError::invalid_config(format!(
+                        "Search default provider '{}' not found in backends",
+                        search_config.default_provider
+                    )));
+                }
+
+                // Validate fallback providers exist
+                if let Some(ref fallback_providers) = search_config.fallback_providers {
+                    for provider_name in fallback_providers {
+                        if !search_config.backends.contains_key(provider_name) {
+                            error!(
+                                fallback_provider = %provider_name,
+                                "Search fallback provider not found in backends"
+                            );
+                            return Err(AetherError::invalid_config(format!(
+                                "Search fallback provider '{}' not found in backends",
+                                provider_name
+                            )));
+                        }
+                    }
+                }
+
+                // Validate max_results is reasonable
+                if search_config.max_results == 0 {
+                    error!("Search max_results cannot be 0");
+                    return Err(AetherError::invalid_config(
+                        "Search max_results must be greater than 0".to_string()
+                    ));
+                }
+
+                if search_config.max_results > 100 {
+                    warn!(
+                        max_results = search_config.max_results,
+                        "Search max_results is very high (>100), this may impact performance"
+                    );
+                }
+
+                // Validate timeout is reasonable
+                if search_config.timeout_seconds == 0 {
+                    error!("Search timeout cannot be 0");
+                    return Err(AetherError::invalid_config(
+                        "Search timeout_seconds must be greater than 0".to_string()
+                    ));
+                }
+
+                // Validate each backend configuration
+                for (backend_name, backend_config) in &search_config.backends {
+                    let provider_type = backend_config.provider_type.as_str();
+
+                    match provider_type {
+                        "tavily" => {
+                            if backend_config.api_key.is_none() {
+                                error!(backend = %backend_name, "Tavily backend requires API key");
+                                return Err(AetherError::invalid_config(format!(
+                                    "Search backend '{}' (Tavily) requires an API key",
+                                    backend_name
+                                )));
+                            }
+                        }
+                        "brave" => {
+                            if backend_config.api_key.is_none() {
+                                error!(backend = %backend_name, "Brave backend requires API key");
+                                return Err(AetherError::invalid_config(format!(
+                                    "Search backend '{}' (Brave) requires an API key",
+                                    backend_name
+                                )));
+                            }
+                        }
+                        "google" => {
+                            if backend_config.api_key.is_none() {
+                                error!(backend = %backend_name, "Google backend requires API key");
+                                return Err(AetherError::invalid_config(format!(
+                                    "Search backend '{}' (Google) requires an API key",
+                                    backend_name
+                                )));
+                            }
+                            if backend_config.engine_id.is_none() {
+                                error!(backend = %backend_name, "Google backend requires engine_id");
+                                return Err(AetherError::invalid_config(format!(
+                                    "Search backend '{}' (Google) requires an engine_id",
+                                    backend_name
+                                )));
+                            }
+                        }
+                        "bing" => {
+                            if backend_config.api_key.is_none() {
+                                error!(backend = %backend_name, "Bing backend requires API key");
+                                return Err(AetherError::invalid_config(format!(
+                                    "Search backend '{}' (Bing) requires an API key",
+                                    backend_name
+                                )));
+                            }
+                        }
+                        "exa" => {
+                            if backend_config.api_key.is_none() {
+                                error!(backend = %backend_name, "Exa backend requires API key");
+                                return Err(AetherError::invalid_config(format!(
+                                    "Search backend '{}' (Exa) requires an API key",
+                                    backend_name
+                                )));
+                            }
+                        }
+                        "searxng" => {
+                            if backend_config.base_url.is_none() {
+                                error!(backend = %backend_name, "SearXNG backend requires base_url");
+                                return Err(AetherError::invalid_config(format!(
+                                    "Search backend '{}' (SearXNG) requires a base_url",
+                                    backend_name
+                                )));
+                            }
+                        }
+                        _ => {
+                            warn!(
+                                backend = %backend_name,
+                                provider_type = %provider_type,
+                                "Unknown search provider type"
+                            );
+                        }
+                    }
+
+                    debug!(
+                        backend = %backend_name,
+                        provider_type = %provider_type,
+                        "Search backend validated"
+                    );
+                }
+
+                debug!(
+                    enabled = search_config.enabled,
+                    default_provider = %search_config.default_provider,
+                    backends_count = search_config.backends.len(),
+                    "Search config validated"
+                );
             }
         }
 

@@ -4,6 +4,7 @@
 /// using different formats (Markdown, XML, JSON).
 use super::{AgentContext, AgentPayload, ContextFormat};
 use crate::memory::MemoryEntry;
+use crate::search::SearchResult;
 
 /// Prompt assembler that converts AgentPayload to LLM message format
 ///
@@ -71,9 +72,12 @@ impl PromptAssembler {
             }
         }
 
-        // Search section (reserved for future)
-        if let Some(_results) = &context.search_results {
-            // TODO: Implement search formatting
+        // Search section
+        if let Some(results) = &context.search_results {
+            if !results.is_empty() {
+                let search_section = self.format_search_results_markdown(results);
+                sections.push(search_section);
+            }
         }
 
         // MCP section (reserved for future)
@@ -118,6 +122,63 @@ impl PromptAssembler {
         lines.join("\n")
     }
 
+    /// Format search results as Markdown
+    ///
+    /// Creates a numbered list of search results with:
+    /// - Title as clickable Markdown link
+    /// - Snippet/excerpt text
+    /// - Optional published date
+    /// - Optional relevance score
+    fn format_search_results_markdown(&self, results: &[SearchResult]) -> String {
+        let mut lines = vec!["**Web Search Results**:".to_string()];
+
+        for (i, result) in results.iter().enumerate() {
+            // Main entry with title as link
+            lines.push(format!(
+                "\n{}. [{}]({})",
+                i + 1,
+                escape_markdown(&result.title),
+                result.url
+            ));
+
+            // Snippet/excerpt (truncate if too long)
+            if !result.snippet.is_empty() {
+                let snippet = truncate_text(&result.snippet, 300);
+                lines.push(format!("   {}", snippet));
+            }
+
+            // Optional metadata
+            let mut metadata = Vec::new();
+
+            // Published date
+            if let Some(timestamp) = result.published_date {
+                let date = format_timestamp(timestamp);
+                metadata.push(format!("Published: {}", date));
+            }
+
+            // Relevance score
+            if let Some(score) = result.relevance_score {
+                metadata.push(format!("Relevance: {:.0}%", score * 100.0));
+            }
+
+            // Source type
+            if let Some(ref source_type) = result.source_type {
+                metadata.push(format!("Type: {}", source_type));
+            }
+
+            // Provider attribution
+            if let Some(ref provider) = result.provider {
+                metadata.push(format!("Source: {}", provider));
+            }
+
+            if !metadata.is_empty() {
+                lines.push(format!("   _{}_", metadata.join(" | ")));
+            }
+        }
+
+        lines.join("\n")
+    }
+
     /// XML formatting (reserved for future)
     fn format_xml(&self, _context: &AgentContext) -> Option<String> {
         // TODO: Implement XML formatting
@@ -147,6 +208,20 @@ fn truncate_text(text: &str, max_len: usize) -> String {
     } else {
         format!("{}...", &text[..max_len])
     }
+}
+
+/// Escape Markdown special characters
+///
+/// Escapes characters that have special meaning in Markdown to prevent
+/// formatting issues when displaying user-provided text.
+fn escape_markdown(text: &str) -> String {
+    text.replace('[', "\\[")
+        .replace(']', "\\]")
+        .replace('(', "\\(")
+        .replace(')', "\\)")
+        .replace('*', "\\*")
+        .replace('_', "\\_")
+        .replace('`', "\\`")
 }
 
 #[cfg(test)]
@@ -286,5 +361,152 @@ mod tests {
 
         // JSON format not implemented, should return base prompt only
         assert_eq!(prompt, "You are helpful.");
+    }
+
+    #[test]
+    fn test_format_search_results_markdown() {
+        let assembler = PromptAssembler::new(ContextFormat::Markdown);
+
+        let results = vec![
+            SearchResult {
+                title: "Rust Programming Language".to_string(),
+                url: "https://www.rust-lang.org".to_string(),
+                snippet: "A language empowering everyone to build reliable and efficient software.".to_string(),
+                published_date: Some(1609459200), // 2021-01-01
+                relevance_score: Some(0.95),
+                source_type: Some("web".to_string()),
+                full_content: None,
+                provider: Some("tavily".to_string()),
+            },
+            SearchResult {
+                title: "Getting Started with Rust".to_string(),
+                url: "https://doc.rust-lang.org/book/".to_string(),
+                snippet: "Learn Rust with The Rust Programming Language book".to_string(),
+                published_date: None,
+                relevance_score: None,
+                source_type: None,
+                full_content: None,
+                provider: Some("brave".to_string()),
+            },
+        ];
+
+        let formatted = assembler.format_search_results_markdown(&results);
+
+        // Check header
+        assert!(formatted.contains("**Web Search Results**"));
+
+        // Check first result
+        assert!(formatted.contains("1. [Rust Programming Language](https://www.rust-lang.org)"));
+        assert!(formatted.contains("A language empowering everyone"));
+        assert!(formatted.contains("Relevance: 95%"));
+        assert!(formatted.contains("Published: 2021-01-01"));
+        assert!(formatted.contains("Type: web"));
+        assert!(formatted.contains("Source: tavily"));
+
+        // Check second result
+        assert!(formatted.contains("2. [Getting Started with Rust](https://doc.rust-lang.org/book/)"));
+        assert!(formatted.contains("Learn Rust with The Rust Programming Language book"));
+        assert!(formatted.contains("Source: brave"));
+    }
+
+    #[test]
+    fn test_assemble_system_prompt_with_search_results() {
+        let assembler = PromptAssembler::new(ContextFormat::Markdown);
+
+        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+
+        let results = vec![SearchResult {
+            title: "Test Result".to_string(),
+            url: "https://example.com".to_string(),
+            snippet: "Test snippet".to_string(),
+            published_date: None,
+            relevance_score: Some(0.9),
+            source_type: None,
+            full_content: None,
+            provider: Some("test".to_string()),
+        }];
+
+        let payload = PayloadBuilder::new()
+            .meta(Intent::GeneralChat, 1000, anchor)
+            .config("openai".to_string(), vec![], ContextFormat::Markdown)
+            .user_input("Test query".to_string())
+            .search_results(results)
+            .build()
+            .unwrap();
+
+        let prompt = assembler.assemble_system_prompt("You are helpful.", &payload);
+
+        // Should contain base prompt
+        assert!(prompt.starts_with("You are helpful."));
+
+        // Should contain context section
+        assert!(prompt.contains("### Context Information"));
+
+        // Should contain search results
+        assert!(prompt.contains("**Web Search Results**"));
+        assert!(prompt.contains("[Test Result](https://example.com)"));
+        assert!(prompt.contains("Test snippet"));
+        assert!(prompt.contains("Relevance: 90%"));
+    }
+
+    #[test]
+    fn test_escape_markdown() {
+        assert_eq!(escape_markdown("Normal text"), "Normal text");
+        assert_eq!(escape_markdown("Text with [brackets]"), "Text with \\[brackets\\]");
+        assert_eq!(
+            escape_markdown("Link: [Title](url)"),
+            "Link: \\[Title\\]\\(url\\)"
+        );
+        assert_eq!(escape_markdown("Bold *text*"), "Bold \\*text\\*");
+        assert_eq!(escape_markdown("Code `snippet`"), "Code \\`snippet\\`");
+        assert_eq!(escape_markdown("Under_score"), "Under\\_score");
+    }
+
+    #[test]
+    fn test_assemble_with_memory_and_search() {
+        let assembler = PromptAssembler::new(ContextFormat::Markdown);
+
+        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
+
+        let memory_anchor =
+            MemoryContextAnchor::with_timestamp("com.app".to_string(), "Window".to_string(), 1000);
+
+        let memories = vec![MemoryEntry {
+            id: "test-id".to_string(),
+            context: memory_anchor,
+            user_input: "Previous question".to_string(),
+            ai_output: "Previous answer".to_string(),
+            embedding: Some(vec![0.1; 384]),
+            similarity_score: Some(0.9),
+        }];
+
+        let search_results = vec![SearchResult {
+            title: "Search Result".to_string(),
+            url: "https://example.com".to_string(),
+            snippet: "Relevant information".to_string(),
+            published_date: None,
+            relevance_score: Some(0.85),
+            source_type: None,
+            full_content: None,
+            provider: Some("test".to_string()),
+        }];
+
+        let payload = PayloadBuilder::new()
+            .meta(Intent::GeneralChat, 1000, anchor)
+            .config("openai".to_string(), vec![], ContextFormat::Markdown)
+            .user_input("Current question".to_string())
+            .memory(memories)
+            .search_results(search_results)
+            .build()
+            .unwrap();
+
+        let prompt = assembler.assemble_system_prompt("You are helpful.", &payload);
+
+        // Should contain both memory and search sections
+        assert!(prompt.contains("**Relevant History**"));
+        assert!(prompt.contains("Previous question"));
+        assert!(prompt.contains("**Web Search Results**"));
+        assert!(prompt.contains("Search Result"));
+        assert!(prompt.contains("Relevant information"));
     }
 }

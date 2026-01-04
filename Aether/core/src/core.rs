@@ -345,10 +345,22 @@ impl AetherCore {
             .map_err(|e| AetherError::config(format!("Failed to build payload: {}", e)))?;
 
         // Execute capabilities to enrich payload
-        let executor = CapabilityExecutor::new(self.memory_db.as_ref().map(Arc::clone), {
-            let cfg = self.lock_config();
-            Some(Arc::new(cfg.memory.clone()))
-        });
+        let executor = CapabilityExecutor::new(
+            self.memory_db.as_ref().map(Arc::clone),
+            {
+                let cfg = self.lock_config();
+                Some(Arc::new(cfg.memory.clone()))
+            },
+            None, // TODO: Add SearchRegistry from config
+            None, // TODO: Add SearchOptions from config
+            {
+                let cfg = self.lock_config();
+                cfg.behavior
+                    .as_ref()
+                    .map(|b| b.pii_scrubbing_enabled)
+                    .unwrap_or(false)
+            },
+        );
 
         executor.execute_all(payload).await
     }

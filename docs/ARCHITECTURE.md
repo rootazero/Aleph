@@ -18,9 +18,10 @@ This document describes the internal architecture of Aether's Rust core, particu
 Aether's core uses a **structured payload-based architecture** that replaces simple string concatenation with a rich, type-safe data flow system. This enables:
 
 - **Intelligent routing** based on user intent and context
-- **Dynamic capability execution** (Memory, Search, MCP tools)
+- **Dynamic capability execution** (Memory ✅, Search ✅, MCP tools 🔮)
 - **Flexible context formatting** (Markdown, XML, JSON)
 - **Transparent memory augmentation** (local RAG)
+- **Web search integration** with 6 providers and fallback mechanism
 
 ---
 
@@ -47,9 +48,9 @@ User Input
 [AgentPayload]
     ↓
 [CapabilityExecutor]
-    ├─→ [Memory] ──→ Vector DB
-    ├─→ [Search] ──→ (Future)
-    └─→ [MCP] ─────→ (Future)
+    ├─→ [Memory] ──────→ Vector DB
+    ├─→ [Search] ──────→ SearchRegistry → Providers (Tavily/SearXNG/Google/Bing/Brave/Exa)
+    └─→ [MCP] ─────────→ (Future)
     ↓
 [AgentPayload + Context]
     ↓
@@ -97,7 +98,7 @@ executor.execute_all(&mut payload)?;
 
 // Execution sequence (sorted by Capability::Memory(0) < Search(1) < Mcp(2)):
 // 1. Memory: Retrieve similar conversations from vector DB
-// 2. Search: (Reserved) Web/knowledge base search
+// 2. Search: Execute web search via SearchRegistry (Tavily/SearXNG/Google/Bing/Brave/Exa)
 // 3. MCP: (Reserved) Tool/resource calls
 ```
 
@@ -188,15 +189,18 @@ pub enum Capability {
 
 **Execution Logic**:
 ```rust
-pub fn execute_all(&self, payload: &mut AgentPayload) -> Result<()> {
+pub async fn execute_all(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
     for capability in sorted_capabilities {
-        match capability {
-            Capability::Memory => self.execute_memory(payload)?,
-            Capability::Search => warn!("Search not implemented"),
-            Capability::Mcp => warn!("MCP not implemented"),
+        payload = match capability {
+            Capability::Memory => self.execute_memory(payload).await?,
+            Capability::Search => self.execute_search(payload).await?,
+            Capability::Mcp => {
+                warn!("MCP not implemented");
+                payload
+            },
         }
     }
-    Ok(())
+    Ok(payload)
 }
 ```
 
@@ -490,12 +494,20 @@ cargo test --lib payload router capability
 
 ### Search Capability
 
-**Status**: Interface reserved, not implemented
+**Status**: ✅ Implemented (2026-01-04)
 
-**Planned Architecture**:
-- Web search via Brave/DuckDuckGo API
-- Local knowledge base (indexed documents)
-- Caching layer for repeated queries
+**Implementation Details**:
+- **6 search providers**: Tavily, SearXNG, Google CSE, Bing, Brave, Exa.ai
+- **Provider fallback**: Automatic retry with configurable fallback chain
+- **PII scrubbing**: Integrated with global PII settings
+- **Timeout protection**: Configurable timeout (default: 10s)
+- **Result formatting**: Markdown format for LLM consumption
+
+**Architecture**:
+- `SearchProvider` trait for provider abstraction
+- `SearchRegistry` for provider management and fallback
+- `CapabilityExecutor::execute_search()` for execution
+- `PromptAssembler::format_search_results_markdown()` for formatting
 
 **Data Structure**:
 ```rust
@@ -503,9 +515,15 @@ pub struct SearchResult {
     pub title: String,
     pub url: String,
     pub snippet: String,
-    pub relevance_score: f32,
+    pub full_content: Option<String>,      // Full page content (Exa/Tavily)
+    pub source_type: Option<String>,       // article/video/forum
+    pub provider: Option<String>,          // Provider name
+    pub published_date: Option<i64>,       // Unix timestamp
+    pub relevance_score: Option<f32>,      // 0.0-1.0
 }
 ```
+
+**Documentation**: See [SEARCH_INTEGRATION_COMPLETE.md](./SEARCH_INTEGRATION_COMPLETE.md)
 
 ### MCP Integration
 

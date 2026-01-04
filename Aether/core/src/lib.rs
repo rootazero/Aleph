@@ -85,6 +85,7 @@ pub mod payload; // NEW: Complete payload module with structured protocol
 pub mod prompt; // LEGACY: Initial structured context protocol implementation
 pub mod providers;
 pub mod router;
+pub mod search; // NEW: Search capability with multiple provider support
 pub mod utils; // NEW: Capability executor for enriching payloads
 
 // Re-export public types
@@ -92,7 +93,8 @@ pub mod utils; // NEW: Capability executor for enriching payloads
 pub use crate::clipboard::{ImageData, ImageFormat};
 pub use crate::config::{
     BehaviorConfig, Config, FullConfig, GeneralConfig, MemoryConfig, ProviderConfig,
-    ProviderConfigEntry, RoutingRuleConfig, ShortcutsConfig, TestConnectionResult,
+    ProviderConfigEntry, RoutingRuleConfig, SearchBackendConfig, SearchBackendEntry,
+    SearchConfig, SearchConfigInternal, ShortcutsConfig, TestConnectionResult,
 };
 pub use crate::core::{AetherCore, AppMemoryInfo, CapturedContext, MemoryEntryFFI as MemoryEntry};
 pub use crate::error::{AetherError, AetherException, Result};

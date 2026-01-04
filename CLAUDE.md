@@ -402,6 +402,26 @@ retention_days = 90
 vector_db = "sqlite-vec"
 similarity_threshold = 0.7
 
+[search]
+enabled = true                     # Enable/disable search capability
+default_provider = "tavily"        # Default search provider
+fallback_providers = ["searxng"]   # Fallback providers if default fails
+max_results = 5                    # Maximum search results
+timeout_seconds = 10               # Search timeout
+
+[search.backends.tavily]
+provider_type = "tavily"
+api_key = "tvly-..."
+
+[search.backends.searxng]
+provider_type = "searxng"
+base_url = "http://localhost:8888"
+
+[search.backends.google]
+provider_type = "google"
+api_key = "AIzaSy..."
+engine_id = "012345..."            # Custom Search Engine ID
+
 [providers.openai]
 api_key = "sk-..."
 model = "gpt-4o"
@@ -420,6 +440,22 @@ system_prompt = "You are a translator."
 capabilities = ["memory"]          # Enable Memory capability for context
 intent_type = "translation"        # Custom intent classification
 context_format = "markdown"        # Context format (markdown | xml | json)
+
+[[rules]]
+regex = "^/search"
+provider = "openai"
+system_prompt = "You are a search assistant. Answer based on search results."
+capabilities = ["search"]          # Enable Search capability
+intent_type = "web_search"
+context_format = "markdown"
+
+[[rules]]
+regex = "^/research"
+provider = "claude"
+system_prompt = "You are a research analyst. Use memory and search to provide comprehensive answers."
+capabilities = ["memory", "search"]  # Enable both Memory and Search
+intent_type = "research"
+context_format = "markdown"
 
 [[rules]]
 regex = "^/draw"
@@ -445,6 +481,7 @@ Use trait-based abstractions for all core components to support swapping:
 - `Router` trait for routing strategies
 - `MemoryStore` trait for vector database implementations
 - `EmbeddingModel` trait for embedding inference engines
+- `SearchProvider` trait for search backend implementations
 
 ### Memory Module Requirements
 
@@ -469,6 +506,38 @@ Use trait-based abstractions for all core components to support swapping:
 - Vector search must complete within 50ms
 - Use lazy loading for embedding model (load on first use)
 
+### Search Module Requirements
+
+**Architecture:**
+- All search operations run in Rust Core (no Swift involvement)
+- Support multiple search providers via trait abstraction
+- Implement provider fallback mechanism for reliability
+- PII scrubbing before sending queries to external services
+
+**Supported Providers:**
+- **Tavily**: AI-optimized search with automatic summarization
+- **SearXNG**: Self-hosted privacy-focused meta-search
+- **Google CSE**: Comprehensive search with Custom Search Engine
+- **Bing**: Cost-effective search API
+- **Brave**: Privacy-focused search
+- **Exa.ai**: AI-native semantic search
+
+**Fallback Mechanism:**
+- Primary provider → Fallback providers → Error
+- Configurable fallback chain via TOML
+- Automatic retry with backoff
+
+**Privacy & Security:**
+- PII scrubbing integrated with global PII settings
+- Only scrubbed queries sent to external APIs
+- Configurable timeout protection (default: 10s)
+- No search history stored externally
+
+**Performance:**
+- Search requests must complete within timeout (configurable)
+- Non-blocking async execution
+- Graceful degradation on failure (continue without results)
+
 ### Critical UI Behavior
 
 **macOS Halo Window Requirements:**
@@ -489,7 +558,7 @@ Aether uses a **Structured Context Protocol** for intelligent request processing
 
 **Core Architecture**:
 - **AgentPayload**: Type-safe data structure replaces string concatenation
-- **Dynamic Capabilities**: Memory, Search (future), MCP tools (future)
+- **Dynamic Capabilities**: Memory (implemented), Search (implemented), MCP tools (future)
 - **Intent Classification**: BuiltinSearch, Custom, Skills, GeneralChat
 - **Context Assembly**: Markdown/XML/JSON formatting for LLM consumption
 

@@ -6,6 +6,7 @@ use super::{
     PayloadMeta,
 };
 use crate::memory::MemoryEntry;
+use crate::search::SearchResult;
 
 /// Builder for AgentPayload
 ///
@@ -99,9 +100,8 @@ impl PayloadBuilder {
         self
     }
 
-    /// Add search results to context (reserved for future implementation)
-    #[cfg(feature = "search")]
-    pub fn search(mut self, results: Vec<super::SearchResult>) -> Self {
+    /// Add search results to context
+    pub fn search_results(mut self, results: Vec<SearchResult>) -> Self {
         self.context.search_results = Some(results);
         self
     }
