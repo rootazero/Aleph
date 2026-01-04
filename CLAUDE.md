@@ -414,6 +414,14 @@ model = "claude-3-5-sonnet-20241022"
 color = "#d97757"
 
 [[rules]]
+regex = "^/translate"
+provider = "openai"
+system_prompt = "You are a translator."
+capabilities = ["memory"]          # Enable Memory capability for context
+intent_type = "translation"        # Custom intent classification
+context_format = "markdown"        # Context format (markdown | xml | json)
+
+[[rules]]
 regex = "^/draw"
 provider = "openai"
 system_prompt = "You are DALL-E. Generate images."
@@ -421,6 +429,7 @@ system_prompt = "You are DALL-E. Generate images."
 [[rules]]
 regex = ".*"                       # Catch-all
 provider = "openai"
+capabilities = ["memory"]          # Enable memory for all requests
 ```
 
 ---
@@ -474,12 +483,32 @@ Use trait-based abstractions for all core components to support swapping:
 - No window activation during Cut/Paste cycle
 - Use `orderFrontRegardless()` instead of `makeKeyAndOrderFront()`
 
-### Multi-Model Orchestration
+### Multi-Model Orchestration & Structured Context Protocol
 
-- **Smart Routing**: Config-based rules (regex/prefix matching)
+Aether uses a **Structured Context Protocol** for intelligent request processing:
+
+**Core Architecture**:
+- **AgentPayload**: Type-safe data structure replaces string concatenation
+- **Dynamic Capabilities**: Memory, Search (future), MCP tools (future)
+- **Intent Classification**: BuiltinSearch, Custom, Skills, GeneralChat
+- **Context Assembly**: Markdown/XML/JSON formatting for LLM consumption
+
+**Processing Flow**:
+```
+User Input → Router → PayloadBuilder → CapabilityExecutor → PromptAssembler → Provider
+                ↓           ↓                  ↓                    ↓
+          RoutingDecision  Payload      Memory/Search/MCP    Formatted Context
+```
+
+**Key Features**:
+- **Smart Routing**: Config-based rules (regex matching + intent inference)
+- **Transparent Memory**: Local RAG injects relevant conversation history
+- **Capability Execution**: Memory (implemented), Search (reserved), MCP (reserved)
+- **Format Flexibility**: Markdown (MVP), XML/JSON (reserved)
 - **Providers**: OpenAI, Anthropic, Google, Local (Ollama)
 - **Fallback**: Auto-retry with default model on timeout/error
-- **Context Injection**: Automatic prompt construction based on clipboard content type
+
+**Detailed Architecture**: See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for complete technical documentation.
 
 ### Privacy & Security
 
@@ -528,6 +557,9 @@ See [docs/TESTING_GUIDE.md](./docs/TESTING_GUIDE.md) for detailed testing proced
 ---
 
 ## Additional Documentation
+
+**Core Architecture:**
+- [Architecture Guide](./docs/ARCHITECTURE.md) - Structured Context Protocol, request flow, and core components
 
 **Detailed Guides:**
 - [Development Phases](./docs/DEVELOPMENT_PHASES.md) - Project roadmap and phase completion status
