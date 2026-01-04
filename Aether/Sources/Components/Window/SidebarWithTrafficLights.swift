@@ -192,7 +192,8 @@ struct SidebarWithTrafficLights: View {
             NavigationItemConfig(tab: .routing, iconName: "arrow.triangle.branch", titleKey: "settings.routing.title"),
             NavigationItemConfig(tab: .shortcuts, iconName: "command", titleKey: "settings.shortcuts.title"),
             NavigationItemConfig(tab: .behavior, iconName: "slider.horizontal.3", titleKey: "settings.behavior.title"),
-            NavigationItemConfig(tab: .memory, iconName: "brain", titleKey: "settings.memory.title")
+            NavigationItemConfig(tab: .memory, iconName: "brain", titleKey: "settings.memory.title"),
+            NavigationItemConfig(tab: .search, iconName: "magnifyingglass", titleKey: "settings.search.title")
         ]
     }
 }

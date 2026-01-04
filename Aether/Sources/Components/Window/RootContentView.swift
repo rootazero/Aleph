@@ -198,6 +198,14 @@ struct RootContentView: View {
             } else {
                 placeholderView("Memory management requires AetherCore initialization")
             }
+
+        case .search:
+            if let core = appDelegate.core {
+                SearchSettingsView(core: core, saveBarState: saveBarState)
+                    .id(configReloadTrigger)
+            } else {
+                placeholderView("Search settings requires AetherCore initialization")
+            }
         }
     }
 

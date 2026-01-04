@@ -18,6 +18,7 @@ enum SettingsTab: Hashable {
     case shortcuts
     case behavior
     case memory
+    case search
 }
 
 // MARK: - UTType Extension
