@@ -20,27 +20,16 @@ struct ShortcutsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                // Header
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                    Text(LocalizedStringKey("settings.shortcuts.title"))
-                        .font(DesignTokens.Typography.title)
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
-
-                    Text(LocalizedStringKey("settings.shortcuts.description"))
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-                }
-
                 // Global Hotkey Card
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                    Label(LocalizedStringKey("settings.shortcuts.global_hotkey"), systemImage: "keyboard")
+                    Label(L("settings.shortcuts.global_hotkey"), systemImage: "keyboard")
                         .font(DesignTokens.Typography.heading)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
 
                     VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                         // Current hotkey display
                         HStack {
-                            Text(LocalizedStringKey("settings.shortcuts.current_hotkey"))
+                            Text(L("settings.shortcuts.current_hotkey"))
                                 .font(DesignTokens.Typography.body)
                                 .frame(width: 80, alignment: .leading)
 
@@ -69,7 +58,7 @@ struct ShortcutsView: View {
                             HStack(spacing: DesignTokens.Spacing.sm) {
                                 Image(systemName: "info.circle")
                                     .foregroundColor(DesignTokens.Colors.accentBlue)
-                                Text(LocalizedStringKey("settings.shortcuts.double_tap_shift_description"))
+                                Text(L("settings.shortcuts.double_tap_shift_description"))
                                     .font(DesignTokens.Typography.caption)
                                     .foregroundColor(DesignTokens.Colors.textSecondary)
                             }
@@ -77,7 +66,7 @@ struct ShortcutsView: View {
                             HStack(spacing: DesignTokens.Spacing.sm) {
                                 Image(systemName: "info.circle")
                                     .foregroundColor(DesignTokens.Colors.accentBlue)
-                                Text(LocalizedStringKey("settings.shortcuts.double_tap_description"))
+                                Text(L("settings.shortcuts.double_tap_description"))
                                     .font(DesignTokens.Typography.caption)
                                     .foregroundColor(DesignTokens.Colors.textSecondary)
                             }
@@ -85,7 +74,7 @@ struct ShortcutsView: View {
                             HStack(spacing: DesignTokens.Spacing.sm) {
                                 Image(systemName: "info.circle")
                                     .foregroundColor(DesignTokens.Colors.accentBlue)
-                                Text(LocalizedStringKey("settings.shortcuts.modifier_combo_description"))
+                                Text(L("settings.shortcuts.modifier_combo_description"))
                                     .font(DesignTokens.Typography.caption)
                                     .foregroundColor(DesignTokens.Colors.textSecondary)
                             }
@@ -111,18 +100,18 @@ struct ShortcutsView: View {
 
                         // Action buttons
                         HStack(spacing: DesignTokens.Spacing.md) {
-                            ActionButton(NSLocalizedString("settings.shortcuts.reset_default", comment: ""), style: .secondary) {
+                            ActionButton(L("settings.shortcuts.reset_default"), style: .secondary) {
                                 resetToDefault()
                             }
 
-                            ActionButton(NSLocalizedString("settings.shortcuts.custom_hotkey", comment: ""), style: .secondary) {
+                            ActionButton(L("settings.shortcuts.custom_hotkey"), style: .secondary) {
                                 showingCustomHotkeyRecorder = true
                             }
 
                             Spacer()
 
                             if showingSaveConfirmation {
-                                Label(LocalizedStringKey("settings.shortcuts.saved"), systemImage: "checkmark.circle.fill")
+                                Label(L("settings.shortcuts.saved"), systemImage: "checkmark.circle.fill")
                                     .foregroundColor(DesignTokens.Colors.providerActive)
                                     .font(DesignTokens.Typography.caption)
                             }
@@ -135,15 +124,15 @@ struct ShortcutsView: View {
 
                 // Preset Shortcuts Card
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                    Label(LocalizedStringKey("settings.shortcuts.presets"), systemImage: "star")
+                    Label(L("settings.shortcuts.presets"), systemImage: "star")
                         .font(DesignTokens.Typography.heading)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
 
                     VStack(spacing: DesignTokens.Spacing.sm) {
                         PresetHotkeyRow(
-                            name: NSLocalizedString("settings.shortcuts.preset_double_tap_shift", comment: ""),
+                            name: L("settings.shortcuts.preset_double_tap_shift"),
                             mode: .doubleTapShift,
-                            description: NSLocalizedString("settings.shortcuts.preset_default_description", comment: ""),
+                            description: L("settings.shortcuts.preset_default_description"),
                             isSelected: currentHotkeyMode == .doubleTapShift
                         ) {
                             applyHotkey(.doubleTapShift)
@@ -152,7 +141,7 @@ struct ShortcutsView: View {
                         PresetHotkeyRow(
                             name: "⌘ + `",
                             mode: .modifierCombo(keyCode: 50, modifiers: .maskCommand),
-                            description: NSLocalizedString("settings.shortcuts.preset_command_grave", comment: ""),
+                            description: L("settings.shortcuts.preset_command_grave"),
                             isSelected: currentHotkeyMode == .modifierCombo(keyCode: 50, modifiers: .maskCommand)
                         ) {
                             applyHotkey(.modifierCombo(keyCode: 50, modifiers: .maskCommand))
@@ -161,7 +150,7 @@ struct ShortcutsView: View {
                         PresetHotkeyRow(
                             name: "⌥ + ␣",
                             mode: .modifierCombo(keyCode: 49, modifiers: .maskAlternate),
-                            description: NSLocalizedString("settings.shortcuts.preset_option_space", comment: ""),
+                            description: L("settings.shortcuts.preset_option_space"),
                             isSelected: currentHotkeyMode == .modifierCombo(keyCode: 49, modifiers: .maskAlternate)
                         ) {
                             applyHotkey(.modifierCombo(keyCode: 49, modifiers: .maskAlternate))
@@ -170,7 +159,7 @@ struct ShortcutsView: View {
                         PresetHotkeyRow(
                             name: "⌃ + ⌘ + A",
                             mode: .modifierCombo(keyCode: 0, modifiers: [.maskControl, .maskCommand]),
-                            description: NSLocalizedString("settings.shortcuts.preset_control_command_a", comment: ""),
+                            description: L("settings.shortcuts.preset_control_command_a"),
                             isSelected: currentHotkeyMode == .modifierCombo(keyCode: 0, modifiers: [.maskControl, .maskCommand])
                         ) {
                             applyHotkey(.modifierCombo(keyCode: 0, modifiers: [.maskControl, .maskCommand]))
@@ -183,33 +172,33 @@ struct ShortcutsView: View {
 
                 // Permission Card
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                    Label(LocalizedStringKey("settings.shortcuts.permission_required"), systemImage: "lock.shield")
+                    Label(L("settings.shortcuts.permission_required"), systemImage: "lock.shield")
                         .font(DesignTokens.Typography.heading)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
 
                     VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                        Text(LocalizedStringKey("settings.shortcuts.permission_description"))
+                        Text(L("settings.shortcuts.permission_description"))
                             .font(DesignTokens.Typography.body)
                             .foregroundColor(DesignTokens.Colors.textPrimary)
 
-                        Text(LocalizedStringKey("settings.shortcuts.why_needed"))
+                        Text(L("settings.shortcuts.why_needed"))
                             .font(DesignTokens.Typography.caption)
                             .fontWeight(.semibold)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
 
                         VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                            Label(LocalizedStringKey("settings.shortcuts.permission_detect"), systemImage: "checkmark.circle")
+                            Label(L("settings.shortcuts.permission_detect"), systemImage: "checkmark.circle")
                                 .font(DesignTokens.Typography.caption)
                                 .foregroundColor(DesignTokens.Colors.textSecondary)
-                            Label(LocalizedStringKey("settings.shortcuts.permission_read"), systemImage: "checkmark.circle")
+                            Label(L("settings.shortcuts.permission_read"), systemImage: "checkmark.circle")
                                 .font(DesignTokens.Typography.caption)
                                 .foregroundColor(DesignTokens.Colors.textSecondary)
-                            Label(LocalizedStringKey("settings.shortcuts.permission_simulate"), systemImage: "checkmark.circle")
+                            Label(L("settings.shortcuts.permission_simulate"), systemImage: "checkmark.circle")
                                 .font(DesignTokens.Typography.caption)
                                 .foregroundColor(DesignTokens.Colors.textSecondary)
                         }
 
-                        ActionButton(NSLocalizedString("settings.shortcuts.open_settings_button", comment: ""), icon: "gear", style: .primary) {
+                        ActionButton(L("settings.shortcuts.open_settings_button"), icon: "gear", style: .primary) {
                             openAccessibilitySettings()
                         }
                         .padding(.top, DesignTokens.Spacing.sm)
@@ -292,15 +281,15 @@ struct ShortcutsView: View {
         case .modifierCombo(let keyCode, let modifiers):
             // Check Command+Space (Spotlight)
             if keyCode == 49 && modifiers == .maskCommand {
-                return NSLocalizedString("settings.shortcuts.conflict_spotlight", comment: "")
+                return L("settings.shortcuts.conflict_spotlight")
             }
             // Check Option+Space (some input methods)
             if keyCode == 49 && modifiers == .maskAlternate {
-                return NSLocalizedString("settings.shortcuts.conflict_input_method", comment: "")
+                return L("settings.shortcuts.conflict_input_method")
             }
             // Check Control+Space (input method switch)
             if keyCode == 49 && modifiers == .maskControl {
-                return NSLocalizedString("settings.shortcuts.conflict_input_switch", comment: "")
+                return L("settings.shortcuts.conflict_input_switch")
             }
             return nil
         }
@@ -392,7 +381,7 @@ struct PresetHotkeyRow: View {
 
             Spacer()
 
-            ActionButton(NSLocalizedString("settings.shortcuts.use_this", comment: ""), style: .primary, isDisabled: isSelected) {
+            ActionButton(L("settings.shortcuts.use_this"), style: .primary, isDisabled: isSelected) {
                 onSelect()
             }
         }
@@ -416,17 +405,17 @@ struct CustomHotkeyRecorderSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
             HStack {
-                Text(LocalizedStringKey("settings.shortcuts.custom_hotkey_title"))
+                Text(L("settings.shortcuts.custom_hotkey_title"))
                     .font(DesignTokens.Typography.title)
                     .foregroundColor(DesignTokens.Colors.textPrimary)
                 Spacer()
-                Button(NSLocalizedString("common.cancel", comment: "")) {
+                Button(L("common.cancel")) {
                     stopRecording()
                     dismiss()
                 }
             }
 
-            Text(LocalizedStringKey("settings.shortcuts.custom_hotkey_instruction"))
+            Text(L("settings.shortcuts.custom_hotkey_instruction"))
                 .font(DesignTokens.Typography.body)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
@@ -447,7 +436,7 @@ struct CustomHotkeyRecorderSheet: View {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .scaleEffect(0.8)
-                            Text(LocalizedStringKey("settings.shortcuts.recording_prompt"))
+                            Text(L("settings.shortcuts.recording_prompt"))
                                 .font(DesignTokens.Typography.body)
                                 .foregroundColor(DesignTokens.Colors.accentBlue)
                         }
@@ -456,7 +445,7 @@ struct CustomHotkeyRecorderSheet: View {
                             .font(.system(size: 24, weight: .bold, design: .monospaced))
                             .foregroundColor(DesignTokens.Colors.textPrimary)
                     } else {
-                        Text(LocalizedStringKey("settings.shortcuts.start_recording_hint"))
+                        Text(L("settings.shortcuts.start_recording_hint"))
                             .font(DesignTokens.Typography.body)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
@@ -479,11 +468,11 @@ struct CustomHotkeyRecorderSheet: View {
             // Action buttons
             HStack(spacing: DesignTokens.Spacing.md) {
                 if isRecording {
-                    ActionButton(NSLocalizedString("settings.shortcuts.stop_recording", comment: ""), style: .secondary) {
+                    ActionButton(L("settings.shortcuts.stop_recording"), style: .secondary) {
                         stopRecording()
                     }
                 } else {
-                    ActionButton(NSLocalizedString("settings.shortcuts.start_recording", comment: ""), icon: "record.circle", style: .primary) {
+                    ActionButton(L("settings.shortcuts.start_recording"), icon: "record.circle", style: .primary) {
                         startRecording()
                     }
                 }
@@ -491,7 +480,7 @@ struct CustomHotkeyRecorderSheet: View {
                 Spacer()
 
                 if let hotkey = recordedHotkey, !isRecording {
-                    ActionButton(NSLocalizedString("settings.shortcuts.apply_hotkey", comment: ""), icon: "checkmark.circle", style: .primary) {
+                    ActionButton(L("settings.shortcuts.apply_hotkey"), icon: "checkmark.circle", style: .primary) {
                         onSelect(hotkey)
                     }
                 }
@@ -536,7 +525,7 @@ struct CustomHotkeyRecorderSheet: View {
 
         // Require at least one modifier
         if cgFlags.isEmpty {
-            errorMessage = NSLocalizedString("settings.shortcuts.error_requires_modifier", comment: "")
+            errorMessage = L("settings.shortcuts.error_requires_modifier")
             NSSound.beep()
             return
         }

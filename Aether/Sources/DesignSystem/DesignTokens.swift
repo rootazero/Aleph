@@ -27,6 +27,9 @@ enum DesignTokens {
         /// Secondary accent color for less prominent elements
         static let accentGray = Color.secondary
 
+        /// Purple accent color - used for system/preset features
+        static let accentPurple = Color(red: 0.58, green: 0.35, blue: 0.95)
+
         // MARK: Status Colors
 
         /// Success/active state color (green)

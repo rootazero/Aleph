@@ -232,7 +232,7 @@ This document outlines the step-by-step implementation plan for adding default p
 - [x] Add `"provider.warning.default_disabled" = "Default provider is disabled. Using fallback.";`
 - [x] Add menu bar strings (`menu.providers.*`)
 
-**File**: `Aether/Resources/zh_CN.lproj/Localizable.strings`
+**File**: `Aether/Resources/zh-Hans.lproj/Localizable.strings`
 - [x] Add Chinese translations for all new strings
 
 **Deliverable**: ✅ All UI text is localized (EN + ZH)

@@ -183,7 +183,7 @@ Aether内部:
 "error.no_text_in_window.suggestion" = "Please open a text document first";
 ```
 
-### 中文 (zh_CN.lproj)
+### 中文 (zh-Hans.lproj)
 ```strings
 "error.no_text_in_window" = "当前窗口没有文本内容";
 "error.no_text_in_window.suggestion" = "请先打开一个文本文档";
@@ -309,7 +309,7 @@ Aether内部:
 2. **en.lproj/Localizable.strings** (英文本地化)
    - 302-303: 新增错误提示
 
-3. **zh_CN.lproj/Localizable.strings** (中文本地化)
+3. **zh-Hans.lproj/Localizable.strings** (中文本地化)
    - 301-302: 新增错误提示
 
 ---

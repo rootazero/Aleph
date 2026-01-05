@@ -27,9 +27,9 @@ enum SearchProviderStatus: Equatable {
 
     var text: String {
         switch self {
-        case .notConfigured: return NSLocalizedString("settings.search.status.not_configured", comment: "Not Configured")
-        case .testing: return NSLocalizedString("settings.search.status.testing", comment: "Testing...")
-        case .available(let latency): return NSLocalizedString("settings.search.status.available", comment: "Available") + " (\(latency)ms)"
+        case .notConfigured: return L("settings.search.status.not_configured")
+        case .testing: return L("settings.search.status.testing")
+        case .available(let latency): return L("settings.search.status.available") + " (\(latency)ms)"
         case .error(let message): return message
         }
     }
@@ -227,7 +227,7 @@ struct SearchProviderCard: View {
                     } else {
                         Image(systemName: "bolt.fill")
                     }
-                    Text(NSLocalizedString("settings.search.test_connection", comment: "Test Connection"))
+                    Text(L("settings.search.test_connection"))
                 }
                 .font(DesignTokens.Typography.body)
                 .foregroundColor(.white)
@@ -247,7 +247,7 @@ struct SearchProviderCard: View {
             Link(destination: preset.docsURL) {
                 HStack(spacing: DesignTokens.Spacing.xs) {
                     Image(systemName: "book.fill")
-                    Text(NSLocalizedString("settings.search.documentation", comment: "Docs"))
+                    Text(L("settings.search.documentation"))
                 }
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)

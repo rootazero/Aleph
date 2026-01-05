@@ -17,9 +17,9 @@ enum PermissionGateStep: Int {
     var title: String {
         switch self {
         case .accessibility:
-            return NSLocalizedString("permission.gate.step1_title", comment: "")
+            return L("permission.gate.step1_title")
         case .inputMonitoring:
-            return NSLocalizedString("permission.gate.step2_title", comment: "")
+            return L("permission.gate.step2_title")
         }
     }
 
@@ -35,9 +35,9 @@ enum PermissionGateStep: Int {
     var description: String {
         switch self {
         case .accessibility:
-            return NSLocalizedString("permission.gate.accessibility_description", comment: "")
+            return L("permission.gate.accessibility_description")
         case .inputMonitoring:
-            return NSLocalizedString("permission.gate.input_monitoring_description", comment: "")
+            return L("permission.gate.input_monitoring_description")
         }
     }
 
@@ -112,7 +112,7 @@ struct PermissionGateView: View {
             // Step 1: Accessibility
             stepBadge(
                 step: 1,
-                title: NSLocalizedString("permission.gate.accessibility_short", comment: ""),
+                title: L("permission.gate.accessibility_short"),
                 isActive: currentStep == .accessibility,
                 isComplete: manager.accessibilityGranted
             )
@@ -126,7 +126,7 @@ struct PermissionGateView: View {
             // Step 2: Input Monitoring
             stepBadge(
                 step: 2,
-                title: NSLocalizedString("permission.gate.input_monitoring_short", comment: ""),
+                title: L("permission.gate.input_monitoring_short"),
                 isActive: currentStep == .inputMonitoring,
                 isComplete: manager.inputMonitoringGranted
             )
@@ -204,7 +204,7 @@ struct PermissionGateView: View {
                 .fill(isGranted ? Color.green : Color.orange)
                 .frame(width: 12, height: 12)
 
-            Text(isGranted ? NSLocalizedString("permission.gate.status_granted", comment: "") : NSLocalizedString("permission.gate.status_waiting", comment: ""))
+            Text(isGranted ? L("permission.gate.status_granted") : L("permission.gate.status_waiting"))
                 .font(.subheadline.weight(.medium))
                 .foregroundColor(isGranted ? .green : .orange)
         }
@@ -227,7 +227,7 @@ struct PermissionGateView: View {
                 Button(action: openSystemSettings) {
                     HStack(spacing: 8) {
                         Image(systemName: "gear")
-                        Text(LocalizedStringKey("permission.open_settings"))
+                        Text(L("permission.open_settings"))
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
@@ -247,7 +247,7 @@ struct PermissionGateView: View {
                     }
                 }) {
                     HStack(spacing: 8) {
-                        Text(LocalizedStringKey("permission.gate.button.continue"))
+                        Text(L("permission.gate.button.continue"))
                         Image(systemName: "arrow.right")
                     }
                     .frame(maxWidth: .infinity)
@@ -266,7 +266,7 @@ struct PermissionGateView: View {
                 Button(action: restartApp) {
                     HStack(spacing: 8) {
                         Image(systemName: "checkmark.circle.fill")
-                        Text(LocalizedStringKey("permission.gate.button.enter_aether"))
+                        Text(L("permission.gate.button.enter_aether"))
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)

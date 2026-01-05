@@ -283,14 +283,14 @@
 
 ### Task 4.3: Update translation files for new UI strings
 - [ ] Update `Aether/Resources/en.lproj/Localizable.strings`
-- [ ] Update `Aether/Resources/zh_CN.lproj/Localizable.strings`
+- [ ] Update `Aether/Resources/zh-Hans.lproj/Localizable.strings`
 - [ ] Add key: `permission.gate.button.enter_aether` = "进入 Aether"
 - [ ] Run `Scripts/validate_translations.sh` to verify completeness
 - [ ] Validation: Translation coverage 100%
 
 **Files modified:**
 - `Aether/Resources/en.lproj/Localizable.strings`
-- `Aether/Resources/zh_CN.lproj/Localizable.strings`
+- `Aether/Resources/zh-Hans.lproj/Localizable.strings`
 
 **Acceptance criteria:**
 - ✅ All new UI strings are localized

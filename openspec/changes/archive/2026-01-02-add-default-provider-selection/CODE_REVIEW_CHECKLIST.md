@@ -230,7 +230,7 @@ openspec show add-default-provider-selection --json --deltas-only
   - `menu.providers.error.failed_to_set`
   - etc.
 
-#### Chinese (`zh_CN.lproj/Localizable.strings`)
+#### Chinese (`zh-Hans.lproj/Localizable.strings`)
 - ✅ All strings translated:
   - "默认" (Default)
   - "设为默认" (Set as Default)

@@ -110,11 +110,11 @@ class ContextCapture {
         // but this should be migrated to use EventHandler in the next refactor
         DispatchQueue.main.async {
             let alert = NSAlert()
-            alert.messageText = NSLocalizedString("alert.context.accessibility_title", comment: "")
-            alert.informativeText = NSLocalizedString("alert.context.accessibility_message", comment: "")
+            alert.messageText = L("alert.context.accessibility_title")
+            alert.informativeText = L("alert.context.accessibility_message")
             alert.alertStyle = .informational
-            alert.addButton(withTitle: NSLocalizedString("alert.context.open_settings", comment: ""))
-            alert.addButton(withTitle: NSLocalizedString("common.cancel", comment: ""))
+            alert.addButton(withTitle: L("alert.context.open_settings"))
+            alert.addButton(withTitle: L("common.cancel"))
 
             let response = alert.runModal()
             if response == .alertFirstButtonReturn {

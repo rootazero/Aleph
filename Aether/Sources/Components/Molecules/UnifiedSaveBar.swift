@@ -47,7 +47,7 @@ struct UnifiedSaveBar: View {
                         .font(.system(size: 12))
                         .foregroundColor(DesignTokens.Colors.warning)
 
-                    Text(LocalizedStringKey("settings.save_bar.changes_unsaved"))
+                    Text(L("settings.save_bar.changes_unsaved"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                 } else {
@@ -56,7 +56,7 @@ struct UnifiedSaveBar: View {
                         .font(.system(size: 12))
                         .foregroundColor(DesignTokens.Colors.success)
 
-                    Text(LocalizedStringKey("settings.save_bar.all_changes_saved"))
+                    Text(L("settings.save_bar.all_changes_saved"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
@@ -77,7 +77,7 @@ struct UnifiedSaveBar: View {
             HStack(spacing: DesignTokens.Spacing.sm) {
                 // Cancel button
                 Button(action: onCancel) {
-                    Text(LocalizedStringKey("common.cancel"))
+                    Text(L("common.cancel"))
                         .font(DesignTokens.Typography.body)
                         .foregroundColor((hasUnsavedChanges && !isSaving) ? DesignTokens.Colors.textPrimary : DesignTokens.Colors.textSecondary)
                 }
@@ -100,7 +100,7 @@ struct UnifiedSaveBar: View {
                                 .frame(width: 12, height: 12)
                                 .tint(.white)
                         }
-                        Text(isSaving ? LocalizedStringKey("common.saving") : LocalizedStringKey("common.save"))
+                        Text(isSaving ? L("common.saving") : L("common.save"))
                             .font(DesignTokens.Typography.body)
                     }
                     .frame(minWidth: 60)

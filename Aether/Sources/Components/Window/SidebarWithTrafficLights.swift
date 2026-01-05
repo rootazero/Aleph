@@ -206,8 +206,8 @@ private struct NavigationItemConfig {
     let iconName: String
     let titleKey: String
 
-    var title: LocalizedStringKey {
-        LocalizedStringKey(titleKey)
+    var title: String {
+        L(titleKey)
     }
 }
 
@@ -218,7 +218,7 @@ private struct NavigationItemConfig {
 /// Similar to `SidebarItem` but with minimal styling to fit the new design.
 private struct SidebarNavigationItem: View {
     let iconName: String
-    let title: LocalizedStringKey
+    let title: String
     let isSelected: Bool
     let action: () -> Void
 

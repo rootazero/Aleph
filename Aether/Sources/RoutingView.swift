@@ -13,8 +13,8 @@ struct RoutingView: View {
     let providers: [ProviderConfigEntry]
     @ObservedObject var saveBarState: SettingsSaveBarState
 
-    // Rules state
-    @State private var rules: [RoutingRuleConfig] = []
+    // Rules state (only custom rules from config)
+    @State private var customRules: [RoutingRuleConfig] = []
     @State private var isLoading: Bool = true
     @State private var errorMessage: String?
 
@@ -23,160 +23,42 @@ struct RoutingView: View {
     @State private var editingRuleIndex: Int?
     @State private var showingDeleteConfirmation: Bool = false
     @State private var deletingRuleIndex: Int?
-    @State private var showingImportExport: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-            // Header
-            HStack {
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                    Text(LocalizedStringKey("settings.routing.title"))
-                        .font(DesignTokens.Typography.title)
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
-
-                    Text(LocalizedStringKey("settings.routing.description"))
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-                }
-
-                Spacer()
-
-                // Import/Export menu
-                Menu {
-                    Button(action: exportRules) {
-                        Label(LocalizedStringKey("settings.routing.export_rules"), systemImage: "square.and.arrow.up")
-                    }
-                    .disabled(rules.isEmpty)
-
-                    Button(action: importRules) {
-                        Label(LocalizedStringKey("settings.routing.import_rules"), systemImage: "square.and.arrow.down")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .imageScale(.large)
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
-                }
-                .buttonStyle(.plain)
-                .help(LocalizedStringKey("settings.routing.import_export_help"))
-
-                // Add Rule button
-                ActionButton(NSLocalizedString("settings.routing.add_rule", comment: ""), icon: "plus.circle.fill", style: .primary) {
-                    addNewRule()
-                }
-            }
-
-            // Error message
-            if let error = errorMessage {
-                HStack(spacing: DesignTokens.Spacing.sm) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(DesignTokens.Colors.warning)
-                    Text(error)
-                        .font(DesignTokens.Typography.body)
-                }
-                .padding(DesignTokens.Spacing.md)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(DesignTokens.Colors.warning.opacity(0.1))
-                .cornerRadius(DesignTokens.CornerRadius.medium)
-            }
-
-            // Rules List
-            if isLoading {
-                ProgressView(LocalizedStringKey("settings.routing.loading"))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if rules.isEmpty {
-                VStack(spacing: DesignTokens.Spacing.md) {
-                    Image(systemName: "square.stack.3d.up.slash")
-                        .font(.system(size: 48))
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                    Text(LocalizedStringKey("settings.routing.no_rules"))
-                        .font(DesignTokens.Typography.heading)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                    Text(LocalizedStringKey("settings.routing.no_rules_message"))
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                    ActionButton(NSLocalizedString("settings.routing.add_rule", comment: ""), icon: "plus.circle.fill", style: .secondary) {
-                        addNewRule()
-                    }
-                    .padding(.top, DesignTokens.Spacing.sm)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                // Use List for drag-and-drop reordering
-                List {
-                    ForEach(Array(rules.enumerated()), id: \.offset) { index, rule in
-                        RuleCard(
-                            rule: rule,
-                            index: index,
-                            provider: providers.first(where: { $0.name == rule.provider }),
-                            onEdit: { editRule(at: index) },
-                            onDelete: { confirmDelete(at: index) }
-                        )
-                        .listRowInsets(EdgeInsets(top: DesignTokens.Spacing.xs, leading: 0, bottom: DesignTokens.Spacing.xs, trailing: 0))
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
-                    }
-                    .onMove(perform: moveRule)
-                }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
-                .background(Color.clear)
-                .disableWindowDrag()  // Prevent window dragging when reordering items
-            }
-
-            // Footer info
-            if !rules.isEmpty {
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-                    // Rule evaluation order hint
+        ScrollView {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xl) {
+                // Error message
+                if let error = errorMessage {
                     HStack(spacing: DesignTokens.Spacing.sm) {
-                        Image(systemName: "info.circle")
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
-                        Text(LocalizedStringKey("settings.routing.footer_info"))
-                            .font(DesignTokens.Typography.caption)
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(DesignTokens.Colors.warning)
+                        Text(error)
+                            .font(DesignTokens.Typography.body)
                     }
-
-                    // Default provider hint
-                    HStack(spacing: DesignTokens.Spacing.sm) {
-                        Image(systemName: "info.circle")
-                            .foregroundColor(DesignTokens.Colors.accentBlue)
-
-                        if let defaultName = defaultProviderName {
-                            HStack(spacing: DesignTokens.Spacing.xs) {
-                                Text(LocalizedStringKey("settings.routing.default_provider_hint"))
-                                    .font(DesignTokens.Typography.caption)
-                                    .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                                // Default provider badge
-                                HStack(spacing: DesignTokens.Spacing.xs) {
-                                    if let color = defaultProviderColor {
-                                        Circle()
-                                            .fill(color)
-                                            .frame(width: 6, height: 6)
-                                    }
-                                    Text(defaultName)
-                                        .font(DesignTokens.Typography.caption)
-                                        .fontWeight(.semibold)
-                                        .foregroundColor(DesignTokens.Colors.textPrimary)
-                                }
-                                .padding(.horizontal, DesignTokens.Spacing.xs)
-                                .padding(.vertical, 2)
-                                .background(DesignTokens.Colors.accentBlue.opacity(0.1))
-                                .cornerRadius(DesignTokens.CornerRadius.small)
-                            }
-                        } else {
-                            Text(LocalizedStringKey("settings.routing.no_default_provider_hint"))
-                                .font(DesignTokens.Typography.caption)
-                                .foregroundColor(DesignTokens.Colors.warning)
-                        }
-                    }
+                    .padding(DesignTokens.Spacing.md)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(DesignTokens.Colors.warning.opacity(0.1))
+                    .cornerRadius(DesignTokens.CornerRadius.medium)
                 }
+
+                // =============================================
+                // SECTION 1: Preset Commands (Hardcoded, Read-only)
+                // =============================================
+                presetCommandsSection
+
+                // =============================================
+                // SECTION 2: Custom Rules (User-defined)
+                // =============================================
+                customRulesSection
+
+                // Footer info
+                footerInfoSection
             }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(DesignTokens.Spacing.lg)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(DesignTokens.Spacing.lg)
+        .scrollEdge(edges: [.top, .bottom], style: .hard())
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             loadRules()
             // Set save bar to disabled state for instant-save view
@@ -190,21 +72,196 @@ struct RoutingView: View {
         }
         .sheet(isPresented: $showingRuleEditor) {
             if let index = editingRuleIndex {
-                RuleEditorView(rules: $rules, core: core, providers: providers, editing: index)
+                RuleEditorView(rules: $customRules, core: core, providers: providers, editing: index)
             } else {
-                RuleEditorView(rules: $rules, core: core, providers: providers)
+                RuleEditorView(rules: $customRules, core: core, providers: providers)
             }
         }
-        .alert(NSLocalizedString("settings.routing.delete_rule", comment: ""), isPresented: $showingDeleteConfirmation) {
-            Button(NSLocalizedString("common.cancel", comment: ""), role: .cancel) {}
-            Button(NSLocalizedString("common.delete", comment: ""), role: .destructive) {
+        .alert(L("settings.routing.delete_rule"), isPresented: $showingDeleteConfirmation) {
+            Button(L("common.cancel"), role: .cancel) {}
+            Button(L("common.delete"), role: .destructive) {
                 if let index = deletingRuleIndex {
                     deleteRule(at: index)
                 }
             }
         } message: {
             if let index = deletingRuleIndex {
-                Text(String(format: NSLocalizedString("settings.routing.delete_rule_message", comment: ""), rules[index].regex))
+                Text(String(format: L("settings.routing.delete_rule_message"), customRules[index].regex))
+            }
+        }
+    }
+
+    // MARK: - Preset Commands Section (Hardcoded)
+
+    private var presetCommandsSection: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            // Section header
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                Text(L("settings.routing.preset_commands"))
+                    .font(DesignTokens.Typography.heading)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                    .fontWeight(.semibold)
+
+                Text(L("settings.routing.preset_commands_subtitle"))
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+            }
+
+            // Hardcoded preset commands
+            VStack(spacing: DesignTokens.Spacing.sm) {
+                ForEach(PresetCommands.all, id: \.command) { preset in
+                    PresetCommandCard(preset: preset)
+                }
+            }
+        }
+        .padding(DesignTokens.Spacing.md)
+        .background(DesignTokens.Colors.accentPurple.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.large, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.large, style: .continuous)
+                .stroke(DesignTokens.Colors.accentPurple.opacity(0.15), lineWidth: 1)
+        )
+    }
+
+    // MARK: - Custom Rules Section
+
+    private var customRulesSection: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            // Section header with action buttons
+            HStack {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                    Text(L("settings.routing.custom_rules"))
+                        .font(DesignTokens.Typography.heading)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
+                        .fontWeight(.semibold)
+
+                    Text(L("settings.routing.custom_rules_subtitle"))
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+
+                Spacer()
+
+                // Import/Export menu
+                Menu {
+                    Button(action: exportRules) {
+                        Label(L("settings.routing.export_rules"), systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(customRules.isEmpty)
+
+                    Button(action: importRules) {
+                        Label(L("settings.routing.import_rules"), systemImage: "square.and.arrow.down")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .imageScale(.large)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
+                }
+                .buttonStyle(.plain)
+                .help(L("settings.routing.import_export_help"))
+
+                // Add Rule button
+                ActionButton(L("settings.routing.add_rule"), icon: "plus.circle.fill", style: .primary) {
+                    addNewRule()
+                }
+            }
+
+            // Custom rules list or empty state
+            if isLoading {
+                ProgressView(L("settings.routing.loading"))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, DesignTokens.Spacing.xl)
+            } else if customRules.isEmpty {
+                // Empty state
+                VStack(spacing: DesignTokens.Spacing.md) {
+                    Image(systemName: "square.stack.3d.up.slash")
+                        .font(.system(size: 40))
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                    Text(L("settings.routing.no_custom_rules"))
+                        .font(DesignTokens.Typography.body)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                    Text(L("settings.routing.no_custom_rules_message"))
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                        .multilineTextAlignment(.center)
+
+                    ActionButton(L("settings.routing.add_rule"), icon: "plus.circle.fill", style: .secondary) {
+                        addNewRule()
+                    }
+                    .padding(.top, DesignTokens.Spacing.sm)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DesignTokens.Spacing.xl)
+                .background(DesignTokens.Colors.cardBackground.opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
+            } else {
+                // Custom rules cards
+                VStack(spacing: DesignTokens.Spacing.sm) {
+                    ForEach(Array(customRules.enumerated()), id: \.offset) { index, rule in
+                        RuleCard(
+                            rule: rule,
+                            index: index,
+                            provider: providers.first(where: { $0.name == rule.provider }),
+                            onEdit: { editRule(at: index) },
+                            onDelete: { confirmDelete(at: index) }
+                        )
+                    }
+                }
+            }
+        }
+        .padding(DesignTokens.Spacing.md)
+        .background(DesignTokens.Colors.cardBackground.opacity(0.3))
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.large, style: .continuous))
+    }
+
+    // MARK: - Footer Info Section
+
+    private var footerInfoSection: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            // Rule evaluation order hint
+            HStack(spacing: DesignTokens.Spacing.sm) {
+                Image(systemName: "info.circle")
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                Text(L("settings.routing.footer_info"))
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+            }
+
+            // Default provider hint
+            HStack(spacing: DesignTokens.Spacing.sm) {
+                Image(systemName: "info.circle")
+                    .foregroundColor(DesignTokens.Colors.accentBlue)
+
+                if let defaultName = defaultProviderName {
+                    HStack(spacing: DesignTokens.Spacing.xs) {
+                        Text(L("settings.routing.default_provider_hint"))
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                        // Default provider badge
+                        HStack(spacing: DesignTokens.Spacing.xs) {
+                            if let color = defaultProviderColor {
+                                Circle()
+                                    .fill(color)
+                                    .frame(width: 6, height: 6)
+                            }
+                            Text(defaultName)
+                                .font(DesignTokens.Typography.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(DesignTokens.Colors.textPrimary)
+                        }
+                        .padding(.horizontal, DesignTokens.Spacing.xs)
+                        .padding(.vertical, 2)
+                        .background(DesignTokens.Colors.accentBlue.opacity(0.1))
+                        .cornerRadius(DesignTokens.CornerRadius.small)
+                    }
+                } else {
+                    Text(L("settings.routing.no_default_provider_hint"))
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.warning)
+                }
             }
         }
     }
@@ -236,7 +293,8 @@ struct RoutingView: View {
                 let config = try core.loadConfig()
 
                 await MainActor.run {
-                    rules = config.rules
+                    // Filter out preset rules - only load custom rules
+                    customRules = config.rules.filter { !$0.isPreset }
                     isLoading = false
                 }
             } catch {
@@ -268,7 +326,7 @@ struct RoutingView: View {
     private func deleteRule(at index: Int) {
         Task {
             do {
-                var updatedRules = rules
+                var updatedRules = customRules
                 updatedRules.remove(at: index)
 
                 try core.updateRoutingRules(rules: updatedRules)
@@ -277,33 +335,11 @@ struct RoutingView: View {
                 let config = try core.loadConfig()
 
                 await MainActor.run {
-                    rules = config.rules
+                    customRules = config.rules.filter { !$0.isPreset }
                 }
             } catch {
                 await MainActor.run {
                     errorMessage = "Failed to delete rule: \(error.localizedDescription)"
-                }
-            }
-        }
-    }
-
-    private func moveRule(from source: IndexSet, to destination: Int) {
-        var updatedRules = rules
-        updatedRules.move(fromOffsets: source, toOffset: destination)
-
-        Task {
-            do {
-                try core.updateRoutingRules(rules: updatedRules)
-
-                // Reload config
-                let config = try core.loadConfig()
-
-                await MainActor.run {
-                    rules = config.rules
-                }
-            } catch {
-                await MainActor.run {
-                    errorMessage = "Failed to reorder rules: \(error.localizedDescription)"
                 }
             }
         }
@@ -322,10 +358,10 @@ struct RoutingView: View {
             guard response == .OK, let url = savePanel.url else { return }
 
             do {
-                // Convert rules to JSON
+                // Convert custom rules to JSON (exclude presets)
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                let jsonData = try encoder.encode(rules)
+                let jsonData = try encoder.encode(customRules)
 
                 // Write to file
                 try jsonData.write(to: url)
@@ -333,8 +369,8 @@ struct RoutingView: View {
                 // Show success notification
                 DispatchQueue.main.async {
                     showInfoAlert(
-                        title: NSLocalizedString("alert.routing.export_title", comment: ""),
-                        message: String(format: NSLocalizedString("alert.routing.export_message", comment: ""), url.lastPathComponent)
+                        title: L("alert.routing.export_title"),
+                        message: String(format: L("alert.routing.export_message"), url.lastPathComponent)
                     )
                 }
             } catch {
@@ -377,13 +413,13 @@ struct RoutingView: View {
 
     private func showImportOptions(importedRules: [RoutingRuleConfig]) {
         let alert = NSAlert()
-        alert.messageText = NSLocalizedString("alert.routing.import_title", comment: "")
-        alert.informativeText = String(format: NSLocalizedString("alert.routing.import_message", comment: ""), importedRules.count)
+        alert.messageText = L("alert.routing.import_title")
+        alert.informativeText = String(format: L("alert.routing.import_message"), importedRules.count)
         alert.alertStyle = .informational
 
-        alert.addButton(withTitle: NSLocalizedString("common.append", comment: ""))
-        alert.addButton(withTitle: NSLocalizedString("common.replace", comment: ""))
-        alert.addButton(withTitle: NSLocalizedString("common.cancel", comment: ""))
+        alert.addButton(withTitle: L("common.append"))
+        alert.addButton(withTitle: L("common.replace"))
+        alert.addButton(withTitle: L("common.cancel"))
 
         let response = alert.runModal()
 
@@ -400,7 +436,7 @@ struct RoutingView: View {
     private func appendImportedRules(_ importedRules: [RoutingRuleConfig]) {
         Task {
             do {
-                var updatedRules = rules
+                var updatedRules = customRules
                 updatedRules.append(contentsOf: importedRules)
 
                 try core.updateRoutingRules(rules: updatedRules)
@@ -409,12 +445,12 @@ struct RoutingView: View {
                 let config = try core.loadConfig()
 
                 await MainActor.run {
-                    rules = config.rules
+                    customRules = config.rules.filter { !$0.isPreset }
 
                     // Show success message
                     showInfoAlert(
-                        title: NSLocalizedString("alert.routing.import_success_append", comment: ""),
-                        message: String(format: NSLocalizedString("alert.routing.import_success_append_message", comment: ""), importedRules.count)
+                        title: L("alert.routing.import_success_append"),
+                        message: String(format: L("alert.routing.import_success_append_message"), importedRules.count)
                     )
                 }
             } catch {
@@ -434,12 +470,12 @@ struct RoutingView: View {
                 let config = try core.loadConfig()
 
                 await MainActor.run {
-                    rules = config.rules
+                    customRules = config.rules.filter { !$0.isPreset }
 
                     // Show success message
                     showInfoAlert(
-                        title: NSLocalizedString("alert.routing.import_success_replace", comment: ""),
-                        message: String(format: NSLocalizedString("alert.routing.import_success_replace_message", comment: ""), importedRules.count)
+                        title: L("alert.routing.import_success_replace"),
+                        message: String(format: L("alert.routing.import_success_replace_message"), importedRules.count)
                     )
                 }
             } catch {
@@ -448,6 +484,239 @@ struct RoutingView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Preset Rules Data Model
+
+/// Hardcoded preset rules that are displayed as read-only guides
+struct PresetRule {
+    let command: String
+    let description: String
+    let descriptionKey: String
+    let isImplemented: Bool
+    let icon: String
+    let usage: String           // Usage example
+    let usageKey: String        // Localization key for usage
+    let subcommands: [PresetSubcommand]  // Optional subcommands
+}
+
+/// Subcommand definition for preset rules
+struct PresetSubcommand {
+    let name: String            // e.g., "google", "tavily"
+    let description: String
+    let descriptionKey: String
+    let isImplemented: Bool
+}
+
+/// All preset rules
+enum PresetRules {
+    static let all: [PresetRule] = [
+        PresetRule(
+            command: "/search",
+            description: "Search the web and get AI-summarized results",
+            descriptionKey: "settings.routing.preset.search.description",
+            isImplemented: true,
+            icon: "magnifyingglass",
+            usage: "/search <query>",
+            usageKey: "settings.routing.preset.search.usage",
+            subcommands: []  // Search provider is configured in Settings > Search
+        ),
+        PresetRule(
+            command: "/mcp",
+            description: "Invoke MCP tools for extended capabilities",
+            descriptionKey: "settings.routing.preset.mcp.description",
+            isImplemented: false,
+            icon: "puzzlepiece.extension",
+            usage: "/mcp <tool> [params]",
+            usageKey: "settings.routing.preset.mcp.usage",
+            subcommands: [
+                PresetSubcommand(
+                    name: "list",
+                    description: "List available MCP tools",
+                    descriptionKey: "settings.routing.preset.mcp.sub.list",
+                    isImplemented: false
+                ),
+                PresetSubcommand(
+                    name: "<tool_name>",
+                    description: "Execute specific MCP tool",
+                    descriptionKey: "settings.routing.preset.mcp.sub.tool",
+                    isImplemented: false
+                )
+            ]
+        ),
+        PresetRule(
+            command: "/skill",
+            description: "Execute predefined skill workflows",
+            descriptionKey: "settings.routing.preset.skills.description",
+            isImplemented: false,
+            icon: "wand.and.stars",
+            usage: "/skill <name>",
+            usageKey: "settings.routing.preset.skills.usage",
+            subcommands: [
+                PresetSubcommand(
+                    name: "list",
+                    description: "List available skills",
+                    descriptionKey: "settings.routing.preset.skills.sub.list",
+                    isImplemented: false
+                ),
+                PresetSubcommand(
+                    name: "<skill_name>",
+                    description: "Execute specific skill",
+                    descriptionKey: "settings.routing.preset.skills.sub.skill",
+                    isImplemented: false
+                )
+            ]
+        )
+    ]
+}
+
+// MARK: - Backward Compatibility Alias
+typealias PresetCommand = PresetRule
+enum PresetCommands {
+    static var all: [PresetRule] { PresetRules.all }
+}
+
+// MARK: - Preset Rule Card Component
+
+/// Card component for displaying a preset rule (read-only) with usage and subcommands
+struct PresetCommandCard: View {
+    let preset: PresetRule
+    @State private var isExpanded: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Main row
+            HStack(spacing: DesignTokens.Spacing.md) {
+                // Icon
+                ZStack {
+                    Circle()
+                        .fill(DesignTokens.Colors.accentPurple.opacity(0.2))
+                        .frame(width: 36, height: 36)
+
+                    Image(systemName: preset.icon)
+                        .font(.system(size: 16))
+                        .foregroundColor(DesignTokens.Colors.accentPurple)
+                }
+
+                // Command details
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                    HStack(spacing: DesignTokens.Spacing.sm) {
+                        // Command name
+                        Text(preset.command)
+                            .font(DesignTokens.Typography.code)
+                            .fontWeight(.semibold)
+                            .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                        // Status badge
+                        if preset.isImplemented {
+                            HStack(spacing: 2) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 8))
+                                Text(L("settings.routing.implemented"))
+                                    .font(.system(size: 10))
+                            }
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(DesignTokens.Colors.success)
+                            .cornerRadius(DesignTokens.CornerRadius.small)
+                        } else {
+                            HStack(spacing: 2) {
+                                Image(systemName: "clock.fill")
+                                    .font(.system(size: 8))
+                                Text(L("settings.routing.coming_soon"))
+                                    .font(.system(size: 10))
+                            }
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(DesignTokens.Colors.textSecondary)
+                            .cornerRadius(DesignTokens.CornerRadius.small)
+                        }
+                    }
+
+                    // Description
+                    Text(L(preset.descriptionKey))
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                        .lineLimit(2)
+
+                    // Usage example
+                    HStack(spacing: DesignTokens.Spacing.xs) {
+                        Text(L("settings.routing.usage"))
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                        Text(preset.usage)
+                            .font(DesignTokens.Typography.code)
+                            .foregroundColor(DesignTokens.Colors.accentBlue)
+                    }
+                }
+
+                Spacer()
+
+                // Expand/collapse button if has subcommands
+                if !preset.subcommands.isEmpty {
+                    Button(action: { withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() } }) {
+                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 12))
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    // Lock icon to indicate read-only
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(DesignTokens.Colors.textSecondary.opacity(0.5))
+                }
+            }
+            .padding(DesignTokens.Spacing.md)
+
+            // Subcommands section (expandable)
+            if isExpanded && !preset.subcommands.isEmpty {
+                Divider()
+                    .padding(.horizontal, DesignTokens.Spacing.md)
+
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                    Text(L("settings.routing.subcommands"))
+                        .font(DesignTokens.Typography.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                    ForEach(preset.subcommands, id: \.name) { subcommand in
+                        HStack(spacing: DesignTokens.Spacing.sm) {
+                            // Subcommand name
+                            Text(subcommand.name)
+                                .font(DesignTokens.Typography.code)
+                                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                            // Status indicator
+                            if subcommand.isImplemented {
+                                Circle()
+                                    .fill(DesignTokens.Colors.success)
+                                    .frame(width: 6, height: 6)
+                            } else {
+                                Circle()
+                                    .fill(DesignTokens.Colors.textSecondary.opacity(0.5))
+                                    .frame(width: 6, height: 6)
+                            }
+
+                            // Description
+                            Text(L(subcommand.descriptionKey))
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                            Spacer()
+                        }
+                    }
+                }
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .padding(.bottom, DesignTokens.Spacing.md)
+                .padding(.leading, 36 + DesignTokens.Spacing.md) // Align with command text
+            }
+        }
+        .background(DesignTokens.Colors.cardBackground.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
     }
 }
 
@@ -481,7 +750,7 @@ struct RuleCard: View {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                 // Pattern
                 HStack(spacing: DesignTokens.Spacing.xs) {
-                    Text(LocalizedStringKey("settings.routing.pattern"))
+                    Text(L("settings.routing.pattern"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                     Text(rule.regex)
@@ -491,7 +760,7 @@ struct RuleCard: View {
 
                 // Provider
                 HStack(spacing: DesignTokens.Spacing.xs) {
-                    Text(LocalizedStringKey("settings.routing.provider"))
+                    Text(L("settings.routing.provider"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
 
@@ -508,7 +777,7 @@ struct RuleCard: View {
                         Text(rule.provider)
                             .font(DesignTokens.Typography.body)
                             .foregroundColor(DesignTokens.Colors.warning)
-                        Text(LocalizedStringKey("settings.routing.not_configured"))
+                        Text(L("settings.routing.not_configured"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.warning)
                     }
@@ -517,7 +786,7 @@ struct RuleCard: View {
                 // System prompt preview (if exists)
                 if let prompt = rule.systemPrompt, !prompt.isEmpty {
                     HStack(spacing: DesignTokens.Spacing.xs) {
-                        Text(LocalizedStringKey("settings.routing.prompt"))
+                        Text(L("settings.routing.prompt"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                         Text(prompt.prefix(50) + (prompt.count > 50 ? "..." : ""))
@@ -538,7 +807,7 @@ struct RuleCard: View {
                         .font(DesignTokens.Typography.body)
                 }
                 .buttonStyle(.plain)
-                .help(LocalizedStringKey("settings.routing.edit_rule_help"))
+                .help(L("settings.routing.edit_rule_help"))
 
                 Button(action: onDelete) {
                     Image(systemName: "trash")
@@ -546,7 +815,7 @@ struct RuleCard: View {
                         .font(DesignTokens.Typography.body)
                 }
                 .buttonStyle(.plain)
-                .help(LocalizedStringKey("settings.routing.delete_rule_help"))
+                .help(L("settings.routing.delete_rule_help"))
             }
         }
         .padding(DesignTokens.Spacing.md)

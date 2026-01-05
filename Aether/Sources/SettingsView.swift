@@ -49,42 +49,42 @@ struct GeneralSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Form {
-                    Section(header: Text(LocalizedStringKey("settings.general.sound"))) {
-                        Toggle(LocalizedStringKey("settings.general.sound_effects"), isOn: $soundEnabled)
+                    Section(header: Text(L("settings.general.sound"))) {
+                        Toggle(L("settings.general.sound_effects"), isOn: $soundEnabled)
                             .onChange(of: soundEnabled) { _, newValue in
-                                showComingSoonAlert(feature: NSLocalizedString("settings.general.sound_effects", comment: "Sound effects feature"))
+                                showComingSoonAlert(feature: L("settings.general.sound_effects"))
                             }
                     }
 
-                    Section(header: Text(LocalizedStringKey("settings.general.language"))) {
-                        Picker(LocalizedStringKey("settings.general.language_preference"), selection: $selectedLanguage) {
-                            Text(LocalizedStringKey("settings.general.language_system_default")).tag(nil as String?)
+                    Section(header: Text(L("settings.general.language"))) {
+                        Picker(L("settings.general.language_preference"), selection: $selectedLanguage) {
+                            Text(L("settings.general.language_system_default")).tag(nil as String?)
                             Text("English").tag("en" as String?)
-                            Text("简体中文").tag("zh_CN" as String?)
+                            Text("简体中文").tag("zh-Hans" as String?)
                         }
                         .onChange(of: selectedLanguage) { oldValue, newValue in
                             saveLanguagePreference(newValue)
                         }
                     }
 
-                    Section(header: Text(LocalizedStringKey("settings.general.updates"))) {
-                        Button(LocalizedStringKey("settings.general.check_updates")) {
+                    Section(header: Text(L("settings.general.updates"))) {
+                        Button(L("settings.general.check_updates")) {
                             checkForUpdates()
                         }
-                        .help(NSLocalizedString("settings.general.check_updates_help", comment: ""))
+                        .help(L("settings.general.check_updates_help"))
                     }
 
-                    Section(header: Text(LocalizedStringKey("settings.general.logs"))) {
-                        Button(LocalizedStringKey("settings.general.view_logs")) {
+                    Section(header: Text(L("settings.general.logs"))) {
+                        Button(L("settings.general.view_logs")) {
                             showingLogViewer = true
                         }
-                        .help(NSLocalizedString("settings.general.view_logs_help", comment: ""))
+                        .help(L("settings.general.view_logs_help"))
                         .disabled(core == nil)
                     }
 
-                    Section(header: Text(LocalizedStringKey("settings.general.about"))) {
+                    Section(header: Text(L("settings.general.about"))) {
                         HStack {
-                            Text(LocalizedStringKey("settings.general.version"))
+                            Text(L("settings.general.version"))
                             Spacer()
                             Text(appVersion)
                                 .foregroundColor(.secondary)
@@ -119,19 +119,16 @@ struct GeneralSettingsView: View {
 
     private func showComingSoonAlert(feature: String) {
         let alert = NSAlert()
-        alert.messageText = NSLocalizedString("settings.general.coming_soon", comment: "Coming soon alert title")
-        alert.informativeText = String.localizedStringWithFormat(
-            NSLocalizedString("settings.general.coming_soon_message", comment: "Coming soon message"),
-            feature
-        )
+        alert.messageText = L("settings.general.coming_soon")
+        alert.informativeText = L("settings.general.coming_soon_message", feature)
         alert.alertStyle = .informational
-        alert.addButton(withTitle: NSLocalizedString("common.ok", comment: "OK button"))
+        alert.addButton(withTitle: L("common.ok"))
         alert.runModal()
     }
 
     private func checkForUpdates() {
         let alert = NSAlert()
-        alert.messageText = NSLocalizedString("settings.general.check_updates", comment: "Check updates alert title")
+        alert.messageText = L("settings.general.check_updates")
         alert.informativeText = """
         Current Version: \(appVersion)
 
@@ -141,7 +138,7 @@ struct GeneralSettingsView: View {
         Automatic updates will be available in a future release.
         """
         alert.alertStyle = .informational
-        alert.addButton(withTitle: NSLocalizedString("common.ok", comment: "OK button"))
+        alert.addButton(withTitle: L("common.ok"))
         alert.addButton(withTitle: "Visit GitHub")
 
         let response = alert.runModal()
@@ -180,21 +177,21 @@ struct GeneralSettingsView: View {
         } catch {
             print("Failed to save language preference: \(error)")
             let alert = NSAlert()
-            alert.messageText = NSLocalizedString("common.error", comment: "")
+            alert.messageText = L("common.error")
             alert.informativeText = "Failed to save language preference: \(error.localizedDescription)"
             alert.alertStyle = .warning
-            alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
+            alert.addButton(withTitle: L("common.ok"))
             alert.runModal()
         }
     }
 
     private func showRestartAlert() {
         let alert = NSAlert()
-        alert.messageText = NSLocalizedString("settings.general.language_restart_title", comment: "Restart required")
-        alert.informativeText = NSLocalizedString("settings.general.language_restart_message", comment: "Language will change after restart")
+        alert.messageText = L("settings.general.language_restart_title")
+        alert.informativeText = L("settings.general.language_restart_message")
         alert.alertStyle = .informational
-        alert.addButton(withTitle: NSLocalizedString("settings.general.language_restart_now", comment: "Restart Now"))
-        alert.addButton(withTitle: NSLocalizedString("settings.general.language_restart_later", comment: "Later"))
+        alert.addButton(withTitle: L("settings.general.language_restart_now"))
+        alert.addButton(withTitle: L("settings.general.language_restart_later"))
 
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
@@ -218,10 +215,10 @@ struct GeneralSettingsView: View {
                 // Show error alert if restart fails
                 DispatchQueue.main.async {
                     let errorAlert = NSAlert()
-                    errorAlert.messageText = NSLocalizedString("alert.restart.failed_title", comment: "Restart Failed")
-                    errorAlert.informativeText = String(format: NSLocalizedString("alert.restart.failed_message", comment: ""), error.localizedDescription)
+                    errorAlert.messageText = L("alert.restart.failed_title")
+                    errorAlert.informativeText = L("alert.restart.failed_message", error.localizedDescription)
                     errorAlert.alertStyle = .warning
-                    errorAlert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
+                    errorAlert.addButton(withTitle: L("common.ok"))
                     errorAlert.runModal()
                 }
             }

@@ -110,17 +110,59 @@ struct RootContentView: View {
         }
     }
 
+    // MARK: - Computed Properties
+
+    /// Current tab title for header display
+    private var currentTabTitle: String {
+        switch selectedTab {
+        case .general:
+            return L("settings.general.title")
+        case .providers:
+            return L("settings.providers.title")
+        case .routing:
+            return L("settings.routing.title")
+        case .shortcuts:
+            return L("settings.shortcuts.title")
+        case .behavior:
+            return L("settings.behavior.title")
+        case .memory:
+            return L("settings.memory.title")
+        case .search:
+            return L("settings.search.title")
+        }
+    }
+
+    /// Current tab description for header display
+    private var currentTabDescription: String {
+        switch selectedTab {
+        case .general:
+            return L("settings.general.description")
+        case .providers:
+            return L("settings.providers.description")
+        case .routing:
+            return L("settings.routing.description")
+        case .shortcuts:
+            return L("settings.shortcuts.description")
+        case .behavior:
+            return L("settings.behavior.description")
+        case .memory:
+            return L("settings.memory.description")
+        case .search:
+            return L("settings.search.description")
+        }
+    }
+
     // MARK: - View Builders
 
     /// Content area displaying the selected tab
     @ViewBuilder
     private var contentArea: some View {
         VStack(spacing: 0) {
-            // Header with Settings title and ThemeSwitcher (no background, bottom border only)
-            VStack(spacing: 0) {
+            // Header with dynamic title, description, and ThemeSwitcher
+            VStack(alignment: .leading, spacing: 0) {
                 HStack {
-                    // Settings title on the left
-                    Text("Settings")
+                    // Dynamic title on the left
+                    Text(currentTabTitle)
                         .font(.system(size: 20, weight: .semibold))
                         .foregroundColor(.primary)
                         .padding(.leading, DesignTokens.Spacing.lg)
@@ -135,6 +177,14 @@ struct RootContentView: View {
 
                 // Bottom border line
                 Divider()
+
+                // Tab description below the divider
+                Text(currentTabDescription)
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                    .padding(.horizontal, DesignTokens.Spacing.lg)
+                    .padding(.top, DesignTokens.Spacing.sm)
+                    .padding(.bottom, DesignTokens.Spacing.md)
             }
             .padding(.top, 0)  // Explicitly set to 0 to ensure no top spacing
 
@@ -440,14 +490,14 @@ struct RootContentView: View {
     @MainActor
     private func showUnsavedChangesDialog(action: String) -> Bool {
         let alert = NSAlert()
-        alert.messageText = NSLocalizedString("settings.unsaved_changes.title", comment: "Unsaved Changes")
-        alert.informativeText = String(format: NSLocalizedString("settings.unsaved_changes.message", comment: ""), action)
+        alert.messageText = L("settings.unsaved_changes.title")
+        alert.informativeText = L("settings.unsaved_changes.message", action)
         alert.alertStyle = .warning
 
         // Add buttons (order matters for return value)
-        alert.addButton(withTitle: NSLocalizedString("common.save", comment: "Save"))
-        alert.addButton(withTitle: NSLocalizedString("settings.unsaved_changes.discard", comment: "Discard"))
-        alert.addButton(withTitle: NSLocalizedString("common.cancel", comment: "Cancel"))
+        alert.addButton(withTitle: L("common.save"))
+        alert.addButton(withTitle: L("settings.unsaved_changes.discard"))
+        alert.addButton(withTitle: L("common.cancel"))
 
         let response = alert.runModal()
 
@@ -518,14 +568,14 @@ class SettingsWindowDelegate: NSObject, NSWindowDelegate {
 
         // Show confirmation dialog
         let alert = NSAlert()
-        alert.messageText = NSLocalizedString("settings.unsaved_changes.title", comment: "Unsaved Changes")
-        alert.informativeText = NSLocalizedString("settings.unsaved_changes.close_message", comment: "You have unsaved changes. Do you want to save them before closing?")
+        alert.messageText = L("settings.unsaved_changes.title")
+        alert.informativeText = L("settings.unsaved_changes.close_message")
         alert.alertStyle = .warning
 
         // Add buttons (order matters for return value)
-        alert.addButton(withTitle: NSLocalizedString("common.save", comment: "Save"))
-        alert.addButton(withTitle: NSLocalizedString("settings.unsaved_changes.discard", comment: "Discard"))
-        alert.addButton(withTitle: NSLocalizedString("common.cancel", comment: "Cancel"))
+        alert.addButton(withTitle: L("common.save"))
+        alert.addButton(withTitle: L("settings.unsaved_changes.discard"))
+        alert.addButton(withTitle: L("common.cancel"))
 
         let response = alert.runModal()
 

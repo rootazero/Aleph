@@ -83,7 +83,7 @@ struct ProviderCard: View {
                                 )
                         }
                         .buttonStyle(.plain)
-                        .help(NSLocalizedString("common.test_connection", comment: "Test Connection"))
+                        .help(L("common.test_connection"))
                     }
                 }
 

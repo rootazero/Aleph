@@ -2,7 +2,8 @@
   Localizable.strings (Simplified Chinese)
   Aether
 
-  简体中文本地化字符串
+  简体中文本地化字符串。
+  所有 UI 文本应通过 NSLocalizedString() 或 LocalizedStringKey 使用这些键。
 */
 
 // MARK: - Common UI Elements
@@ -30,13 +31,14 @@
 
 // MARK: - Settings Window - General Tab
 "settings.general.title" = "通用";
+"settings.general.description" = "配置应用程序通用设置，包括声音、语言和更新。";
 "settings.general.sound" = "声音";
-"settings.general.sound_effects" = "声音效果";
+"settings.general.sound_effects" = "音效";
 "settings.general.language" = "语言";
 "settings.general.language_preference" = "首选语言";
-"settings.general.language_system_default" = "系统默认";
+"settings.general.language_system_default" = "跟随系统";
 "settings.general.language_restart_title" = "需要重启";
-"settings.general.language_restart_message" = "语言将在重启 Aether 后生效。是否立即重启？";
+"settings.general.language_restart_message" = "语言将在重启 Aether 后更改。是否立即重启？";
 "settings.general.language_restart_now" = "立即重启";
 "settings.general.language_restart_later" = "稍后";
 "settings.general.updates" = "更新";
@@ -48,22 +50,23 @@
 "settings.general.about" = "关于";
 "settings.general.version" = "版本：";
 "settings.general.coming_soon" = "即将推出";
-"settings.general.coming_soon_message" = "%@ 将在未来的更新中提供。";
+"settings.general.coming_soon_message" = "%@ 将在未来的更新中推出。";
 
-// MARK: - Settings Window - Unified Save Bar (统一保存栏)
-"settings.save_bar.all_changes_saved" = "所有设置已保存";
-"settings.save_bar.changes_unsaved" = "设置未保存";
+// MARK: - Settings Window - Unified Save Bar (NEW)
+"settings.save_bar.all_changes_saved" = "所有更改已保存";
+"settings.save_bar.changes_unsaved" = "更改未保存";
 
 // MARK: - Settings Window - Providers Tab
 "settings.providers.title" = "提供商";
+"settings.providers.description" = "配置 AI 提供商、API 密钥和模型参数，用于请求路由。";
 "settings.providers.search_placeholder" = "搜索提供商...";
 "settings.providers.add_custom" = "添加自定义提供商";
 "settings.providers.preset_providers" = "预设提供商";
-"settings.providers.configured_providers" = "已配置提供商";
+"settings.providers.configured_providers" = "已配置的提供商";
 "settings.providers.no_results" = "未找到提供商";
-"settings.providers.status.default_tooltip" = "默认供应商（当路由规则都不匹配时使用）";
-"settings.providers.status.active_tooltip" = "已激活的供应商";
-"settings.providers.status.inactive_tooltip" = "未激活的供应商";
+"settings.providers.status.default_tooltip" = "默认提供商（当没有路由规则匹配时使用）";
+"settings.providers.status.active_tooltip" = "活跃的提供商";
+"settings.providers.status.inactive_tooltip" = "未激活的提供商";
 
 // MARK: - Provider Configuration
 "provider.field.active" = "启用";
@@ -113,7 +116,7 @@
 "provider.custom_api_endpoint" = "OpenAI 兼容 API：%@";
 "provider.custom_compatible" = "自定义 OpenAI 兼容提供商";
 
-// MARK: - Provider Default Selection (默认供应商选择)
+// MARK: - Provider Default Selection (NEW for default provider management)
 "provider.badge.default" = "默认";
 "provider.action.set_default" = "设为默认";
 "provider.status.is_default" = "这是默认提供商";
@@ -138,7 +141,7 @@
 
 // MARK: - Settings Window - Routing Tab
 "settings.routing.title" = "路由规则";
-"settings.routing.description" = "定义剪贴板内容如何基于模式路由到 AI 提供商。";
+"settings.routing.description" = "定义如何根据模式将剪贴板内容路由到 AI 提供商。";
 "settings.routing.add_rule" = "添加规则";
 "settings.routing.edit_rule" = "编辑规则";
 "settings.routing.delete_rule" = "删除规则";
@@ -148,42 +151,42 @@
 "settings.routing.loading" = "加载规则中...";
 "settings.routing.no_rules" = "未配置路由规则";
 "settings.routing.no_rules_message" = "添加您的第一条规则以开始路由剪贴板内容";
-"settings.routing.footer_info" = "规则从上到下评估。拖动以重新排序优先级。";
+"settings.routing.footer_info" = "规则从上到下依次评估。拖动可重新排列优先级。";
 "settings.routing.delete_rule_message" = "您确定要删除模式为「%@」的规则吗？";
 "settings.routing.pattern" = "模式：";
 "settings.routing.provider" = "提供商：";
-"settings.routing.prompt" = "提示：";
+"settings.routing.prompt" = "提示词：";
 "settings.routing.not_configured" = "（未配置）";
 "settings.routing.edit_rule_help" = "编辑规则";
 "settings.routing.delete_rule_help" = "删除规则";
-"settings.routing.default_provider_hint" = "当所有规则都不匹配时，将使用默认供应商：";
-"settings.routing.no_default_provider_hint" = "未设置默认供应商。请在「供应商」标签页中设置默认供应商。";
+"settings.routing.default_provider_hint" = "当没有规则匹配时，将使用默认提供商：";
+"settings.routing.no_default_provider_hint" = "未设置默认提供商。请在提供商标签页中设置默认提供商。";
 
 // MARK: - Settings Window - Shortcuts Tab
-"settings.shortcuts.title" = "键盘快捷键";
-"settings.shortcuts.description" = "配置 Aether 的全局键盘快捷键。";
-"settings.shortcuts.global_hotkey" = "全局快捷键";
+"settings.shortcuts.title" = "快捷键";
+"settings.shortcuts.description" = "配置 Aether 的全局快捷键。";
+"settings.shortcuts.global_hotkey" = "全局热键";
 "settings.shortcuts.summon_label" = "召唤 Aether：";
-"settings.shortcuts.cancel_hotkey" = "取消快捷键";
-"settings.shortcuts.record_instruction" = "按任意组合键进行录制...";
-"settings.shortcuts.press_escape" = "按 Escape 键取消";
-"settings.shortcuts.reset_button" = "重置为默认";
+"settings.shortcuts.cancel_hotkey" = "取消热键";
+"settings.shortcuts.record_instruction" = "按任意组合键来录制...";
+"settings.shortcuts.press_escape" = "按 Escape 取消";
+"settings.shortcuts.reset_button" = "恢复默认";
 "settings.shortcuts.preset_button" = "选择预设...";
 "settings.shortcuts.saved" = "已保存！";
 "settings.shortcuts.permission_required" = "需要权限";
-"settings.shortcuts.permission_description" = "Aether 需要**辅助功能**权限来检测全局快捷键。";
+"settings.shortcuts.permission_description" = "Aether 需要**辅助功能**权限来检测全局热键。";
 "settings.shortcuts.why_needed" = "为什么需要此权限：";
-"settings.shortcuts.permission_detect" = "在任何应用中检测双击Shift快捷键（默认）";
+"settings.shortcuts.permission_detect" = "在任意应用中检测双击 Shift 热键（默认）";
 "settings.shortcuts.permission_read" = "读取剪贴板内容";
-"settings.shortcuts.permission_simulate" = "模拟键盘输入以进行粘贴";
+"settings.shortcuts.permission_simulate" = "模拟键盘输入进行粘贴";
 "settings.shortcuts.open_settings_button" = "打开系统设置";
 "settings.shortcuts.preset_sheet_title" = "选择预设快捷键";
-"settings.shortcuts.preset_sheet_description" = "选择常用的键盘快捷键组合：";
-"settings.shortcuts.use_this_button" = "使用此快捷键";
-"settings.shortcuts.current_hotkey" = "当前热键：";
-"settings.shortcuts.double_tap_shift_description" = "快速按两次 Shift 键召唤 Aether。这是推荐的方式，可以避免输入法冲突。";
-"settings.shortcuts.double_tap_description" = "双击指定的键召唤 Aether。此方法可绕过输入法拦截。";
-"settings.shortcuts.modifier_combo_description" = "使用修饰键组合来召唤 Aether。请确保不与系统或应用程序快捷键冲突。";
+"settings.shortcuts.preset_sheet_description" = "选择一个常用的快捷键组合：";
+"settings.shortcuts.use_this_button" = "使用此项";
+"settings.shortcuts.current_hotkey" = "当前：";
+"settings.shortcuts.double_tap_shift_description" = "快速按两次 Shift 键来召唤 Aether。这是推荐的方式，可以避免输入法冲突。";
+"settings.shortcuts.double_tap_description" = "双击指定的键来召唤 Aether。此方法可绕过输入法拦截。";
+"settings.shortcuts.modifier_combo_description" = "使用修饰键组合其他键来召唤 Aether。请确保不与系统或应用程序快捷键冲突。";
 "settings.shortcuts.reset_default" = "恢复默认";
 "settings.shortcuts.custom_hotkey" = "自定义热键";
 "settings.shortcuts.presets" = "预设快捷键";
@@ -193,19 +196,19 @@
 "settings.shortcuts.preset_option_space" = "Option + 空格（可能与输入法冲突）";
 "settings.shortcuts.preset_control_command_a" = "Control + Command + A";
 "settings.shortcuts.use_this" = "使用";
-"settings.shortcuts.conflict_spotlight" = "可能与聚焦搜索冲突（⌘+空格）";
+"settings.shortcuts.conflict_spotlight" = "可能与 Spotlight（⌘+空格）冲突";
 "settings.shortcuts.conflict_input_method" = "可能与某些输入法冲突";
-"settings.shortcuts.conflict_input_switch" = "可能与输入法切换冲突（⌃+空格）";
+"settings.shortcuts.conflict_input_switch" = "可能与输入法切换（⌃+空格）冲突";
 "settings.shortcuts.custom_hotkey_title" = "自定义热键";
 "settings.shortcuts.custom_hotkey_instruction" = "按下您想要的组合键。必须包含至少一个修饰键（⌘⌥⇧⌃）。";
-"settings.shortcuts.recording_prompt" = "请按下组合键...";
+"settings.shortcuts.recording_prompt" = "按下组合键...";
 "settings.shortcuts.start_recording_hint" = "点击下方按钮开始录制";
 "settings.shortcuts.stop_recording" = "停止录制";
 "settings.shortcuts.start_recording" = "开始录制";
 "settings.shortcuts.apply_hotkey" = "应用此热键";
 "settings.shortcuts.error_requires_modifier" = "必须包含至少一个修饰键（⌘⌥⇧⌃）";
 
-// MARK: - 热键显示
+// MARK: - Hotkey Display
 "hotkey.double_tap_shift" = "双击 Shift";
 "hotkey.double_tap_key" = "双击 %@";
 
@@ -245,14 +248,14 @@
 "settings.behavior.pii_example_ssn" = "例如：123-45-6789";
 "settings.behavior.pii_example_credit_card" = "例如：1234-5678-9012-3456";
 
-// MARK: - Settings Window - Search Tab (搜索设置)
-"settings.search.title" = "搜索";
+// MARK: - Settings Window - Search Tab
+"settings.search.title" = "搜索引擎";
 "settings.search.description" = "配置用于 AI 增强信息检索的网络搜索提供商。";
 "settings.search.providers" = "搜索提供商";
 "settings.search.providers_description" = "为每个搜索提供商配置 API 凭据。点击提供商卡片展开配置。";
 "settings.search.pii_scrubbing" = "隐私保护";
 "settings.search.pii_scrubbing_enable" = "启用 PII 清理";
-"settings.search.pii_scrubbing_description" = "在发送到外部服务之前，自动从搜索查询中删除个人身份信息。";
+"settings.search.pii_scrubbing_description" = "在发送到外部服务之前自动从搜索查询中删除个人身份信息。";
 "settings.search.pii_types_label" = "选择要清理的 PII 类型：";
 "settings.search.pii_type_email" = "电子邮件地址";
 "settings.search.pii_example_email" = "例如：user@example.com";
@@ -282,12 +285,12 @@
 "settings.memory.retention_1year" = "1 年";
 "settings.memory.retention_never" = "永不删除";
 "settings.memory.retention_help" = "自动删除超过所选时间的记忆";
-"settings.memory.max_context_items" = "最大上下文条目数：";
-"settings.memory.max_context_help" = "要检索的过去交互数量";
+"settings.memory.max_context_items" = "最大上下文条目：";
+"settings.memory.max_context_help" = "检索过去交互的数量";
 "settings.memory.similarity_threshold" = "相似度阈值：";
-"settings.memory.similarity_help" = "包含记忆的最小相似度分数";
+"settings.memory.similarity_help" = "包含记忆的最低相似度分数";
 "settings.memory.statistics" = "统计信息";
-"settings.memory.total_memories" = "总记忆数：";
+"settings.memory.total_memories" = "记忆总数：";
 "settings.memory.total_apps" = "应用总数：";
 "settings.memory.database_size" = "数据库大小：";
 "settings.memory.date_range" = "日期范围：";
@@ -296,10 +299,10 @@
 "settings.memory.filter" = "筛选：";
 "settings.memory.all_apps" = "所有应用";
 "settings.memory.refresh" = "刷新";
-"settings.memory.clear_all_button" = "全部清除";
+"settings.memory.clear_all_button" = "清除全部";
 "settings.memory.loading_memories" = "加载记忆中...";
-"settings.memory.no_memories" = "尚未存储记忆";
-"settings.memory.no_memories_message" = "启用记忆后使用 Aether，记忆将显示在此处。";
+"settings.memory.no_memories" = "尚无存储的记忆";
+"settings.memory.no_memories_message" = "启用记忆功能后使用 Aether，记忆将显示在此处。";
 "settings.memory.delete_memory" = "删除记忆";
 "settings.memory.delete_memory_message" = "您确定要删除此记忆吗？此操作无法撤销。";
 "settings.memory.delete_memory_help" = "删除此记忆";
@@ -308,17 +311,17 @@
 "settings.memory.user_prefix" = "用户：%@";
 "settings.memory.ai_prefix" = "AI：%@";
 "settings.memory.show_more" = "显示更多";
-"settings.memory.show_less" = "显示更少";
+"settings.memory.show_less" = "收起";
 
 // MARK: - Menu Bar
 "menu.settings" = "设置...";
 "menu.quit" = "退出 Aether";
 "menu.about" = "关于 Aether";
-"menu.default_provider" = "默认供应商";
+"menu.default_provider" = "默认提供商";
 "menu.input_mode" = "输入模式";
-"menu.no_providers" = "无可用供应商";
+"menu.no_providers" = "无可用提供商";
 
-// Menu Bar - Default Provider Quick Switch (菜单栏默认供应商快速切换)
+// Menu Bar - Default Provider Quick Switch (NEW for default provider management)
 "menu.providers.section_title" = "默认提供商";
 "menu.providers.switch_to" = "切换到 %@";
 "menu.providers.error.failed_to_set" = "设置默认提供商失败";
@@ -330,7 +333,7 @@
 "permission.input_monitoring.title" = "需要输入监控权限";
 "permission.input_monitoring.description" = "Aether 需要输入监控权限来捕获键盘事件。";
 "permission.open_settings" = "打开系统设置";
-"permission.grant_instruction" = "请在系统设置中授予权限,然后返回此应用。";
+"permission.grant_instruction" = "请在系统设置中授予权限，然后返回此应用。";
 "permission.button.later" = "稍后设置";
 "permission.instruction.step1" = "点击下方「打开系统设置」按钮";
 "permission.instruction.step2" = "找到「隐私与安全性」→「辅助功能」";
@@ -338,12 +341,12 @@
 "permission.instruction.step4" = "返回 Aether，热键将自动生效";
 
 // MARK: - Permission Gate View
-"permission.gate.step1_title" = "步骤 1/2: 辅助功能权限";
-"permission.gate.step2_title" = "步骤 2/2: 输入监控权限";
+"permission.gate.step1_title" = "步骤 1/2：辅助功能权限";
+"permission.gate.step2_title" = "步骤 2/2：输入监控权限";
 "permission.gate.accessibility_short" = "辅助功能";
 "permission.gate.input_monitoring_short" = "输入监控";
 "permission.gate.accessibility_description" = "Aether 需要辅助功能权限来捕获窗口上下文和模拟键盘输入，以便将 AI 响应粘贴到您的应用程序中。";
-"permission.gate.input_monitoring_description" = "Aether 需要输入监控权限来检测全局热键（默认: ` 键），让您可以在任何应用中快速召唤 AI 助手。\n\n⚠️ 重要提示：授予此权限后，macOS 系统会弹出重启提示，请点击「重新打开」按钮。";
+"permission.gate.input_monitoring_description" = "Aether 需要输入监控权限来检测全局热键（默认：` 键），让您可以在任何应用中快速召唤 AI 助手。\n\n⚠️ 重要提示：授予此权限后，macOS 系统会弹出重启提示，请点击「重新打开」按钮。";
 "permission.gate.status_granted" = "已授权 ✓";
 "permission.gate.status_waiting" = "等待授权...";
 "permission.gate.button.continue" = "继续";
@@ -365,7 +368,7 @@
 "error.no_text_in_window.suggestion" = "请先打开一个文本文档";
 "error.core_not_initialized" = "核心未初始化";
 "error.core_not_initialized.suggestion" = "请重启应用";
-"error.check_connection" = "请检查网络连接和API配置";
+"error.check_connection" = "请检查网络连接和 API 配置";
 
 // MARK: - Alerts
 "alert.confirm_delete" = "您确定要删除此项吗？";
@@ -409,7 +412,7 @@
 "alert.context.accessibility_message" = "Aether 需要辅助功能权限以捕获窗口上下文用于记忆功能。\n\n请在以下位置授予权限：\n系统设置 → 隐私与安全性 → 辅助功能";
 "alert.context.open_settings" = "打开设置";
 
-// MARK: - 重启提醒
+// MARK: - Restart Alerts
 "alert.restart.failed_title" = "应用重启失败";
 "alert.restart.failed_message" = "在授予权限后 Aether 无法自动重启。\n\n错误：%@\n\n请从应用程序文件夹手动重新启动 Aether。";
 
@@ -421,15 +424,45 @@
 "halo.state.error" = "错误";
 
 // MARK: - Settings Window - Unsaved Changes
-"settings.unsaved_changes.title" = "未保存的修改";
-"settings.unsaved_changes.message" = "你有未保存的修改。是否在离开前保存？";
+"settings.unsaved_changes.title" = "未保存的更改";
+"settings.unsaved_changes.message" = "您有未保存的更改。离开前是否要保存它们？";
 "settings.unsaved_changes.save" = "保存";
 "settings.unsaved_changes.dont_save" = "不保存";
-"settings.unsaved_changes.discard" = "放弃修改";
-"settings.unsaved_changes.close_title" = "未保存的修改";
-"settings.unsaved_changes.close_message" = "你有未保存的修改。是否在关闭前保存？";
+"settings.unsaved_changes.discard" = "放弃";
+"settings.unsaved_changes.close_title" = "未保存的更改";
+"settings.unsaved_changes.close_message" = "您有未保存的更改。关闭前是否要保存它们？";
 
 // MARK: - Halo Input Mode Selection
 "halo.input_mode.title" = "选择模式";
 "halo.input_mode.replace" = "替换";
 "halo.input_mode.append" = "追加";
+
+// MARK: - Routing View - Preset Rules
+"settings.routing.preset_commands" = "预设规则";
+"settings.routing.preset_commands_subtitle" = "Aether 内置的系统规则，无法编辑或删除。";
+"settings.routing.preset_badge" = "系统";
+"settings.routing.implemented" = "可用";
+"settings.routing.coming_soon" = "即将推出";
+
+// MARK: - Routing View - Custom Rules
+"settings.routing.custom_rules" = "自定义规则";
+"settings.routing.custom_rules_subtitle" = "用户定义的路由规则。拖动可重新排列优先级（优先级高的规则先评估）。";
+"settings.routing.no_custom_rules" = "无自定义规则";
+"settings.routing.no_custom_rules_message" = "点击上方「添加规则」来创建自定义路由模式。";
+
+// MARK: - Preset Rule Descriptions and Usage
+"settings.routing.usage" = "用法：";
+"settings.routing.subcommands" = "子命令";
+
+"settings.routing.preset.search.description" = "网络搜索功能 - 使用搜索引擎查找最新信息";
+"settings.routing.preset.search.usage" = "/search <查询内容>";
+
+"settings.routing.preset.mcp.description" = "模型上下文协议集成 - 连接到外部工具和服务";
+"settings.routing.preset.mcp.usage" = "/mcp <工具名> [参数]";
+"settings.routing.preset.mcp.sub.list" = "列出可用的 MCP 工具";
+"settings.routing.preset.mcp.sub.tool" = "执行指定的 MCP 工具";
+
+"settings.routing.preset.skills.description" = "Claude Code 技能 - 执行自定义工作流和自动化";
+"settings.routing.preset.skills.usage" = "/skill <技能名>";
+"settings.routing.preset.skills.sub.list" = "列出可用的技能";
+"settings.routing.preset.skills.sub.skill" = "执行指定的技能";

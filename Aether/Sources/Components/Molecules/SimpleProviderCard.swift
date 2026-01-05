@@ -96,13 +96,13 @@ struct SimpleProviderCard: View {
     }
 
     /// Tooltip text for status indicator
-    private var statusIndicatorTooltip: LocalizedStringKey {
+    private var statusIndicatorTooltip: String {
         if isDefault && isConfigured {
-            return "settings.providers.status.default_tooltip"
+            return L("settings.providers.status.default_tooltip")
         } else if isConfigured && isActive {
-            return "settings.providers.status.active_tooltip"
+            return L("settings.providers.status.active_tooltip")
         } else {
-            return "settings.providers.status.inactive_tooltip"
+            return L("settings.providers.status.inactive_tooltip")
         }
     }
 

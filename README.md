@@ -69,7 +69,7 @@ Aether acts as an invisible "ether" connecting your intent with AI models throug
 
 - **Supported Languages**:
   - 🇬🇧 English (en) - Base language
-  - 🇨🇳 Simplified Chinese (zh_CN) - 简体中文 (100% translated, 249 keys)
+  - 🇨🇳 Simplified Chinese (zh-Hans) - 简体中文 (100% translated, 249 keys)
 - **System Language Detection**: Automatically follows your macOS system language
 - **Graceful Fallback**: Unsupported languages fallback to English
 - **Complete Coverage**: All UI text, error messages, alerts, and system prompts localized

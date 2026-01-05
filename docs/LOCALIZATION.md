@@ -6,7 +6,7 @@ This guide explains how Aether implements internationalization (i18n) and how co
 
 Aether uses Apple's native localization infrastructure to support multiple languages:
 - **Base Language**: English (`en.lproj/`)
-- **Supported Languages**: Simplified Chinese (`zh_CN.lproj/`)
+- **Supported Languages**: Simplified Chinese (`zh-Hans.lproj/`)
 
 ## Architecture
 
@@ -17,7 +17,7 @@ Aether/Resources/
 ├── en.lproj/                       # English (base)
 │   ├── Localizable.strings        # UI text
 │   └── InfoPlist.strings          # App metadata & permissions
-└── zh_CN.lproj/                    # Simplified Chinese
+└── zh-Hans.lproj/                    # Simplified Chinese
     ├── Localizable.strings
     └── InfoPlist.strings
 ```
@@ -77,9 +77,10 @@ mkdir -p Aether/Resources/<lang-code>.lproj
 
 **Common Language Codes:**
 - `en` - English
-- `zh_CN` - Simplified Chinese (China)
-- `zh_TW` - Traditional Chinese (Taiwan)
-- `zh_HK` - Traditional Chinese (Hong Kong)
+- `zh-Hans` - Simplified Chinese
+- `zh-Hant` - Traditional Chinese
+- `zh-Hant-TW` - Traditional Chinese (Taiwan)
+- `zh-Hant-HK` - Traditional Chinese (Hong Kong)
 - `ja` - Japanese
 - `ko` - Korean
 - `de` - German
@@ -125,7 +126,7 @@ info:
   properties:
     CFBundleLocalizations:
       - en
-      - zh_CN
+      - zh-Hans
       - <lang-code>  # Add your language code
 ```
 
@@ -201,7 +202,7 @@ chmod +x .git/hooks/pre-commit
 
 ```bash
 # Launch with Simplified Chinese
-open -a Aether --args -AppleLanguages '(zh_CN)'
+open -a Aether --args -AppleLanguages '(zh-Hans)'
 
 # Launch with Japanese
 open -a Aether --args -AppleLanguages '(ja)'
@@ -304,7 +305,7 @@ cp Aether/Resources/en.lproj/*.strings Aether/Resources/ja.lproj/
 # ...
 
 # 4. Update project.yml
-# CFBundleLocalizations: [en, zh_CN, ja]
+# CFBundleLocalizations: [en, zh-Hans, ja]
 
 # 5. Regenerate project
 xcodegen generate
@@ -334,7 +335,7 @@ Aether uses a three-tier approach to determine the UI language:
    - On first launch or when "System Default" is selected
    - Detects macOS system language from `Locale.preferredLanguages`
    - Maps system language to supported language:
-     - **Chinese variants** (`zh_CN`, `zh_TW`, `zh_HK`, `zh`, etc.) → `zh_CN`
+     - **Chinese variants** (`zh-Hans`, `zh-Hant`, `zh-Hant-TW`, `zh-Hant-HK`) → `zh-Hans`
      - **All other languages** (including unsupported) → `en` (English)
 
 3. **Fallback to English** (Lowest Priority)
@@ -351,7 +352,7 @@ Aether uses a three-tier approach to determine the UI language:
 
 3. **Behavior**:
    - Language preference is saved to `~/.config/aether/config.toml` under `[general]` section
-   - Format: `language = "en"` or `language = "zh_CN"`
+   - Format: `language = "en"` or `language = "zh-Hans"`
    - If "System Default" is selected, the language field is omitted from config
    - Language changes require app restart to take effect (macOS localization caching)
 
@@ -374,9 +375,9 @@ On first installation:
 - **Applied On**: App launch in `AppDelegate.applicationDidFinishLaunching()`
 - **System Detection**: Uses `Locale.preferredLanguages.first` to detect system language
 - **Language Mapping**:
-  - `zh_CN`, `zh_TW`, `zh_HK`, `zh` → `zh_CN`
+  - `zh-Hans`, `zh-Hant`, `zh-Hant-TW`, `zh-Hant-HK` → `zh-Hans`
   - All other languages → `en`
-- **Validation**: Rust core logs warning for invalid codes (accepts `"en"` and `"zh_CN"`)
+- **Validation**: Rust core logs warning for invalid codes (accepts `"en"` and `"zh-Hans"`)
 
 ### Testing Language Changes
 
@@ -384,11 +385,11 @@ On first installation:
 2. **Via Config**: Edit `~/.config/aether/config.toml`:
    ```toml
    [general]
-   language = "zh_CN"  # or "en"
+   language = "zh-Hans"  # or "en"
    ```
 3. **Via Command Line** (deprecated, use UI instead):
    ```bash
-   open -a Aether --args -AppleLanguages '(zh_CN)'
+   open -a Aether --args -AppleLanguages '(zh-Hans)'
    ```
 
 ---

@@ -31,7 +31,6 @@
 
 // MARK: - Settings Window - General Tab
 "settings.general.title" = "General";
-"settings.general.description" = "Configure general application settings including sound, language, and updates.";
 "settings.general.sound" = "Sound";
 "settings.general.sound_effects" = "Sound Effects";
 "settings.general.language" = "Language";
@@ -58,7 +57,6 @@
 
 // MARK: - Settings Window - Providers Tab
 "settings.providers.title" = "Providers";
-"settings.providers.description" = "Configure AI providers, API keys, and model parameters for routing.";
 "settings.providers.search_placeholder" = "Search providers...";
 "settings.providers.add_custom" = "Add Custom Provider";
 "settings.providers.preset_providers" = "Preset Providers";
@@ -437,9 +435,9 @@
 "halo.input_mode.replace" = "Replace";
 "halo.input_mode.append" = "Append";
 
-// MARK: - Routing View - Preset Rules
-"settings.routing.preset_commands" = "Preset Rules";
-"settings.routing.preset_commands_subtitle" = "Built-in system rules provided by Aether. Cannot be edited or deleted.";
+// MARK: - Routing View - Preset Commands
+"settings.routing.preset_commands" = "System Preset Commands";
+"settings.routing.preset_commands_subtitle" = "Built-in commands provided by Aether. These commands cannot be edited or deleted.";
 "settings.routing.preset_badge" = "System";
 "settings.routing.implemented" = "Available";
 "settings.routing.coming_soon" = "Coming Soon";
@@ -450,19 +448,7 @@
 "settings.routing.no_custom_rules" = "No Custom Rules";
 "settings.routing.no_custom_rules_message" = "Click 'Add Rule' above to create custom routing patterns.";
 
-// MARK: - Preset Rule Descriptions and Usage
-"settings.routing.usage" = "Usage:";
-"settings.routing.subcommands" = "Subcommands";
-
+// MARK: - Preset Command Descriptions
 "settings.routing.preset.search.description" = "Web search capability - Use search engines to find up-to-date information";
-"settings.routing.preset.search.usage" = "/search <query>";
-
 "settings.routing.preset.mcp.description" = "Model Context Protocol integration - Connect to external tools and services";
-"settings.routing.preset.mcp.usage" = "/mcp <tool> [params]";
-"settings.routing.preset.mcp.sub.list" = "List available MCP tools";
-"settings.routing.preset.mcp.sub.tool" = "Execute specific MCP tool";
-
 "settings.routing.preset.skills.description" = "Claude Code Skills - Execute custom workflows and automations";
-"settings.routing.preset.skills.usage" = "/skill <name>";
-"settings.routing.preset.skills.sub.list" = "List available skills";
-"settings.routing.preset.skills.sub.skill" = "Execute specific skill";

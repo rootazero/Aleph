@@ -314,7 +314,7 @@ struct InputModeSelectionView: View {
     var body: some View {
         VStack(spacing: 12) {
             // Title
-            Text(NSLocalizedString("halo.input_mode.title", comment: "Select mode"))
+            Text(L("halo.input_mode.title"))
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.secondary)
 
@@ -323,7 +323,7 @@ struct InputModeSelectionView: View {
                 // Replace button
                 InputModeButton(
                     icon: "scissors",
-                    label: NSLocalizedString("halo.input_mode.replace", comment: "Replace"),
+                    label: L("halo.input_mode.replace"),
                     isHovered: hoveredButton == .replace,
                     color: .orange
                 ) {
@@ -336,7 +336,7 @@ struct InputModeSelectionView: View {
                 // Append button
                 InputModeButton(
                     icon: "text.append",
-                    label: NSLocalizedString("halo.input_mode.append", comment: "Append"),
+                    label: L("halo.input_mode.append"),
                     isHovered: hoveredButton == .append,
                     color: .blue
                 ) {

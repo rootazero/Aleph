@@ -61,24 +61,24 @@ struct LogViewerView: View {
                 Button(action: exportLogs) {
                     Label("Export", systemImage: "square.and.arrow.up")
                 }
-                .help(NSLocalizedString("logs.help.export", comment: ""))
+                .help(L("logs.help.export"))
 
                 Button(action: { showingClearConfirmation = true }) {
                     Label("Clear", systemImage: "trash")
                 }
-                .help(NSLocalizedString("logs.help.clear", comment: ""))
+                .help(L("logs.help.clear"))
 
                 Button(action: loadLogs) {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
-                .help(NSLocalizedString("logs.help.reload", comment: ""))
+                .help(L("logs.help.reload"))
 
                 Button(action: { dismiss() }) {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
-                .help(NSLocalizedString("logs.help.close", comment: ""))
+                .help(L("logs.help.close"))
             }
             .padding()
             .background(Color(NSColor.controlBackgroundColor))
@@ -142,13 +142,13 @@ struct LogViewerView: View {
             loadLogs()
             loadCurrentLogLevel()
         }
-        .alert(NSLocalizedString("alert.logs.clear_title", comment: ""), isPresented: $showingClearConfirmation) {
-            Button(NSLocalizedString("common.cancel", comment: ""), role: .cancel) {}
-            Button(NSLocalizedString("alert.logs.clear_button", comment: ""), role: .destructive) {
+        .alert(L("alert.logs.clear_title"), isPresented: $showingClearConfirmation) {
+            Button(L("common.cancel"), role: .cancel) {}
+            Button(L("alert.logs.clear_button"), role: .destructive) {
                 clearLogs()
             }
         } message: {
-            Text(NSLocalizedString("settings.memory.clear_all_message", comment: ""))
+            Text(L("settings.memory.clear_all_message"))
         }
     }
 
@@ -244,10 +244,10 @@ struct LogViewerView: View {
 
                                 // Show success notification
                                 let alert = NSAlert()
-                                alert.messageText = NSLocalizedString("alert.logs.exported_title", comment: "")
-                                alert.informativeText = String(format: NSLocalizedString("alert.logs.exported_message", comment: ""), url.path)
+                                alert.messageText = L("alert.logs.exported_title")
+                                alert.informativeText = L("alert.logs.exported_message", url.path)
                                 alert.alertStyle = .informational
-                                alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
+                                alert.addButton(withTitle: L("common.ok"))
                                 alert.runModal()
                             } catch {
                                 showError("Failed to save logs: \(error.localizedDescription)")
@@ -290,10 +290,10 @@ struct LogViewerView: View {
 
                     // Show success alert
                     let alert = NSAlert()
-                    alert.messageText = NSLocalizedString("alert.logs.cleared_title", comment: "")
-                    alert.informativeText = String(format: NSLocalizedString("alert.logs.cleared_message", comment: ""), logFiles.count)
+                    alert.messageText = L("alert.logs.cleared_title")
+                    alert.informativeText = L("alert.logs.cleared_message", logFiles.count)
                     alert.alertStyle = .informational
-                    alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
+                    alert.addButton(withTitle: L("common.ok"))
                     alert.runModal()
                 }
             } catch {
@@ -306,10 +306,10 @@ struct LogViewerView: View {
 
     private func showError(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = NSLocalizedString("error.title", comment: "")
+        alert.messageText = L("error.title")
         alert.informativeText = message
         alert.alertStyle = .warning
-        alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
+        alert.addButton(withTitle: L("common.ok"))
         alert.runModal()
     }
 
@@ -326,7 +326,7 @@ struct LogViewerView: View {
         if !exists {
             // Create log directory if it doesn't exist
             try fileManager.createDirectory(at: logDirURL, withIntermediateDirectories: true)
-            return NSLocalizedString("logs.empty.first_run", comment: "No log files found. Logs will appear here after Aether performs operations.")
+            return L("logs.empty.first_run")
         }
 
         if !isDirectory.boolValue {
@@ -349,7 +349,7 @@ struct LogViewerView: View {
         }
 
         guard !logFiles.isEmpty else {
-            return NSLocalizedString("logs.empty.no_logs", comment: "No log files found. Logs will appear here after Aether performs operations.")
+            return L("logs.empty.no_logs")
         }
 
         // Read the most recent log file (last 1000 lines)

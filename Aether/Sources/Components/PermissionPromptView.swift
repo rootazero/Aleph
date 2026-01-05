@@ -16,18 +16,18 @@ enum PermissionType {
     var title: String {
         switch self {
         case .accessibility:
-            return NSLocalizedString("permission.accessibility.title", comment: "")
+            return L("permission.accessibility.title")
         case .inputMonitoring:
-            return NSLocalizedString("permission.input_monitoring.title", comment: "")
+            return L("permission.input_monitoring.title")
         }
     }
 
     var message: String {
         switch self {
         case .accessibility:
-            return NSLocalizedString("permission.accessibility.description", comment: "")
+            return L("permission.accessibility.description")
         case .inputMonitoring:
-            return NSLocalizedString("permission.input_monitoring.description", comment: "")
+            return L("permission.input_monitoring.description")
         }
     }
 
@@ -79,17 +79,17 @@ struct PermissionPromptView: View {
 
             // Instructions
             VStack(alignment: .leading, spacing: 12) {
-                instructionRow(number: 1, text: NSLocalizedString("permission.instruction.step1", comment: ""))
-                instructionRow(number: 2, text: NSLocalizedString("permission.instruction.step2", comment: ""))
-                instructionRow(number: 3, text: NSLocalizedString("permission.instruction.step3", comment: ""))
-                instructionRow(number: 4, text: NSLocalizedString("permission.instruction.step4", comment: ""))
+                instructionRow(number: 1, text: L("permission.instruction.step1"))
+                instructionRow(number: 2, text: L("permission.instruction.step2"))
+                instructionRow(number: 3, text: L("permission.instruction.step3"))
+                instructionRow(number: 4, text: L("permission.instruction.step4"))
             }
             .padding(.horizontal, 8)
 
             // Action buttons
             HStack(spacing: 12) {
                 Button(action: onDismiss) {
-                    Text(LocalizedStringKey("permission.button.later"))
+                    Text(L("permission.button.later"))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                 }
@@ -100,7 +100,7 @@ struct PermissionPromptView: View {
                 Button(action: onOpenSettings) {
                     HStack(spacing: 6) {
                         Image(systemName: "gear")
-                        Text(LocalizedStringKey("permission.open_settings"))
+                        Text(L("permission.open_settings"))
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)

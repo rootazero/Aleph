@@ -89,10 +89,9 @@ enum HotkeyMode: Equatable {
     var displayString: String {
         switch self {
         case .doubleTapShift:
-            return NSLocalizedString("hotkey.double_tap_shift", comment: "Double-tap Shift")
+            return L("hotkey.double_tap_shift")
         case .doubleTap(let keyCode):
-            let format = NSLocalizedString("hotkey.double_tap_key", comment: "Double-tap key format")
-            return String(format: format, symbolForKeyCode(keyCode))
+            return L("hotkey.double_tap_key", symbolForKeyCode(keyCode))
         case .modifierCombo(let keyCode, let modifiers):
             var parts: [String] = []
             if modifiers.contains(.maskControl) { parts.append("⌃") }

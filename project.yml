@@ -38,6 +38,11 @@ targets:
         type: group
       - path: Aether/Assets.xcassets
         type: file
+      - path: Aether/Resources
+        name: Resources
+        type: group
+        excludes:
+          - "AppIcon/**"
     info:
       path: Aether/Info.plist
       properties:
@@ -136,24 +141,6 @@ targets:
             --out-dir "${PROJECT_DIR}/Aether/Sources/Generated/"
 
           echo "UniFFI bindings generated successfully"
-        basedOnDependencyAnalysis: false
-      - name: "Copy Localization Resources"
-        script: |
-          # Copy .lproj folders to app bundle Resources directory
-          RESOURCES_DIR="${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources"
-          mkdir -p "${RESOURCES_DIR}"
-
-          # Copy English localization
-          if [ -d "${PROJECT_DIR}/Aether/Resources/en.lproj" ]; then
-            cp -R "${PROJECT_DIR}/Aether/Resources/en.lproj" "${RESOURCES_DIR}/"
-            echo "Copied en.lproj to app bundle"
-          fi
-
-          # Copy Simplified Chinese localization (zh-Hans)
-          if [ -d "${PROJECT_DIR}/Aether/Resources/zh-Hans.lproj" ]; then
-            cp -R "${PROJECT_DIR}/Aether/Resources/zh-Hans.lproj" "${RESOURCES_DIR}/"
-            echo "Copied zh-Hans.lproj to app bundle"
-          fi
         basedOnDependencyAnalysis: false
 
   AetherTests:

@@ -93,3 +93,59 @@ extension RoutingRuleConfig: Codable {
         }
     }
 }
+
+// MARK: - Preset Rule Detection
+
+extension RoutingRuleConfig {
+    /// Check if this is a preset system rule
+    ///
+    /// Preset rules are:
+    /// - `/search` - Web search capability (implemented)
+    /// - `/mcp` - MCP integration (reserved)
+    /// - `/skill` - Skills workflow (reserved)
+    ///
+    /// Detection: intent_type starts with "builtin_" or equals "skills"
+    var isPreset: Bool {
+        guard let intent = intentType else { return false }
+        return intent.hasPrefix("builtin_") || intent == "skills"
+    }
+
+    /// Get user-friendly name for preset rule
+    var presetCommandName: String? {
+        guard isPreset else { return nil }
+
+        // Extract command from regex pattern
+        // Pattern format: ^/command\s+
+        let pattern = regex
+        if pattern.hasPrefix("^/") {
+            let parts = pattern.dropFirst(2).split(separator: "\\")
+            if let command = parts.first {
+                return "/\(command)"
+            }
+        }
+
+        return nil
+    }
+
+    /// Get description for preset rule
+    var presetDescription: String? {
+        guard let intent = intentType, isPreset else { return nil }
+
+        switch intent {
+        case "builtin_search":
+            return L("settings.routing.preset.search.description")
+        case "builtin_mcp":
+            return L("settings.routing.preset.mcp.description")
+        case "skills":
+            return L("settings.routing.preset.skills.description")
+        default:
+            return nil
+        }
+    }
+
+    /// Check if preset feature is implemented
+    var isPresetImplemented: Bool {
+        guard let intent = intentType else { return false }
+        return intent == "builtin_search"  // Only /search is implemented
+    }
+}

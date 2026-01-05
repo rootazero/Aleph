@@ -21,6 +21,6 @@ func showInfoAlert(title: String, message: String) {
     alert.messageText = title
     alert.informativeText = message
     alert.alertStyle = .informational
-    alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
+    alert.addButton(withTitle: L("common.ok"))
     alert.runModal()
 }

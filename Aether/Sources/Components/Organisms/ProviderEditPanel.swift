@@ -218,13 +218,13 @@ struct ProviderEditPanel: View {
                             .imageScale(.large)
                     }
                     .buttonStyle(.plain)
-                    .alert(NSLocalizedString("provider.delete.title", comment: ""), isPresented: $showDeleteConfirmation) {
-                        Button(NSLocalizedString("common.cancel", comment: ""), role: .cancel) {}
-                        Button(NSLocalizedString("common.delete", comment: ""), role: .destructive) {
+                    .alert(L("provider.delete.title"), isPresented: $showDeleteConfirmation) {
+                        Button(L("common.cancel"), role: .cancel) {}
+                        Button(L("common.delete"), role: .destructive) {
                             deleteCurrentProvider()
                         }
                     } message: {
-                        Text(String(format: NSLocalizedString("provider.delete.message", comment: ""), provider.name))
+                        Text(String(format: L("provider.delete.message"), provider.name))
                     }
                 }
             }
@@ -264,7 +264,7 @@ struct ProviderEditPanel: View {
                                     .font(DesignTokens.Typography.title)
                                     .foregroundColor(DesignTokens.Colors.textPrimary)
                             } else {
-                                Text(LocalizedStringKey("provider.custom_provider"))
+                                Text(L("provider.custom_provider"))
                                     .font(DesignTokens.Typography.title)
                                     .foregroundColor(DesignTokens.Colors.textSecondary)
                             }
@@ -280,7 +280,7 @@ struct ProviderEditPanel: View {
                                         Image(systemName: "network")
                                             .font(.system(size: 12))
                                     }
-                                    Text(isTesting ? NSLocalizedString("provider.button.testing", comment: "") : NSLocalizedString("common.test_connection", comment: ""))
+                                    Text(isTesting ? L("provider.button.testing") : L("common.test_connection"))
                                         .font(.system(size: 12, weight: .medium))
                                 }
                                 .foregroundColor(canTestConnection ? .white : DesignTokens.Colors.textSecondary)
@@ -291,7 +291,7 @@ struct ProviderEditPanel: View {
                             }
                             .buttonStyle(.plain)
                             .disabled(!canTestConnection || isTesting)
-                            .help(canTestConnection ? NSLocalizedString("common.test_connection", comment: "") : "Configure API key and model first")
+                            .help(canTestConnection ? L("common.test_connection") : "Configure API key and model first")
                         }
 
                         Spacer()
@@ -300,18 +300,18 @@ struct ProviderEditPanel: View {
                         // Active Toggle + Set as Default Toggle
                         VStack(alignment: .trailing, spacing: DesignTokens.Spacing.sm) {
                             // Active toggle
-                            Toggle(NSLocalizedString("provider.field.active", comment: ""), isOn: $isProviderActive)
+                            Toggle(L("provider.field.active"), isOn: $isProviderActive)
                                 .toggleStyle(.switch)
 
                             // Set as Default toggle (always show, disable when inactive or adding new)
                             Toggle(isOn: isDefaultBinding) {
-                                Text(NSLocalizedString("provider.action.set_default", comment: "Set as Default"))
+                                Text(L("provider.action.set_default"))
                                     .font(.system(size: 12, weight: .medium))
                             }
                             .toggleStyle(.switch)
                             .disabled(!isProviderActive || isAddingNew)
-                            .help(isAddingNew ? NSLocalizedString("provider.help.set_default_save_first", comment: "Save provider first") :
-                                  (isProviderActive ? NSLocalizedString("provider.help.set_default", comment: "") : NSLocalizedString("provider.help.set_default_disabled", comment: "")))
+                            .help(isAddingNew ? L("provider.help.set_default_save_first") :
+                                  (isProviderActive ? L("provider.help.set_default") : L("provider.help.set_default_disabled")))
                         }
                     }
 
@@ -324,12 +324,12 @@ struct ProviderEditPanel: View {
                     // Description - custom or preset
                     if isCustomProvider {
                         if !baseURL.isEmpty {
-                            Text(String(format: NSLocalizedString("provider.custom_api_endpoint", comment: ""), baseURL))
+                            Text(String(format: L("provider.custom_api_endpoint"), baseURL))
                                 .font(DesignTokens.Typography.caption)
                                 .foregroundColor(DesignTokens.Colors.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         } else {
-                            Text(LocalizedStringKey("provider.custom_compatible"))
+                            Text(L("provider.custom_compatible"))
                                 .font(DesignTokens.Typography.caption)
                                 .foregroundColor(DesignTokens.Colors.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -349,10 +349,10 @@ struct ProviderEditPanel: View {
             // Form fields
             // Provider Name (only for custom providers)
             if isCustomProvider {
-                FormField(title: NSLocalizedString("provider.field.provider_name", comment: "")) {
-                    TextField(LocalizedStringKey("provider.placeholder.provider_name"), text: $providerName)
+                FormField(title: L("provider.field.provider_name")) {
+                    TextField(L("provider.placeholder.provider_name"), text: $providerName)
                         .textFieldStyle(.roundedBorder)
-                    Text(LocalizedStringKey("provider.help.provider_name"))
+                    Text(L("provider.help.provider_name"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
@@ -360,7 +360,7 @@ struct ProviderEditPanel: View {
 
             // Theme Color (only for custom providers)
             if isCustomProvider {
-                FormField(title: NSLocalizedString("provider.field.theme_color", comment: "")) {
+                FormField(title: L("provider.field.theme_color")) {
                     HStack(spacing: DesignTokens.Spacing.sm) {
                         ColorPicker("", selection: $color, supportsOpacity: false)
                             .labelsHidden()
@@ -369,7 +369,7 @@ struct ProviderEditPanel: View {
                             .fill(color)
                             .frame(width: 32, height: 32)
 
-                        Text(LocalizedStringKey("provider.help.theme_color"))
+                        Text(L("provider.help.theme_color"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
@@ -381,8 +381,8 @@ struct ProviderEditPanel: View {
 
             // API Key (not required for Ollama)
             if providerType != "ollama" {
-                FormField(title: NSLocalizedString("provider.field.api_key", comment: "")) {
-                    SecureField(LocalizedStringKey("provider.placeholder.api_key"), text: $apiKey)
+                FormField(title: L("provider.field.api_key")) {
+                    SecureField(L("provider.placeholder.api_key"), text: $apiKey)
                         .textFieldStyle(.roundedBorder)
                         .onChange(of: apiKey) {
                             testResult = nil // Clear test result when API key changes
@@ -390,39 +390,39 @@ struct ProviderEditPanel: View {
                 }
             }
 
-            FormField(title: NSLocalizedString("provider.field.model", comment: "")) {
-                TextField(LocalizedStringKey("provider.placeholder.model"), text: $model)
+            FormField(title: L("provider.field.model")) {
+                TextField(L("provider.placeholder.model"), text: $model)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: model) {
                         testResult = nil // Clear test result when model changes
                     }
             }
 
-            FormField(title: isCustomProvider ? NSLocalizedString("provider.field.base_url", comment: "") : NSLocalizedString("provider.field.base_url_optional", comment: "")) {
-                TextField(isCustomProvider ? LocalizedStringKey("provider.placeholder.base_url_custom") : LocalizedStringKey("provider.placeholder.base_url_official"), text: $baseURL)
+            FormField(title: isCustomProvider ? L("provider.field.base_url") : L("provider.field.base_url_optional")) {
+                TextField(isCustomProvider ? L("provider.placeholder.base_url_custom") : L("provider.placeholder.base_url_official"), text: $baseURL)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: baseURL) {
                         testResult = nil // Clear test result when base URL changes
                     }
-                Text(isCustomProvider ? LocalizedStringKey("provider.help.base_url_custom") : LocalizedStringKey("provider.help.base_url_official"))
+                Text(isCustomProvider ? L("provider.help.base_url_custom") : L("provider.help.base_url_official"))
                     .font(DesignTokens.Typography.caption)
                     .foregroundColor(DesignTokens.Colors.textSecondary)
             }
 
             // Generation Parameters (collapsible)
-            DisclosureGroup(LocalizedStringKey("provider.section.generation_params"), isExpanded: $isAdvancedExpanded) {
+            DisclosureGroup(L("provider.section.generation_params"), isExpanded: $isAdvancedExpanded) {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                     // Common parameters (all providers)
-                    FormField(title: NSLocalizedString("provider.field.max_tokens_optional", comment: "")) {
+                    FormField(title: L("provider.field.max_tokens_optional")) {
                         TextField(getMaxTokensPlaceholder(), text: $maxTokens)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 150)
-                        Text(LocalizedStringKey("provider.help.max_tokens"))
+                        Text(L("provider.help.max_tokens"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
 
-                    FormField(title: NSLocalizedString("provider.field.temperature_optional", comment: "")) {
+                    FormField(title: L("provider.field.temperature_optional")) {
                         TextField(getTemperaturePlaceholder(), text: $temperature)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 150)
@@ -432,22 +432,22 @@ struct ProviderEditPanel: View {
                     }
 
                     // Top-P (all providers except Ollama uses it optionally)
-                    FormField(title: NSLocalizedString("provider.field.top_p_optional", comment: "")) {
-                        TextField(LocalizedStringKey("provider.placeholder.top_p"), text: $topP)
+                    FormField(title: L("provider.field.top_p_optional")) {
+                        TextField(L("provider.placeholder.top_p"), text: $topP)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 150)
-                        Text(LocalizedStringKey("provider.help.top_p"))
+                        Text(L("provider.help.top_p"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
 
                     // Top-K (Claude, Gemini, Ollama)
                     if providerType == "claude" || providerType == "gemini" || providerType == "ollama" {
-                        FormField(title: NSLocalizedString("provider.field.top_k_optional", comment: "")) {
-                            TextField(providerType == "ollama" ? LocalizedStringKey("provider.placeholder.top_k_ollama") : LocalizedStringKey("provider.placeholder.top_k_default"), text: $topK)
+                        FormField(title: L("provider.field.top_k_optional")) {
+                            TextField(providerType == "ollama" ? L("provider.placeholder.top_k_ollama") : L("provider.placeholder.top_k_default"), text: $topK)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 150)
-                            Text(LocalizedStringKey("provider.help.top_k"))
+                            Text(L("provider.help.top_k"))
                                 .font(DesignTokens.Typography.caption)
                                 .foregroundColor(DesignTokens.Colors.textSecondary)
                         }
@@ -631,11 +631,11 @@ struct ProviderEditPanel: View {
                 .font(.system(size: 60))
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
-            Text(LocalizedStringKey("provider.empty_state.title"))
+            Text(L("provider.empty_state.title"))
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(LocalizedStringKey("provider.empty_state.message"))
+            Text(L("provider.empty_state.message"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
         }

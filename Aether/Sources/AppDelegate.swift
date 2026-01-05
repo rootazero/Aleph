@@ -134,7 +134,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let menu = NSMenu()
 
         menu.addItem(NSMenuItem(
-            title: NSLocalizedString("menu.about", comment: "About menu item"),
+            title: L("menu.about"),
             action: #selector(showAbout),
             keyEquivalent: ""
         ))
@@ -142,7 +142,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Add "Default Provider" submenu (will be populated by rebuildProvidersMenu)
         let defaultProviderMenuItem = NSMenuItem(
-            title: NSLocalizedString("menu.default_provider", comment: "Default Provider menu item"),
+            title: L("menu.default_provider"),
             action: nil,
             keyEquivalent: ""
         )
@@ -151,7 +151,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Add "Input Mode" submenu (will be populated by rebuildInputModeMenu)
         let inputModeMenuItem = NSMenuItem(
-            title: NSLocalizedString("menu.input_mode", comment: "Input Mode menu item"),
+            title: L("menu.input_mode"),
             action: nil,
             keyEquivalent: ""
         )
@@ -162,7 +162,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Create and store Settings menu item for enable/disable control
         settingsMenuItem = NSMenuItem(
-            title: NSLocalizedString("menu.settings", comment: "Settings menu item"),
+            title: L("menu.settings"),
             action: #selector(showSettings),
             keyEquivalent: ","
         )
@@ -170,7 +170,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(
-            title: NSLocalizedString("menu.quit", comment: "Quit menu item"),
+            title: L("menu.quit"),
             action: #selector(quit),
             keyEquivalent: "q"
         ))
@@ -186,10 +186,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     @objc private func showAbout() {
         let alert = NSAlert()
-        alert.messageText = NSLocalizedString("alert.about.title", comment: "")
-        alert.informativeText = String(format: NSLocalizedString("alert.about.message", comment: ""), "0.1.0 (Phase 2)")
+        alert.messageText = L("alert.about.title")
+        alert.informativeText = L("alert.about.message", "0.1.0 (Phase 2)")
         alert.alertStyle = .informational
-        alert.addButton(withTitle: NSLocalizedString("common.ok", comment: "OK button"))
+        alert.addButton(withTitle: L("common.ok"))
         alert.runModal()
     }
 
@@ -206,10 +206,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
             // Show error alert
             let alert = NSAlert()
-            alert.messageText = NSLocalizedString("error.core_not_initialized", comment: "")
-            alert.informativeText = "Aether核心未初始化，请等待权限授予后重试。"
+            alert.messageText = L("error.core_not_initialized")
+            alert.informativeText = L("error.core_not_initialized.suggestion")
             alert.alertStyle = .warning
-            alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
+            alert.addButton(withTitle: L("common.ok"))
             alert.runModal()
             return
         }
@@ -355,11 +355,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Use generic menu builder
         rebuildMenu(
-            menuItemTitle: NSLocalizedString("menu.default_provider", comment: "Default Provider menu item"),
+            menuItemTitle: L("menu.default_provider"),
             items: items,
             currentSelection: defaultProvider,
             action: #selector(selectDefaultProvider(_:)),
-            placeholderText: NSLocalizedString("menu.no_providers", comment: "No providers available")
+            placeholderText: L("menu.no_providers")
         )
     }
 
@@ -415,14 +415,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Define input modes with localized display names
         let inputModes: [(String, String)] = [
-            ("cut", NSLocalizedString("settings.behavior.input_mode_cut", comment: "Cut")),
-            ("copy", NSLocalizedString("settings.behavior.input_mode_copy", comment: "Copy")),
-            ("halo", NSLocalizedString("settings.behavior.input_mode_halo", comment: "Halo Selection"))
+            ("cut", L("settings.behavior.input_mode_cut")),
+            ("copy", L("settings.behavior.input_mode_copy")),
+            ("halo", L("settings.behavior.input_mode_halo"))
         ]
 
         // Use generic menu builder
         rebuildMenu(
-            menuItemTitle: NSLocalizedString("menu.input_mode", comment: "Input Mode menu item"),
+            menuItemTitle: L("menu.input_mode"),
             items: inputModes,
             currentSelection: currentInputMode,
             action: #selector(selectInputMode(_:))
@@ -634,10 +634,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     private func showErrorAlert(message: String) {
         let alert = NSAlert()
-        alert.messageText = NSLocalizedString("error.aether", comment: "")
+        alert.messageText = L("error.aether")
         alert.informativeText = message
         alert.alertStyle = .critical
-        alert.addButton(withTitle: NSLocalizedString("common.ok", comment: ""))
+        alert.addButton(withTitle: L("common.ok"))
         alert.runModal()
     }
 
@@ -949,8 +949,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             DispatchQueue.main.async { [weak self] in
                 self?.haloWindow?.updateState(.error(
                     type: .unknown,
-                    message: NSLocalizedString("error.core_not_initialized", comment: "Core not initialized"),
-                    suggestion: NSLocalizedString("error.core_not_initialized.suggestion", comment: "Please restart the app")
+                    message: L("error.core_not_initialized"),
+                    suggestion: L("error.core_not_initialized.suggestion")
                 ))
             }
             return
@@ -1040,8 +1040,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                         self?.haloWindow?.show(at: NSEvent.mouseLocation)
                         self?.haloWindow?.updateState(.error(
                             type: .unknown,
-                            message: NSLocalizedString("error.no_text_in_window", comment: "No text content in current window"),
-                            suggestion: NSLocalizedString("error.no_text_in_window.suggestion", comment: "Please open a text document first")
+                            message: L("error.no_text_in_window"),
+                            suggestion: L("error.no_text_in_window.suggestion")
                         ))
                         // Auto-hide after 2 seconds
                         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
@@ -1312,7 +1312,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     DispatchQueue.main.async { [weak self] in
                         self?.eventHandler?.onError(
                             message: errorMessage,
-                            suggestion: suggestion ?? NSLocalizedString("error.check_connection", comment: "Please check network and API config")
+                            suggestion: suggestion ?? L("error.check_connection")
                         )
                     }
                 }
@@ -1479,98 +1479,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     // MARK: - Language Preference
 
-    /// Apply language preference from config on app launch
+    /// Initialize localization system on app launch
     ///
-    /// Language Selection Logic:
+    /// This initializes the LocalizationManager which:
     /// 1. If user has manually set language in config → Use user's choice
     /// 2. If no config exists or no language set → Use system language
     /// 3. If system language not supported → Fallback to English
-    ///
-    /// Supported languages: en (English), zh-Hans (Simplified Chinese)
     private func applyLanguagePreference() {
-        do {
-            // Try to load config from default path
-            let configPath = NSHomeDirectory() + "/.config/aether/config.toml"
-            let fileManager = FileManager.default
-
-            var configuredLanguage: String? = nil
-
-            // Check if config file exists and contains language preference
-            if fileManager.fileExists(atPath: configPath) {
-                let configContent = try String(contentsOfFile: configPath, encoding: .utf8)
-
-                // Simple regex to extract language field from [general] section
-                // Format: language = "en" or language = "zh-Hans"
-                let pattern = #"language\s*=\s*"([^"]+)""#
-                if let regex = try? NSRegularExpression(pattern: pattern, options: []),
-                   let match = regex.firstMatch(in: configContent, options: [], range: NSRange(configContent.startIndex..., in: configContent)),
-                   let languageRange = Range(match.range(at: 1), in: configContent) {
-                    configuredLanguage = String(configContent[languageRange])
-                    print("[AppDelegate] Found user-configured language: \(configuredLanguage!)")
-                }
-            }
-
-            // Determine which language to use
-            let languageToUse: String
-
-            if let userLanguage = configuredLanguage {
-                // User has manually set a language preference
-                languageToUse = userLanguage
-                print("[AppDelegate] Using user-configured language: \(languageToUse)")
-            } else {
-                // No user preference, detect system language
-                let systemLanguage = detectSystemLanguage()
-                languageToUse = systemLanguage
-                print("[AppDelegate] No user preference, using system language: \(languageToUse)")
-            }
-
-            // Apply the selected language
-            UserDefaults.standard.set([languageToUse], forKey: "AppleLanguages")
-            UserDefaults.standard.synchronize()
-
-            print("[AppDelegate] ✅ Applied language: \(languageToUse)")
-
-        } catch {
-            print("[AppDelegate] ⚠️ Failed to apply language preference: \(error)")
-            // Fall back to English on error
-            UserDefaults.standard.set(["en"], forKey: "AppleLanguages")
-            UserDefaults.standard.synchronize()
-            print("[AppDelegate] Fallback to English due to error")
-        }
-    }
-
-    /// Detect system language and return supported language code
-    ///
-    /// Uses CFPreferencesCopyAppValue to get the REAL system language preference,
-    /// not the app-level UserDefaults which may have been overridden.
-    ///
-    /// Returns:
-    /// - "zh-Hans" if system language is any Chinese variant (zh-Hans, zh-Hant, zh-Hant-TW, zh-Hant-HK)
-    /// - "en" for all other languages (including unsupported ones)
-    private func detectSystemLanguage() -> String {
-        // Get the REAL system language using CFPreferences
-        // This bypasses any app-level UserDefaults overrides
-        guard let systemLanguages = CFPreferencesCopyAppValue(
-            "AppleLanguages" as CFString,
-            kCFPreferencesAnyApplication
-        ) as? [String],
-        let primaryLanguage = systemLanguages.first else {
-            print("[AppDelegate] No system language found, defaulting to English")
-            return "en"
-        }
-
-        print("[AppDelegate] System primary language (from CFPreferences): \(primaryLanguage)")
-
-        // Check if system language is Chinese (any variant)
-        // Possible system values: zh-Hans, zh-Hans-US, zh-Hant, zh-Hant-TW, zh-Hant-HK
-        if primaryLanguage.hasPrefix("zh") {
-            print("[AppDelegate] Detected Chinese system language, using zh-Hans")
-            return "zh-Hans"
-        }
-
-        // For all other languages (including unsupported ones), use English
-        print("[AppDelegate] System language '\(primaryLanguage)' not specifically supported, using English")
-        return "en"
+        // Initialize LocalizationManager - this determines the correct language
+        // and loads the appropriate bundle
+        _ = LocalizationManager.shared
+        print("[AppDelegate] ✅ LocalizationManager initialized with language: \(LocalizationManager.shared.currentLanguage)")
     }
 
     // MARK: - Application Lifecycle

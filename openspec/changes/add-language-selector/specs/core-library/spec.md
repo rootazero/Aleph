@@ -10,7 +10,7 @@ The `GeneralConfig` struct SHALL support storing and validating a user's preferr
 - **WHEN** the struct is serialized or deserialized
 - **THEN** the struct SHALL have an optional `language: Option<String>` field
 - **AND** the field SHALL be annotated with `#[serde(default, skip_serializing_if = "Option::is_none")]`
-- **AND** the field SHALL represent the preferred language code (e.g., `"en"`, `"zh_CN"`)
+- **AND** the field SHALL represent the preferred language code (e.g., `"en"`, `"zh-Hans"`)
 - **AND** if the field is `None`, the system SHALL use the macOS system language
 
 #### Scenario: Valid language codes
@@ -18,9 +18,10 @@ The `GeneralConfig` struct SHALL support storing and validating a user's preferr
 - **WHEN** the config is loaded
 - **THEN** the system SHALL accept the following language codes:
   - `"en"` - English
-  - `"zh_CN"` - Simplified Chinese (China)
-  - `"zh_TW"` - Traditional Chinese (Taiwan, future)
-  - `"zh_HK"` - Traditional Chinese (Hong Kong, future)
+  - `"zh-Hans"` - Simplified Chinese
+  - `"zh-Hant"` - Traditional Chinese (future)
+  - `"zh-Hant-TW"` - Traditional Chinese Taiwan (future)
+  - `"zh-Hant-HK"` - Traditional Chinese Hong Kong (future)
   - Any future language codes matching existing `.lproj` directories
 - **AND** the system SHALL log a warning if an unrecognized language code is detected
 - **AND** the system SHALL fall back to system language if the language code is invalid
@@ -29,7 +30,7 @@ The `GeneralConfig` struct SHALL support storing and validating a user's preferr
 - **GIVEN** the user selects a language in the Settings UI
 - **WHEN** the config is saved
 - **THEN** the `config.toml` file SHALL contain a `language` field under `[general]`
-- **AND** the field SHALL be formatted as: `language = "en"` or `language = "zh_CN"`
+- **AND** the field SHALL be formatted as: `language = "en"` or `language = "zh-Hans"`
 - **AND** if "System Default" is selected, the `language` field SHALL be omitted from the file
 
 #### Scenario: Language override applied on app launch

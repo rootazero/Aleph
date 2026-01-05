@@ -7,7 +7,7 @@ default_hotkey = "Grave"  # Backtick key
 default_provider = "openai"
 log_retention_days = 30
 enable_performance_logging = false
-language = "zh_CN"
+language = "zh-Hans"
 
 [memory]
 enabled = true

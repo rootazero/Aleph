@@ -5,7 +5,7 @@
 ### Task 1.1: Add `language` field to `GeneralConfig`
 - [ ] Add `language: Option<String>` field to `GeneralConfig` struct in `Aether/core/src/config/mod.rs`
 - [ ] Add serde attribute: `#[serde(default, skip_serializing_if = "Option::is_none")]`
-- [ ] Document field: "Preferred language override (e.g., 'en', 'zh_CN'). If None, use system language."
+- [ ] Document field: "Preferred language override (e.g., 'en', 'zh-Hans'). If None, use system language."
 
 ### Task 1.2: Validate language configuration on load
 - [ ] Add validation logic to ensure `language` value (if set) matches an existing `.lproj` directory
@@ -32,7 +32,7 @@
 - [ ] Add options:
   - "System Default" (value: `nil`)
   - "English" (value: `"en"`)
-  - "简体中文" (value: `"zh_CN"`)
+  - "简体中文" (value: `"zh-Hans"`)
 - [ ] Bind picker to `@State private var selectedLanguage: String?`
 
 ### Task 2.2: Load current language setting from config
@@ -101,7 +101,7 @@
   ```
 
 ### Task 4.2: Add Simplified Chinese strings
-- [ ] Open `Aether/Resources/zh_CN.lproj/Localizable.strings`
+- [ ] Open `Aether/Resources/zh-Hans.lproj/Localizable.strings`
 - [ ] Add translated keys:
   ```strings
   /* Settings - General - Language */
@@ -129,7 +129,7 @@
   3. Select "System Default" → Restart → Verify UI follows system language
 - [ ] Test config persistence:
   1. Check `~/.config/aether/config.toml` after each selection
-  2. Verify `[general]` section contains `language = "en"` or `language = "zh_CN"` or omits the field for system default
+  2. Verify `[general]` section contains `language = "en"` or `language = "zh-Hans"` or omits the field for system default
 
 ### Task 5.2: Edge case testing
 - [ ] Test invalid language code in config.toml (e.g., `language = "invalid"`)
@@ -171,7 +171,7 @@
 **Risk Level**: Low (non-breaking change, existing i18n infrastructure)
 
 **Dependencies:**
-- Existing i18n files (`en.lproj`, `zh_CN.lproj`)
+- Existing i18n files (`en.lproj`, `zh-Hans.lproj`)
 - Existing config persistence layer
 - Existing UniFFI bindings
 

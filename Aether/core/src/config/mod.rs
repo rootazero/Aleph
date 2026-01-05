@@ -58,7 +58,7 @@ pub struct GeneralConfig {
     /// Enable performance logging (default: false)
     #[serde(default)]
     pub enable_performance_logging: bool,
-    /// Preferred language override (e.g., 'en', 'zh_CN'). If None, use system language.
+    /// Preferred language override (e.g., 'en', 'zh-Hans'). If None, use system language.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
 }
@@ -1137,7 +1137,7 @@ impl Config {
         // Validate language preference
         if let Some(ref language) = self.general.language {
             // List of supported language codes (must match .lproj directory names)
-            let supported_languages = vec!["en", "zh_CN"];
+            let supported_languages = vec!["en", "zh-Hans"];
 
             if !supported_languages.contains(&language.as_str()) {
                 tracing::warn!(

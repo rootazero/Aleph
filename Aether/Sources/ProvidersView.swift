@@ -181,7 +181,7 @@ struct ProvidersView: View {
             // Search bar
             SearchBar(
                 searchText: $searchText,
-                placeholder: NSLocalizedString("settings.providers.search_placeholder", comment: "Search providers placeholder")
+                placeholder: L("settings.providers.search_placeholder")
             )
                 .frame(width: 240)
 
@@ -189,7 +189,7 @@ struct ProvidersView: View {
 
             // Add Custom Provider button with background highlight
             Button(action: addCustomProvider) {
-                Text(LocalizedStringKey("settings.providers.add_custom"))
+                Text(L("settings.providers.add_custom"))
                     .font(DesignTokens.Typography.body)
                     .foregroundColor(.white)
             }

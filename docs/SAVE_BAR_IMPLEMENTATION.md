@@ -109,7 +109,7 @@ private var hasUnsavedChanges: Bool {
 "settings.unsaved_changes.discard" = "Discard";
 ```
 
-**中文** (`zh_CN.lproj/Localizable.strings`):
+**中文** (`zh-Hans.lproj/Localizable.strings`):
 ```
 "settings.unsaved_changes.discard" = "放弃修改";
 ```
@@ -191,7 +191,7 @@ private var hasUnsavedChanges: Bool {
 2. `Aether/Resources/en.lproj/Localizable.strings`
    - 添加 `settings.unsaved_changes.discard` 键
 
-3. `Aether/Resources/zh_CN.lproj/Localizable.strings`
+3. `Aether/Resources/zh-Hans.lproj/Localizable.strings`
    - 添加 `settings.unsaved_changes.discard` 键
 
 ### 依赖的现有文件:

@@ -18,10 +18,24 @@ struct BehaviorSettingsView: View {
     @State private var outputMode: OutputMode = .typewriter
     @State private var typingSpeed: Double = 50.0
 
+    // PII settings
+    @State private var piiEnabled: Bool = false
+    @State private var piiScrubEmail: Bool = true
+    @State private var piiScrubPhone: Bool = true
+    @State private var piiScrubSSN: Bool = true
+    @State private var piiScrubCreditCard: Bool = true
+
     // Saved state (for comparison)
     @State private var savedInputMode: InputMode = .cut
     @State private var savedOutputMode: OutputMode = .typewriter
     @State private var savedTypingSpeed: Double = 50.0
+
+    // Saved PII settings (for comparison)
+    @State private var savedPiiEnabled: Bool = false
+    @State private var savedPiiScrubEmail: Bool = true
+    @State private var savedPiiScrubPhone: Bool = true
+    @State private var savedPiiScrubSSN: Bool = true
+    @State private var savedPiiScrubCreditCard: Bool = true
 
     // UI state
     @State private var showingPreview = false
@@ -32,13 +46,14 @@ struct BehaviorSettingsView: View {
         // Scrollable content only (no internal save bar)
         ScrollView {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                headerSection
                 inputModeCard
                 outputModeCard
 
                 if outputMode == .typewriter {
                     typingSpeedCard
                 }
+
+                piiScrubbingCard
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .padding(DesignTokens.Spacing.lg)
@@ -55,31 +70,24 @@ struct BehaviorSettingsView: View {
         .onChange(of: inputMode) { _, _ in updateSaveBarState() }
         .onChange(of: outputMode) { _, _ in updateSaveBarState() }
         .onChange(of: typingSpeed) { _, _ in updateSaveBarState() }
+        .onChange(of: piiEnabled) { _, _ in updateSaveBarState() }
+        .onChange(of: piiScrubEmail) { _, _ in updateSaveBarState() }
+        .onChange(of: piiScrubPhone) { _, _ in updateSaveBarState() }
+        .onChange(of: piiScrubSSN) { _, _ in updateSaveBarState() }
+        .onChange(of: piiScrubCreditCard) { _, _ in updateSaveBarState() }
         .onChange(of: isSaving) { _, _ in updateSaveBarState() }
     }
 
     // MARK: - View Components
 
-    private var headerSection: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-            Text(LocalizedStringKey("settings.behavior.title"))
-                .font(DesignTokens.Typography.title)
-                .foregroundColor(DesignTokens.Colors.textPrimary)
-
-            Text(LocalizedStringKey("settings.behavior.description"))
-                .font(DesignTokens.Typography.caption)
-                .foregroundColor(DesignTokens.Colors.textSecondary)
-        }
-    }
-
     private var inputModeCard: some View {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                    Label(LocalizedStringKey("settings.behavior.input_mode"), systemImage: "arrow.down.doc")
+                    Label(L("settings.behavior.input_mode"), systemImage: "arrow.down.doc")
                         .font(DesignTokens.Typography.heading)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
 
                     VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                        Text(LocalizedStringKey("settings.behavior.input_mode_description"))
+                        Text(L("settings.behavior.input_mode_description"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
 
@@ -112,12 +120,12 @@ struct BehaviorSettingsView: View {
 
     private var outputModeCard: some View {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                    Label(LocalizedStringKey("settings.behavior.output_mode"), systemImage: "arrow.up.doc")
+                    Label(L("settings.behavior.output_mode"), systemImage: "arrow.up.doc")
                         .font(DesignTokens.Typography.heading)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
 
                     VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                        Text(LocalizedStringKey("settings.behavior.output_mode_description"))
+                        Text(L("settings.behavior.output_mode_description"))
                             .font(DesignTokens.Typography.caption)
                             .foregroundColor(DesignTokens.Colors.textSecondary)
 
@@ -150,13 +158,13 @@ struct BehaviorSettingsView: View {
 
     private var typingSpeedCard: some View {
                     VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                        Label(LocalizedStringKey("settings.behavior.typing_speed"), systemImage: "speedometer")
+                        Label(L("settings.behavior.typing_speed"), systemImage: "speedometer")
                             .font(DesignTokens.Typography.heading)
                             .foregroundColor(DesignTokens.Colors.textPrimary)
 
                         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
                             HStack {
-                                Text(LocalizedStringKey("settings.behavior.typing_speed_label"))
+                                Text(L("settings.behavior.typing_speed_label"))
                                     .font(DesignTokens.Typography.body)
                                     .frame(width: 80, alignment: .leading)
 
@@ -170,7 +178,7 @@ struct BehaviorSettingsView: View {
 
                             // Speed indicator bar
                             HStack(spacing: DesignTokens.Spacing.xs) {
-                                Text(LocalizedStringKey("settings.behavior.speed_slow"))
+                                Text(L("settings.behavior.speed_slow"))
                                     .font(DesignTokens.Typography.caption)
                                     .foregroundColor(DesignTokens.Colors.textSecondary)
 
@@ -189,13 +197,13 @@ struct BehaviorSettingsView: View {
                                 }
                                 .frame(height: 4)
 
-                                Text(LocalizedStringKey("settings.behavior.speed_fast"))
+                                Text(L("settings.behavior.speed_fast"))
                                     .font(DesignTokens.Typography.caption)
                                     .foregroundColor(DesignTokens.Colors.textSecondary)
                             }
 
                             // Preview button
-                            ActionButton(NSLocalizedString("settings.behavior.preview_button", comment: ""), icon: "play.circle", style: .secondary) {
+                            ActionButton(L("settings.behavior.preview_button"), icon: "play.circle", style: .secondary) {
                                 showingPreview = true
                             }
                         }
@@ -205,13 +213,103 @@ struct BehaviorSettingsView: View {
                     .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
     }
 
+    private var piiScrubbingCard: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            Label(L("settings.behavior.pii_scrubbing"), systemImage: "lock.shield")
+                .font(DesignTokens.Typography.heading)
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                Toggle(L("settings.behavior.pii_scrubbing_enable"), isOn: $piiEnabled)
+                    .toggleStyle(.switch)
+                    .font(DesignTokens.Typography.body)
+
+                Text(L("settings.behavior.pii_scrubbing_description"))
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                if piiEnabled {
+                    Divider()
+
+                    Text(L("settings.behavior.pii_types_label"))
+                        .font(DesignTokens.Typography.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                        piiToggle(
+                            title: "settings.behavior.pii_type_email",
+                            icon: "envelope",
+                            example: "settings.behavior.pii_example_email",
+                            binding: $piiScrubEmail
+                        )
+
+                        piiToggle(
+                            title: "settings.behavior.pii_type_phone",
+                            icon: "phone",
+                            example: "settings.behavior.pii_example_phone",
+                            binding: $piiScrubPhone
+                        )
+
+                        piiToggle(
+                            title: "settings.behavior.pii_type_ssn",
+                            icon: "lock.shield",
+                            example: "settings.behavior.pii_example_ssn",
+                            binding: $piiScrubSSN
+                        )
+
+                        piiToggle(
+                            title: "settings.behavior.pii_type_credit_card",
+                            icon: "creditcard",
+                            example: "settings.behavior.pii_example_credit_card",
+                            binding: $piiScrubCreditCard
+                        )
+                    }
+                }
+            }
+            .padding(DesignTokens.Spacing.md)
+            .background(DesignTokens.Colors.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
+        }
+    }
+
+    @ViewBuilder
+    private func piiToggle(
+        title: String,
+        icon: String,
+        example: String,
+        binding: Binding<Bool>
+    ) -> some View {
+        Toggle(isOn: binding) {
+            HStack(spacing: DesignTokens.Spacing.sm) {
+                Image(systemName: icon)
+                    .foregroundColor(DesignTokens.Colors.warning)
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L(title))
+                        .font(DesignTokens.Typography.body)
+                    Text(L(example))
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+            }
+        }
+        .toggleStyle(.checkbox)
+    }
+
     // MARK: - Computed Properties
 
     /// Check if current state differs from saved state
     private var hasUnsavedChanges: Bool {
         return inputMode != savedInputMode ||
                outputMode != savedOutputMode ||
-               abs(typingSpeed - savedTypingSpeed) > 0.1
+               abs(typingSpeed - savedTypingSpeed) > 0.1 ||
+               piiEnabled != savedPiiEnabled ||
+               piiScrubEmail != savedPiiScrubEmail ||
+               piiScrubPhone != savedPiiScrubPhone ||
+               piiScrubSSN != savedPiiScrubSSN ||
+               piiScrubCreditCard != savedPiiScrubCreditCard
     }
 
     /// Status message for UnifiedSaveBar
@@ -220,7 +318,7 @@ struct BehaviorSettingsView: View {
             return error
         }
         if hasUnsavedChanges {
-            return NSLocalizedString("settings.unsaved_changes.title", comment: "")
+            return L("settings.unsaved_changes.title")
         }
         return nil
     }
@@ -263,6 +361,11 @@ struct BehaviorSettingsView: View {
                         // Load typing speed
                         typingSpeed = Double(behavior.typingSpeed)
                         savedTypingSpeed = typingSpeed
+
+                        // Load PII settings
+                        piiEnabled = behavior.piiScrubbingEnabled
+                        savedPiiEnabled = piiEnabled
+                        // Note: Individual PII type settings will be loaded when backend support is added
                     }
                 }
             } catch {
@@ -274,7 +377,7 @@ struct BehaviorSettingsView: View {
     private func saveSettings() async {
         guard let core = core else {
             await MainActor.run {
-                errorMessage = NSLocalizedString("error.core_not_initialized", comment: "")
+                errorMessage = L("error.core_not_initialized")
             }
             return
         }
@@ -290,7 +393,7 @@ struct BehaviorSettingsView: View {
                 inputMode: inputMode.rawValue,
                 outputMode: outputMode.rawValue,
                 typingSpeed: UInt32(typingSpeed),
-                piiScrubbingEnabled: false  // PII settings moved to SearchSettingsView
+                piiScrubbingEnabled: piiEnabled
             )
 
             // Update via Rust core
@@ -300,12 +403,22 @@ struct BehaviorSettingsView: View {
             print("  Input Mode: \(inputMode.rawValue)")
             print("  Output Mode: \(outputMode.rawValue)")
             print("  Typing Speed: \(Int(typingSpeed))")
+            print("  PII Scrubbing Enabled: \(piiEnabled)")
+            print("  PII Scrub Email: \(piiScrubEmail)")
+            print("  PII Scrub Phone: \(piiScrubPhone)")
+            print("  PII Scrub SSN: \(piiScrubSSN)")
+            print("  PII Scrub Credit Card: \(piiScrubCreditCard)")
 
             await MainActor.run {
                 // Update saved state to match current state
                 savedInputMode = inputMode
                 savedOutputMode = outputMode
                 savedTypingSpeed = typingSpeed
+                savedPiiEnabled = piiEnabled
+                savedPiiScrubEmail = piiScrubEmail
+                savedPiiScrubPhone = piiScrubPhone
+                savedPiiScrubSSN = piiScrubSSN
+                savedPiiScrubCreditCard = piiScrubCreditCard
 
                 isSaving = false
                 errorMessage = nil
@@ -324,6 +437,11 @@ struct BehaviorSettingsView: View {
         inputMode = savedInputMode
         outputMode = savedOutputMode
         typingSpeed = savedTypingSpeed
+        piiEnabled = savedPiiEnabled
+        piiScrubEmail = savedPiiScrubEmail
+        piiScrubPhone = savedPiiScrubPhone
+        piiScrubSSN = savedPiiScrubSSN
+        piiScrubCreditCard = savedPiiScrubCreditCard
         errorMessage = nil
     }
 
@@ -348,9 +466,9 @@ enum InputMode: String, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .cut: return NSLocalizedString("settings.behavior.input_mode_cut", comment: "")
-        case .copy: return NSLocalizedString("settings.behavior.input_mode_copy", comment: "")
-        case .halo: return NSLocalizedString("settings.behavior.input_mode_halo", comment: "")
+        case .cut: return L("settings.behavior.input_mode_cut")
+        case .copy: return L("settings.behavior.input_mode_copy")
+        case .halo: return L("settings.behavior.input_mode_halo")
         }
     }
 
@@ -365,11 +483,11 @@ enum InputMode: String, CaseIterable {
     var description: String {
         switch self {
         case .cut:
-            return NSLocalizedString("settings.behavior.input_mode_cut_description", comment: "")
+            return L("settings.behavior.input_mode_cut_description")
         case .copy:
-            return NSLocalizedString("settings.behavior.input_mode_copy_description", comment: "")
+            return L("settings.behavior.input_mode_copy_description")
         case .halo:
-            return NSLocalizedString("settings.behavior.input_mode_halo_description", comment: "")
+            return L("settings.behavior.input_mode_halo_description")
         }
     }
 
@@ -386,8 +504,8 @@ enum OutputMode: String, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .typewriter: return NSLocalizedString("settings.behavior.output_mode_typewriter", comment: "")
-        case .instant: return NSLocalizedString("settings.behavior.output_mode_instant", comment: "")
+        case .typewriter: return L("settings.behavior.output_mode_typewriter")
+        case .instant: return L("settings.behavior.output_mode_instant")
         }
     }
 
@@ -401,9 +519,9 @@ enum OutputMode: String, CaseIterable {
     var description: String {
         switch self {
         case .typewriter:
-            return NSLocalizedString("settings.behavior.output_mode_typewriter_description", comment: "")
+            return L("settings.behavior.output_mode_typewriter_description")
         case .instant:
-            return NSLocalizedString("settings.behavior.output_mode_instant_description", comment: "")
+            return L("settings.behavior.output_mode_instant_description")
         }
     }
 

@@ -41,14 +41,14 @@ enum NavigationGuard {
     @discardableResult
     static func showUnsavedChangesAlert() -> NavigationAction {
         let alert = NSAlert()
-        alert.messageText = NSLocalizedString("settings.unsaved_changes.title", comment: "Unsaved changes alert title")
-        alert.informativeText = NSLocalizedString("settings.unsaved_changes.message", comment: "Unsaved changes alert message")
+        alert.messageText = L("settings.unsaved_changes.title")
+        alert.informativeText = L("settings.unsaved_changes.message")
         alert.alertStyle = .warning
 
         // Button order: Save (default) | Don't Save (destructive) | Cancel
-        alert.addButton(withTitle: NSLocalizedString("settings.unsaved_changes.save", comment: "Save button"))
-        alert.addButton(withTitle: NSLocalizedString("settings.unsaved_changes.dont_save", comment: "Don't save button"))
-        alert.addButton(withTitle: NSLocalizedString("common.cancel", comment: "Cancel button"))
+        alert.addButton(withTitle: L("settings.unsaved_changes.save"))
+        alert.addButton(withTitle: L("settings.unsaved_changes.dont_save"))
+        alert.addButton(withTitle: L("common.cancel"))
 
         let response = alert.runModal()
 
@@ -73,13 +73,13 @@ enum NavigationGuard {
     @discardableResult
     static func showWindowCloseAlert() -> NavigationAction {
         let alert = NSAlert()
-        alert.messageText = NSLocalizedString("settings.unsaved_changes.close_title", comment: "Close window alert title")
-        alert.informativeText = NSLocalizedString("settings.unsaved_changes.close_message", comment: "Close window alert message")
+        alert.messageText = L("settings.unsaved_changes.close_title")
+        alert.informativeText = L("settings.unsaved_changes.close_message")
         alert.alertStyle = .warning
 
-        alert.addButton(withTitle: NSLocalizedString("settings.unsaved_changes.save", comment: "Save button"))
-        alert.addButton(withTitle: NSLocalizedString("settings.unsaved_changes.dont_save", comment: "Don't save button"))
-        alert.addButton(withTitle: NSLocalizedString("common.cancel", comment: "Cancel button"))
+        alert.addButton(withTitle: L("settings.unsaved_changes.save"))
+        alert.addButton(withTitle: L("settings.unsaved_changes.dont_save"))
+        alert.addButton(withTitle: L("common.cancel"))
 
         let response = alert.runModal()
 

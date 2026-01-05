@@ -44,7 +44,7 @@ Successfully implemented a complete default provider management system for Aethe
 
 #### Localization (`Aether/Resources/`)
 - ✅ `en.lproj/Localizable.strings`: Added 13 new English strings
-- ✅ `zh_CN.lproj/Localizable.strings`: Added 13 new Chinese translations
+- ✅ `zh-Hans.lproj/Localizable.strings`: Added 13 new Chinese translations
 
 ### Documentation
 - ✅ `INTEGRATION_TEST_REPORT.md`: Comprehensive test plan and results
@@ -206,7 +206,7 @@ All 6 success criteria **ACHIEVED** ✅:
 ### Files Modified
 - **Rust**: 4 files (config/mod.rs, router/mod.rs, core.rs, aether.udl)
 - **Swift**: 4 files (ProvidersView, SimpleProviderCard, ProviderEditPanel, AppDelegate)
-- **Localization**: 2 files (en.lproj, zh_CN.lproj)
+- **Localization**: 2 files (en.lproj, zh-Hans.lproj)
 - **Documentation**: 3 new files (INTEGRATION_TEST_REPORT.md, CODE_REVIEW_CHECKLIST.md, IMPLEMENTATION_SUMMARY.md)
 
 ### Lines of Code Added
