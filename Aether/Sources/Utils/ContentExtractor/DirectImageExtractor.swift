@@ -49,8 +49,13 @@ final class DirectImageExtractor: ContentExtractor {
         // Try each supported type in order of preference (PNG > JPEG > TIFF)
         for type in supportedTypes {
             if types.contains(type), let data = pasteboard.data(forType: type) {
-                // Check size limits
-                let sizeBytes = UInt64(data.count)
+                // CRITICAL: Convert TIFF to PNG for API compatibility
+                // Most AI APIs only support: jpeg, png, gif, webp
+                // macOS clipboard often stores images as TIFF (e.g., screenshots)
+                let (finalData, finalMimeType) = convertToApiCompatibleFormat(data: data, originalType: type)
+
+                // Check size limits (after conversion)
+                let sizeBytes = UInt64(finalData.count)
                 if sizeBytes > MediaSizeLimits.maxImageSizeBytes {
                     let sizeMB = Double(sizeBytes) / (1024.0 * 1024.0)
                     let errorMessage = String(format: "Image size (%.1fMB) exceeds the maximum limit of %@. Please use a smaller image.", sizeMB, MediaSizeLimits.maxImageSizeDescription)
@@ -69,15 +74,12 @@ final class DirectImageExtractor: ContentExtractor {
                     logger.warning("Large image: \(sizeBytes) bytes")
                 }
 
-                // Determine MIME type
-                let mimeType = self.mimeType(for: type)
-
                 // Convert to Base64
-                let base64Data = data.base64EncodedString()
+                let base64Data = finalData.base64EncodedString()
 
                 let attachment = MediaAttachment(
                     mediaType: "image",
-                    mimeType: mimeType,
+                    mimeType: finalMimeType,
                     data: base64Data,
                     filename: nil,
                     sizeBytes: sizeBytes
@@ -86,7 +88,7 @@ final class DirectImageExtractor: ContentExtractor {
                 attachments.append(attachment)
                 handledTypes.insert(type)
 
-                logger.debug("Extracted \(type.rawValue) image: \(sizeBytes) bytes")
+                logger.debug("Extracted \(type.rawValue) image as \(finalMimeType): \(sizeBytes) bytes")
 
                 // Only extract the first available image type
                 // (PNG and TIFF often both exist for same image)
@@ -104,6 +106,63 @@ final class DirectImageExtractor: ContentExtractor {
     }
 
     // MARK: - Private Helpers
+
+    /// Convert image data to API-compatible format
+    ///
+    /// AI APIs typically only support: jpeg, png, gif, webp
+    /// TIFF (common in macOS clipboard) must be converted to PNG
+    ///
+    /// - Parameters:
+    ///   - data: Original image data
+    ///   - originalType: Original pasteboard type
+    /// - Returns: Tuple of (converted data, mime type)
+    private func convertToApiCompatibleFormat(data: Data, originalType: NSPasteboard.PasteboardType) -> (Data, String) {
+        // PNG and JPEG are already API-compatible
+        if originalType == .png {
+            return (data, "image/png")
+        }
+        if originalType == NSPasteboard.PasteboardType("public.jpeg") {
+            return (data, "image/jpeg")
+        }
+
+        // TIFF needs conversion to PNG
+        if originalType == .tiff {
+            logger.info("Converting TIFF to PNG for API compatibility")
+
+            // Create NSImage from TIFF data
+            guard let image = NSImage(data: data) else {
+                logger.error("Failed to create NSImage from TIFF data, using original")
+                return (data, "image/tiff")
+            }
+
+            // Convert to PNG
+            if let pngData = convertToPNG(image: image) {
+                logger.info("Successfully converted TIFF to PNG (\(data.count) -> \(pngData.count) bytes)")
+                return (pngData, "image/png")
+            } else {
+                logger.error("Failed to convert TIFF to PNG, using original")
+                return (data, "image/tiff")
+            }
+        }
+
+        // Unknown type - return as-is
+        return (data, "application/octet-stream")
+    }
+
+    /// Convert NSImage to PNG data
+    ///
+    /// - Parameter image: Source image
+    /// - Returns: PNG data or nil if conversion fails
+    private func convertToPNG(image: NSImage) -> Data? {
+        // Get the best representation
+        guard let tiffData = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData) else {
+            return nil
+        }
+
+        // Convert to PNG
+        return bitmap.representation(using: .png, properties: [:])
+    }
 
     private func mimeType(for type: NSPasteboard.PasteboardType) -> String {
         switch type {

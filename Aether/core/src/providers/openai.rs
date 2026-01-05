@@ -223,8 +223,14 @@ impl OpenAiProvider {
 
         if use_prepend_mode {
             // Prepend system prompt to user message (for APIs that ignore system role)
+            // Use a clearer format that separates instruction from user input
             let user_content = if let Some(prompt) = system_prompt {
-                format!("{}\n\n{}", prompt, input)
+                // Format: [instruction]\n\n---\n\n[user input]
+                // This makes it clear what's instruction vs. content to process
+                format!(
+                    "[指令]\n{}\n\n---\n\n[用户输入]\n{}",
+                    prompt, input
+                )
             } else {
                 input.to_string()
             };

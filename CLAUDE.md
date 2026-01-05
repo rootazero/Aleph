@@ -40,6 +40,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 4. Backend routes request to appropriate AI (OpenAI/Claude/Gemini/Local LLM)
 5. Halo dissolves, result is pasted back (Cmd+V) or typed character-by-character
 
+### Multimodal Content Data Order
+
+When processing multimodal content (text + images/attachments), data is assembled in this order:
+
+```
+Final Data = Window Text + Clipboard Text Context + Clipboard Attachments + Window Attachments
+```
+
+**Key Rules:**
+- **Clipboard**: Contains ONE type only (either text OR attachments like images/videos/PDFs)
+- **Window**: May contain BOTH text AND attachments (e.g., Notes app with embedded images)
+- **Text always comes first**: This ensures command prefixes (like `/en`) are at the beginning for routing
+
+**Data Sources:**
+| Source | Content | When Captured |
+|--------|---------|---------------|
+| Window Text | Text from active window | After Cut/Copy operation |
+| Clipboard Text Context | Recent clipboard text (within 10s) | Via ClipboardMonitor |
+| Clipboard Attachments | Images/files user copied | BEFORE Cut/Copy (preserved) |
+| Window Attachments | Embedded media in window | After Cut/Copy operation |
+
+**Example Scenarios:**
+
+| Window | Clipboard | Final Result |
+|--------|-----------|--------------|
+| "Summarize:" + ImageW | ImageC | "Summarize:" + ImageC + ImageW |
+| "Summarize:" + ImageW | "Context text" | "Summarize:" + "Context text" + ImageW |
+| "Translate this" | ImageC | "Translate this" + ImageC |
+| "Hello" | "World" | "Hello" + "World" |
+
+**Implementation:** See `AppDelegate.swift` → `processWithInputModeChoice()` for the merging logic.
+
 ---
 
 ## Technical Stack

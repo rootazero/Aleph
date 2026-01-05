@@ -275,6 +275,60 @@ enum MediaSizeLimits {
     static let maxImageSizeDescription: String = "10MB"
 }
 
+/// Image format converter for API compatibility
+///
+/// AI APIs typically only support: jpeg, png, gif, webp
+/// TIFF (common in macOS) must be converted to PNG
+enum ImageFormatConverter {
+    /// API-compatible image formats
+    static let apiCompatibleFormats = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+
+    /// Check if a MIME type is API-compatible
+    static func isApiCompatible(_ mimeType: String) -> Bool {
+        apiCompatibleFormats.contains(mimeType)
+    }
+
+    /// Convert image data to API-compatible format if needed
+    ///
+    /// - Parameters:
+    ///   - data: Original image data
+    ///   - mimeType: Original MIME type
+    /// - Returns: Tuple of (converted data, final mime type)
+    static func convertIfNeeded(data: Data, mimeType: String) -> (Data, String) {
+        // Already compatible
+        if isApiCompatible(mimeType) {
+            return (data, mimeType)
+        }
+
+        // TIFF needs conversion to PNG
+        if mimeType == "image/tiff" {
+            if let pngData = convertToPNG(data: data) {
+                return (pngData, "image/png")
+            }
+        }
+
+        // Conversion failed or unknown format - return original
+        return (data, mimeType)
+    }
+
+    /// Convert image data to PNG format
+    ///
+    /// - Parameter data: Source image data
+    /// - Returns: PNG data or nil if conversion fails
+    static func convertToPNG(data: Data) -> Data? {
+        guard let image = NSImage(data: data) else {
+            return nil
+        }
+
+        guard let tiffData = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData) else {
+            return nil
+        }
+
+        return bitmap.representation(using: .png, properties: [:])
+    }
+}
+
 /// Helper to get MIME type from file extension
 func mimeType(for extension: String) -> String {
     SupportedMediaType.from(extension: `extension`)?.mimeType ?? "application/octet-stream"

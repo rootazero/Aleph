@@ -139,18 +139,22 @@ final class RTFDExtractor: ContentExtractor {
                 logger.warning("Large RTFD attachment: \(sizeBytes) bytes")
             }
 
-            // Get MIME type
-            let mimeType = SupportedMediaType.from(extension: ext)?.mimeType ?? "application/octet-stream"
+            // Get MIME type and convert to API-compatible format if needed
+            let originalMimeType = SupportedMediaType.from(extension: ext)?.mimeType ?? "application/octet-stream"
+            let (finalData, finalMimeType) = ImageFormatConverter.convertIfNeeded(data: data, mimeType: originalMimeType)
+
+            // Update size after conversion
+            let finalSizeBytes = UInt64(finalData.count)
 
             // Convert to Base64
-            let base64Data = data.base64EncodedString()
+            let base64Data = finalData.base64EncodedString()
 
             let attachment = MediaAttachment(
                 mediaType: "image",
-                mimeType: mimeType,
+                mimeType: finalMimeType,
                 data: base64Data,
                 filename: filename,
-                sizeBytes: sizeBytes
+                sizeBytes: finalSizeBytes
             )
 
             attachments.append(attachment)

@@ -1102,6 +1102,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let originalChangeCount = ClipboardManager.shared.changeCount()
         print("[AppDelegate] 💾 Saved original clipboard state (changeCount: \(originalChangeCount))")
 
+        // CRITICAL: Save original clipboard media attachments BEFORE Cut/Copy
+        // This preserves images/files that user manually copied to clipboard
+        // Without this, simulateCut()/simulateCopy() would overwrite the clipboard
+        // and lose the media attachments that user intended to send to AI
+        let (_, originalMediaAttachments, _) = ClipboardManager.shared.getMixedContent()
+        if !originalMediaAttachments.isEmpty {
+            print("[AppDelegate] 📎 Saved \(originalMediaAttachments.count) original media attachment(s) from clipboard")
+            for (index, attachment) in originalMediaAttachments.enumerated() {
+                print("[AppDelegate]   [\(index + 1)] \(attachment.mediaType)/\(attachment.mimeType) - \(attachment.sizeBytes) bytes")
+            }
+        }
+
         // Step 1: Try to cut/copy selected text based on input_mode
         if useCutMode {
             print("[AppDelegate] Simulating Cmd+X to cut selected text...")
@@ -1243,11 +1255,40 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         print("[AppDelegate] Clipboard text: \(clipboardText.prefix(50))...")
 
         // Log media attachments if present (add-multimodal-content-support)
+        // NOTE: mediaAttachments from getMixedContent() after Cut/Copy is usually empty
+        // because Cut/Copy overwrites the clipboard. The actual attachments were saved
+        // in originalMediaAttachments BEFORE the Cut/Copy operation.
         if !mediaAttachments.isEmpty {
-            print("[AppDelegate] 📎 Extracted \(mediaAttachments.count) media attachment(s):")
+            print("[AppDelegate] 📎 Extracted \(mediaAttachments.count) media attachment(s) from current clipboard:")
             for (index, attachment) in mediaAttachments.enumerated() {
                 print("[AppDelegate]   [\(index + 1)] \(attachment.mediaType)/\(attachment.mimeType) - \(attachment.sizeBytes) bytes")
             }
+        }
+
+        // CRITICAL FIX: Merge attachments in correct order
+        // Data order rule: Window text + Clipboard text/attachment + Window attachment
+        //
+        // - originalMediaAttachments: Clipboard attachments (saved BEFORE Cut/Copy)
+        // - mediaAttachments: Window attachments (from Cut/Copy operation)
+        //
+        // Final order: Clipboard attachments first, then Window attachments
+        // This keeps text content (from clipboardContext) logically before window attachments
+        var finalMediaAttachments: [MediaAttachment] = []
+
+        // 1. Add clipboard attachments first (user's copied context)
+        if !originalMediaAttachments.isEmpty {
+            finalMediaAttachments.append(contentsOf: originalMediaAttachments)
+            print("[AppDelegate] 📎 Added \(originalMediaAttachments.count) clipboard attachment(s)")
+        }
+
+        // 2. Add window attachments (from Cut/Copy of window content)
+        if !mediaAttachments.isEmpty {
+            finalMediaAttachments.append(contentsOf: mediaAttachments)
+            print("[AppDelegate] 📎 Added \(mediaAttachments.count) window attachment(s)")
+        }
+
+        if !finalMediaAttachments.isEmpty {
+            print("[AppDelegate] 📎 Total: \(finalMediaAttachments.count) attachment(s) (clipboard: \(originalMediaAttachments.count), window: \(mediaAttachments.count))")
         }
 
         // IMPORTANT: Check for recent clipboard content (within 10 seconds)
@@ -1288,10 +1329,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             do {
                 // Create captured context for Rust (add-multimodal-content-support)
                 // Include media attachments if present
+                // CRITICAL: Use finalMediaAttachments which preserves images from BEFORE Cut/Copy
                 let capturedContext = CapturedContext(
                     appBundleId: windowContext.bundleId ?? "unknown",
                     windowTitle: windowContext.windowTitle,
-                    attachments: mediaAttachments.isEmpty ? nil : mediaAttachments
+                    attachments: finalMediaAttachments.isEmpty ? nil : finalMediaAttachments
                 )
 
                 // CRITICAL: Construct user input - clipboard content appended after window content
