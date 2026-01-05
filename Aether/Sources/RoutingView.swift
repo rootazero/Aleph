@@ -774,7 +774,7 @@ struct RuleCard: View {
                                 .foregroundColor(DesignTokens.Colors.textPrimary)
                         }
                     } else {
-                        Text(rule.provider)
+                        Text(rule.provider ?? L("settings.routing.no_provider"))
                             .font(DesignTokens.Typography.body)
                             .foregroundColor(DesignTokens.Colors.warning)
                         Text(L("settings.routing.not_configured"))

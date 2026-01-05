@@ -12,6 +12,8 @@ import Foundation
 
 extension RoutingRuleConfig: Codable {
     enum CodingKeys: String, CodingKey {
+        case ruleType = "rule_type"
+        case isBuiltin = "is_builtin"
         case regex
         case provider
         case systemPrompt = "system_prompt"
@@ -28,8 +30,10 @@ extension RoutingRuleConfig: Codable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let ruleType = try container.decodeIfPresent(String.self, forKey: .ruleType)
+        let isBuiltin = try container.decodeIfPresent(Bool.self, forKey: .isBuiltin) ?? false
         let regex = try container.decode(String.self, forKey: .regex)
-        let provider = try container.decode(String.self, forKey: .provider)
+        let provider = try container.decodeIfPresent(String.self, forKey: .provider)
         let systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
         let stripPrefix = try container.decodeIfPresent(Bool.self, forKey: .stripPrefix)
         let capabilities = try container.decodeIfPresent([String].self, forKey: .capabilities)
@@ -42,6 +46,8 @@ extension RoutingRuleConfig: Codable {
         let knowledgeBase = try container.decodeIfPresent(String.self, forKey: .knowledgeBase)
 
         self.init(
+            ruleType: ruleType,
+            isBuiltin: isBuiltin,
             regex: regex,
             provider: provider,
             systemPrompt: systemPrompt,
@@ -59,8 +65,14 @@ extension RoutingRuleConfig: Codable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        if let ruleType = ruleType {
+            try container.encode(ruleType, forKey: .ruleType)
+        }
+        try container.encode(isBuiltin, forKey: .isBuiltin)
         try container.encode(regex, forKey: .regex)
-        try container.encode(provider, forKey: .provider)
+        if let provider = provider {
+            try container.encode(provider, forKey: .provider)
+        }
         if let systemPrompt = systemPrompt {
             try container.encode(systemPrompt, forKey: .systemPrompt)
         }
@@ -104,8 +116,9 @@ extension RoutingRuleConfig {
     /// - `/mcp` - MCP integration (reserved)
     /// - `/skill` - Skills workflow (reserved)
     ///
-    /// Detection: intent_type starts with "builtin_" or equals "skills"
+    /// Detection: isBuiltin flag or intent_type starts with "builtin_" or equals "skills"
     var isPreset: Bool {
+        if isBuiltin { return true }
         guard let intent = intentType else { return false }
         return intent.hasPrefix("builtin_") || intent == "skills"
     }

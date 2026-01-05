@@ -183,41 +183,71 @@ impl From<Config> for FullConfig {
 
 /// Routing rule configuration for TOML parsing
 ///
-/// Each rule specifies:
-/// - A regex pattern to match against user input
-/// - The provider to use when matched
-/// - An optional system prompt override
-/// - Whether to strip the matched prefix before sending to AI
+/// Aether supports two types of routing rules:
+///
+/// ## Command Rules (指令规则)
+/// - Pattern starts with `^/` (e.g., `^/draw`, `^/translate`)
+/// - First-match-stops: only one command rule matches per request
+/// - Requires `provider` field to specify which AI to use
+/// - Command prefix is automatically stripped before sending to AI
+///
+/// ## Keyword Rules (关键词规则)
+/// - Pattern does not start with `/` (e.g., `翻译成英文`, `代码优化`)
+/// - All-match: multiple keyword rules can match simultaneously
+/// - No `provider` field (uses default_provider)
+/// - Multiple matched prompts are combined with `\n\n`
 ///
 /// # Example TOML
 ///
 /// ```toml
+/// # Command rule - specifies provider
 /// [[rules]]
-/// regex = "^/code"
-/// provider = "claude"
-/// system_prompt = "You are a senior software engineer."
-/// strip_prefix = true  # Remove "/code" before sending to AI
+/// rule_type = "command"
+/// regex = "^/draw\\s+"
+/// provider = "gemini"
+/// system_prompt = "请根据提示画一幅画"
 ///
+/// # Keyword rule - prompt only, no provider
 /// [[rules]]
-/// regex = ".*"
-/// provider = "openai"
+/// rule_type = "keyword"
+/// regex = "翻译成英文"
+/// system_prompt = "翻译目标语言为英文"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingRuleConfig {
-    // ===== Existing fields (backward compatible) =====
+    // ===== Rule Type (refactor-routing-rule-logic) =====
+    /// Rule type: "command" or "keyword"
+    /// - "command": Starts with /, first-match-stops, requires provider
+    /// - "keyword": Non-/ pattern, all-match, prompt only
+    /// Default: auto-detected based on regex pattern
+    #[serde(default)]
+    pub rule_type: Option<String>,
+
+    /// Whether this is a builtin rule (read-only in Settings UI)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_builtin: bool,
+
+    // ===== Core fields =====
     /// Regex pattern to match against user input
     pub regex: String,
+
     /// Provider name to use when this rule matches
-    pub provider: String,
-    /// Optional system prompt to guide AI behavior
+    /// Required for command rules, ignored for keyword rules
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+
+    /// System prompt to guide AI behavior
+    /// Command rules: optional (uses provider default if not set)
+    /// Keyword rules: required (this is the main purpose of keyword rules)
     #[serde(default)]
     pub system_prompt: Option<String>,
+
     /// Whether to strip the matched prefix from input before sending to AI
-    /// Defaults to true for patterns starting with "^/" (command patterns)
+    /// Defaults to true for command rules, ignored for keyword rules
     #[serde(default)]
     pub strip_prefix: Option<bool>,
 
-    // ===== 🆕 New fields (MVP implementation) =====
+    // ===== Capability fields =====
     /// Required capabilities (e.g., ["memory", "search", "mcp"])
     /// Default: [] (no capabilities)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -235,7 +265,7 @@ pub struct RoutingRuleConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_format: Option<String>,
 
-    // ===== 🔮 Skills fields (Solution C reserved) =====
+    // ===== Skills fields (reserved) =====
     /// Skills ID (e.g., "build-macos-apps", "pdf")
     /// Only valid when intent_type = "skills:xxx"
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -263,10 +293,13 @@ pub struct RoutingRuleConfig {
 
 impl RoutingRuleConfig {
     /// Create a test config (for tests only)
+    /// Note: This creates a command rule since it has an explicit provider
     pub fn test_config(regex: &str, provider: &str) -> Self {
         Self {
+            rule_type: Some("command".to_string()), // Explicit command since provider is specified
+            is_builtin: false,
             regex: regex.to_string(),
-            provider: provider.to_string(),
+            provider: Some(provider.to_string()),
             system_prompt: None,
             strip_prefix: None,
             capabilities: None,
@@ -277,6 +310,98 @@ impl RoutingRuleConfig {
             workflow: None,
             tools: None,
             knowledge_base: None,
+        }
+    }
+
+    /// Create a command rule config
+    pub fn command(regex: &str, provider: &str, system_prompt: Option<&str>) -> Self {
+        Self {
+            rule_type: Some("command".to_string()),
+            is_builtin: false,
+            regex: regex.to_string(),
+            provider: Some(provider.to_string()),
+            system_prompt: system_prompt.map(|s| s.to_string()),
+            strip_prefix: Some(true),
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
+        }
+    }
+
+    /// Create a keyword rule config
+    pub fn keyword(regex: &str, system_prompt: &str) -> Self {
+        Self {
+            rule_type: Some("keyword".to_string()),
+            is_builtin: false,
+            regex: regex.to_string(),
+            provider: None,
+            system_prompt: Some(system_prompt.to_string()),
+            strip_prefix: None,
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
+        }
+    }
+
+    /// Get the effective rule type (with auto-detection)
+    ///
+    /// If `rule_type` is explicitly set, use it.
+    /// Otherwise, auto-detect based on regex pattern:
+    /// - Patterns starting with `^/` are command rules
+    /// - Other patterns are keyword rules
+    pub fn get_rule_type(&self) -> &str {
+        if let Some(ref rule_type) = self.rule_type {
+            return rule_type.as_str();
+        }
+        // Auto-detect based on regex pattern
+        if self.regex.starts_with("^/") {
+            "command"
+        } else {
+            "keyword"
+        }
+    }
+
+    /// Check if this is a command rule
+    pub fn is_command_rule(&self) -> bool {
+        self.get_rule_type() == "command"
+    }
+
+    /// Check if this is a keyword rule
+    pub fn is_keyword_rule(&self) -> bool {
+        self.get_rule_type() == "keyword"
+    }
+
+    /// Get provider name (required for command rules)
+    ///
+    /// For command rules, this returns the provider name.
+    /// For keyword rules, this returns None (use default_provider).
+    pub fn get_provider(&self) -> Option<&str> {
+        if self.is_command_rule() {
+            self.provider.as_deref()
+        } else {
+            None // Keyword rules don't specify provider
+        }
+    }
+
+    /// Check if strip_prefix should be applied
+    ///
+    /// Command rules: defaults to true if not explicitly set
+    /// Keyword rules: always false
+    pub fn should_strip_prefix(&self) -> bool {
+        if self.is_keyword_rule() {
+            false
+        } else {
+            self.strip_prefix.unwrap_or(true)
         }
     }
 
@@ -687,6 +812,26 @@ impl From<SearchConfigInternal> for SearchConfig {
     }
 }
 
+impl From<SearchConfig> for SearchConfigInternal {
+    fn from(config: SearchConfig) -> Self {
+        let backends = config
+            .backends
+            .into_iter()
+            .map(|entry| (entry.name, entry.config))
+            .collect();
+
+        Self {
+            enabled: config.enabled,
+            default_provider: config.default_provider,
+            fallback_providers: config.fallback_providers,
+            max_results: config.max_results as usize,
+            timeout_seconds: config.timeout_seconds,
+            backends,
+            pii: config.pii,
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -698,8 +843,10 @@ impl Default for Config {
             rules: vec![
                 // /search command - web search capability
                 RoutingRuleConfig {
+                    rule_type: Some("command".to_string()),
+                    is_builtin: true,
                     regex: r"^/search\s+".to_string(),
-                    provider: "openai".to_string(), // Default, user can override
+                    provider: Some("openai".to_string()), // Default, user can override
                     system_prompt: Some("You are a helpful search assistant. Use the search capability to find up-to-date information.".to_string()),
                     strip_prefix: Some(true),
                     capabilities: Some(vec!["search".to_string()]),
@@ -713,8 +860,10 @@ impl Default for Config {
                 },
                 // /mcp command - Model Context Protocol integration (reserved for future)
                 RoutingRuleConfig {
+                    rule_type: Some("command".to_string()),
+                    is_builtin: true,
                     regex: r"^/mcp\s+".to_string(),
-                    provider: "openai".to_string(),
+                    provider: Some("openai".to_string()),
                     system_prompt: Some("You are an MCP integration assistant. (Feature not yet implemented)".to_string()),
                     strip_prefix: Some(true),
                     capabilities: None, // Will add ["mcp"] when implemented
@@ -728,8 +877,10 @@ impl Default for Config {
                 },
                 // /skill command - Skills workflow execution (reserved for future)
                 RoutingRuleConfig {
+                    rule_type: Some("command".to_string()),
+                    is_builtin: true,
                     regex: r"^/skill\s+".to_string(),
-                    provider: "openai".to_string(),
+                    provider: Some("openai".to_string()),
                     system_prompt: Some("You are a skills execution assistant. (Feature not yet implemented)".to_string()),
                     strip_prefix: Some(true),
                     capabilities: None, // Will add ["skills"] when implemented
@@ -825,7 +976,18 @@ impl Config {
             path = %path.display(),
             providers_count = config.providers.len(),
             rules_count = config.rules.len(),
-            "Config parsed successfully, checking for migrations"
+            "Config parsed successfully, merging builtin rules"
+        );
+
+        // Merge builtin rules with user rules
+        // Builtin rules (/search, /mcp, /skill) should be prepended to user rules
+        // unless user has defined a rule with the same regex pattern
+        config.merge_builtin_rules();
+
+        debug!(
+            path = %path.display(),
+            rules_count = config.rules.len(),
+            "Builtin rules merged, checking for migrations"
         );
 
         // Migrate PII config from behavior to search (integrate-search-registry)
@@ -879,6 +1041,120 @@ impl Config {
             );
             Ok(Self::default())
         }
+    }
+
+    /// Get builtin routing rules
+    ///
+    /// Returns the preset routing rules for builtin commands (/search, /mcp, /skill).
+    /// These rules are always available and merged with user-defined rules.
+    fn builtin_rules() -> Vec<RoutingRuleConfig> {
+        vec![
+            // /search command - web search capability
+            RoutingRuleConfig {
+                rule_type: Some("command".to_string()),
+                is_builtin: true,
+                regex: r"^/search\s+".to_string(),
+                provider: Some("openai".to_string()), // Default, actual provider determined by default_provider
+                system_prompt: Some("You are a helpful search assistant. Answer questions based on the web search results provided below. Be concise and cite sources when possible.".to_string()),
+                strip_prefix: Some(true),
+                capabilities: Some(vec!["search".to_string()]),
+                intent_type: Some("builtin_search".to_string()),
+                context_format: Some("markdown".to_string()),
+                skill_id: None,
+                skill_version: None,
+                workflow: None,
+                tools: None,
+                knowledge_base: None,
+            },
+            // /mcp command - Model Context Protocol integration (reserved for future)
+            RoutingRuleConfig {
+                rule_type: Some("command".to_string()),
+                is_builtin: true,
+                regex: r"^/mcp\s+".to_string(),
+                provider: Some("openai".to_string()),
+                system_prompt: Some("You are an MCP integration assistant. (Feature not yet implemented)".to_string()),
+                strip_prefix: Some(true),
+                capabilities: None, // Will add ["mcp"] when implemented
+                intent_type: Some("builtin_mcp".to_string()),
+                context_format: Some("markdown".to_string()),
+                skill_id: None,
+                skill_version: None,
+                workflow: None,
+                tools: None,
+                knowledge_base: None,
+            },
+            // /skill command - Skills workflow execution (reserved for future)
+            RoutingRuleConfig {
+                rule_type: Some("command".to_string()),
+                is_builtin: true,
+                regex: r"^/skill\s+".to_string(),
+                provider: Some("openai".to_string()),
+                system_prompt: Some("You are a skills execution assistant. (Feature not yet implemented)".to_string()),
+                strip_prefix: Some(true),
+                capabilities: None, // Will add ["skills"] when implemented
+                intent_type: Some("skills".to_string()),
+                context_format: Some("markdown".to_string()),
+                skill_id: None,
+                skill_version: None,
+                workflow: None,
+                tools: None,
+                knowledge_base: None,
+            },
+        ]
+    }
+
+    /// Merge builtin rules with user-defined rules
+    ///
+    /// Builtin rules (/search, /mcp, /skill) are prepended to user rules
+    /// unless the user has defined a rule with the same regex pattern.
+    /// This ensures builtin commands always work while allowing user overrides.
+    ///
+    /// Builtin rules will use the user's default_provider if configured,
+    /// otherwise fall back to the first configured provider.
+    fn merge_builtin_rules(&mut self) {
+        let mut builtin = Self::builtin_rules();
+
+        // Determine the provider to use for builtin rules
+        // Priority: default_provider > first configured provider > "openai" (fallback)
+        let builtin_provider = self
+            .general
+            .default_provider
+            .clone()
+            .or_else(|| self.providers.keys().next().cloned())
+            .unwrap_or_else(|| "openai".to_string());
+
+        // Update builtin rules to use the resolved provider
+        for rule in &mut builtin {
+            rule.provider = Some(builtin_provider.clone());
+        }
+
+        // Collect user regex patterns as owned strings to avoid borrowing issues
+        let user_regexes: std::collections::HashSet<String> = self
+            .rules
+            .iter()
+            .map(|r| r.regex.clone())
+            .collect();
+
+        let user_count = user_regexes.len();
+
+        // Prepend builtin rules that user hasn't overridden
+        let mut merged_rules: Vec<RoutingRuleConfig> = builtin
+            .into_iter()
+            .filter(|r| !user_regexes.contains(&r.regex))
+            .collect();
+
+        // Take ownership of user rules and append
+        let user_rules = std::mem::take(&mut self.rules);
+        merged_rules.extend(user_rules);
+        self.rules = merged_rules;
+
+        debug!(
+            builtin_count = Self::builtin_rules().len(),
+            user_count = user_count,
+            merged_count = self.rules.len(),
+            builtin_provider = %builtin_provider,
+            "Merged builtin rules with user rules"
+        );
     }
 
     /// Validate configuration
@@ -1070,19 +1346,56 @@ impl Config {
 
         // Validate routing rules
         for (idx, rule) in self.rules.iter().enumerate() {
-            // Check provider exists
-            if !self.providers.contains_key(&rule.provider) {
-                error!(
-                    rule_index = idx + 1,
-                    provider = %rule.provider,
-                    "Rule references unknown provider"
-                );
-                return Err(AetherError::invalid_config(format!(
-                    "Rule #{} references unknown provider '{}'",
-                    idx + 1,
-                    rule.provider
-                )));
+            let rule_type = rule.get_rule_type();
+
+            // Command rules require a provider (skip for builtin rules which use default_provider)
+            if rule.is_command_rule() && !rule.is_builtin {
+                match &rule.provider {
+                    Some(provider) => {
+                        if !self.providers.contains_key(provider) {
+                            error!(
+                                rule_index = idx + 1,
+                                provider = %provider,
+                                "Command rule references unknown provider"
+                            );
+                            return Err(AetherError::invalid_config(format!(
+                                "Command rule #{} references unknown provider '{}'",
+                                idx + 1,
+                                provider
+                            )));
+                        }
+                    }
+                    None => {
+                        error!(
+                            rule_index = idx + 1,
+                            regex = %rule.regex,
+                            "Command rule missing provider"
+                        );
+                        return Err(AetherError::invalid_config(format!(
+                            "Command rule #{} (regex: '{}') requires a provider",
+                            idx + 1,
+                            rule.regex
+                        )));
+                    }
+                }
             }
+
+            // Keyword rules require a system_prompt
+            if rule.is_keyword_rule() && rule.system_prompt.is_none() {
+                warn!(
+                    rule_index = idx + 1,
+                    regex = %rule.regex,
+                    "Keyword rule missing system_prompt - rule will have no effect"
+                );
+            }
+
+            debug!(
+                rule_index = idx + 1,
+                rule_type = %rule_type,
+                regex = %rule.regex,
+                is_builtin = rule.is_builtin,
+                "Validating rule"
+            );
 
             // Validate regex pattern
             if let Err(e) = regex::Regex::new(&rule.regex) {
@@ -1099,13 +1412,6 @@ impl Config {
                     e
                 )));
             }
-
-            debug!(
-                rule_index = idx + 1,
-                provider = %rule.provider,
-                regex = %rule.regex,
-                "Routing rule validated"
-            );
         }
 
         // Validate memory config
@@ -1656,7 +1962,8 @@ impl Config {
             let removed = self.rules.remove(index);
             debug!(
                 index = index,
-                provider = %removed.provider,
+                rule_type = %removed.get_rule_type(),
+                regex = %removed.regex,
                 rules_count = self.rules.len(),
                 "Removed routing rule"
             );
@@ -1901,21 +2208,10 @@ mod tests {
         let provider = ProviderConfig::test_config("gpt-4o");
         config.providers.insert("openai".to_string(), provider);
 
-        // Add rule with invalid regex
-        config.rules.push(RoutingRuleConfig {
-            regex: "[invalid(".to_string(),
-            provider: "openai".to_string(),
-            system_prompt: None,
-            strip_prefix: None,
-            capabilities: None,
-            intent_type: None,
-            context_format: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        });
+        // Add command rule with invalid regex
+        let mut invalid_rule = RoutingRuleConfig::command("[invalid(", "openai", None);
+        invalid_rule.regex = "[invalid(".to_string();
+        config.rules.push(invalid_rule);
 
         // Should fail validation
         assert!(config.validate().is_err());
@@ -1925,21 +2221,10 @@ mod tests {
     fn test_config_validation_rule_unknown_provider() {
         let mut config = Config::default();
 
-        // Add rule referencing unknown provider
-        config.rules.push(RoutingRuleConfig {
-            regex: ".*".to_string(),
-            provider: "nonexistent".to_string(),
-            system_prompt: None,
-            strip_prefix: None,
-            capabilities: None,
-            intent_type: None,
-            context_format: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        });
+        // Add command rule referencing unknown provider
+        config
+            .rules
+            .push(RoutingRuleConfig::command(".*", "nonexistent", None));
 
         // Should fail validation
         assert!(config.validate().is_err());
@@ -2044,20 +2329,7 @@ max_context_items = 5
         ];
 
         for pattern in valid_patterns {
-            config.rules = vec![RoutingRuleConfig {
-                regex: pattern.to_string(),
-                provider: "openai".to_string(),
-                system_prompt: None,
-                strip_prefix: None,
-                capabilities: None,
-                intent_type: None,
-                context_format: None,
-                skill_id: None,
-                skill_version: None,
-                workflow: None,
-                tools: None,
-                knowledge_base: None,
-            }];
+            config.rules = vec![RoutingRuleConfig::command(pattern, "openai", None)];
             assert!(
                 config.validate().is_ok(),
                 "Pattern '{}' should be valid",
@@ -2084,20 +2356,9 @@ max_context_items = 5
         ];
 
         for pattern in invalid_patterns {
-            config.rules = vec![RoutingRuleConfig {
-                regex: pattern.to_string(),
-                provider: "openai".to_string(),
-                system_prompt: None,
-                strip_prefix: None,
-                capabilities: None,
-                intent_type: None,
-                context_format: None,
-                skill_id: None,
-                skill_version: None,
-                workflow: None,
-                tools: None,
-                knowledge_base: None,
-            }];
+            let mut invalid_rule = RoutingRuleConfig::command(pattern, "openai", None);
+            invalid_rule.regex = pattern.to_string(); // Ensure exact pattern is used
+            config.rules = vec![invalid_rule];
             assert!(
                 config.validate().is_err(),
                 "Pattern '{}' should be invalid",
@@ -2293,20 +2554,11 @@ max_context_items = 5
         config.providers.insert("openai".to_string(), provider);
         config.general.default_provider = Some("openai".to_string());
 
-        config.rules.push(RoutingRuleConfig {
-            regex: "^/code".to_string(),
-            provider: "openai".to_string(),
-            system_prompt: Some("You are a coding assistant.".to_string()),
-            strip_prefix: None,
-            capabilities: None,
-            intent_type: None,
-            context_format: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        });
+        config.rules.push(RoutingRuleConfig::command(
+            "^/code",
+            "openai",
+            Some("You are a coding assistant."),
+        ));
 
         // Serialize to TOML
         let toml_str = toml::to_string_pretty(&config).unwrap();
@@ -2322,7 +2574,13 @@ max_context_items = 5
         );
         assert_eq!(deserialized.behavior.as_ref().unwrap().input_mode, "copy");
         assert_eq!(deserialized.providers.len(), 1);
-        assert_eq!(deserialized.rules.len(), 1);
+        // 3 builtin rules + 1 custom rule = 4 total
+        assert_eq!(deserialized.rules.len(), 4);
+        // Verify custom rule is present
+        assert!(deserialized
+            .rules
+            .iter()
+            .any(|r| r.regex.contains("code")));
         assert!(deserialized.validate().is_ok());
     }
 }

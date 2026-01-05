@@ -594,9 +594,9 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func testProviderConnectionWithConfig(providerName: String, providerConfig: ProviderConfig)  -> TestConnectionResult
     
-    func testSearchProvider(providerName: String) async  -> ProviderTestResult
+    func testSearchProvider(providerName: String) throws  -> ProviderTestResult
     
-    func testSearchProviderWithConfig(config: SearchProviderTestConfig) async  -> ProviderTestResult
+    func testSearchProviderWithConfig(config: SearchProviderTestConfig) throws  -> ProviderTestResult
     
     func testStreamingResponse() 
     
@@ -611,6 +611,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func updateProvider(name: String, provider: ProviderConfig) throws 
     
     func updateRoutingRules(rules: [RoutingRuleConfig]) throws 
+    
+    func updateSearchConfig(search: SearchConfig) throws 
     
     func updateShortcuts(shortcuts: ShortcutsConfig) throws 
     
@@ -857,40 +859,20 @@ open func testProviderConnectionWithConfig(providerName: String, providerConfig:
 })
 }
     
-open func testSearchProvider(providerName: String)async  -> ProviderTestResult {
-    return
-        try!  await uniffiRustCallAsync(
-            rustFutureFunc: {
-                uniffi_aethecore_fn_method_aethercore_test_search_provider(
-                    self.uniffiClonePointer(),
-                    FfiConverterString.lower(providerName)
-                )
-            },
-            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
-            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
-            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
-            liftFunc: FfiConverterTypeProviderTestResult.lift,
-            errorHandler: nil
-            
-        )
+open func testSearchProvider(providerName: String)throws  -> ProviderTestResult {
+    return try  FfiConverterTypeProviderTestResult.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_test_search_provider(self.uniffiClonePointer(),
+        FfiConverterString.lower(providerName),$0
+    )
+})
 }
     
-open func testSearchProviderWithConfig(config: SearchProviderTestConfig)async  -> ProviderTestResult {
-    return
-        try!  await uniffiRustCallAsync(
-            rustFutureFunc: {
-                uniffi_aethecore_fn_method_aethercore_test_search_provider_with_config(
-                    self.uniffiClonePointer(),
-                    FfiConverterTypeSearchProviderTestConfig.lower(config)
-                )
-            },
-            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
-            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
-            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
-            liftFunc: FfiConverterTypeProviderTestResult.lift,
-            errorHandler: nil
-            
-        )
+open func testSearchProviderWithConfig(config: SearchProviderTestConfig)throws  -> ProviderTestResult {
+    return try  FfiConverterTypeProviderTestResult.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_test_search_provider_with_config(self.uniffiClonePointer(),
+        FfiConverterTypeSearchProviderTestConfig.lower(config),$0
+    )
+})
 }
     
 open func testStreamingResponse() {try! rustCall() {
@@ -939,6 +921,13 @@ open func updateProvider(name: String, provider: ProviderConfig)throws  {try rus
 open func updateRoutingRules(rules: [RoutingRuleConfig])throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_update_routing_rules(self.uniffiClonePointer(),
         FfiConverterSequenceTypeRoutingRuleConfig.lower(rules),$0
+    )
+}
+}
+    
+open func updateSearchConfig(search: SearchConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_update_search_config(self.uniffiClonePointer(),
+        FfiConverterTypeSearchConfig.lower(search),$0
     )
 }
 }
@@ -2150,8 +2139,10 @@ public func FfiConverterTypeProviderTestResult_lower(_ value: ProviderTestResult
 
 
 public struct RoutingRuleConfig {
+    public var ruleType: String?
+    public var isBuiltin: Bool
     public var regex: String
-    public var provider: String
+    public var provider: String?
     public var systemPrompt: String?
     public var stripPrefix: Bool?
     public var capabilities: [String]?
@@ -2165,7 +2156,9 @@ public struct RoutingRuleConfig {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(regex: String, provider: String, systemPrompt: String?, stripPrefix: Bool?, capabilities: [String]?, intentType: String?, contextFormat: String?, skillId: String?, skillVersion: String?, workflow: String?, tools: String?, knowledgeBase: String?) {
+    public init(ruleType: String?, isBuiltin: Bool, regex: String, provider: String?, systemPrompt: String?, stripPrefix: Bool?, capabilities: [String]?, intentType: String?, contextFormat: String?, skillId: String?, skillVersion: String?, workflow: String?, tools: String?, knowledgeBase: String?) {
+        self.ruleType = ruleType
+        self.isBuiltin = isBuiltin
         self.regex = regex
         self.provider = provider
         self.systemPrompt = systemPrompt
@@ -2185,6 +2178,12 @@ public struct RoutingRuleConfig {
 
 extension RoutingRuleConfig: Equatable, Hashable {
     public static func ==(lhs: RoutingRuleConfig, rhs: RoutingRuleConfig) -> Bool {
+        if lhs.ruleType != rhs.ruleType {
+            return false
+        }
+        if lhs.isBuiltin != rhs.isBuiltin {
+            return false
+        }
         if lhs.regex != rhs.regex {
             return false
         }
@@ -2225,6 +2224,8 @@ extension RoutingRuleConfig: Equatable, Hashable {
     }
 
     public func hash(into hasher: inout Hasher) {
+        hasher.combine(ruleType)
+        hasher.combine(isBuiltin)
         hasher.combine(regex)
         hasher.combine(provider)
         hasher.combine(systemPrompt)
@@ -2248,8 +2249,10 @@ public struct FfiConverterTypeRoutingRuleConfig: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RoutingRuleConfig {
         return
             try RoutingRuleConfig(
+                ruleType: FfiConverterOptionString.read(from: &buf), 
+                isBuiltin: FfiConverterBool.read(from: &buf), 
                 regex: FfiConverterString.read(from: &buf), 
-                provider: FfiConverterString.read(from: &buf), 
+                provider: FfiConverterOptionString.read(from: &buf), 
                 systemPrompt: FfiConverterOptionString.read(from: &buf), 
                 stripPrefix: FfiConverterOptionBool.read(from: &buf), 
                 capabilities: FfiConverterOptionSequenceString.read(from: &buf), 
@@ -2264,8 +2267,10 @@ public struct FfiConverterTypeRoutingRuleConfig: FfiConverterRustBuffer {
     }
 
     public static func write(_ value: RoutingRuleConfig, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.ruleType, into: &buf)
+        FfiConverterBool.write(value.isBuiltin, into: &buf)
         FfiConverterString.write(value.regex, into: &buf)
-        FfiConverterString.write(value.provider, into: &buf)
+        FfiConverterOptionString.write(value.provider, into: &buf)
         FfiConverterOptionString.write(value.systemPrompt, into: &buf)
         FfiConverterOptionBool.write(value.stripPrefix, into: &buf)
         FfiConverterOptionSequenceString.write(value.capabilities, into: &buf)
@@ -4082,52 +4087,6 @@ fileprivate struct FfiConverterSequenceTypeSearchBackendEntry: FfiConverterRustB
         return seq
     }
 }
-private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
-private let UNIFFI_RUST_FUTURE_POLL_MAYBE_READY: Int8 = 1
-
-fileprivate let uniffiContinuationHandleMap = UniffiHandleMap<UnsafeContinuation<Int8, Never>>()
-
-fileprivate func uniffiRustCallAsync<F, T>(
-    rustFutureFunc: () -> UInt64,
-    pollFunc: (UInt64, @escaping UniffiRustFutureContinuationCallback, UInt64) -> (),
-    completeFunc: (UInt64, UnsafeMutablePointer<RustCallStatus>) -> F,
-    freeFunc: (UInt64) -> (),
-    liftFunc: (F) throws -> T,
-    errorHandler: ((RustBuffer) throws -> Swift.Error)?
-) async throws -> T {
-    // Make sure to call uniffiEnsureInitialized() since future creation doesn't have a
-    // RustCallStatus param, so doesn't use makeRustCall()
-    uniffiEnsureInitialized()
-    let rustFuture = rustFutureFunc()
-    defer {
-        freeFunc(rustFuture)
-    }
-    var pollResult: Int8;
-    repeat {
-        pollResult = await withUnsafeContinuation {
-            pollFunc(
-                rustFuture,
-                uniffiFutureContinuationCallback,
-                uniffiContinuationHandleMap.insert(obj: $0)
-            )
-        }
-    } while pollResult != UNIFFI_RUST_FUTURE_POLL_READY
-
-    return try liftFunc(makeRustCall(
-        { completeFunc(rustFuture, $0) },
-        errorHandler: errorHandler
-    ))
-}
-
-// Callback handlers for an async calls.  These are invoked by Rust when the future is ready.  They
-// lift the return value or error and resume the suspended function.
-fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: Int8) {
-    if let continuation = try? uniffiContinuationHandleMap.remove(handle: handle) {
-        continuation.resume(returning: pollResult)
-    } else {
-        print("uniffiFutureContinuationCallback invalid handle")
-    }
-}
 public func checkEmbeddingModelExists()throws  -> Bool {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_func_check_embedding_model_exists($0
@@ -4253,10 +4212,10 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_test_provider_connection_with_config() != 26018) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_test_search_provider() != 57532) {
+    if (uniffi_aethecore_checksum_method_aethercore_test_search_provider() != 54585) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_test_search_provider_with_config() != 46815) {
+    if (uniffi_aethecore_checksum_method_aethercore_test_search_provider_with_config() != 47098) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_test_streaming_response() != 24597) {
@@ -4278,6 +4237,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_routing_rules() != 28990) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_update_search_config() != 59013) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_shortcuts() != 5200) {

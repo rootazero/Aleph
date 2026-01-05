@@ -178,6 +178,10 @@ interface AetherCore {
   [Throws=AetherException]
   void update_behavior(BehaviorConfig behavior);
 
+  // Update search configuration
+  [Throws=AetherException]
+  void update_search_config(SearchConfig search);
+
   // Validate regex pattern
   [Throws=AetherException]
   boolean validate_regex(string pattern);
@@ -219,12 +223,14 @@ interface AetherCore {
   string get_log_directory();
 
   // SEARCH PROVIDER TESTING (integrate-search-registry)
-  [Async]
+  // Note: These are synchronous methods that use runtime.block_on() internally
+  // to execute async search operations within Tokio runtime context
+  [Throws=AetherException]
   ProviderTestResult test_search_provider(string provider_name);
 
   // Test search provider with ad-hoc config (without requiring saved config)
   // This allows testing provider credentials before saving to config file
-  [Async]
+  [Throws=AetherException]
   ProviderTestResult test_search_provider_with_config(SearchProviderTestConfig config);
 };
 
@@ -365,20 +371,28 @@ dictionary SearchProviderTestConfig {
   string? engine_id;       // Engine ID (required for Google CSE)
 };
 
-// Routing rule configuration (Phase 6 - Task 1.5)
+// Routing rule configuration (Phase 6 - Task 1.5, refactor-routing-rule-logic)
+//
+// Aether supports two types of routing rules:
+// - Command Rules: Start with ^/, first-match-stops, requires provider
+// - Keyword Rules: Non-/ patterns, all-match, prompt only (uses default_provider)
 dictionary RoutingRuleConfig {
-  // ===== Existing fields (backward compatible) =====
-  string regex;
-  string provider;
-  string? system_prompt;
-  boolean? strip_prefix;  // Whether to strip matched prefix before sending to AI (default: true for ^/ patterns)
+  // ===== Rule Type (refactor-routing-rule-logic) =====
+  string? rule_type;   // "command" or "keyword" (auto-detected if not specified)
+  boolean is_builtin;  // Whether this is a builtin rule (read-only in Settings UI)
 
-  // ===== 🆕 New fields (MVP implementation) =====
+  // ===== Core fields =====
+  string regex;        // Regex pattern to match user input
+  string? provider;    // Provider name (required for command rules, ignored for keyword)
+  string? system_prompt;  // System prompt to guide AI behavior
+  boolean? strip_prefix;  // Strip matched prefix before sending to AI (default: true for command rules)
+
+  // ===== Capability fields =====
   sequence<string>? capabilities;  // Required capabilities (e.g., ["memory", "search"])
   string? intent_type;              // Intent type identifier (e.g., "translation", "research")
   string? context_format;           // Context injection format (e.g., "markdown", "xml", "json")
 
-  // ===== 🔮 Skills fields (Solution C reserved) =====
+  // ===== Skills fields (reserved) =====
   string? skill_id;          // Skills ID (e.g., "build-macos-apps")
   string? skill_version;     // Skills version (e.g., "1.0.0")
   string? workflow;          // Skills workflow definition (JSON string)

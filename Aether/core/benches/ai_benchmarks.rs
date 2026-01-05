@@ -33,19 +33,17 @@ fn create_benchmark_config() -> Config {
 
     // Add 10 routing rules to test matching performance
     for i in 0..10 {
-        config.rules.push(RoutingRuleConfig {
-            regex: format!("^/rule{}", i),
-            provider: "mock".to_string(),
-            system_prompt: Some(format!("System prompt {}", i)),
-        });
+        config.rules.push(RoutingRuleConfig::command(
+            &format!("^/rule{}", i),
+            "mock",
+            Some(&format!("System prompt {}", i)),
+        ));
     }
 
     // Add catch-all rule
-    config.rules.push(RoutingRuleConfig {
-        regex: ".*".to_string(),
-        provider: "mock".to_string(),
-        system_prompt: None,
-    });
+    config
+        .rules
+        .push(RoutingRuleConfig::command(".*", "mock", None));
 
     config.general.default_provider = Some("mock".to_string());
 

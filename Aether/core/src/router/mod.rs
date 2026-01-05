@@ -327,22 +327,80 @@ impl Router {
         }
 
         // Load routing rules from config
+        // Note: Rules are now split into command rules and keyword rules
+        // - Command rules: first-match-stops, requires provider
+        // - Keyword rules: all-match, prompt only (uses default_provider)
         let mut rules = Vec::new();
         let mut rule_configs = Vec::new();
         for rule_config in &config.rules {
+            // Determine effective provider for this rule
+            let effective_provider = if rule_config.is_command_rule() {
+                // Command rules require explicit provider
+                match &rule_config.provider {
+                    Some(p) => {
+                        // For builtin rules, try specified provider first, then fallback to default
+                        if rule_config.is_builtin && !providers.contains_key(p) {
+                            // Builtin rule: fallback to default_provider
+                            config
+                                .general
+                                .default_provider
+                                .clone()
+                                .unwrap_or_else(|| "openai".to_string())
+                        } else {
+                            p.clone()
+                        }
+                    }
+                    None => {
+                        // Builtin rules without provider use default_provider
+                        if rule_config.is_builtin {
+                            config
+                                .general
+                                .default_provider
+                                .clone()
+                                .unwrap_or_else(|| "openai".to_string())
+                        } else {
+                            return Err(AetherError::invalid_config(format!(
+                                "Command rule (regex: '{}') requires a provider",
+                                rule_config.regex
+                            )));
+                        }
+                    }
+                }
+            } else {
+                // Keyword rules use default provider
+                config
+                    .general
+                    .default_provider
+                    .clone()
+                    .unwrap_or_else(|| "openai".to_string())
+            };
+
+            // Skip builtin rules if no valid provider available
+            if rule_config.is_builtin && !providers.contains_key(&effective_provider) {
+                debug!(
+                    regex = %rule_config.regex,
+                    provider = %effective_provider,
+                    "Skipping builtin rule: no matching provider available"
+                );
+                continue;
+            }
+
             // Create RoutingRule from config
             let rule = RoutingRule::new(
                 &rule_config.regex,
-                &rule_config.provider,
+                &effective_provider,
                 rule_config.system_prompt.as_deref(),
-                rule_config.strip_prefix,
+                Some(rule_config.should_strip_prefix()),
             )?;
 
-            // Validate that provider exists
-            if !providers.contains_key(&rule_config.provider) {
+            // Validate that provider exists (only for non-builtin command rules)
+            if rule_config.is_command_rule()
+                && !rule_config.is_builtin
+                && !providers.contains_key(&effective_provider)
+            {
                 return Err(AetherError::invalid_config(format!(
                     "Rule references unknown provider '{}'. Available providers: {}",
-                    rule_config.provider,
+                    effective_provider,
                     providers.keys().cloned().collect::<Vec<_>>().join(", ")
                 )));
             }
@@ -925,36 +983,11 @@ mod tests {
             config
         });
 
-        // Add routing rules
-        config.rules.push(RoutingRuleConfig {
-            regex: r"^/code".to_string(),
-            provider: "claude".to_string(),
-            system_prompt: Some("You are a coder".to_string()),
-            strip_prefix: None,
-            capabilities: None,
-            intent_type: None,
-            context_format: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        });
-
-        config.rules.push(RoutingRuleConfig {
-            regex: r".*".to_string(),
-            provider: "openai".to_string(),
-            system_prompt: None,
-            strip_prefix: None,
-            capabilities: None,
-            intent_type: None,
-            context_format: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        });
+        // Add routing rules (using command factory method)
+        config
+            .rules
+            .push(RoutingRuleConfig::command(r"^/code", "claude", Some("You are a coder")));
+        config.rules.push(RoutingRuleConfig::command(r".*", "openai", None));
 
         let router = Router::new(&config).unwrap();
 
@@ -977,36 +1010,11 @@ mod tests {
             config
         });
 
-        // Add routing rules (first match wins)
-        config.rules.push(RoutingRuleConfig {
-            regex: r"^/code".to_string(),
-            provider: "claude".to_string(),
-            system_prompt: Some("You are a coder".to_string()),
-            strip_prefix: None,
-            capabilities: None,
-            intent_type: None,
-            context_format: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        });
-
-        config.rules.push(RoutingRuleConfig {
-            regex: r".*".to_string(),
-            provider: "openai".to_string(),
-            system_prompt: None,
-            strip_prefix: None,
-            capabilities: None,
-            intent_type: None,
-            context_format: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        });
+        // Add routing rules (first match wins, using command factory method)
+        config
+            .rules
+            .push(RoutingRuleConfig::command(r"^/code", "claude", Some("You are a coder")));
+        config.rules.push(RoutingRuleConfig::command(r".*", "openai", None));
 
         let router = Router::new(&config).unwrap();
 
@@ -1034,21 +1042,10 @@ mod tests {
             .providers
             .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
-        // Add rule referencing non-existent provider
-        config.rules.push(RoutingRuleConfig {
-            regex: r"^/code".to_string(),
-            provider: "nonexistent".to_string(),
-            system_prompt: None,
-            strip_prefix: None,
-            capabilities: None,
-            intent_type: None,
-            context_format: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        });
+        // Add command rule referencing non-existent provider
+        config
+            .rules
+            .push(RoutingRuleConfig::command(r"^/code", "nonexistent", None));
 
         let result = Router::new(&config);
         assert!(result.is_err());
@@ -1064,21 +1061,10 @@ mod tests {
             .providers
             .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
-        // Add rule with invalid regex
-        config.rules.push(RoutingRuleConfig {
-            regex: r"[invalid(regex".to_string(),
-            provider: "openai".to_string(),
-            system_prompt: None,
-            strip_prefix: None,
-            capabilities: None,
-            intent_type: None,
-            context_format: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        });
+        // Add rule with invalid regex - need to create manually for invalid regex test
+        let mut invalid_rule = RoutingRuleConfig::command(r"[invalid(regex", "openai", None);
+        invalid_rule.regex = r"[invalid(regex".to_string();
+        config.rules.push(invalid_rule);
 
         let result = Router::new(&config);
         assert!(result.is_err());
@@ -1087,20 +1073,7 @@ mod tests {
 
     #[test]
     fn test_routing_rule_config_serialization() {
-        let rule = RoutingRuleConfig {
-            regex: r"^/code".to_string(),
-            provider: "claude".to_string(),
-            system_prompt: Some("You are a coder".to_string()),
-            strip_prefix: None,
-            capabilities: None,
-            intent_type: None,
-            context_format: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        };
+        let rule = RoutingRuleConfig::command(r"^/code", "claude", Some("You are a coder"));
 
         let json = serde_json::to_string(&rule).unwrap();
         assert!(json.contains("^/code"));
@@ -1110,6 +1083,7 @@ mod tests {
 
     #[test]
     fn test_routing_rule_config_deserialization() {
+        // Test backward compatibility: old JSON without rule_type/is_builtin should still work
         let json = r#"{
             "regex": "^/code",
             "provider": "claude",
@@ -1118,8 +1092,11 @@ mod tests {
 
         let rule: RoutingRuleConfig = serde_json::from_str(json).unwrap();
         assert_eq!(rule.regex, "^/code");
-        assert_eq!(rule.provider, "claude");
+        assert_eq!(rule.provider, Some("claude".to_string()));
         assert_eq!(rule.system_prompt, Some("You are a coder".to_string()));
+        // Auto-detected rule type should be "command" because regex starts with ^/
+        assert_eq!(rule.get_rule_type(), "command");
+        assert!(!rule.is_builtin);
     }
 
     #[test]
@@ -1130,23 +1107,27 @@ mod tests {
             .providers
             .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
-        config.rules.push(RoutingRuleConfig {
-            regex: r"^/code".to_string(),
-            provider: "openai".to_string(),
-            system_prompt: Some("You are a coder".to_string()),
-            strip_prefix: None,
-            capabilities: None,
-            intent_type: None,
-            context_format: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        });
+        config
+            .rules
+            .push(RoutingRuleConfig::command(r"^/code", "openai", Some("You are a coder")));
 
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("rules"));
         assert!(json.contains("^/code"));
+    }
+
+    #[test]
+    fn test_rule_type_auto_detection() {
+        // Command rule pattern (starts with ^/)
+        let command_rule = RoutingRuleConfig::test_config(r"^/draw", "openai");
+        assert_eq!(command_rule.get_rule_type(), "command");
+        assert!(command_rule.is_command_rule());
+        assert!(!command_rule.is_keyword_rule());
+
+        // Keyword rule pattern (does not start with ^/)
+        let keyword_rule = RoutingRuleConfig::keyword("翻译成英文", "翻译目标语言为英文");
+        assert_eq!(keyword_rule.get_rule_type(), "keyword");
+        assert!(keyword_rule.is_keyword_rule());
+        assert!(!keyword_rule.is_command_rule());
     }
 }

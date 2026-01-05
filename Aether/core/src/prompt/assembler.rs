@@ -299,20 +299,8 @@ mod tests {
     fn test_custom_command_from_rule() {
         let mut assembler = PromptAssembler::new();
 
-        let rule = RoutingRuleConfig {
-            regex: "^/en".to_string(),
-            provider: "openai".to_string(),
-            system_prompt: Some("Custom translation prompt".to_string()),
-            strip_prefix: Some(true),
-            capabilities: None,
-            intent_type: None,
-            context_format: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        };
+        let rule =
+            RoutingRuleConfig::command("^/en", "openai", Some("Custom translation prompt"));
 
         let result = assembler.add_custom_command_from_rule(&rule);
         assert!(result.is_ok());
@@ -326,20 +314,7 @@ mod tests {
         let mut assembler = PromptAssembler::new();
 
         // Add custom /en command
-        let rule = RoutingRuleConfig {
-            regex: "^/en".to_string(),
-            provider: "openai".to_string(),
-            system_prompt: Some("Translate to English".to_string()),
-            strip_prefix: Some(true),
-            capabilities: None,
-            intent_type: None,
-            context_format: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        };
+        let rule = RoutingRuleConfig::command("^/en", "openai", Some("Translate to English"));
 
         assembler.add_custom_command_from_rule(&rule).unwrap();
 

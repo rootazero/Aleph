@@ -245,7 +245,7 @@ struct RuleEditorView: View {
             // Load existing rule data
             let rule = rules[index]
             pattern = rule.regex
-            selectedProvider = rule.provider
+            selectedProvider = rule.provider ?? ""
             systemPrompt = rule.systemPrompt ?? ""
         } else {
             // New rule: set default provider
@@ -319,9 +319,13 @@ struct RuleEditorView: View {
         Task {
             do {
                 // Create new rule config
+                // Auto-detect rule type based on regex pattern
+                let isCommandRule = pattern.hasPrefix("^/")
                 let newRule = RoutingRuleConfig(
+                    ruleType: isCommandRule ? "command" : "keyword",
+                    isBuiltin: false,  // User-created rules are never builtin
                     regex: pattern,
-                    provider: selectedProvider,
+                    provider: isCommandRule ? selectedProvider : nil,  // Keyword rules don't need provider
                     systemPrompt: systemPrompt.isEmpty ? nil : systemPrompt,
                     stripPrefix: nil,  // Auto-detect: true for ^/ patterns
                     capabilities: nil,

@@ -98,40 +98,16 @@ mod tests {
 
     #[test]
     fn test_intent_from_rule_search() {
-        let rule = RoutingRuleConfig {
-            regex: "^/search".to_string(),
-            provider: "openai".to_string(),
-            system_prompt: None,
-            strip_prefix: None,
-            capabilities: None,
-            intent_type: Some("search".to_string()),
-            context_format: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        };
+        let mut rule = RoutingRuleConfig::command("^/search", "openai", None);
+        rule.intent_type = Some("search".to_string());
 
         assert_eq!(Intent::from_rule(&rule), Intent::BuiltinSearch);
     }
 
     #[test]
     fn test_intent_from_rule_custom() {
-        let rule = RoutingRuleConfig {
-            regex: "^/translate".to_string(),
-            provider: "openai".to_string(),
-            system_prompt: None,
-            strip_prefix: None,
-            capabilities: None,
-            intent_type: Some("translation".to_string()),
-            context_format: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        };
+        let mut rule = RoutingRuleConfig::command("^/translate", "openai", None);
+        rule.intent_type = Some("translation".to_string());
 
         assert_eq!(
             Intent::from_rule(&rule),
@@ -141,20 +117,9 @@ mod tests {
 
     #[test]
     fn test_intent_from_rule_skills() {
-        let rule = RoutingRuleConfig {
-            regex: "^/build-ios".to_string(),
-            provider: "claude".to_string(),
-            system_prompt: None,
-            strip_prefix: None,
-            capabilities: None,
-            intent_type: Some("skills:build-macos-apps".to_string()),
-            context_format: None,
-            skill_id: Some("build-macos-apps".to_string()),
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        };
+        let mut rule = RoutingRuleConfig::command("^/build-ios", "claude", None);
+        rule.intent_type = Some("skills:build-macos-apps".to_string());
+        rule.skill_id = Some("build-macos-apps".to_string());
 
         let intent = Intent::from_rule(&rule);
         assert!(intent.is_skills());
