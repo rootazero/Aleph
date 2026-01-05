@@ -32,6 +32,7 @@ use std::pin::Pin;
 
 // Sub-modules
 pub mod claude;
+pub mod gemini;
 pub mod mock;
 pub mod ollama;
 pub mod openai;
@@ -40,6 +41,7 @@ pub mod retry;
 
 // Re-exports
 pub use claude::ClaudeProvider;
+pub use gemini::GeminiProvider;
 pub use mock::{MockError, MockProvider};
 pub use ollama::OllamaProvider;
 pub use openai::OpenAiProvider;
@@ -118,6 +120,10 @@ pub fn create_provider(name: &str, config: ProviderConfig) -> Result<Arc<dyn AiP
             let provider = ClaudeProvider::new(name.to_string(), config)?;
             Ok(Arc::new(provider))
         }
+        "gemini" => {
+            let provider = GeminiProvider::new(name.to_string(), config)?;
+            Ok(Arc::new(provider))
+        }
         "ollama" => {
             let provider = OllamaProvider::new(name.to_string(), config)?;
             Ok(Arc::new(provider))
@@ -128,7 +134,7 @@ pub fn create_provider(name: &str, config: ProviderConfig) -> Result<Arc<dyn AiP
             Ok(Arc::new(provider))
         }
         unknown => Err(AetherError::invalid_config(format!(
-            "Unknown provider type: '{}'. Supported types: openai, claude, ollama, mock",
+            "Unknown provider type: '{}'. Supported types: openai, claude, gemini, ollama, mock",
             unknown
         ))),
     }
@@ -378,6 +384,16 @@ mod tests {
     }
 
     #[test]
+    fn test_create_gemini_provider() {
+        let mut config = ProviderConfig::test_config("gemini-1.5-flash");
+        config.provider_type = Some("gemini".to_string());
+
+        let provider = create_provider("gemini", config);
+        assert!(provider.is_ok());
+        assert_eq!(provider.unwrap().name(), "gemini");
+    }
+
+    #[test]
     fn test_create_ollama_provider() {
         let mut config = ProviderConfig::test_config("llama3.2");
         config.provider_type = Some("ollama".to_string());
@@ -419,6 +435,8 @@ mod tests {
         // Infer from name
         assert_eq!(config.infer_provider_type("openai"), "openai");
         assert_eq!(config.infer_provider_type("claude"), "claude");
+        assert_eq!(config.infer_provider_type("gemini"), "gemini");
+        assert_eq!(config.infer_provider_type("google"), "gemini");
         assert_eq!(config.infer_provider_type("ollama"), "ollama");
         assert_eq!(config.infer_provider_type("deepseek"), "openai");
         assert_eq!(config.infer_provider_type("moonshot"), "openai");

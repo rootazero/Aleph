@@ -346,29 +346,16 @@ impl OpenAiProvider {
             },
         });
 
-        // Use vision-capable model and higher max_tokens for image analysis
-        // Prefer the configured model if it supports vision, otherwise fallback to gpt-4o
-        let model = if self.is_vision_capable_model() {
-            self.config.model.clone()
-        } else {
-            "gpt-4o".to_string()
-        };
-
+        // For multimodal requests, always use the configured model.
+        // Custom endpoints (OpenRouter, Azure, relay APIs) should configure vision-capable models.
+        // We trust the user's configuration - if they send images to a non-vision model,
+        // the API will return an appropriate error.
         ChatCompletionRequest {
-            model,
+            model: self.config.model.clone(),
             messages,
             max_tokens: Some(self.config.max_tokens.unwrap_or(4096)),
             temperature: self.config.temperature,
         }
-    }
-
-    /// Check if the configured model supports vision
-    fn is_vision_capable_model(&self) -> bool {
-        let model = self.config.model.to_lowercase();
-        model.contains("gpt-4o")
-            || model.contains("gpt-4-turbo")
-            || model.contains("gpt-4-vision")
-            || model.contains("vision")
     }
 
     /// Parse error response and convert to AetherError

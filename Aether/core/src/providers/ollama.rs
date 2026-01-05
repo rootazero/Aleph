@@ -1,34 +1,33 @@
 /// Ollama local LLM client implementation
 ///
 /// Implements the `AiProvider` trait for locally-hosted Ollama models.
-/// Executes the `ollama run` command to generate responses.
+/// Uses Ollama's HTTP API for text and vision capabilities.
 ///
 /// # Configuration
 ///
 /// Required fields:
-/// - `model`: Model name (e.g., "llama3.2", "codellama", "mistral")
+/// - `model`: Model name (e.g., "llama3.2", "llava", "bakllava")
 ///
 /// Optional fields:
-/// - `timeout_seconds`: Command execution timeout (defaults to 30)
+/// - `base_url`: Ollama server URL (defaults to "http://localhost:11434")
+/// - `timeout_seconds`: Request timeout (defaults to 60)
 ///
 /// # Prerequisites
 ///
-/// Ollama must be installed and available in PATH:
+/// Ollama must be installed and running:
 /// - macOS/Linux: `curl -fsSL https://ollama.ai/install.sh | sh`
 /// - Manual: https://ollama.ai/download
 ///
 /// Models must be pulled before use:
 /// ```bash
 /// ollama pull llama3.2
+/// ollama pull llava  # For vision support
 /// ```
 ///
-/// # Design Notes
+/// # Vision Support
 ///
-/// Unlike cloud providers (OpenAI, Claude), Ollama runs locally:
-/// - No API key required
-/// - No network calls (assuming local Ollama server)
-/// - Uses command-line execution via `tokio::process::Command`
-/// - Output may contain ANSI escape codes that need stripping
+/// Vision-capable models (llava, bakllava, etc.) can process images
+/// when using `process_with_attachments()`.
 ///
 /// # Example
 ///
@@ -41,14 +40,14 @@
 /// let config = ProviderConfig {
 ///     api_key: None, // Not needed for Ollama
 ///     model: "llama3.2".to_string(),
-///     base_url: None,
+///     base_url: Some("http://localhost:11434".to_string()),
 ///     color: "#0000ff".to_string(),
 ///     timeout_seconds: 60,
 ///     max_tokens: None,
 ///     temperature: None,
 /// };
 ///
-/// let provider = OllamaProvider::new(config)?;
+/// let provider = OllamaProvider::new("ollama".to_string(), config)?;
 /// let response = provider.process("Hello!", Some("You are helpful")).await?;
 /// println!("Response: {}", response);
 /// # Ok(())
@@ -57,24 +56,69 @@
 use crate::config::ProviderConfig;
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
-use regex::Regex;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
-use tokio::process::Command;
-use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
+
+/// Default Ollama server URL
+const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 
 /// Ollama local provider
 pub struct OllamaProvider {
     /// Provider name (e.g., "ollama", "ollama-llama3")
     name: String,
-    /// Model name (e.g., "llama3.2")
+    /// Model name (e.g., "llama3.2", "llava")
     model: String,
-    /// Command execution timeout
-    timeout: Duration,
+    /// HTTP client
+    client: Client,
+    /// API endpoint
+    endpoint: String,
     /// Provider brand color
     color: String,
+    /// Provider config for advanced options
+    config: ProviderConfig,
+}
+
+/// Request body for Ollama /api/generate endpoint
+#[derive(Debug, Serialize)]
+struct GenerateRequest {
+    model: String,
+    prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    images: Option<Vec<String>>,
+    stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    options: Option<GenerateOptions>,
+}
+
+/// Optional generation parameters
+#[derive(Debug, Serialize)]
+struct GenerateOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    num_predict: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repeat_penalty: Option<f32>,
+}
+
+/// Response from Ollama /api/generate endpoint
+#[derive(Debug, Deserialize)]
+struct GenerateResponse {
+    response: String,
+    #[allow(dead_code)]
+    done: bool,
+}
+
+/// Error response from Ollama API
+#[derive(Debug, Deserialize)]
+struct OllamaError {
+    error: String,
 }
 
 impl OllamaProvider {
@@ -82,6 +126,7 @@ impl OllamaProvider {
     ///
     /// # Arguments
     ///
+    /// * `name` - Provider name
     /// * `config` - Provider configuration with model name
     ///
     /// # Returns
@@ -105,50 +150,134 @@ impl OllamaProvider {
             ));
         }
 
+        // Build HTTP client with timeout
+        let client = Client::builder()
+            .timeout(Duration::from_secs(config.timeout_seconds))
+            .build()
+            .map_err(|e| {
+                AetherError::invalid_config(format!("Failed to build HTTP client: {}", e))
+            })?;
+
+        // Build API endpoint
+        let base_url = config
+            .base_url
+            .as_ref()
+            .map(|s| s.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_string());
+        let endpoint = format!("{}/api/generate", base_url);
+
         info!(
             model = %config.model,
+            endpoint = %endpoint,
             timeout_seconds = config.timeout_seconds,
-            "Ollama provider initialized successfully"
+            "Ollama provider initialized successfully (HTTP API)"
         );
 
         Ok(Self {
             name,
-            model: config.model,
-            timeout: Duration::from_secs(config.timeout_seconds),
-            color: config.color,
+            model: config.model.clone(),
+            client,
+            endpoint,
+            color: config.color.clone(),
+            config,
         })
     }
 
-    /// Format prompt combining system prompt and user input
+    /// Check if the model supports vision
     ///
-    /// If a system prompt is provided, prepend it to the user input.
-    /// This mimics the behavior of chat APIs where system prompts guide model behavior.
-    fn format_prompt(&self, input: &str, system_prompt: Option<&str>) -> String {
-        match system_prompt {
-            Some(sys) => format!("{}\n\n{}", sys, input),
-            None => input.to_string(),
+    /// Vision-capable models include llava, bakllava, and similar.
+    fn is_vision_model(&self) -> bool {
+        let model_lower = self.model.to_lowercase();
+        model_lower.contains("llava")
+            || model_lower.contains("bakllava")
+            || model_lower.contains("vision")
+            || model_lower.contains("moondream")
+    }
+
+    /// Build generate options from config
+    fn build_options(&self) -> Option<GenerateOptions> {
+        if self.config.temperature.is_some()
+            || self.config.max_tokens.is_some()
+            || self.config.repeat_penalty.is_some()
+        {
+            Some(GenerateOptions {
+                temperature: self.config.temperature,
+                num_predict: self.config.max_tokens,
+                repeat_penalty: self.config.repeat_penalty,
+            })
+        } else {
+            None
         }
     }
 
-    /// Strip ANSI escape codes from output
-    ///
-    /// Ollama may include color codes and formatting in terminal output.
-    /// This function removes all ANSI sequences to get clean text.
-    fn strip_ansi_codes(&self, text: &str) -> String {
-        // Regex pattern for ANSI escape codes
-        // Matches ESC [ ... m sequences
-        let ansi_pattern = Regex::new(r"\x1b\[[0-9;]*m").unwrap();
-        ansi_pattern.replace_all(text, "").to_string()
+    /// Build request for text-only generation
+    fn build_request(&self, input: &str, system_prompt: Option<&str>) -> GenerateRequest {
+        GenerateRequest {
+            model: self.model.clone(),
+            prompt: input.to_string(),
+            system: system_prompt.map(|s| s.to_string()),
+            images: None,
+            stream: false,
+            options: self.build_options(),
+        }
     }
 
-    /// Clean and format output text
-    ///
-    /// - Strip ANSI escape codes
-    /// - Trim leading/trailing whitespace
-    /// - Preserve internal line breaks
-    fn clean_output(&self, output: &str) -> String {
-        let stripped = self.strip_ansi_codes(output);
-        stripped.trim().to_string()
+    /// Build request with images for vision generation
+    fn build_multimodal_request(
+        &self,
+        input: &str,
+        attachments: &[crate::core::MediaAttachment],
+        system_prompt: Option<&str>,
+    ) -> GenerateRequest {
+        // Collect base64 image data (Ollama expects raw base64, not data URI)
+        let images: Vec<String> = attachments
+            .iter()
+            .filter(|a| a.media_type == "image")
+            .map(|a| a.data.clone()) // Already base64 encoded
+            .collect();
+
+        GenerateRequest {
+            model: self.model.clone(),
+            prompt: if input.is_empty() {
+                "Describe this image in detail.".to_string()
+            } else {
+                input.to_string()
+            },
+            system: system_prompt.map(|s| s.to_string()),
+            images: if images.is_empty() {
+                None
+            } else {
+                Some(images)
+            },
+            stream: false,
+            options: self.build_options(),
+        }
+    }
+
+    /// Handle error response from Ollama
+    async fn handle_error(&self, response: reqwest::Response) -> AetherError {
+        let status = response.status();
+
+        // Try to parse error response
+        if let Ok(error_response) = response.json::<OllamaError>().await {
+            let error_msg = error_response.error;
+
+            // Check for specific error patterns
+            if error_msg.contains("model") && error_msg.contains("not found") {
+                error!(model = %self.model, "Ollama model not found");
+                return AetherError::provider(format!(
+                    "Ollama model '{}' not found. Run: ollama pull {}",
+                    self.model, self.model
+                ));
+            }
+
+            error!(status = %status, error = %error_msg, "Ollama API error");
+            return AetherError::provider(format!("Ollama error: {}", error_msg));
+        }
+
+        // Fallback error
+        error!(status = %status, "Ollama request failed");
+        AetherError::provider(format!("Ollama request failed: {}", status))
     }
 }
 
@@ -158,122 +287,185 @@ impl AiProvider for OllamaProvider {
         input: &str,
         system_prompt: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
-        // Clone the data we need before moving into async block
         let input = input.to_string();
         let system_prompt = system_prompt.map(|s| s.to_string());
 
         Box::pin(async move {
-            // Format prompt
-            let prompt = self.format_prompt(&input, system_prompt.as_deref());
-
             debug!(
                 model = %self.model,
                 input_length = input.len(),
-                prompt_length = prompt.len(),
                 has_system_prompt = system_prompt.is_some(),
-                timeout_seconds = self.timeout.as_secs(),
-                "Executing Ollama command"
+                "Sending request to Ollama"
             );
 
-            // Build command: ollama run <model> <prompt>
-            let mut cmd = Command::new("ollama");
-            cmd.arg("run")
-                .arg(&self.model)
-                .arg(&prompt)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
+            // Build request body
+            let request_body = self.build_request(&input, system_prompt.as_deref());
 
-            // Execute with timeout
-            let output_result = timeout(self.timeout, cmd.output()).await;
-
-            // Handle timeout
-            let output = match output_result {
-                Ok(result) => result.map_err(|e| {
-                    if e.kind() == std::io::ErrorKind::NotFound {
-                        error!("Ollama command not found in PATH");
-                        AetherError::provider(
-                        "Ollama command not found. Please install Ollama from https://ollama.ai"
-                    )
+            // Send POST request
+            let response = self
+                .client
+                .post(&self.endpoint)
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await
+                .map_err(|e| {
+                    if e.is_timeout() {
+                        error!("Ollama request timed out");
+                        AetherError::Timeout {
+                            suggestion: Some(
+                                "The Ollama model is taking too long. Try a smaller model or increase the timeout.".to_string(),
+                            ),
+                        }
+                    } else if e.is_connect() {
+                        error!(error = %e, "Failed to connect to Ollama");
+                        AetherError::network(format!(
+                            "Failed to connect to Ollama at {}. Is Ollama running?",
+                            self.endpoint
+                        ))
                     } else {
-                        error!(error = %e, "Failed to execute Ollama command");
-                        AetherError::provider(format!("Failed to execute Ollama: {}", e))
+                        error!(error = %e, "Ollama network error");
+                        AetherError::network(format!("Network error: {}", e))
                     }
-                })?,
-                Err(_) => {
-                    error!(
-                        model = %self.model,
-                        timeout_seconds = self.timeout.as_secs(),
-                        "Ollama command timed out"
-                    );
-                    return Err(AetherError::Timeout {
-                    suggestion: Some("The Ollama model is taking too long. Try a smaller model or increase the timeout.".to_string()),
-                });
-                }
-            };
+                })?;
 
-            // Check exit status
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let exit_code = output.status.code().unwrap_or(-1);
-
-                // Check for specific error patterns
-                if stderr.contains("model") && stderr.contains("not found") {
-                    error!(
-                        model = %self.model,
-                        exit_code = exit_code,
-                        stderr = %stderr,
-                        "Ollama model not found"
-                    );
-                    return Err(AetherError::provider(format!(
-                        "Ollama model '{}' not found. Run: ollama pull {}",
-                        self.model, self.model
-                    )));
-                }
-
-                error!(
-                    model = %self.model,
-                    exit_code = exit_code,
-                    stderr = %stderr,
-                    "Ollama command failed"
-                );
-                return Err(AetherError::provider(format!(
-                    "Ollama command failed (exit {}): {}",
-                    exit_code, stderr
-                )));
+            // Check status code
+            if !response.status().is_success() {
+                return Err(self.handle_error(response).await);
             }
 
-            // Parse stdout
-            let raw_output = String::from_utf8(output.stdout).map_err(|e| {
-                error!(error = %e, "Ollama output is not valid UTF-8");
-                AetherError::provider(format!("Ollama output is not valid UTF-8: {}", e))
+            // Parse response
+            let generate_response: GenerateResponse = response.json().await.map_err(|e| {
+                error!(error = %e, "Failed to parse Ollama response");
+                AetherError::provider(format!("Failed to parse Ollama response: {}", e))
             })?;
 
-            debug!(
-                raw_output_length = raw_output.len(),
-                "Ollama command completed, cleaning output"
-            );
+            let text = generate_response.response.trim().to_string();
 
-            // Clean output
-            let cleaned = self.clean_output(&raw_output);
-
-            if cleaned.is_empty() {
-                warn!(
-                    model = %self.model,
-                    raw_output_length = raw_output.len(),
-                    "Ollama returned empty response after cleaning"
-                );
+            if text.is_empty() {
+                warn!(model = %self.model, "Ollama returned empty response");
                 return Err(AetherError::provider("Ollama returned empty response"));
             }
 
             info!(
                 model = %self.model,
-                response_length = cleaned.len(),
+                response_length = text.len(),
                 "Ollama request completed successfully"
             );
 
-            Ok(cleaned)
+            Ok(text)
         })
+    }
+
+    fn process_with_attachments(
+        &self,
+        input: &str,
+        attachments: Option<&[crate::core::MediaAttachment]>,
+        system_prompt: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        let input = input.to_string();
+        let attachments = attachments.map(|a| a.to_vec());
+        let system_prompt = system_prompt.map(|s| s.to_string());
+
+        Box::pin(async move {
+            // Check if we have image attachments
+            let image_attachments: Option<Vec<_>> = attachments.as_ref().and_then(|atts| {
+                let images: Vec<_> = atts
+                    .iter()
+                    .filter(|a| a.media_type == "image")
+                    .cloned()
+                    .collect();
+                if images.is_empty() {
+                    None
+                } else {
+                    Some(images)
+                }
+            });
+
+            // If no images, fall back to text-only
+            let Some(images) = image_attachments else {
+                return self.process(&input, system_prompt.as_deref()).await;
+            };
+
+            // Check if model supports vision
+            if !self.is_vision_model() {
+                warn!(
+                    model = %self.model,
+                    "Model does not support vision, falling back to text-only"
+                );
+                return self.process(&input, system_prompt.as_deref()).await;
+            }
+
+            debug!(
+                model = %self.model,
+                input_length = input.len(),
+                image_count = images.len(),
+                has_system_prompt = system_prompt.is_some(),
+                "Sending multimodal request to Ollama"
+            );
+
+            // Build multimodal request body
+            let request_body =
+                self.build_multimodal_request(&input, &images, system_prompt.as_deref());
+
+            // Send POST request
+            let response = self
+                .client
+                .post(&self.endpoint)
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await
+                .map_err(|e| {
+                    if e.is_timeout() {
+                        error!("Ollama multimodal request timed out");
+                        AetherError::Timeout {
+                            suggestion: Some(
+                                "Vision processing is slow. Try increasing the timeout.".to_string(),
+                            ),
+                        }
+                    } else if e.is_connect() {
+                        error!(error = %e, "Failed to connect to Ollama");
+                        AetherError::network(format!(
+                            "Failed to connect to Ollama at {}. Is Ollama running?",
+                            self.endpoint
+                        ))
+                    } else {
+                        error!(error = %e, "Ollama network error");
+                        AetherError::network(format!("Network error: {}", e))
+                    }
+                })?;
+
+            // Check status code
+            if !response.status().is_success() {
+                return Err(self.handle_error(response).await);
+            }
+
+            // Parse response
+            let generate_response: GenerateResponse = response.json().await.map_err(|e| {
+                error!(error = %e, "Failed to parse Ollama multimodal response");
+                AetherError::provider(format!("Failed to parse Ollama response: {}", e))
+            })?;
+
+            let text = generate_response.response.trim().to_string();
+
+            if text.is_empty() {
+                warn!(model = %self.model, "Ollama returned empty response");
+                return Err(AetherError::provider("Ollama returned empty response"));
+            }
+
+            info!(
+                model = %self.model,
+                response_length = text.len(),
+                "Ollama multimodal request completed successfully"
+            );
+
+            Ok(text)
+        })
+    }
+
+    fn supports_vision(&self) -> bool {
+        self.is_vision_model()
     }
 
     fn name(&self) -> &str {
@@ -321,63 +513,53 @@ mod tests {
     }
 
     #[test]
-    fn test_format_prompt_without_system() {
+    fn test_default_endpoint() {
         let config = create_test_config();
         let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
-
-        let prompt = provider.format_prompt("Hello", None);
-        assert_eq!(prompt, "Hello");
+        assert_eq!(
+            provider.endpoint,
+            "http://localhost:11434/api/generate"
+        );
     }
 
     #[test]
-    fn test_format_prompt_with_system() {
-        let config = create_test_config();
+    fn test_custom_endpoint() {
+        let mut config = create_test_config();
+        config.base_url = Some("http://192.168.1.100:11434".to_string());
         let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
-
-        let prompt = provider.format_prompt("Hello", Some("You are a helpful assistant"));
-        assert_eq!(prompt, "You are a helpful assistant\n\nHello");
+        assert_eq!(
+            provider.endpoint,
+            "http://192.168.1.100:11434/api/generate"
+        );
     }
 
     #[test]
-    fn test_strip_ansi_codes() {
+    fn test_is_vision_model() {
         let config = create_test_config();
         let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
+        assert!(!provider.is_vision_model());
 
-        // Test with ANSI color codes
-        let text_with_ansi = "\x1b[32mGreen text\x1b[0m normal text \x1b[1;31mRed bold\x1b[0m";
-        let stripped = provider.strip_ansi_codes(text_with_ansi);
-        assert_eq!(stripped, "Green text normal text Red bold");
+        let mut vision_config = create_test_config();
+        vision_config.model = "llava".to_string();
+        let vision_provider = OllamaProvider::new("ollama".to_string(), vision_config).unwrap();
+        assert!(vision_provider.is_vision_model());
+
+        let mut bak_config = create_test_config();
+        bak_config.model = "bakllava:latest".to_string();
+        let bak_provider = OllamaProvider::new("ollama".to_string(), bak_config).unwrap();
+        assert!(bak_provider.is_vision_model());
     }
 
     #[test]
-    fn test_strip_ansi_codes_no_ansi() {
+    fn test_supports_vision() {
         let config = create_test_config();
         let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
+        assert!(!provider.supports_vision());
 
-        let plain_text = "Hello world";
-        let result = provider.strip_ansi_codes(plain_text);
-        assert_eq!(result, plain_text);
-    }
-
-    #[test]
-    fn test_clean_output() {
-        let config = create_test_config();
-        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
-
-        // Test with ANSI codes and whitespace
-        let raw = "  \n\x1b[32mHello\x1b[0m world\n  ";
-        let cleaned = provider.clean_output(raw);
-        assert_eq!(cleaned, "Hello world");
-    }
-
-    #[test]
-    fn test_clean_output_multiline() {
-        let config = create_test_config();
-        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
-
-        let raw = "Line 1\nLine 2\nLine 3";
-        let cleaned = provider.clean_output(raw);
-        assert_eq!(cleaned, "Line 1\nLine 2\nLine 3");
+        let mut vision_config = create_test_config();
+        vision_config.model = "llava".to_string();
+        let vision_provider = OllamaProvider::new("ollama".to_string(), vision_config).unwrap();
+        assert!(vision_provider.supports_vision());
     }
 
     #[test]
@@ -390,20 +572,32 @@ mod tests {
     }
 
     #[test]
-    fn test_timeout_value() {
+    fn test_build_request() {
         let config = create_test_config();
         let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
 
-        assert_eq!(provider.timeout, Duration::from_secs(60));
+        let request = provider.build_request("Hello", None);
+        assert_eq!(request.model, "llama3.2");
+        assert_eq!(request.prompt, "Hello");
+        assert!(request.system.is_none());
+        assert!(request.images.is_none());
+        assert!(!request.stream);
+
+        let request_with_system = provider.build_request("Hello", Some("Be helpful"));
+        assert_eq!(request_with_system.system, Some("Be helpful".to_string()));
     }
 
-    // Note: Integration tests requiring actual Ollama installation
-    // should be in tests/ directory and gated behind a feature flag
-    // Example:
-    // #[tokio::test]
-    // #[cfg(feature = "integration-tests")]
-    // async fn test_ollama_integration() {
-    //     // This would require ollama to be installed and running
-    //     // with llama3.2 model pulled
-    // }
+    #[test]
+    fn test_build_options() {
+        let mut config = create_test_config();
+        config.temperature = Some(0.8);
+        config.max_tokens = Some(1000);
+        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
+
+        let options = provider.build_options();
+        assert!(options.is_some());
+        let opts = options.unwrap();
+        assert_eq!(opts.temperature, Some(0.8));
+        assert_eq!(opts.num_predict, Some(1000));
+    }
 }
