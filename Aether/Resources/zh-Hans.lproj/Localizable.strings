@@ -355,6 +355,7 @@
 "menu.edit.cut" = "剪切";
 "menu.edit.copy" = "拷贝";
 "menu.edit.paste" = "粘贴";
+"menu.edit.paste_match_style" = "粘贴并匹配样式";
 "menu.edit.delete" = "删除";
 "menu.edit.select_all" = "全选";
 

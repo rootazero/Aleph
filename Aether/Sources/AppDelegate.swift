@@ -166,10 +166,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         editMenu.addItem(NSMenuItem.separator())
 
-        // Cut
+        // Cut - use generic selector for responder chain to find correct target
         let cutItem = NSMenuItem(
             title: L("menu.edit.cut"),
-            action: #selector(NSText.cut(_:)),
+            action: Selector(("cut:")),
             keyEquivalent: "x"
         )
         editMenu.addItem(cutItem)
@@ -177,7 +177,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Copy
         let copyItem = NSMenuItem(
             title: L("menu.edit.copy"),
-            action: #selector(NSText.copy(_:)),
+            action: Selector(("copy:")),
             keyEquivalent: "c"
         )
         editMenu.addItem(copyItem)
@@ -185,15 +185,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Paste
         let pasteItem = NSMenuItem(
             title: L("menu.edit.paste"),
-            action: #selector(NSText.paste(_:)),
+            action: Selector(("paste:")),
             keyEquivalent: "v"
         )
         editMenu.addItem(pasteItem)
 
+        // Paste and Match Style (for rich text compatibility)
+        let pasteAndMatchStyleItem = NSMenuItem(
+            title: L("menu.edit.paste_match_style"),
+            action: Selector(("pasteAsPlainText:")),
+            keyEquivalent: "V"
+        )
+        pasteAndMatchStyleItem.keyEquivalentModifierMask = [.command, .option]
+        editMenu.addItem(pasteAndMatchStyleItem)
+
         // Delete
         let deleteItem = NSMenuItem(
             title: L("menu.edit.delete"),
-            action: #selector(NSText.delete(_:)),
+            action: Selector(("delete:")),
             keyEquivalent: ""
         )
         editMenu.addItem(deleteItem)
@@ -203,7 +212,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Select All
         let selectAllItem = NSMenuItem(
             title: L("menu.edit.select_all"),
-            action: #selector(NSText.selectAll(_:)),
+            action: Selector(("selectAll:")),
             keyEquivalent: "a"
         )
         editMenu.addItem(selectAllItem)
@@ -1191,7 +1200,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Get the captured clipboard content (text + media attachments)
         // add-multimodal-content-support: Use getMixedContent() for comprehensive extraction
-        let (extractedText, mediaAttachments) = ClipboardManager.shared.getMixedContent()
+        let (extractedText, mediaAttachments, extractionError) = ClipboardManager.shared.getMixedContent()
+
+        // Check for extraction errors (e.g., file too large)
+        if let error = extractionError {
+            print("[AppDelegate] ❌ Content extraction error: \(error)")
+            // Restore original clipboard
+            if let original = originalClipboardText {
+                ClipboardManager.shared.setText(original)
+            }
+            // Hide Halo and show error alert to user
+            DispatchQueue.main.async { [weak self] in
+                self?.haloWindow?.hide()
+                let alert = NSAlert()
+                alert.messageText = L("error.file_size")
+                alert.informativeText = error
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: L("common.ok"))
+                alert.runModal()
+            }
+            return
+        }
 
         guard let clipboardText = extractedText else {
             print("[AppDelegate] ❌ Clipboard is empty after copy operation")

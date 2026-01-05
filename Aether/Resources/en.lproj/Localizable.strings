@@ -355,6 +355,7 @@
 "menu.edit.cut" = "Cut";
 "menu.edit.copy" = "Copy";
 "menu.edit.paste" = "Paste";
+"menu.edit.paste_match_style" = "Paste and Match Style";
 "menu.edit.delete" = "Delete";
 "menu.edit.select_all" = "Select All";
 
