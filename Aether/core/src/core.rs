@@ -1985,9 +1985,27 @@ impl AetherCore {
     ///
     /// This method updates the routing rules in config AND reinitializes the router
     /// to ensure the new rules take effect immediately.
+    ///
+    /// **IMPORTANT**: This method preserves builtin rules (is_builtin = true) and only
+    /// updates user-defined rules. Builtin rules are prepended to maintain their priority.
     pub fn update_routing_rules(&self, rules: Vec<crate::config::RoutingRuleConfig>) -> Result<()> {
         let mut config = self.lock_config();
-        config.rules = rules;
+
+        // Preserve builtin rules from current config
+        let builtin_rules: Vec<_> = config.rules.iter().filter(|r| r.is_builtin).cloned().collect();
+
+        // Merge: builtin rules first (for priority), then user rules
+        let mut merged_rules = builtin_rules;
+        merged_rules.extend(rules);
+
+        log::info!(
+            "Updating routing rules: {} builtin + {} user = {} total",
+            merged_rules.iter().filter(|r| r.is_builtin).count(),
+            merged_rules.iter().filter(|r| !r.is_builtin).count(),
+            merged_rules.len()
+        );
+
+        config.rules = merged_rules;
         config.validate()?;
         config.save()?;
         drop(config); // Release lock before reloading router
