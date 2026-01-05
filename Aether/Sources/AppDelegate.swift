@@ -362,7 +362,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // This allows Cmd+V/C/X to work without showing Dock icon
         let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 980, height: 750),
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
