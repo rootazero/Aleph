@@ -297,9 +297,7 @@ struct RuleEditorView: View {
             Picker("", selection: $selectedProvider) {
                 ForEach(providers, id: \.name) { provider in
                     HStack(spacing: 6) {
-                        Circle()
-                            .fill(Color(hex: provider.config.color) ?? .gray)
-                            .frame(width: 10, height: 10)
+                        ProviderIcon(providerType: provider.name, size: 14)
                         Text(provider.name)
                     }
                     .tag(provider.name)
