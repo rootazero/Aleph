@@ -105,7 +105,7 @@ impl SearchRegistry {
 
         // Check cache first
         {
-            let cache = self.test_cache.lock().unwrap();
+            let cache = self.test_cache.lock().unwrap_or_else(|e| e.into_inner());
             if let Some((result, timestamp)) = cache.get(name) {
                 if timestamp.elapsed() < CACHE_TTL {
                     log::debug!("Returning cached test result for provider '{}'", name);
@@ -175,7 +175,7 @@ impl SearchRegistry {
 
         // Cache result
         {
-            let mut cache = self.test_cache.lock().unwrap();
+            let mut cache = self.test_cache.lock().unwrap_or_else(|e| e.into_inner());
             cache.insert(name.to_string(), (result.clone(), Instant::now()));
         }
 

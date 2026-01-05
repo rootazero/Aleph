@@ -149,7 +149,18 @@ struct SearchSettingsView: View {
         )
 
         // Use the new method that tests with ad-hoc config
-        return await core.testSearchProviderWithConfig(config: testConfig)
+        // Note: This is a synchronous method that uses tokio runtime internally
+        do {
+            return try core.testSearchProviderWithConfig(config: testConfig)
+        } catch {
+            // Handle any unexpected errors gracefully
+            return ProviderTestResult(
+                success: false,
+                latencyMs: 0,
+                errorMessage: "Test failed: \(error.localizedDescription)",
+                errorType: "unknown"
+            )
+        }
     }
 
     /// Load settings from config
@@ -191,7 +202,7 @@ struct SearchSettingsView: View {
 
     /// Save settings to config
     private func saveSettings() async {
-        guard core != nil else {
+        guard let core = core else {
             await MainActor.run {
                 errorMessage = L("error.core_not_initialized")
             }
@@ -203,20 +214,56 @@ struct SearchSettingsView: View {
             errorMessage = nil
         }
 
-        // TODO: Implement search config save when backend support is ready
-        // For now, just log the settings that would be saved
+        do {
+            // Build SearchConfig from current provider fields
+            var backends: [SearchBackendEntry] = []
 
-        // Note: This will require adding updateSearchConfig() method to AetherCore
-        // try core.updateSearchConfig(search: searchConfig)
+            for preset in SearchProviderPresets.all {
+                if let fields = providerFields[preset.id],
+                   !fields.isEmpty,
+                   fields.values.contains(where: { !$0.isEmpty })
+                {
+                    let config = SearchBackendConfig(
+                        providerType: preset.providerType,
+                        apiKey: fields["api_key"],
+                        baseUrl: fields["base_url"],
+                        engineId: fields["engine_id"]
+                    )
+                    backends.append(SearchBackendEntry(name: preset.id, config: config))
+                }
+            }
 
-        print("Search settings saved successfully")
+            // Determine default provider (first configured provider, or "tavily" as fallback)
+            let defaultProvider = backends.first?.name ?? "tavily"
 
-        await MainActor.run {
-            // Update saved state to match current state
-            savedProviderFields = providerFields
+            // Create search config
+            let searchConfig = SearchConfig(
+                enabled: !backends.isEmpty,
+                defaultProvider: defaultProvider,
+                fallbackProviders: nil,
+                maxResults: 5,
+                timeoutSeconds: 10,
+                backends: backends,
+                pii: nil
+            )
 
-            isSaving = false
-            errorMessage = nil
+            // Save to config via AetherCore
+            try core.updateSearchConfig(search: searchConfig)
+
+            print("Search settings saved successfully")
+
+            await MainActor.run {
+                // Update saved state to match current state
+                savedProviderFields = providerFields
+                isSaving = false
+                errorMessage = nil
+            }
+        } catch {
+            print("Failed to save search settings: \(error)")
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+                isSaving = false
+            }
         }
     }
 
