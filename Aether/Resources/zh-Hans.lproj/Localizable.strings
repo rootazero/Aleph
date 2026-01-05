@@ -289,9 +289,11 @@
 "settings.search.fallback_order" = "备用顺序";
 "settings.search.fallback_order_placeholder" = "拖动提供商以设置备用优先级（即将推出）";
 "settings.search.status.not_configured" = "未配置";
+"settings.search.status.configured" = "已配置";
 "settings.search.status.testing" = "测试中...";
 "settings.search.status.available" = "可用";
 "settings.search.test_connection" = "测试连接";
+"settings.search.get_api_key" = "免费获取 API";
 "settings.search.documentation" = "文档";
 
 // MARK: - Settings Window - Memory Tab

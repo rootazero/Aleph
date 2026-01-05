@@ -289,9 +289,11 @@
 "settings.search.fallback_order" = "Fallback Order";
 "settings.search.fallback_order_placeholder" = "Drag providers to set fallback priority (coming soon)";
 "settings.search.status.not_configured" = "Not Configured";
+"settings.search.status.configured" = "Configured";
 "settings.search.status.testing" = "Testing...";
 "settings.search.status.available" = "Available";
 "settings.search.test_connection" = "Test Connection";
+"settings.search.get_api_key" = "Get Free API";
 "settings.search.documentation" = "Docs";
 
 // MARK: - Settings Window - Memory Tab

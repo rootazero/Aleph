@@ -52,6 +52,7 @@ struct SearchProviderPreset: Identifiable, Equatable {
     let color: String
     let providerType: String
     let fields: [SearchPresetField]
+    let getApiKeyURL: URL?  // URL to get free API key
     let docsURL: URL
     let description: String
 }
@@ -85,7 +86,8 @@ struct SearchProviderPresets {
                     placeholder: nil
                 )
             ],
-            docsURL: URL(string: "https://docs.tavily.com/docs/tavily-api/rest_api")!,
+            getApiKeyURL: URL(string: "https://app.tavily.com/home"),
+            docsURL: URL(string: "https://app.tavily.com/home")!,
             description: "AI-optimized search with high-quality results and answer extraction"
         ),
 
@@ -106,6 +108,7 @@ struct SearchProviderPresets {
                     placeholder: "https://searx.be"
                 )
             ],
+            getApiKeyURL: nil,  // Self-hosted, no API key needed
             docsURL: URL(string: "https://docs.searxng.org/")!,
             description: "Privacy-respecting metasearch engine with no tracking"
         ),
@@ -133,6 +136,7 @@ struct SearchProviderPresets {
                     placeholder: "xxxxxxxxxxxxxxxxx"
                 )
             ],
+            getApiKeyURL: URL(string: "https://example.com/placeholder"),  // TODO: Add correct URL
             docsURL: URL(string: "https://developers.google.com/custom-search/v1/overview")!,
             description: "Google's powerful search with customizable result sources"
         ),
@@ -153,6 +157,7 @@ struct SearchProviderPresets {
                     placeholder: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
                 )
             ],
+            getApiKeyURL: URL(string: "https://example.com/placeholder"),  // TODO: Add correct URL
             docsURL: URL(string: "https://www.microsoft.com/en-us/bing/apis/bing-web-search-api")!,
             description: "Microsoft Bing search with affordable pricing and good coverage"
         ),
@@ -173,6 +178,7 @@ struct SearchProviderPresets {
                     placeholder: "BSAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
                 )
             ],
+            getApiKeyURL: URL(string: "https://example.com/placeholder"),  // TODO: Add correct URL
             docsURL: URL(string: "https://brave.com/search/api/")!,
             description: "Independent search index with privacy focus and ad-free results"
         ),
@@ -193,6 +199,7 @@ struct SearchProviderPresets {
                     placeholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
                 )
             ],
+            getApiKeyURL: URL(string: "https://example.com/placeholder"),  // TODO: Add correct URL
             docsURL: URL(string: "https://docs.exa.ai/")!,
             description: "AI-powered semantic search for finding similar content and research"
         )

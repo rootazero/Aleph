@@ -3,6 +3,7 @@ import SwiftUI
 /// Provider status for search providers
 enum SearchProviderStatus: Equatable {
     case notConfigured
+    case configured  // Configured but not tested
     case testing
     case available(latency: UInt32)
     case error(String)
@@ -10,6 +11,7 @@ enum SearchProviderStatus: Equatable {
     var icon: String {
         switch self {
         case .notConfigured: return "exclamationmark.triangle.fill"
+        case .configured: return "checkmark.circle"
         case .testing: return "arrow.triangle.2.circlepath"
         case .available: return "checkmark.circle.fill"
         case .error: return "xmark.circle.fill"
@@ -19,6 +21,7 @@ enum SearchProviderStatus: Equatable {
     var color: Color {
         switch self {
         case .notConfigured: return .orange
+        case .configured: return .blue
         case .testing: return .blue
         case .available: return .green
         case .error: return .red
@@ -28,6 +31,7 @@ enum SearchProviderStatus: Equatable {
     var text: String {
         switch self {
         case .notConfigured: return L("settings.search.status.not_configured")
+        case .configured: return L("settings.search.status.configured")
         case .testing: return L("settings.search.status.testing")
         case .available(let latency): return L("settings.search.status.available") + " (\(latency)ms)"
         case .error(let message): return message
@@ -86,6 +90,13 @@ struct SearchProviderCard: View {
         )
         .onHover { hovering in
             isHovered = hovering
+        }
+        .onAppear {
+            // Check initial configuration status
+            updateStatusFromFields()
+        }
+        .onChange(of: fieldValues) { _, _ in
+            updateStatusFromFields()
         }
         .animation(.easeInOut(duration: 0.2), value: isExpanded)
     }
@@ -243,6 +254,18 @@ struct SearchProviderCard: View {
 
             Spacer()
 
+            // Get Free API link (if available)
+            if let getApiKeyURL = preset.getApiKeyURL {
+                Link(destination: getApiKeyURL) {
+                    HStack(spacing: DesignTokens.Spacing.xs) {
+                        Image(systemName: "key.fill")
+                        Text(L("settings.search.get_api_key"))
+                    }
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(Color(hex: preset.color) ?? DesignTokens.Colors.accentBlue)
+                }
+            }
+
             // Documentation link
             Link(destination: preset.docsURL) {
                 HStack(spacing: DesignTokens.Spacing.xs) {
@@ -292,9 +315,14 @@ struct SearchProviderCard: View {
     /// Update status based on field values
     private func updateStatusFromFields() {
         if isConfigured {
-            // Don't change status if already testing or has result
-            if case .notConfigured = status {
-                // Keep as not configured until test is run
+            // Only update to .configured if currently not configured
+            // Don't change if already testing or has test result
+            switch status {
+            case .notConfigured:
+                status = .configured
+            case .configured, .testing, .available, .error:
+                // Keep existing status
+                break
             }
         } else {
             status = .notConfigured
