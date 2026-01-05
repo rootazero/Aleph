@@ -59,6 +59,22 @@ struct CyberpunkTheme: HaloTheme {
             )
         )
     }
+
+    func retrievingMemoryView() -> AnyView {
+        AnyView(
+            CyberpunkRetrievingMemoryView(color: .purple)
+        )
+    }
+
+    func processingWithAIView(providerColor: Color, providerName: String?) -> AnyView {
+        AnyView(
+            CyberpunkProcessingWithAIView(
+                color: providerColor,
+                providerName: providerName,
+                textColor: textColor
+            )
+        )
+    }
 }
 
 // MARK: - Hexagon Shape
@@ -288,5 +304,111 @@ private struct CyberpunkErrorView: View {
                 )
         }
         .padding()
+    }
+}
+
+// MARK: - Cyberpunk Retrieving Memory View
+
+private struct CyberpunkRetrievingMemoryView: View {
+    let color: Color
+    @State private var rotation: Double = 0
+    @State private var pulseScale: CGFloat = 1.0
+
+    var body: some View {
+        ZStack {
+            // Glowing background
+            HexagonShape()
+                .fill(color.opacity(0.2))
+                .frame(width: 100, height: 100)
+                .blur(radius: 15)
+
+            // Rotating hexagonal ring
+            HexagonShape()
+                .stroke(color, lineWidth: 3)
+                .frame(width: 80, height: 80)
+                .shadow(color: color, radius: 15)
+                .scaleEffect(pulseScale)
+                .rotationEffect(.degrees(rotation))
+                .onAppear {
+                    withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) {
+                        rotation = 360
+                    }
+                    withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                        pulseScale = 1.05
+                    }
+                }
+
+            // Inner hexagon
+            HexagonShape()
+                .stroke(color.opacity(0.6), lineWidth: 2)
+                .frame(width: 50, height: 50)
+
+            // Glitch overlay
+            GlitchOverlay()
+                .frame(width: 80, height: 80)
+                .clipShape(HexagonShape())
+                .blendMode(.screen)
+        }
+    }
+}
+
+// MARK: - Cyberpunk Processing With AI View
+
+private struct CyberpunkProcessingWithAIView: View {
+    let color: Color
+    let providerName: String?
+    let textColor: Color
+    @State private var rotation: Double = 0
+    @State private var pulseScale: CGFloat = 1.0
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ZStack {
+                // Glowing background
+                HexagonShape()
+                    .fill(color.opacity(0.2))
+                    .frame(width: 100, height: 100)
+                    .blur(radius: 15)
+
+                // Rotating hexagonal ring
+                HexagonShape()
+                    .stroke(color, lineWidth: 3)
+                    .frame(width: 80, height: 80)
+                    .shadow(color: color, radius: 15)
+                    .scaleEffect(pulseScale)
+                    .rotationEffect(.degrees(rotation))
+                    .onAppear {
+                        withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) {
+                            rotation = 360
+                        }
+                        withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                            pulseScale = 1.05
+                        }
+                    }
+
+                // Corner accents
+                ForEach(0..<6, id: \.self) { i in
+                    Rectangle()
+                        .fill(color)
+                        .frame(width: 3, height: 10)
+                        .offset(y: -45)
+                        .rotationEffect(.degrees(Double(i) * 60))
+                }
+
+                // Glitch overlay
+                GlitchOverlay()
+                    .frame(width: 80, height: 80)
+                    .clipShape(HexagonShape())
+                    .blendMode(.screen)
+            }
+
+            // Provider name
+            if let name = providerName {
+                Text(name)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundColor(textColor)
+                    .shadow(color: textColor, radius: 5)
+            }
+        }
     }
 }
