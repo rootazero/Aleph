@@ -133,6 +133,11 @@ class HaloWindow: NSWindow {
     }
 
     func updateState(_ state: HaloState) {
+        // Skip update if the state is visually identical (prevents flickering)
+        if isVisuallyIdentical(current: haloViewModel.state, new: state) {
+            return
+        }
+
         // Update via ViewModel (ObservableObject) to propagate changes to SwiftUI
         haloViewModel.state = state
 
@@ -198,6 +203,27 @@ class HaloWindow: NSWindow {
 
         default:
             return NSSize(width: 120, height: 120)
+        }
+    }
+
+    /// Check if two states are visually identical (same animation/icon)
+    /// Used to prevent flickering when transitioning between states that look the same
+    private func isVisuallyIdentical(current: HaloState, new: HaloState) -> Bool {
+        switch (current, new) {
+        // listening and processingWithAI both show processing animation
+        case (.processing, .processing):
+            // Same base state - skip update to prevent flicker
+            return true
+        case (.processing, .processingWithAI):
+            // Both show processing animation
+            return true
+        case (.processingWithAI, .processing):
+            // Both show processing animation
+            return true
+        case (.processingWithAI, .processingWithAI):
+            return true
+        default:
+            return false
         }
     }
 }
