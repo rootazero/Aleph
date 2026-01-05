@@ -167,13 +167,13 @@ extension RoutingRuleConfig {
             // Extract command name from pattern like "^/en\s+" or "^/translate\s+"
             if regex.hasPrefix("^/") {
                 var name = String(regex.dropFirst(2))  // Remove "^/"
-                // Remove trailing \s+ if present
+                // Remove trailing \s+ if present (3 chars: \, s, +)
                 if name.hasSuffix("\\s+") {
-                    name = String(name.dropLast(4))
+                    name = String(name.dropLast(3))
                 }
-                // Remove trailing \s* if present
+                // Remove trailing \s* if present (3 chars: \, s, *)
                 if name.hasSuffix("\\s*") {
-                    name = String(name.dropLast(4))
+                    name = String(name.dropLast(3))
                 }
                 return "/\(name)"
             }

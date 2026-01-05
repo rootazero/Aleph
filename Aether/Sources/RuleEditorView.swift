@@ -497,9 +497,9 @@ struct RuleEditorView: View {
         // Pattern: ^/name\s+ or ^/name
         if regex.hasPrefix("^/") {
             var name = String(regex.dropFirst(2))
-            // Remove trailing \s+ if present
+            // Remove trailing \s+ if present (3 chars: \, s, +)
             if name.hasSuffix("\\s+") {
-                name = String(name.dropLast(4))
+                name = String(name.dropLast(3))
             }
             return name
         }
