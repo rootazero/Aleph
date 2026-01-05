@@ -64,10 +64,10 @@ class EventHandler: AetherEventHandler {
         }
 
         DispatchQueue.main.async { [weak self] in
-            // Update Halo window to show error with suggestion
-            self?.haloWindow?.updateState(.error(type: .unknown, message: message, suggestion: suggestion))
+            // Hide Halo window - errors are shown via system alert only
+            self?.haloWindow?.hide()
 
-            // Also show system notification
+            // Show system alert for clear error display
             self?.showErrorNotification(message: message, suggestion: suggestion)
         }
     }
@@ -235,13 +235,9 @@ class EventHandler: AetherEventHandler {
             }
 
         case .error:
-            // Use typed error if available, otherwise show generic error
-            haloWindow?.updateState(.error(type: .unknown, message: "An error occurred", suggestion: nil))
+            // Hide Halo - errors are shown via system alert only
+            haloWindow?.hide()
             announceToVoiceOver("Error occurred")
-            // Auto-hide after 2 seconds
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                self?.haloWindow?.hide()
-            }
 
         case .typewriting:
             // Ignore typewriting state - Halo is hidden during output
@@ -284,13 +280,10 @@ class EventHandler: AetherEventHandler {
     // MARK: - Typed Error Handling
 
     private func handleTypedError(errorType: ErrorType, message: String) {
-        // Update Halo with typed error (do NOT auto-hide, let user interact with error actions)
-        // Note: onErrorTyped doesn't include suggestion, only onError callback does
-        haloWindow?.updateState(.error(type: errorType, message: message, suggestion: nil))
-
-        // NOTE: We don't auto-hide the Halo for errors anymore because
-        // ErrorActionView provides actionable buttons that the user might want to interact with.
-        // The Halo will hide when the user clicks "Dismiss" or after a successful retry.
+        // Hide Halo and show system alert instead
+        // Halo's transparent background makes error text hard to read
+        haloWindow?.hide()
+        showErrorNotification(message: message, suggestion: nil)
     }
 
     // MARK: - Error Action Handlers
