@@ -327,14 +327,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
-        // CRITICAL: Switch to regular activation policy for keyboard shortcuts to work
-        // Accessory apps don't properly respond to Cmd+V/C/X in TextFields
-        NSApp.setActivationPolicy(.regular)
-        print("[AppDelegate] Switched to regular activation policy for settings window")
-
-        // CRITICAL: Re-setup main menu after switching activation policy
-        // Without this, Edit menu shortcuts (Cmd+V, Cmd+C, Cmd+X) may not work
-        setupMainMenu()
+        // GHOST MODE: Stay in accessory mode (no Dock icon)
+        // Using NSPanel with proper configuration allows keyboard shortcuts to work
+        // without needing to switch to regular activation policy
+        print("[AppDelegate] Opening settings panel in GHOST MODE (no Dock icon)")
 
         // Check if settings window already exists and is valid
         // First check if reference exists and window is still alive (not released)
@@ -344,8 +340,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 // Window exists and is visible, reset to minimum size and bring to front
                 window.setContentSize(NSSize(width: 980, height: 750))
                 window.center()
-                window.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
+                // GHOST MODE: Bring to front without activating app
+                window.orderFrontRegardless()
+                window.makeKey()
                 return
             } else {
                 // Window exists but not visible, clean up stale reference
@@ -360,31 +357,45 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let hostingController = NSHostingController(rootView: settingsView)
         hostingController.sizingOptions = []  // Disable auto-sizing
 
-        // Create window with explicit size
-        let window = NSWindow(
+        // GHOST MODE: Use NSPanel instead of NSWindow
+        // NSPanel can receive keyboard events even when app is in accessory mode
+        // This allows Cmd+V/C/X to work without showing Dock icon
+        let panel = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 980, height: 750),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
 
-        window.title = "Settings"
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        window.contentViewController = hostingController
+        panel.title = "Settings"
+        panel.titlebarAppearsTransparent = true
+        panel.titleVisibility = .hidden
+        panel.contentViewController = hostingController
 
         // Set size constraints
-        window.minSize = NSSize(width: 980, height: 750)
-        window.center()
+        panel.minSize = NSSize(width: 980, height: 750)
+        panel.center()
+
+        // GHOST MODE: Always stay on top (floating level)
+        panel.level = .floating
+
+        // CRITICAL: Allow panel to become key window for keyboard input
+        // This is essential for TextField/TextEditor to receive keystrokes
+        panel.becomesKeyOnlyIfNeeded = false
 
         // Window management
-        window.hidesOnDeactivate = false
-        window.isReleasedWhenClosed = false
-        window.delegate = self
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.delegate = self
 
-        settingsWindow = window
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow = panel
+
+        // GHOST MODE: Show panel without activating the app (avoids Dock icon)
+        // Use orderFrontRegardless() instead of makeKeyAndOrderFront() to avoid activation
+        panel.orderFrontRegardless()
+
+        // Make the panel key window for keyboard input, but don't activate the app
+        panel.makeKey()
     }
 
     @objc private func quit() {
@@ -1696,16 +1707,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
 extension AppDelegate: NSWindowDelegate {
     /// Called when settings window is about to close
-    /// Clear the window reference and switch back to accessory policy
+    /// Clear the window reference (GHOST MODE: no policy switching needed)
     func windowWillClose(_ notification: Notification) {
         if let window = notification.object as? NSWindow, window == settingsWindow {
-            print("[AppDelegate] Settings window closing, clearing reference")
+            print("[AppDelegate] Settings panel closing, clearing reference")
             settingsWindow = nil
-
-            // CRITICAL: Switch back to accessory policy when settings window closes
-            // This hides the app from Dock again (menu bar only mode)
-            NSApp.setActivationPolicy(.accessory)
-            print("[AppDelegate] Switched back to accessory activation policy")
+            // GHOST MODE: We stay in accessory mode throughout, no policy switch needed
         }
     }
 }

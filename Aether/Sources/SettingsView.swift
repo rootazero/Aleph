@@ -40,6 +40,9 @@ struct GeneralSettingsView: View {
     @State private var showingLogViewer = false
     @State private var selectedLanguage: String? = nil
 
+    // Launch at login manager (singleton)
+    @StateObject private var launchAtLoginManager = LaunchAtLoginManager.shared
+
     private var appVersion: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "Unknown"
@@ -59,6 +62,13 @@ struct GeneralSettingsView: View {
                             .onChange(of: soundEnabled) { _, newValue in
                                 showComingSoonAlert(feature: L("settings.general.sound_effects"))
                             }
+                    }
+
+                    Section(header: Text(L("settings.general.startup"))) {
+                        Toggle(L("settings.general.launch_at_login"), isOn: $launchAtLoginManager.isEnabled)
+                        Text(L("settings.general.launch_at_login_description"))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
 
                     Section(header: Text(L("settings.general.language"))) {

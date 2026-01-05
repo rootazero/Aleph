@@ -41,6 +41,10 @@
 "settings.general.theme_jarvis" = "Jarvis";
 "settings.general.sound" = "Sound";
 "settings.general.sound_effects" = "Sound Effects";
+"settings.general.startup" = "Startup";
+"settings.general.launch_at_login" = "Launch at Login";
+"settings.general.launch_at_login_description" = "Automatically start Aether when you log in to your Mac.";
+"settings.general.launch_at_login_error" = "Failed to change launch at login setting";
 "settings.general.language" = "Language";
 "settings.general.language_preference" = "Preferred Language";
 "settings.general.language_system_default" = "System Default";
