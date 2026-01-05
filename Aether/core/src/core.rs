@@ -1654,9 +1654,21 @@ impl AetherCore {
         // Get cleaned input from routing match (command prefix stripped if applicable)
         // For command rules like "/en Hello world" → "Hello world"
         // For keyword rules or no match, use original input
+        //
+        // IMPORTANT: routing_match.cleaned_input() may contain routing context suffix
+        // (format: "UserInput\n---\n[AppName] WindowTitle") because the routing context
+        // is used for rule matching. We need to strip the context suffix to get pure user input.
         let final_input = routing_match
             .cleaned_input()
-            .map(|s| s.to_string())
+            .map(|s| {
+                // Remove routing context suffix if present
+                // The suffix format is "\n---\n[AppName] WindowTitle"
+                if let Some(idx) = s.find("\n---\n") {
+                    s[..idx].to_string()
+                } else {
+                    s.to_string()
+                }
+            })
             .unwrap_or_else(|| input.clone());
         let prefix_was_stripped = final_input.len() < input.len();
 
