@@ -132,6 +132,18 @@ class HaloWindow: NSWindow {
         })
     }
 
+    /// Show window at its current position (used after hide to re-show)
+    func showAtCurrentPosition() {
+        // Show window WITHOUT activating (critical for focus preservation)
+        self.orderFrontRegardless()
+
+        // Fade in animation
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            self.animator().alphaValue = 1.0
+        })
+    }
+
     func updateState(_ state: HaloState) {
         // Skip update if the state is visually identical (prevents flickering)
         if isVisuallyIdentical(current: haloViewModel.state, new: state) {

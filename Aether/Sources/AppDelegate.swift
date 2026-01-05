@@ -1341,8 +1341,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                             self.typewriterCancellation = nil
 
                             await MainActor.run {
-                                // Update Halo to success state and hide
-                                print("[AppDelegate] ✅ Output complete, updating Halo to success state")
+                                // Show Halo again and update to success state
+                                print("[AppDelegate] ✅ Output complete, showing success state")
+                                self.haloWindow?.showAtCurrentPosition()
                                 self.haloWindow?.updateState(.success(finalText: String(truncatedResponse.prefix(100))))
 
                                 // Auto-hide Halo after 1.5 seconds
