@@ -579,6 +579,76 @@ User Input → Router → PayloadBuilder → CapabilityExecutor → PromptAssemb
 
 **Detailed Architecture**: See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for complete technical documentation.
 
+### Routing Rules & Prompt Assembly
+
+Aether uses a layered routing system with rules that can be combined:
+
+**Rule Types:**
+
+1. **Builtin Commands** (one-to-one capability binding, not user-customizable):
+   - `/search` → Search capability (web search results injected)
+   - `/mcp` → MCP capability (future)
+   - `/skill` → Skill capability (future)
+
+2. **User-Defined Slash Commands** (in config.toml):
+   - `/zh`, `/en`, `/draw`, etc.
+   - Only have `system_prompt`, no special capabilities
+   - Only ONE slash command can match per request
+
+3. **Keyword Rules** (in config.toml):
+   - Match by regex patterns in user input
+   - Multiple keyword rules can match simultaneously
+   - Can be combined with slash commands
+
+**Prompt Assembly Order:**
+```
+final_system_prompt = slash_command_prompt + keyword_rule1_prompt + keyword_rule2_prompt + ...
+                      (separated by \n\n)
+```
+
+**Memory Behavior:**
+- Memory is available in EVERY conversation (regardless of command used)
+- Memory provides context for accuracy and continuity
+- Memory should NOT directly interfere with the response
+
+**System Prompt Mode (for APIs that ignore system role):**
+
+Some APIs (like certain OpenAI-compatible endpoints) ignore the `system` role message. For these providers, configure `system_prompt_mode = "prepend"` in config.toml:
+
+```toml
+[providers.my_provider]
+provider_type = "openai"
+system_prompt_mode = "prepend"  # Prepend system prompt to user message
+```
+
+**Prepend Mode Logic:**
+```
+Normal Mode:
+  system_message = "You are a helpful AI assistant." + memory_context + search_results
+  user_message = user_input
+
+Prepend Mode (with rule prompt):
+  system_message = (none, or ignored by API)
+  user_message = [指令] rule_prompts + memory_context + search_results
+                 ---
+                 [用户输入] user_input
+
+Prepend Mode (without rule prompt):
+  system_message = (none, or ignored by API)
+  user_message = user_input (with context prepended if available)
+```
+
+**Key Implementation Points:**
+- `rule_system_prompt`: Combined prompts from matched slash command + keyword rules
+- `context_only`: Memory + Search results (WITHOUT "You are a helpful AI assistant.")
+- `assembled_system_prompt`: Base prompt + Memory + Search results (full version)
+
+**Code Locations:**
+- Rule matching: `Aether/core/src/router/mod.rs` → `RoutingMatch::assemble_prompt()`
+- Prompt assembly: `Aether/core/src/payload/assembler.rs` → `PromptAssembler`
+- System prompt mode handling: `Aether/core/src/core.rs` (search for `provider_uses_prepend`)
+- API request formatting: `Aether/core/src/providers/openai.rs` (search for `system_prompt_mode`)
+
 ### Privacy & Security
 
 - **PII Scrubbing**: Regex-based removal of phone/email before API calls

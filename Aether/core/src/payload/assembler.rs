@@ -49,10 +49,13 @@ impl PromptAssembler {
         prompt
     }
 
-    /// Format context data
+    /// Format context data (memory, search, MCP) without base prompt
+    ///
+    /// Use this when you need only the context part, not the full system prompt.
+    /// Useful for prepend mode where base prompt should be excluded.
     ///
     /// Selects formatting strategy based on context_format
-    fn format_context(&self, context: &AgentContext) -> Option<String> {
+    pub fn format_context(&self, context: &AgentContext) -> Option<String> {
         match self.context_format {
             ContextFormat::Markdown => self.format_markdown(context),
             ContextFormat::Xml => self.format_xml(context),

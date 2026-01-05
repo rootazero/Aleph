@@ -1649,12 +1649,19 @@ impl AetherCore {
 
         // Assemble system prompt using PromptAssembler
         use crate::payload::PromptAssembler;
+        let assembler = PromptAssembler::new(crate::payload::ContextFormat::Markdown);
+
+        // Get full assembled prompt (base + context) for normal mode
         let assembled_system_prompt = if let Some(ref payload) = enriched_payload {
-            let assembler = PromptAssembler::new(crate::payload::ContextFormat::Markdown);
             assembler.assemble_system_prompt(&base_system_prompt, payload)
         } else {
             base_system_prompt.clone()
         };
+
+        // Get context only (memory + search, without base prompt) for prepend mode
+        let context_only = enriched_payload
+            .as_ref()
+            .and_then(|p| assembler.format_context(&p.context));
 
         let memory_time = start_time.elapsed();
         debug!(
@@ -1672,10 +1679,34 @@ impl AetherCore {
         // Step 4: Call AI provider with retry and fallback logic (Task 10.1 & 10.2)
         let routing_time = start_time.elapsed();
 
+        // Check if provider uses prepend mode for system prompts
+        // If so, we only use rule_system_prompt (not assembled) because prepend mode
+        // means the system prompt goes directly in the user message, and including
+        // memory context would confuse the model
+        let provider_uses_prepend = {
+            let config = self.lock_config();
+            config
+                .providers
+                .get(&provider_name)
+                .and_then(|p| p.system_prompt_mode.as_ref())
+                .map(|m| m == "prepend")
+                .unwrap_or(false)
+        };
+
         // Use custom system prompt from routing rule, or assembled prompt with memory/search context
         // Priority: rule system prompt > assembled (contains context) > base
-        let system_prompt = if !rule_system_prompt.is_empty() {
-            // Combine rule system prompt with assembled context
+        //
+        // For prepend mode: use rule_prompt + context_only (memory/search without base_prompt)
+        // This ensures memory is available for context but "You are a helpful AI assistant." is excluded
+        let system_prompt = if provider_uses_prepend && !rule_system_prompt.is_empty() {
+            // Prepend mode: rule prompt + context only (no base prompt like "You are a helpful AI assistant.")
+            if let Some(ctx) = &context_only {
+                format!("{}\n\n{}", rule_system_prompt, ctx)
+            } else {
+                rule_system_prompt.clone()
+            }
+        } else if !rule_system_prompt.is_empty() {
+            // Normal mode: Combine rule system prompt with assembled context (includes base prompt)
             format!("{}\n\n{}", rule_system_prompt, assembled_system_prompt)
         } else {
             assembled_system_prompt.clone()
@@ -1708,6 +1739,8 @@ impl AetherCore {
         // Log the final system prompt being used
         info!(
             has_rule_prompt = !rule_system_prompt.is_empty(),
+            provider_uses_prepend = provider_uses_prepend,
+            has_context = context_only.is_some(),
             system_prompt_preview = %system_prompt.chars().take(80).collect::<String>(),
             prefix_stripped = prefix_was_stripped,
             final_input_preview = %final_input.chars().take(50).collect::<String>(),
