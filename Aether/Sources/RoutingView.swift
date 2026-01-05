@@ -276,7 +276,7 @@ struct RoutingView: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
-                .frame(height: min(CGFloat(commandRules.count) * 80, 240))  // Max 3 rules visible, scroll for more
+                .frame(height: min(CGFloat(commandRules.count) * 74, 296))  // 74pt per rule (70 + 4 gap), max 4 visible
             }
         }
     }
@@ -325,7 +325,7 @@ struct RoutingView: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
-                .frame(height: min(CGFloat(keywordRules.count) * 80, 240))  // Max 3 rules visible, scroll for more
+                .frame(height: min(CGFloat(keywordRules.count) * 74, 296))  // 74pt per rule (70 + 4 gap), max 4 visible
             }
         }
     }
@@ -1018,7 +1018,9 @@ struct RuleCard: View {
                 .help(L("settings.routing.delete_rule_help"))
             }
         }
-        .padding(DesignTokens.Spacing.md)
+        .padding(.horizontal, DesignTokens.Spacing.md)
+        .padding(.vertical, DesignTokens.Spacing.sm)
+        .frame(height: 70)  // Fixed height for consistent layout
         .background(DesignTokens.Colors.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
         .scaleEffect(isHovering ? 1.02 : 1.0)
