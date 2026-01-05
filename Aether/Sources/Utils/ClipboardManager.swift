@@ -203,8 +203,8 @@ class ClipboardManager {
     /// Uses the ContentExtractorRegistry to extract all available content
     /// from the clipboard, including text and media attachments.
     ///
-    /// - Returns: Tuple of (text, attachments)
-    func getMixedContent() -> (text: String?, attachments: [MediaAttachment]) {
+    /// - Returns: Tuple of (text, attachments, error)
+    func getMixedContent() -> (text: String?, attachments: [MediaAttachment], error: String?) {
         let pasteboard = NSPasteboard.general
 
         // Log available types for debugging
@@ -215,6 +215,22 @@ class ClipboardManager {
         // Delegate to ContentExtractorRegistry
         let result = ContentExtractorRegistry.shared.extractAll(from: pasteboard)
 
+        // Check for errors
+        if let error = result.error {
+            logger.error("Content extraction error: \(error)")
+            return (nil, [], error)
+        }
+
+        // CRITICAL FIX: If extractors didn't return text, fall back to direct getText()
+        // This ensures command prefixes like /en are always captured correctly
+        var text = result.text
+        if text == nil || text?.isEmpty == true {
+            text = getText()
+            if text != nil {
+                logger.debug("Fallback to getText() returned text: \(text!.prefix(50))...")
+            }
+        }
+
         // Log extraction summary
         if result.attachments.isEmpty {
             logger.debug("No media attachments found in clipboard")
@@ -222,7 +238,7 @@ class ClipboardManager {
             logger.info("Extracted \(result.attachments.count) media attachments from clipboard")
         }
 
-        return result
+        return (text, result.attachments, nil)
     }
 
     /// Get image as Base64 string (legacy wrapper)
@@ -232,7 +248,7 @@ class ClipboardManager {
     ///
     /// - Returns: Base64-encoded image data, or nil if no image available
     func getImageAsBase64() -> String? {
-        let (_, attachments) = getMixedContent()
+        let (_, attachments, _) = getMixedContent()
         return attachments.first?.data
     }
 
