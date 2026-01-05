@@ -25,9 +25,10 @@ struct CyberpunkTheme: HaloTheme {
     }
 
     func processingView(providerColor: Color?, streamingText: String?) -> AnyView {
+        // Ignore providerColor, use theme's processingColor for consistent visual experience
         AnyView(
             CyberpunkProcessingView(
-                color: providerColor ?? processingColor,
+                color: processingColor,
                 text: streamingText,
                 textColor: textColor
             )
@@ -67,9 +68,10 @@ struct CyberpunkTheme: HaloTheme {
     }
 
     func processingWithAIView(providerColor: Color, providerName: String?) -> AnyView {
+        // Ignore providerColor, use theme's processingColor for consistent visual experience
         AnyView(
             CyberpunkProcessingWithAIView(
-                color: providerColor,
+                color: processingColor,
                 providerName: providerName,
                 textColor: textColor
             )

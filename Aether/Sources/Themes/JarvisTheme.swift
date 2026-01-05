@@ -26,9 +26,10 @@ struct JarvisTheme: HaloTheme {
     }
 
     func processingView(providerColor: Color?, streamingText: String?) -> AnyView {
+        // Ignore providerColor, use theme's processingColor for consistent visual experience
         AnyView(
             JarvisProcessingView(
-                color: providerColor ?? processingColor,
+                color: processingColor,
                 text: streamingText,
                 textColor: textColor
             )
@@ -68,9 +69,10 @@ struct JarvisTheme: HaloTheme {
     }
 
     func processingWithAIView(providerColor: Color, providerName: String?) -> AnyView {
+        // Ignore providerColor, use theme's processingColor for consistent visual experience
         AnyView(
             JarvisProcessingWithAIView(
-                color: providerColor,
+                color: processingColor,
                 providerName: providerName,
                 textColor: textColor
             )

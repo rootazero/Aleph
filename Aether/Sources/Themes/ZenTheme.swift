@@ -8,14 +8,14 @@
 import SwiftUI
 
 struct ZenTheme: HaloTheme {
-    // MARK: - Colors (Adaptive to system appearance)
+    // MARK: - Colors (Unified purple theme for consistent visual experience)
 
-    // Light mode: soft white, Dark mode: soft gray
-    let listeningColor = Color.primary.opacity(0.8)
+    // Unified Aether purple for all states
+    let aetherPurple = Color.purple
 
-    // Light mode: sage green, Dark mode: lighter green
-    let processingColor = Color(red: 0.56, green: 0.93, blue: 0.56)
-
+    // State-specific colors (all based on purple for consistency)
+    let listeningColor = Color.purple
+    let processingColor = Color.purple
     let successColor = Color.green.opacity(0.8)
     let errorColor = Color.red.opacity(0.8)
 
@@ -31,9 +31,10 @@ struct ZenTheme: HaloTheme {
     }
 
     func processingView(providerColor: Color?, streamingText: String?) -> AnyView {
+        // Ignore providerColor, use unified purple for consistent visual experience
         AnyView(
             ZenProcessingView(
-                color: providerColor ?? processingColor,
+                color: processingColor,
                 text: streamingText
             )
         )
@@ -72,9 +73,10 @@ struct ZenTheme: HaloTheme {
     }
 
     func processingWithAIView(providerColor: Color, providerName: String?) -> AnyView {
+        // Ignore providerColor, use unified purple for consistent visual experience
         AnyView(
             ZenProcessingWithAIView(
-                color: providerColor,
+                color: processingColor,
                 providerName: providerName
             )
         )
