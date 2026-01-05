@@ -8,6 +8,13 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// State for the rule editor sheet
+struct RuleEditorState: Identifiable {
+    let id = UUID()
+    let editingRule: RoutingRuleConfig?  // nil for new rule, non-nil for editing
+    let editingIndex: Int?               // Index in customRules array
+}
+
 struct RoutingView: View {
     let core: AetherCore
     let providers: [ProviderConfigEntry]
@@ -26,9 +33,8 @@ struct RoutingView: View {
         customRules.filter { $0.isKeywordRule }
     }
 
-    // UI state
-    @State private var showingRuleEditor: Bool = false
-    @State private var editingRuleIndex: Int?
+    // UI state - use sheet(item:) for reliable data passing
+    @State private var ruleEditorState: RuleEditorState?
     @State private var showingDeleteConfirmation: Bool = false
     @State private var deletingRuleIndex: Int?
 
@@ -78,9 +84,9 @@ struct RoutingView: View {
                 onCancel: nil
             )
         }
-        .sheet(isPresented: $showingRuleEditor) {
-            if let index = editingRuleIndex {
-                RuleEditorView(rules: $customRules, core: core, providers: providers, editing: index)
+        .sheet(item: $ruleEditorState) { state in
+            if let rule = state.editingRule, let index = state.editingIndex {
+                RuleEditorView(rules: $customRules, core: core, providers: providers, editingRule: rule, editingIndex: index)
             } else {
                 RuleEditorView(rules: $customRules, core: core, providers: providers)
             }
@@ -474,13 +480,13 @@ struct RoutingView: View {
     // MARK: - Actions
 
     private func addNewRule() {
-        editingRuleIndex = nil
-        showingRuleEditor = true
+        ruleEditorState = RuleEditorState(editingRule: nil, editingIndex: nil)
     }
 
     private func editRule(at index: Int) {
-        editingRuleIndex = index
-        showingRuleEditor = true
+        guard index >= 0 && index < customRules.count else { return }
+        let rule = customRules[index]
+        ruleEditorState = RuleEditorState(editingRule: rule, editingIndex: index)
     }
 
     private func confirmDelete(at index: Int) {

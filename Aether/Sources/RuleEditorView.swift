@@ -79,21 +79,26 @@ struct RuleEditorView: View {
     // Initial rule type for new rules
     private let initialRuleType: RuleType?
 
+    // The rule being edited (captured at init time for stability)
+    private let editingRule: RoutingRuleConfig?
+
     // Initialize for new rule with optional initial type
     init(rules: Binding<[RoutingRuleConfig]>, core: AetherCore, providers: [ProviderConfigEntry], initialType: RuleType? = nil) {
         self._rules = rules
         self.core = core
         self.providers = providers
         self.editingIndex = nil
+        self.editingRule = nil
         self.initialRuleType = initialType
     }
 
-    // Initialize for editing existing rule
-    init(rules: Binding<[RoutingRuleConfig]>, core: AetherCore, providers: [ProviderConfigEntry], editing index: Int) {
+    // Initialize for editing existing rule (with rule object for stability)
+    init(rules: Binding<[RoutingRuleConfig]>, core: AetherCore, providers: [ProviderConfigEntry], editingRule: RoutingRuleConfig, editingIndex: Int) {
         self._rules = rules
         self.core = core
         self.providers = providers
-        self.editingIndex = index
+        self.editingIndex = editingIndex
+        self.editingRule = editingRule
         self.initialRuleType = nil
     }
 
@@ -457,10 +462,8 @@ struct RuleEditorView: View {
     // MARK: - Data Loading
 
     private func loadFormData() {
-        if let index = editingIndex, index < rules.count {
-            // Load existing rule data
-            let rule = rules[index]
-
+        if let rule = editingRule {
+            // Load existing rule data (use captured rule for stability)
             // Detect rule type and extract name/keyword from pattern
             if rule.isCommandRule {
                 ruleType = .command
