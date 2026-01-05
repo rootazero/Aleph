@@ -332,6 +332,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         NSApp.setActivationPolicy(.regular)
         print("[AppDelegate] Switched to regular activation policy for settings window")
 
+        // CRITICAL: Re-setup main menu after switching activation policy
+        // Without this, Edit menu shortcuts (Cmd+V, Cmd+C, Cmd+X) may not work
+        setupMainMenu()
+
         // Check if settings window already exists and is valid
         // First check if reference exists and window is still alive (not released)
         if let window = settingsWindow {
