@@ -25,6 +25,8 @@
 "common.info" = "Information";
 "common.append" = "Append";
 "common.replace" = "Replace";
+"common.optional" = "Optional";
+"common.required" = "Required";
 
 // MARK: - Settings Window - Sidebar
 "settings.sidebar.title" = "Aether";
@@ -161,6 +163,17 @@
 "settings.routing.delete_rule_help" = "Delete rule";
 "settings.routing.default_provider_hint" = "When no rules match, the default provider will be used:";
 "settings.routing.no_default_provider_hint" = "No default provider set. Please set a default provider in the Providers tab.";
+"settings.routing.no_provider" = "No provider";
+"settings.routing.type.command" = "Command";
+"settings.routing.type.keyword" = "Keyword";
+"settings.routing.keyword_hint" = "All-match: prompt added to matched requests";
+"settings.routing.editor.command_hint" = "First-match-stops, requires provider";
+"settings.routing.editor.keyword_hint" = "All-match, prompt only";
+"settings.routing.editor.valid_pattern" = "Valid regex pattern";
+"settings.routing.editor.pattern_help" = "Use regex to match clipboard content. Examples:\n• ^/draw - Command rule (starts with /draw)\n• .*code.* - Keyword rule (contains 'code')";
+"settings.routing.editor.no_providers" = "No providers configured. Add a provider in the Providers tab first.";
+"settings.routing.editor.prompt_help_command" = "Custom instructions for this rule. Leave empty to use default.";
+"settings.routing.editor.prompt_help_keyword" = "System prompt to add when this keyword rule matches. Required for keyword rules.";
 
 // MARK: - Settings Window - Shortcuts Tab
 "settings.shortcuts.title" = "Keyboard Shortcuts";

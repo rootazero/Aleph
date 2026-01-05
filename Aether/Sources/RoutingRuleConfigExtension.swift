@@ -106,6 +106,59 @@ extension RoutingRuleConfig: Codable {
     }
 }
 
+// MARK: - Rule Type Detection
+
+extension RoutingRuleConfig {
+    /// Get the effective rule type
+    ///
+    /// Priority:
+    /// 1. Explicit ruleType if set
+    /// 2. Auto-detect from regex pattern: ^/ = command, else = keyword
+    var effectiveRuleType: String {
+        if let type = ruleType, !type.isEmpty {
+            return type
+        }
+        return regex.hasPrefix("^/") ? "command" : "keyword"
+    }
+
+    /// Check if this is a command rule
+    ///
+    /// Command rules:
+    /// - Start with ^/ (e.g., ^/draw, ^/translate)
+    /// - First-match-stops semantics
+    /// - Require provider selection
+    /// - Command prefix is stripped before sending to AI
+    var isCommandRule: Bool {
+        effectiveRuleType == "command"
+    }
+
+    /// Check if this is a keyword rule
+    ///
+    /// Keyword rules:
+    /// - Don't start with ^/ (e.g., .*code.*, urgent)
+    /// - All-match semantics (multiple can match)
+    /// - Only provide system prompt (no provider)
+    /// - Prompts are combined with \n\n separator
+    var isKeywordRule: Bool {
+        effectiveRuleType == "keyword"
+    }
+
+    /// Get localized rule type display name
+    var ruleTypeDisplayName: String {
+        isCommandRule ? L("settings.routing.type.command") : L("settings.routing.type.keyword")
+    }
+
+    /// Get rule type icon
+    var ruleTypeIcon: String {
+        isCommandRule ? "command" : "text.magnifyingglass"
+    }
+
+    /// Get rule type color
+    var ruleTypeColor: String {
+        isCommandRule ? "#007AFF" : "#34C759"  // Blue for command, Green for keyword
+    }
+}
+
 // MARK: - Preset Rule Detection
 
 extension RoutingRuleConfig {

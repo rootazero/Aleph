@@ -25,6 +25,8 @@
 "common.info" = "信息";
 "common.append" = "追加";
 "common.replace" = "替换";
+"common.optional" = "可选";
+"common.required" = "必填";
 
 // MARK: - Settings Window - Sidebar
 "settings.sidebar.title" = "Aether";
@@ -161,6 +163,17 @@
 "settings.routing.delete_rule_help" = "删除规则";
 "settings.routing.default_provider_hint" = "当没有规则匹配时，将使用默认提供商：";
 "settings.routing.no_default_provider_hint" = "未设置默认提供商。请在提供商标签页中设置默认提供商。";
+"settings.routing.no_provider" = "无提供商";
+"settings.routing.type.command" = "命令";
+"settings.routing.type.keyword" = "关键词";
+"settings.routing.keyword_hint" = "多重匹配: 提示会添加到匹配的请求中";
+"settings.routing.editor.command_hint" = "首次匹配即停止，需要指定提供商";
+"settings.routing.editor.keyword_hint" = "多重匹配，仅提示";
+"settings.routing.editor.valid_pattern" = "有效的正则表达式";
+"settings.routing.editor.pattern_help" = "使用正则表达式匹配剪贴板内容。例如：\n• ^/draw - 命令规则（以 /draw 开头）\n• .*code.* - 关键词规则（包含 'code'）";
+"settings.routing.editor.no_providers" = "未配置提供商。请先在提供商标签页中添加提供商。";
+"settings.routing.editor.prompt_help_command" = "此规则的自定义指令。留空则使用默认值。";
+"settings.routing.editor.prompt_help_keyword" = "关键词规则匹配时添加的系统提示。关键词规则必须填写。";
 
 // MARK: - Settings Window - Shortcuts Tab
 "settings.shortcuts.title" = "快捷键";

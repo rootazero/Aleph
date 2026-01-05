@@ -38,6 +38,17 @@ struct RuleEditorView: View {
         case noMatch
     }
 
+    /// Computed property: is the current pattern a command rule?
+    /// Command rules start with ^/ (e.g., ^/draw, ^/translate)
+    private var isCommandPattern: Bool {
+        pattern.hasPrefix("^/")
+    }
+
+    /// Rule type display name
+    private var ruleTypeDisplay: String {
+        isCommandPattern ? L("settings.routing.type.command") : L("settings.routing.type.keyword")
+    }
+
     // Initialize for new rule
     init(rules: Binding<[RoutingRuleConfig]>, core: AetherCore, providers: [ProviderConfigEntry]) {
         self._rules = rules
@@ -77,13 +88,37 @@ struct RuleEditorView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     // Pattern Input
-                    FormField(title: "Regex Pattern") {
+                    FormField(title: L("settings.routing.pattern").replacingOccurrences(of: ":", with: "")) {
                         TextField("e.g., ^/draw or .*code.*", text: $pattern)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
                             .onChange(of: pattern) {
                                 validatePattern()
                             }
+
+                        // Rule type indicator (auto-detected from pattern)
+                        if !pattern.isEmpty {
+                            HStack(spacing: 8) {
+                                // Rule type badge
+                                HStack(spacing: 4) {
+                                    Image(systemName: isCommandPattern ? "command" : "text.magnifyingglass")
+                                        .font(.system(size: 10))
+                                    Text(ruleTypeDisplay)
+                                        .font(.system(size: 11, weight: .medium))
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(isCommandPattern ? Color.blue : Color.green)
+                                .cornerRadius(4)
+
+                                Text(isCommandPattern
+                                    ? L("settings.routing.editor.command_hint")
+                                    : L("settings.routing.editor.keyword_hint"))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
 
                         if let error = patternError {
                             HStack(spacing: 6) {
@@ -94,55 +129,60 @@ struct RuleEditorView: View {
                                     .font(.caption)
                                     .foregroundColor(.red)
                             }
-                        } else if !pattern.isEmpty {
+                        } else if !pattern.isEmpty && patternError == nil {
                             HStack(spacing: 6) {
                                 Image(systemName: "checkmark.circle.fill")
                                     .foregroundColor(.green)
                                     .imageScale(.small)
-                                Text("Valid regex pattern")
+                                Text(L("settings.routing.editor.valid_pattern"))
                                     .font(.caption)
                                     .foregroundColor(.green)
                             }
                         }
 
-                        Text("Use regex to match clipboard content. Examples:\n• ^/draw - Starts with /draw\n• .*code.* - Contains 'code'\n• .* - Matches everything")
+                        Text(L("settings.routing.editor.pattern_help"))
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    // Provider Selection
-                    FormField(title: "Provider") {
-                        Picker("Select provider", selection: $selectedProvider) {
-                            ForEach(providers, id: \.name) { provider in
-                                HStack {
-                                    Circle()
-                                        .fill(Color(hex: provider.config.color) ?? .gray)
-                                        .frame(width: 10, height: 10)
-                                    Text(provider.name)
+                    // Provider Selection (only for command rules)
+                    if isCommandPattern {
+                        FormField(title: L("settings.routing.provider").replacingOccurrences(of: ":", with: "")) {
+                            Picker("Select provider", selection: $selectedProvider) {
+                                ForEach(providers, id: \.name) { provider in
+                                    HStack {
+                                        Circle()
+                                            .fill(Color(hex: provider.config.color) ?? .gray)
+                                            .frame(width: 10, height: 10)
+                                        Text(provider.name)
+                                    }
+                                    .tag(provider.name)
                                 }
-                                .tag(provider.name)
                             }
-                        }
-                        .pickerStyle(.menu)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                            .pickerStyle(.menu)
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                        if providers.isEmpty {
-                            Text("No providers configured. Add a provider in the Providers tab first.")
-                                .font(.caption)
-                                .foregroundColor(.orange)
+                            if providers.isEmpty {
+                                Text(L("settings.routing.editor.no_providers"))
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            }
                         }
                     }
 
-                    // System Prompt (Optional)
-                    FormField(title: "System Prompt (Optional)") {
+                    // System Prompt (Required for keyword rules, optional for command rules)
+                    FormField(title: L("settings.routing.prompt").replacingOccurrences(of: ":", with: "")
+                              + (isCommandPattern ? " (\(L("common.optional")))" : " (\(L("common.required")))")) {
                         VStack(alignment: .leading, spacing: 6) {
                             TextEditor(text: $systemPrompt)
                                 .font(.system(.body, design: .monospaced))
                                 .frame(minHeight: 100, maxHeight: 200)
                                 .border(Color.gray.opacity(0.3))
 
-                            Text("Custom instructions for this rule. Leave empty to use default.")
+                            Text(isCommandPattern
+                                ? L("settings.routing.editor.prompt_help_command")
+                                : L("settings.routing.editor.prompt_help_keyword"))
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -273,8 +313,13 @@ struct RuleEditorView: View {
         guard !pattern.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
         guard patternError == nil else { return false }
 
-        // Provider required
-        guard !selectedProvider.isEmpty else { return false }
+        // Command rules: provider required
+        if isCommandPattern {
+            guard !selectedProvider.isEmpty else { return false }
+        } else {
+            // Keyword rules: system prompt required (that's their purpose)
+            guard !systemPrompt.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        }
 
         return true
     }

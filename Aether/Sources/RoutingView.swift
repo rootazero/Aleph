@@ -723,6 +723,7 @@ struct PresetCommandCard: View {
 // MARK: - Rule Card Component
 
 /// Card component for displaying a routing rule with modern styling
+/// Supports both command rules (with provider) and keyword rules (prompt only)
 struct RuleCard: View {
     let rule: RoutingRuleConfig
     let index: Int
@@ -732,54 +733,82 @@ struct RuleCard: View {
 
     @State private var isHovering = false
 
+    /// Rule type badge color
+    private var ruleTypeColor: Color {
+        rule.isCommandRule ? DesignTokens.Colors.accentBlue : DesignTokens.Colors.success
+    }
+
     var body: some View {
         HStack(spacing: DesignTokens.Spacing.md) {
-            // Priority badge
+            // Priority badge with rule type indicator
             ZStack {
                 Circle()
-                    .fill(DesignTokens.Colors.accentBlue.opacity(0.2))
+                    .fill(ruleTypeColor.opacity(0.2))
                     .frame(width: 32, height: 32)
 
                 Text("#\(index + 1)")
                     .font(DesignTokens.Typography.caption)
                     .fontWeight(.semibold)
-                    .foregroundColor(DesignTokens.Colors.accentBlue)
+                    .foregroundColor(ruleTypeColor)
             }
 
             // Rule details
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                // Pattern
-                HStack(spacing: DesignTokens.Spacing.xs) {
-                    Text(L("settings.routing.pattern"))
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                // Rule type badge + Pattern
+                HStack(spacing: DesignTokens.Spacing.sm) {
+                    // Rule type badge
+                    HStack(spacing: 3) {
+                        Image(systemName: rule.ruleTypeIcon)
+                            .font(.system(size: 9))
+                        Text(rule.ruleTypeDisplayName)
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(ruleTypeColor)
+                    .cornerRadius(DesignTokens.CornerRadius.small)
+
+                    // Pattern
                     Text(rule.regex)
                         .font(DesignTokens.Typography.code)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
                 }
 
-                // Provider
-                HStack(spacing: DesignTokens.Spacing.xs) {
-                    Text(L("settings.routing.provider"))
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                    if let provider = provider {
-                        HStack(spacing: DesignTokens.Spacing.xs) {
-                            Circle()
-                                .fill(Color(hex: provider.config.color) ?? .gray)
-                                .frame(width: 8, height: 8)
-                            Text(provider.name)
-                                .font(DesignTokens.Typography.body)
-                                .foregroundColor(DesignTokens.Colors.textPrimary)
-                        }
-                    } else {
-                        Text(rule.provider ?? L("settings.routing.no_provider"))
-                            .font(DesignTokens.Typography.body)
-                            .foregroundColor(DesignTokens.Colors.warning)
-                        Text(L("settings.routing.not_configured"))
+                // Provider (only for command rules)
+                if rule.isCommandRule {
+                    HStack(spacing: DesignTokens.Spacing.xs) {
+                        Text(L("settings.routing.provider"))
                             .font(DesignTokens.Typography.caption)
-                            .foregroundColor(DesignTokens.Colors.warning)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                        if let provider = provider {
+                            HStack(spacing: DesignTokens.Spacing.xs) {
+                                Circle()
+                                    .fill(Color(hex: provider.config.color) ?? .gray)
+                                    .frame(width: 8, height: 8)
+                                Text(provider.name)
+                                    .font(DesignTokens.Typography.body)
+                                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                            }
+                        } else {
+                            Text(rule.provider ?? L("settings.routing.no_provider"))
+                                .font(DesignTokens.Typography.body)
+                                .foregroundColor(DesignTokens.Colors.warning)
+                            Text(L("settings.routing.not_configured"))
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.warning)
+                        }
+                    }
+                } else {
+                    // Keyword rule: show all-match hint
+                    HStack(spacing: DesignTokens.Spacing.xs) {
+                        Image(systemName: "arrow.triangle.merge")
+                            .font(.system(size: 10))
+                            .foregroundColor(DesignTokens.Colors.success)
+                        Text(L("settings.routing.keyword_hint"))
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.success)
                     }
                 }
 
