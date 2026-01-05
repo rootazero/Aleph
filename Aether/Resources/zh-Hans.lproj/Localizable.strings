@@ -321,6 +321,15 @@
 "menu.input_mode" = "输入模式";
 "menu.no_providers" = "无可用提供商";
 
+// MARK: - Edit Menu (for TextField keyboard shortcuts)
+"menu.edit.undo" = "撤销";
+"menu.edit.redo" = "重做";
+"menu.edit.cut" = "剪切";
+"menu.edit.copy" = "拷贝";
+"menu.edit.paste" = "粘贴";
+"menu.edit.delete" = "删除";
+"menu.edit.select_all" = "全选";
+
 // Menu Bar - Default Provider Quick Switch (NEW for default provider management)
 "menu.providers.section_title" = "默认提供商";
 "menu.providers.switch_to" = "切换到 %@";

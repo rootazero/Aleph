@@ -321,6 +321,15 @@
 "menu.input_mode" = "Input Mode";
 "menu.no_providers" = "No providers available";
 
+// MARK: - Edit Menu (for TextField keyboard shortcuts)
+"menu.edit.undo" = "Undo";
+"menu.edit.redo" = "Redo";
+"menu.edit.cut" = "Cut";
+"menu.edit.copy" = "Copy";
+"menu.edit.paste" = "Paste";
+"menu.edit.delete" = "Delete";
+"menu.edit.select_all" = "Select All";
+
 // Menu Bar - Default Provider Quick Switch (NEW for default provider management)
 "menu.providers.section_title" = "Default Provider";
 "menu.providers.switch_to" = "Switch to %@";

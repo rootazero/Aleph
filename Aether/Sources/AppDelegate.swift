@@ -68,6 +68,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Apply language preference before UI initialization
         applyLanguagePreference()
 
+        // CRITICAL: Set up main menu with Edit menu for keyboard shortcuts (Cmd+V, Cmd+C, etc.)
+        // Without this, TextField/TextEditor won't respond to standard editing shortcuts
+        setupMainMenu()
+
         // Set up menu bar
         setupMenuBar()
 
@@ -111,6 +115,106 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Clean up Rust core (only if initialized)
         // Note: No need to call stopListening() as hotkey monitoring is now in Swift
         print("[Aether] Application terminating")
+    }
+
+    // MARK: - Main Menu Setup (for Edit shortcuts)
+
+    /// Set up the application's main menu with Edit menu for standard keyboard shortcuts
+    ///
+    /// This is essential for SwiftUI TextField/TextEditor in accessory apps.
+    /// Without the Edit menu, Cmd+V (Paste), Cmd+C (Copy), Cmd+X (Cut) won't work.
+    private func setupMainMenu() {
+        let mainMenu = NSMenu()
+
+        // App menu (required for macOS app structure)
+        let appMenuItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(NSMenuItem(
+            title: L("menu.about"),
+            action: #selector(showAbout),
+            keyEquivalent: ""
+        ))
+        appMenu.addItem(NSMenuItem.separator())
+        appMenu.addItem(NSMenuItem(
+            title: L("menu.quit"),
+            action: #selector(quit),
+            keyEquivalent: "q"
+        ))
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+
+        // Edit menu (CRITICAL for Cmd+V, Cmd+C, Cmd+X in TextFields)
+        let editMenuItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+
+        // Undo
+        let undoItem = NSMenuItem(
+            title: L("menu.edit.undo"),
+            action: Selector(("undo:")),
+            keyEquivalent: "z"
+        )
+        editMenu.addItem(undoItem)
+
+        // Redo
+        let redoItem = NSMenuItem(
+            title: L("menu.edit.redo"),
+            action: Selector(("redo:")),
+            keyEquivalent: "Z"
+        )
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(redoItem)
+
+        editMenu.addItem(NSMenuItem.separator())
+
+        // Cut
+        let cutItem = NSMenuItem(
+            title: L("menu.edit.cut"),
+            action: #selector(NSText.cut(_:)),
+            keyEquivalent: "x"
+        )
+        editMenu.addItem(cutItem)
+
+        // Copy
+        let copyItem = NSMenuItem(
+            title: L("menu.edit.copy"),
+            action: #selector(NSText.copy(_:)),
+            keyEquivalent: "c"
+        )
+        editMenu.addItem(copyItem)
+
+        // Paste
+        let pasteItem = NSMenuItem(
+            title: L("menu.edit.paste"),
+            action: #selector(NSText.paste(_:)),
+            keyEquivalent: "v"
+        )
+        editMenu.addItem(pasteItem)
+
+        // Delete
+        let deleteItem = NSMenuItem(
+            title: L("menu.edit.delete"),
+            action: #selector(NSText.delete(_:)),
+            keyEquivalent: ""
+        )
+        editMenu.addItem(deleteItem)
+
+        editMenu.addItem(NSMenuItem.separator())
+
+        // Select All
+        let selectAllItem = NSMenuItem(
+            title: L("menu.edit.select_all"),
+            action: #selector(NSText.selectAll(_:)),
+            keyEquivalent: "a"
+        )
+        editMenu.addItem(selectAllItem)
+
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
+
+        // Set the main menu
+        NSApp.mainMenu = mainMenu
+
+        print("[AppDelegate] ✅ Main menu with Edit shortcuts configured")
     }
 
     // MARK: - Menu Bar Setup
