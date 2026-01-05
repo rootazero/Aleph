@@ -1243,23 +1243,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     windowTitle: windowContext.windowTitle
                 )
 
-                // CRITICAL: Construct user input with clipboard context if available
-                // This provides additional context to the AI for better responses
+                // CRITICAL: Construct user input - clipboard content appended after window content
+                // Format: Window content first (may contain command like /en), then clipboard content
+                // This ensures routing rules like "^/en" can match the command prefix
                 let userInput: String
                 if let clipContext = clipboardContext {
-                    // Format: Current text + Clipboard context
-                    userInput = """
-                    Current content:
-                    \(clipboardText)
-
-                    Clipboard context (recent copy):
-                    \(clipContext)
-                    """
-                    print("[AppDelegate] 🤖 Sending to AI: current text (\(clipboardText.count) chars) + clipboard context (\(clipContext.count) chars)")
+                    userInput = "\(clipboardText)\n\n\(clipContext)"
+                    print("[AppDelegate] 🤖 Sending to AI: window (\(clipboardText.count) chars) + clipboard (\(clipContext.count) chars)")
                 } else {
-                    // No clipboard context, just send current text
                     userInput = clipboardText
-                    print("[AppDelegate] 🤖 Sending to AI: current text only (\(clipboardText.count) chars)")
+                    print("[AppDelegate] 🤖 Sending to AI: window text only (\(clipboardText.count) chars)")
                 }
 
                 // Call Rust core's process_input() - this replaces the old onHotkeyDetected flow
