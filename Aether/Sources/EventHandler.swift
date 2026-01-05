@@ -204,7 +204,9 @@ class EventHandler: AetherEventHandler {
             accumulatedText = ""
 
         case .listening:
-            haloWindow?.updateState(.listening)
+            // Use processing animation for listening state (same as processingWithAI)
+            // This unifies the visual feedback: processing icon → (hidden) → success
+            haloWindow?.updateState(.processing(providerColor: .blue, streamingText: nil))
             // Reset accumulated text when starting new interaction
             accumulatedText = ""
             announceToVoiceOver("Listening for input")
