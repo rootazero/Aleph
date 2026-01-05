@@ -81,12 +81,13 @@ struct PermissionGateView: View {
             // Current step content
             stepContent
 
+            Spacer()
+
             // Action buttons
             actionButtons
-                .padding(.top, 30)
         }
         .padding(40)
-        .frame(width: 600)
+        .frame(width: 600, height: 480)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(.ultraThinMaterial)
