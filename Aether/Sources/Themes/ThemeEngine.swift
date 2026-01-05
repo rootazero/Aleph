@@ -37,8 +37,8 @@ class ThemeEngine: ObservableObject {
            let theme = Theme(rawValue: savedTheme) {
             self.selectedTheme = theme
         } else {
-            // Default to Cyberpunk theme
-            self.selectedTheme = .cyberpunk
+            // Default to Zen theme (circular halo with 3 rotating arcs)
+            self.selectedTheme = .zen
         }
     }
 
