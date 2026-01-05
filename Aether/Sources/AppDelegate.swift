@@ -45,8 +45,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // First-time initialization window
     private var initializationWindow: NSWindow?
 
-    // Theme engine
-    private var themeEngine: ThemeEngine?
+    // Theme engine (accessible for settings UI)
+    var themeEngine: ThemeEngine?
 
     // Global hotkey monitor (Swift layer)
     private var hotkeyMonitor: GlobalHotkeyMonitor?

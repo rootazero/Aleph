@@ -61,6 +61,22 @@ struct JarvisTheme: HaloTheme {
         )
     }
 
+    func retrievingMemoryView() -> AnyView {
+        AnyView(
+            JarvisRetrievingMemoryView(color: .purple)
+        )
+    }
+
+    func processingWithAIView(providerColor: Color, providerName: String?) -> AnyView {
+        AnyView(
+            JarvisProcessingWithAIView(
+                color: providerColor,
+                providerName: providerName,
+                textColor: textColor
+            )
+        )
+    }
+
     // MARK: - Custom Properties
 
     var transitionDuration: Double {
@@ -330,5 +346,146 @@ private struct JarvisErrorView: View {
             }
         }
         .padding()
+    }
+}
+
+// MARK: - Jarvis Retrieving Memory View
+
+private struct JarvisRetrievingMemoryView: View {
+    let color: Color
+    @State private var rotation: Double = 0
+    @State private var coreIntensity: Double = 0.5
+
+    var body: some View {
+        ZStack {
+            // Background glow
+            Circle()
+                .fill(color.opacity(0.2))
+                .frame(width: 110, height: 110)
+                .blur(radius: 20)
+
+            // Rotating hexagonal segments
+            ForEach(0..<6, id: \.self) { i in
+                HexSegment(index: i)
+                    .fill(color.opacity(0.4))
+                    .frame(width: 80, height: 80)
+                    .shadow(color: color, radius: 5)
+            }
+            .rotationEffect(.degrees(rotation))
+            .onAppear {
+                withAnimation(.linear(duration: 4).repeatForever(autoreverses: false)) {
+                    rotation = 360
+                }
+            }
+
+            // Tech readout rings
+            ForEach(0..<3, id: \.self) { ring in
+                Circle()
+                    .stroke(color.opacity(0.3), lineWidth: 1)
+                    .frame(width: CGFloat(30 + ring * 15), height: CGFloat(30 + ring * 15))
+            }
+
+            // Pulsing energy core
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [color, color.opacity(0.6), .clear],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: 25
+                    )
+                )
+                .frame(width: 40, height: 40)
+                .shadow(color: color, radius: 20 * coreIntensity)
+                .onAppear {
+                    withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                        coreIntensity = 1.5
+                    }
+                }
+        }
+    }
+}
+
+// MARK: - Jarvis Processing With AI View
+
+private struct JarvisProcessingWithAIView: View {
+    let color: Color
+    let providerName: String?
+    let textColor: Color
+    @State private var rotation: Double = 0
+    @State private var coreIntensity: Double = 0.5
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ZStack {
+                // Background glow
+                Circle()
+                    .fill(color.opacity(0.2))
+                    .frame(width: 110, height: 110)
+                    .blur(radius: 20)
+
+                // Rotating hexagonal segments
+                ForEach(0..<6, id: \.self) { i in
+                    HexSegment(index: i)
+                        .fill(color.opacity(0.4))
+                        .frame(width: 80, height: 80)
+                        .shadow(color: color, radius: 5)
+                }
+                .rotationEffect(.degrees(rotation))
+                .onAppear {
+                    withAnimation(.linear(duration: 4).repeatForever(autoreverses: false)) {
+                        rotation = 360
+                    }
+                }
+
+                // Tech readout rings
+                ForEach(0..<3, id: \.self) { ring in
+                    Circle()
+                        .stroke(color.opacity(0.3), lineWidth: 1)
+                        .frame(width: CGFloat(30 + ring * 15), height: CGFloat(30 + ring * 15))
+                }
+
+                // Pulsing energy core
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [color, color.opacity(0.6), .clear],
+                            center: .center,
+                            startRadius: 0,
+                            endRadius: 25
+                        )
+                    )
+                    .frame(width: 40, height: 40)
+                    .shadow(color: color, radius: 20 * coreIntensity)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                            coreIntensity = 1.5
+                        }
+                    }
+
+                // Corner indicators (HUD style)
+                ForEach(0..<4, id: \.self) { i in
+                    VStack {
+                        Rectangle()
+                            .fill(color)
+                            .frame(width: 15, height: 2)
+                        Rectangle()
+                            .fill(color)
+                            .frame(width: 2, height: 15)
+                            .offset(x: -6.5, y: -8.5)
+                    }
+                    .offset(x: 45, y: -45)
+                    .rotationEffect(.degrees(Double(i) * 90))
+                }
+            }
+
+            // Provider name
+            if let name = providerName {
+                Text(name)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundColor(textColor)
+                    .shadow(color: color, radius: 5)
+            }
+        }
     }
 }

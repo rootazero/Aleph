@@ -217,7 +217,11 @@ struct RootContentView: View {
     private var tabContent: some View {
         switch selectedTab {
         case .general:
-            GeneralSettingsView(core: appDelegate.core, saveBarState: saveBarState)
+            if let themeEngine = appDelegate.themeEngine {
+                GeneralSettingsView(core: appDelegate.core, saveBarState: saveBarState, themeEngine: themeEngine)
+            } else {
+                GeneralSettingsView(core: appDelegate.core, saveBarState: saveBarState, themeEngine: ThemeEngine())
+            }
 
         case .providers:
             if let core = appDelegate.core {

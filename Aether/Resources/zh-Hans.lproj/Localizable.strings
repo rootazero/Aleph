@@ -34,6 +34,11 @@
 // MARK: - Settings Window - General Tab
 "settings.general.title" = "通用";
 "settings.general.description" = "配置应用程序通用设置，包括声音、语言和更新。";
+"settings.general.theme" = "Halo 主题";
+"settings.general.theme_description" = "选择 Halo 浮窗动画的视觉风格";
+"settings.general.theme_cyberpunk" = "赛博朋克";
+"settings.general.theme_zen" = "禅意";
+"settings.general.theme_jarvis" = "贾维斯";
 "settings.general.sound" = "声音";
 "settings.general.sound_effects" = "音效";
 "settings.general.language" = "语言";

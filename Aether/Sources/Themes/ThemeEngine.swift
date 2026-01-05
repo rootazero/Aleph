@@ -2,27 +2,57 @@
 //  ThemeEngine.swift
 //  Aether
 //
-//  Theme management - System appearance only (follows macOS light/dark mode)
+//  Theme management - Supports user-selected themes with persistence
 //
 
 import SwiftUI
 import Combine
 
-/// Manages theme rendering based on system appearance
-/// Automatically adapts to macOS light/dark mode changes
+/// Manages theme rendering with user preference persistence
 class ThemeEngine: ObservableObject {
     // MARK: - Published Properties
 
-    /// Currently active theme instance (always uses system appearance)
-    var activeTheme: any HaloTheme {
-        ZenTheme()
+    /// Currently selected theme type
+    @Published var selectedTheme: Theme {
+        didSet {
+            saveThemePreference()
+        }
     }
+
+    /// Currently active theme instance
+    var activeTheme: any HaloTheme {
+        selectedTheme.makeTheme()
+    }
+
+    // MARK: - Private Properties
+
+    private let userDefaultsKey = "aether.halo.theme"
 
     // MARK: - Initialization
 
-    /// Initialize theme engine
+    /// Initialize theme engine with saved preference or default
     init() {
-        // Theme is now purely reactive to system appearance
-        // No persistence needed
+        // Load saved theme preference
+        if let savedTheme = UserDefaults.standard.string(forKey: userDefaultsKey),
+           let theme = Theme(rawValue: savedTheme) {
+            self.selectedTheme = theme
+        } else {
+            // Default to Cyberpunk theme
+            self.selectedTheme = .cyberpunk
+        }
+    }
+
+    // MARK: - Public Methods
+
+    /// Set the active theme
+    func setTheme(_ theme: Theme) {
+        selectedTheme = theme
+    }
+
+    // MARK: - Private Methods
+
+    /// Save theme preference to UserDefaults
+    private func saveThemePreference() {
+        UserDefaults.standard.set(selectedTheme.rawValue, forKey: userDefaultsKey)
     }
 }

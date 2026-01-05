@@ -34,6 +34,11 @@
 // MARK: - Settings Window - General Tab
 "settings.general.title" = "General";
 "settings.general.description" = "Configure general application settings including sound, language, and updates.";
+"settings.general.theme" = "Halo Theme";
+"settings.general.theme_description" = "Choose the visual style for the Halo overlay animation";
+"settings.general.theme_cyberpunk" = "Cyberpunk";
+"settings.general.theme_zen" = "Zen";
+"settings.general.theme_jarvis" = "Jarvis";
 "settings.general.sound" = "Sound";
 "settings.general.sound_effects" = "Sound Effects";
 "settings.general.language" = "Language";

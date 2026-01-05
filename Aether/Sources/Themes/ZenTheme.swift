@@ -64,6 +64,21 @@ struct ZenTheme: HaloTheme {
             )
         )
     }
+
+    func retrievingMemoryView() -> AnyView {
+        AnyView(
+            ZenRetrievingMemoryView(color: .purple)
+        )
+    }
+
+    func processingWithAIView(providerColor: Color, providerName: String?) -> AnyView {
+        AnyView(
+            ZenProcessingWithAIView(
+                color: providerColor,
+                providerName: providerName
+            )
+        )
+    }
 }
 
 // MARK: - Zen Listening View
@@ -232,5 +247,113 @@ private struct ZenErrorView: View {
                 .foregroundColor(color.opacity(0.7))
         }
         .padding()
+    }
+}
+
+// MARK: - Zen Retrieving Memory View
+
+private struct ZenRetrievingMemoryView: View {
+    let color: Color
+    @State private var breathingScale: CGFloat = 1.0
+    @State private var rotation: Double = 0
+
+    var body: some View {
+        ZStack {
+            // Soft circular gradient background
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [color.opacity(0.4), color.opacity(0.1), .clear],
+                        center: .center,
+                        startRadius: 20,
+                        endRadius: 60
+                    )
+                )
+                .frame(width: 100, height: 100)
+
+            // Breathing outer circle
+            Circle()
+                .stroke(color.opacity(0.5), lineWidth: 2)
+                .frame(width: 80, height: 80)
+                .scaleEffect(breathingScale)
+                .onAppear {
+                    withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+                        breathingScale = 1.1
+                    }
+                }
+
+            // Rotating segments for subtle motion
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .trim(from: 0.0, to: 0.15)
+                    .stroke(color, lineWidth: 3)
+                    .frame(width: 60, height: 60)
+                    .rotationEffect(.degrees(Double(i) * 120 + rotation))
+            }
+            .onAppear {
+                withAnimation(.linear(duration: 3).repeatForever(autoreverses: false)) {
+                    rotation = 360
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Zen Processing With AI View
+
+private struct ZenProcessingWithAIView: View {
+    let color: Color
+    let providerName: String?
+    @State private var breathingScale: CGFloat = 1.0
+    @State private var rotation: Double = 0
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ZStack {
+                // Soft circular gradient background
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [color.opacity(0.6), color.opacity(0.1), .clear],
+                            center: .center,
+                            startRadius: 20,
+                            endRadius: 60
+                        )
+                    )
+                    .frame(width: 100, height: 100)
+
+                // Breathing outer circle
+                Circle()
+                    .stroke(color.opacity(0.5), lineWidth: 2)
+                    .frame(width: 80, height: 80)
+                    .scaleEffect(breathingScale)
+                    .onAppear {
+                        withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+                            breathingScale = 1.1
+                        }
+                    }
+
+                // Rotating segments for subtle motion
+                ForEach(0..<3, id: \.self) { i in
+                    Circle()
+                        .trim(from: 0.0, to: 0.15)
+                        .stroke(color, lineWidth: 3)
+                        .frame(width: 60, height: 60)
+                        .rotationEffect(.degrees(Double(i) * 120 + rotation))
+                }
+                .onAppear {
+                    withAnimation(.linear(duration: 3).repeatForever(autoreverses: false)) {
+                        rotation = 360
+                    }
+                }
+            }
+
+            // Provider name
+            if let name = providerName {
+                Text(name)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundColor(.primary)
+            }
+        }
     }
 }
