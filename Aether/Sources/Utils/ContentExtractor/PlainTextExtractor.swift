@@ -47,7 +47,8 @@ final class PlainTextExtractor: ContentExtractor {
             metadata: [
                 "extractor": identifier,
                 "text_length": text.count
-            ]
+            ],
+            error: nil
         )
     }
 }

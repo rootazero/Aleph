@@ -64,21 +64,29 @@ struct ExtractionResult {
     /// Additional metadata for debugging/logging
     let metadata: [String: Any]
 
+    /// Error message if extraction failed (e.g., file too large)
+    let error: String?
+
     // MARK: - Static Constructors
 
     /// Create an empty result
     static var empty: ExtractionResult {
-        ExtractionResult(text: nil, attachments: [], handledTypes: [], metadata: [:])
+        ExtractionResult(text: nil, attachments: [], handledTypes: [], metadata: [:], error: nil)
     }
 
     /// Create a result with text only
     static func text(_ text: String) -> ExtractionResult {
-        ExtractionResult(text: text, attachments: [], handledTypes: [.string], metadata: [:])
+        ExtractionResult(text: text, attachments: [], handledTypes: [.string], metadata: [:], error: nil)
     }
 
     /// Create a result with attachments only
     static func attachments(_ attachments: [MediaAttachment], handledTypes: Set<NSPasteboard.PasteboardType>) -> ExtractionResult {
-        ExtractionResult(text: nil, attachments: attachments, handledTypes: handledTypes, metadata: [:])
+        ExtractionResult(text: nil, attachments: attachments, handledTypes: handledTypes, metadata: [:], error: nil)
+    }
+
+    /// Create a result with an error
+    static func error(_ message: String) -> ExtractionResult {
+        ExtractionResult(text: nil, attachments: [], handledTypes: [], metadata: [:], error: message)
     }
 }
 
@@ -156,11 +164,12 @@ final class ContentExtractorRegistry {
     /// extractors are skipped by lower-priority ones to avoid duplicate extraction.
     ///
     /// - Parameter pasteboard: The system pasteboard to extract from
-    /// - Returns: Tuple of (text, attachments)
-    func extractAll(from pasteboard: NSPasteboard) -> (text: String?, attachments: [MediaAttachment]) {
+    /// - Returns: Tuple of (text, attachments, error)
+    func extractAll(from pasteboard: NSPasteboard) -> (text: String?, attachments: [MediaAttachment], error: String?) {
         var allAttachments: [MediaAttachment] = []
         var text: String?
         var handledTypes: Set<NSPasteboard.PasteboardType> = []
+        var firstError: String?
 
         let extractorsCopy = queue.sync { self.extractors }
 
@@ -175,6 +184,19 @@ final class ContentExtractorRegistry {
             if extractor.canExtract(from: pasteboard) {
                 let result = extractor.extract(from: pasteboard)
 
+                // Check for errors - record but continue processing other extractors
+                // CRITICAL FIX: Don't return immediately on error - this was blocking
+                // PlainTextExtractor from running when image extraction failed,
+                // causing "/" commands to fail even when text was available.
+                if let error = result.error {
+                    logger.error("[\(extractor.identifier)] Extraction error: \(error)")
+                    if firstError == nil {
+                        firstError = error
+                    }
+                    // Continue processing other extractors instead of returning
+                    continue
+                }
+
                 // Take text from first extractor that provides it
                 if text == nil, let extractedText = result.text {
                     text = extractedText
@@ -188,7 +210,14 @@ final class ContentExtractorRegistry {
         }
 
         logger.info("Extraction complete: \(allAttachments.count) total attachments")
-        return (text, allAttachments)
+
+        // Only return error if we got nothing useful
+        // If we have text or attachments, the extraction was at least partially successful
+        if text == nil && allAttachments.isEmpty && firstError != nil {
+            return (nil, [], firstError)
+        }
+
+        return (text, allAttachments, nil)
     }
 
     // MARK: - Utilities
@@ -236,11 +265,14 @@ enum SupportedMediaType: String, CaseIterable {
 
 /// Size limits for media content
 enum MediaSizeLimits {
-    /// Maximum allowed image size in bytes (20MB)
-    static let maxImageSizeBytes: UInt64 = 20 * 1024 * 1024
+    /// Maximum allowed image size in bytes (10MB)
+    static let maxImageSizeBytes: UInt64 = 10 * 1024 * 1024
 
     /// Warning threshold for image size in bytes (5MB)
     static let warnImageSizeBytes: UInt64 = 5 * 1024 * 1024
+
+    /// Human-readable maximum size for error messages
+    static let maxImageSizeDescription: String = "10MB"
 }
 
 /// Helper to get MIME type from file extension

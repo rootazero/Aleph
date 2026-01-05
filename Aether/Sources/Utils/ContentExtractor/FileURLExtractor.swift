@@ -62,8 +62,17 @@ final class FileURLExtractor: ContentExtractor {
             // Check size limits
             let sizeBytes = UInt64(data.count)
             if sizeBytes > MediaSizeLimits.maxImageSizeBytes {
+                let sizeMB = Double(sizeBytes) / (1024.0 * 1024.0)
+                let errorMessage = String(format: "File \"%@\" (%.1fMB) exceeds the maximum limit of %@. Please use a smaller file.", url.lastPathComponent, sizeMB, MediaSizeLimits.maxImageSizeDescription)
                 logger.error("File too large: \(url.lastPathComponent) (\(sizeBytes) bytes)")
-                continue
+                // Return error immediately to stop processing
+                return ExtractionResult(
+                    text: nil,
+                    attachments: [],
+                    handledTypes: [],
+                    metadata: ["extractor": identifier],
+                    error: errorMessage
+                )
             }
 
             if sizeBytes > MediaSizeLimits.warnImageSizeBytes {
@@ -95,7 +104,8 @@ final class FileURLExtractor: ContentExtractor {
             metadata: [
                 "extractor": identifier,
                 "file_count": urls.count
-            ]
+            ],
+            error: nil
         )
     }
 

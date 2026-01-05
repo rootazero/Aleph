@@ -41,24 +41,42 @@ final class RTFDExtractor: ContentExtractor {
             return .empty
         }
 
-        let attachments = extractImagesFromRTFD(rtfdData)
+        let result = extractImagesFromRTFD(rtfdData)
 
-        if attachments.isEmpty {
+        // Check for error first
+        if let error = result.error {
+            return ExtractionResult(
+                text: nil,
+                attachments: [],
+                handledTypes: [],
+                metadata: ["extractor": identifier],
+                error: error
+            )
+        }
+
+        if result.attachments.isEmpty {
             logger.debug("No images found in RTFD content")
         }
 
         return ExtractionResult(
             text: nil,
-            attachments: attachments,
+            attachments: result.attachments,
             handledTypes: [.rtfd],
             metadata: [
                 "extractor": identifier,
                 "rtfd_size": rtfdData.count
-            ]
+            ],
+            error: nil
         )
     }
 
     // MARK: - Private Helpers
+
+    /// Result type for RTFD image extraction
+    private struct RTFDExtractionResult {
+        let attachments: [MediaAttachment]
+        let error: String?
+    }
 
     /// Extract embedded images from RTFD data
     ///
@@ -66,9 +84,10 @@ final class RTFDExtractor: ContentExtractor {
     /// NSTextAttachment attributes to find embedded images.
     ///
     /// - Parameter rtfdData: Raw RTFD data from pasteboard
-    /// - Returns: Array of MediaAttachment for each embedded image
-    private func extractImagesFromRTFD(_ rtfdData: Data) -> [MediaAttachment] {
+    /// - Returns: RTFDExtractionResult with attachments or error
+    private func extractImagesFromRTFD(_ rtfdData: Data) -> RTFDExtractionResult {
         var attachments: [MediaAttachment] = []
+        var oversizeError: String?
 
         // Parse RTFD data as NSAttributedString
         guard let attrString = try? NSAttributedString(
@@ -77,12 +96,12 @@ final class RTFDExtractor: ContentExtractor {
             documentAttributes: nil
         ) else {
             logger.error("Failed to parse RTFD data")
-            return []
+            return RTFDExtractionResult(attachments: [], error: nil)
         }
 
         // Enumerate NSTextAttachment attributes
         let fullRange = NSRange(location: 0, length: attrString.length)
-        attrString.enumerateAttribute(.attachment, in: fullRange, options: []) { value, _, _ in
+        attrString.enumerateAttribute(.attachment, in: fullRange, options: []) { value, _, stop in
             guard let textAttachment = value as? NSTextAttachment,
                   let fileWrapper = textAttachment.fileWrapper else {
                 return
@@ -105,10 +124,14 @@ final class RTFDExtractor: ContentExtractor {
                 return
             }
 
-            // Check size limits
+            // Check size limits - return error immediately if exceeded
             let sizeBytes = UInt64(data.count)
             if sizeBytes > MediaSizeLimits.maxImageSizeBytes {
-                logger.error("RTFD attachment too large: \(sizeBytes) bytes")
+                let sizeMB = Double(sizeBytes) / (1024.0 * 1024.0)
+                oversizeError = String(format: "Embedded image \"%@\" (%.1fMB) exceeds the maximum limit of %@. Please use a smaller image.", filename, sizeMB, MediaSizeLimits.maxImageSizeDescription)
+                logger.error("RTFD attachment too large: \(filename) (\(sizeBytes) bytes)")
+                // Stop enumeration
+                stop.pointee = true
                 return
             }
 
@@ -134,6 +157,6 @@ final class RTFDExtractor: ContentExtractor {
             logger.debug("Extracted RTFD attachment: \(filename) (\(sizeBytes) bytes)")
         }
 
-        return attachments
+        return RTFDExtractionResult(attachments: attachments, error: oversizeError)
     }
 }
