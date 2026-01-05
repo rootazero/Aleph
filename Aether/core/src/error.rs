@@ -292,16 +292,9 @@ impl AetherError {
                 )
             }
             AetherError::ProviderError { message, .. } => {
-                // Check if it's a server error (5xx)
-                if message.contains("500")
-                    || message.contains("502")
-                    || message.contains("503")
-                    || message.contains("504")
-                {
-                    "The AI service is temporarily unavailable. Please try again later.".to_string()
-                } else {
-                    format!("AI service error: {}. Please try again.", message)
-                }
+                // Show the actual error message for debugging
+                // Previously we hid 5xx errors, but users need to see what went wrong
+                format!("AI service error: {}. Please try again.", message)
             }
             AetherError::HotkeyError { message, .. } => {
                 format!(

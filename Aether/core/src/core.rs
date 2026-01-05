@@ -1717,10 +1717,24 @@ impl AetherCore {
                 .unwrap_or(false);
 
             if has_attachments {
+                let atts = attachments.as_ref().unwrap();
+                for (i, att) in atts.iter().enumerate() {
+                    info!(
+                        index = i,
+                        media_type = %att.media_type,
+                        mime_type = %att.mime_type,
+                        data_len = att.data.len(),
+                        size_bytes = att.size_bytes,
+                        "Media attachment details"
+                    );
+                }
                 info!(
-                    attachment_count = attachments.as_ref().map(|a| a.len()).unwrap_or(0),
+                    attachment_count = atts.len(),
+                    provider_supports_vision = provider.supports_vision(),
                     "Processing with media attachments"
                 );
+            } else {
+                debug!("No media attachments, processing text only");
             }
 
             self.runtime.block_on(async {

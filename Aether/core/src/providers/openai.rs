@@ -107,6 +107,9 @@ enum ContentBlock {
 #[derive(Debug, Serialize)]
 struct ImageUrl {
     url: String,
+    /// Detail level for image processing: "low", "high", or "auto"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
 }
 
 /// Response from OpenAI chat completion API
@@ -274,6 +277,7 @@ impl OpenAiProvider {
         content_blocks.push(ContentBlock::ImageUrl {
             image_url: ImageUrl {
                 url: image.to_base64(),
+                detail: Some("auto".to_string()),
             },
         });
 
@@ -334,7 +338,10 @@ impl OpenAiProvider {
                 // Format: data:image/png;base64,<base64_data>
                 let data_uri = format!("data:{};base64,{}", attachment.mime_type, attachment.data);
                 content_blocks.push(ContentBlock::ImageUrl {
-                    image_url: ImageUrl { url: data_uri },
+                    image_url: ImageUrl {
+                        url: data_uri,
+                        detail: Some("auto".to_string()),
+                    },
                 });
             }
         }
@@ -362,8 +369,20 @@ impl OpenAiProvider {
     async fn handle_error(&self, response: reqwest::Response) -> AetherError {
         let status = response.status();
 
+        // Try to read the raw response body first for logging
+        let body_text = response.text().await.unwrap_or_else(|_| "".to_string());
+
+        // Log the error details
+        error!(
+            status = %status,
+            provider = %self.name,
+            endpoint = %self.endpoint,
+            body_preview = %body_text.chars().take(500).collect::<String>(),
+            "API error response"
+        );
+
         // Try to parse error response body
-        if let Ok(error_response) = response.json::<ErrorResponse>().await {
+        if let Ok(error_response) = serde_json::from_str::<ErrorResponse>(&body_text) {
             let error_msg = error_response.error.message;
 
             return match status.as_u16() {
@@ -391,7 +410,7 @@ impl OpenAiProvider {
             ),
             429 => AetherError::rate_limit(format!("{} rate limit exceeded", self.name)),
             500..=599 => AetherError::provider(format!("{} server error: {}", self.name, status)),
-            _ => AetherError::provider(format!("{} API error: {}", self.name, status)),
+            _ => AetherError::provider(format!("{} API error ({}): {}", self.name, status, body_text.chars().take(200).collect::<String>())),
         }
     }
 }
@@ -610,8 +629,21 @@ impl AiProvider for OpenAiProvider {
                 return self.process(&input, system_prompt.as_deref()).await;
             };
 
+            // Log detailed info about attachments for debugging
+            for (i, img) in images.iter().enumerate() {
+                debug!(
+                    index = i,
+                    media_type = %img.media_type,
+                    mime_type = %img.mime_type,
+                    data_len = img.data.len(),
+                    size_bytes = img.size_bytes,
+                    "Multimodal image attachment"
+                );
+            }
+
             debug!(
                 model = %self.config.model,
+                endpoint = %self.endpoint,
                 input_length = input.len(),
                 image_count = images.len(),
                 has_system_prompt = system_prompt.is_some(),
@@ -621,6 +653,13 @@ impl AiProvider for OpenAiProvider {
             // Build multimodal request body
             let request_body =
                 self.build_multimodal_request(&input, &images, system_prompt.as_deref());
+
+            // Log request for debugging (truncate data for readability)
+            debug!(
+                request_model = %request_body.model,
+                message_count = request_body.messages.len(),
+                "Built multimodal request"
+            );
 
             // Send POST request
             let response = self
@@ -658,13 +697,27 @@ impl AiProvider for OpenAiProvider {
             // Check status code
             if !response.status().is_success() {
                 let status = response.status();
-                debug!(status = %status, "OpenAI multimodal request failed");
+                error!(
+                    status = %status,
+                    endpoint = %self.endpoint,
+                    model = %self.config.model,
+                    "OpenAI multimodal request failed"
+                );
                 return Err(self.handle_error(response).await);
             }
 
             // Parse response
-            let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
-                error!(error = %e, "Failed to parse OpenAI multimodal response");
+            let response_text = response.text().await.map_err(|e| {
+                error!(error = %e, "Failed to read OpenAI response body");
+                AetherError::provider(format!("Failed to read response: {}", e))
+            })?;
+
+            let completion: ChatCompletionResponse = serde_json::from_str(&response_text).map_err(|e| {
+                error!(
+                    error = %e,
+                    response_preview = %response_text.chars().take(500).collect::<String>(),
+                    "Failed to parse OpenAI multimodal response"
+                );
                 AetherError::provider(format!("Failed to parse OpenAI response: {}", e))
             })?;
 
@@ -806,6 +859,51 @@ mod tests {
             provider.endpoint,
             "https://api.openai.com/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn test_multimodal_request_json_format() {
+        use crate::core::MediaAttachment;
+
+        let config = create_test_config();
+        let provider = OpenAiProvider::new("openai".to_string(), config).unwrap();
+
+        let attachments = vec![MediaAttachment {
+            media_type: "image".to_string(),
+            mime_type: "image/png".to_string(),
+            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_string(),
+            filename: Some("test.png".to_string()),
+            size_bytes: 100,
+        }];
+
+        let request = provider.build_multimodal_request("What's in this image?", &attachments, None);
+
+        // Serialize to JSON and verify format
+        let json = serde_json::to_string_pretty(&request).unwrap();
+        println!("Multimodal request JSON:\n{}", json);
+
+        // Parse JSON to verify structure
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        // Verify model
+        assert_eq!(parsed["model"], "gpt-4o");
+
+        // Verify messages structure
+        let messages = parsed["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+
+        // Verify user message has content array
+        let content = messages[0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+
+        // Verify text block
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "What's in this image?");
+
+        // Verify image_url block
+        assert_eq!(content[1]["type"], "image_url");
+        assert!(content[1]["image_url"]["url"].as_str().unwrap().starts_with("data:image/png;base64,"));
+        assert_eq!(content[1]["image_url"]["detail"], "auto");
     }
 
     // Note: Integration tests with real API calls should be in tests/ directory
