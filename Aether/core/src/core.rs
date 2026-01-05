@@ -1497,10 +1497,16 @@ impl AetherCore {
             "Built routing context for provider selection"
         );
 
-        // Step 2: Route FIRST to get capabilities from routing rule
-        // Use route_with_extended_info to get full RoutingDecision with capabilities
-        let routing_decision = router
-            .route_with_extended_info(&routing_context)
+        // Step 2: Route using new match_rules() API
+        // - Command rules: first-match-stops, returns provider + cleaned input
+        // - Keyword rules: all-match, adds prompts
+        let routing_match = router.match_rules(&routing_context);
+
+        // Determine provider name (command rule or default)
+        let provider_name = routing_match
+            .provider_name()
+            .map(|s| s.to_string())
+            .or_else(|| router.default_provider_name().map(|s| s.to_string()))
             .ok_or(AetherError::NoProviderAvailable {
                 suggestion: Some(
                     "No routing rules matched. Configure routing rules in Settings → Routing"
@@ -1508,11 +1514,24 @@ impl AetherCore {
                 ),
             })?;
 
-        let provider_name = routing_decision.provider_name.clone();
-        let provider_color = routing_decision.provider.color().to_string();
-        let rule_system_prompt = routing_decision.system_prompt.clone();
-        let rule_capabilities = routing_decision.capabilities.clone();
-        let fallback_provider = routing_decision.fallback;
+        // Look up provider
+        let provider = router.get_provider(&provider_name).ok_or(AetherError::NoProviderAvailable {
+            suggestion: Some(format!("Provider '{}' not found", provider_name)),
+        })?;
+
+        let provider_color = provider.color().to_string();
+
+        // Get capabilities from the match
+        let rule_capabilities = routing_match.get_capabilities();
+
+        // Get system prompt from match (combined command + keyword prompts)
+        let rule_system_prompt = routing_match.assemble_prompt().unwrap_or_default();
+
+        // Determine fallback provider (default if different from primary)
+        let fallback_provider = router
+            .default_provider_name()
+            .filter(|default| *default != provider_name)
+            .and_then(|name| router.get_provider(name));
 
         info!(
             provider = %provider_name,
@@ -1520,7 +1539,9 @@ impl AetherCore {
             has_fallback = fallback_provider.is_some(),
             rule_capabilities_count = rule_capabilities.len(),
             rule_capabilities = ?rule_capabilities,
-            "Routed to AI provider with extended info"
+            command_matched = routing_match.command_rule.is_some(),
+            keyword_count = routing_match.keyword_rules.len(),
+            "Routed to AI provider with match_rules()"
         );
 
         // Step 3: Build and enrich AgentPayload using new architecture
@@ -1630,9 +1651,13 @@ impl AetherCore {
             assembled_system_prompt.clone()
         };
 
-        // Strip command prefix from input if rule has strip_prefix enabled
-        // This removes patterns like "/en" from "/en Hello world" before sending to AI
-        let final_input = router.strip_command_prefix(&routing_context, &input);
+        // Get cleaned input from routing match (command prefix stripped if applicable)
+        // For command rules like "/en Hello world" → "Hello world"
+        // For keyword rules or no match, use original input
+        let final_input = routing_match
+            .cleaned_input()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| input.clone());
         let prefix_was_stripped = final_input.len() < input.len();
 
         // Log the final system prompt being used
@@ -1644,8 +1669,7 @@ impl AetherCore {
             "Final system prompt for AI request"
         );
 
-        // Get provider reference from routing decision
-        let provider = routing_decision.provider;
+        // Provider is already obtained above from router.get_provider()
 
         // Try primary provider with retry
         let response = {
@@ -1946,6 +1970,59 @@ impl AetherCore {
         Ok(())
     }
 
+    /// Update search configuration
+    ///
+    /// Updates the search configuration and reinitializes the SearchRegistry.
+    /// This allows hot-reloading search providers after settings changes.
+    ///
+    /// # Arguments
+    /// * `search` - New search configuration (UniFFI type)
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error
+    pub fn update_search_config(&self, search: crate::config::SearchConfig) -> Result<()> {
+        // Convert UniFFI SearchConfig to internal SearchConfigInternal
+        let search_internal: crate::config::SearchConfigInternal = search.into();
+
+        // Update config and save to disk
+        {
+            let mut config = self.lock_config();
+            config.search = Some(search_internal.clone());
+            config.save()?;
+        }
+
+        // Reinitialize SearchRegistry with new config
+        if search_internal.enabled {
+            match Self::create_search_registry_from_config(&search_internal) {
+                Ok(registry) => {
+                    let mut registry_lock = self
+                        .search_registry
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner());
+                    *registry_lock = Some(Arc::new(registry));
+                    log::info!("Search configuration updated and registry reinitialized");
+                }
+                Err(e) => {
+                    log::warn!("Failed to reinitialize SearchRegistry: {}", e);
+                    return Err(AetherError::config(format!(
+                        "Failed to reinitialize search registry: {}",
+                        e
+                    )));
+                }
+            }
+        } else {
+            // Disable search by clearing the registry
+            let mut registry_lock = self
+                .search_registry
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            *registry_lock = None;
+            log::info!("Search capability disabled");
+        }
+
+        Ok(())
+    }
+
     /// Validate regex pattern
     pub fn validate_regex(&self, pattern: String) -> Result<bool> {
         match regex::Regex::new(&pattern) {
@@ -2066,10 +2143,10 @@ impl AetherCore {
     ///     print("✗ Provider test failed: \(result.error_message)")
     /// }
     /// ```
-    pub async fn test_search_provider(
+    pub fn test_search_provider(
         &self,
         provider_name: String,
-    ) -> crate::search::ProviderTestResult {
+    ) -> Result<crate::search::ProviderTestResult> {
         use crate::search::ProviderTestResult;
 
         // Clone Arc from registry (must drop lock before await)
@@ -2080,17 +2157,17 @@ impl AetherCore {
 
         match registry_arc {
             Some(reg) => {
-                // Delegate to registry's test method
-                reg.test_search_provider(&provider_name).await
+                // Execute async search test within tokio runtime
+                Ok(self.runtime.block_on(reg.test_search_provider(&provider_name)))
             }
             None => {
                 // Search capability not enabled
-                ProviderTestResult {
+                Ok(ProviderTestResult {
                     success: false,
                     latency_ms: 0,
                     error_message: "Search capability not enabled in configuration".to_string(),
                     error_type: "config".to_string(),
-                }
+                })
             }
         }
     }
@@ -2120,10 +2197,10 @@ impl AetherCore {
     /// )
     /// let result = await core.testSearchProviderWithConfig(config: config)
     /// ```
-    pub async fn test_search_provider_with_config(
+    pub fn test_search_provider_with_config(
         &self,
         config: crate::search::SearchProviderTestConfig,
-    ) -> crate::search::ProviderTestResult {
+    ) -> Result<crate::search::ProviderTestResult> {
         use crate::search::providers::*;
         use crate::search::{ProviderTestResult, SearchOptions, SearchProvider};
         use std::time::Instant;
@@ -2134,23 +2211,23 @@ impl AetherCore {
                 let api_key = match config.api_key {
                     Some(ref key) if !key.is_empty() => key.clone(),
                     _ => {
-                        return ProviderTestResult {
+                        return Ok(ProviderTestResult {
                             success: false,
                             latency_ms: 0,
                             error_message: "Tavily requires an API key".to_string(),
                             error_type: "config".to_string(),
-                        }
+                        })
                     }
                 };
                 match TavilyProvider::new(api_key) {
                     Ok(p) => Box::new(p),
                     Err(e) => {
-                        return ProviderTestResult {
+                        return Ok(ProviderTestResult {
                             success: false,
                             latency_ms: 0,
                             error_message: format!("Failed to create Tavily provider: {}", e),
                             error_type: "config".to_string(),
-                        }
+                        })
                     }
                 }
             }
@@ -2158,23 +2235,23 @@ impl AetherCore {
                 let api_key = match config.api_key {
                     Some(ref key) if !key.is_empty() => key.clone(),
                     _ => {
-                        return ProviderTestResult {
+                        return Ok(ProviderTestResult {
                             success: false,
                             latency_ms: 0,
                             error_message: "Brave requires an API key".to_string(),
                             error_type: "config".to_string(),
-                        }
+                        })
                     }
                 };
                 match BraveProvider::new(api_key) {
                     Ok(p) => Box::new(p),
                     Err(e) => {
-                        return ProviderTestResult {
+                        return Ok(ProviderTestResult {
                             success: false,
                             latency_ms: 0,
                             error_message: format!("Failed to create Brave provider: {}", e),
                             error_type: "config".to_string(),
-                        }
+                        })
                     }
                 }
             }
@@ -2182,23 +2259,23 @@ impl AetherCore {
                 let base_url = match config.base_url {
                     Some(ref url) if !url.is_empty() => url.clone(),
                     _ => {
-                        return ProviderTestResult {
+                        return Ok(ProviderTestResult {
                             success: false,
                             latency_ms: 0,
                             error_message: "SearXNG requires a base URL".to_string(),
                             error_type: "config".to_string(),
-                        }
+                        })
                     }
                 };
                 match SearxngProvider::new(base_url) {
                     Ok(p) => Box::new(p),
                     Err(e) => {
-                        return ProviderTestResult {
+                        return Ok(ProviderTestResult {
                             success: false,
                             latency_ms: 0,
                             error_message: format!("Failed to create SearXNG provider: {}", e),
                             error_type: "config".to_string(),
-                        }
+                        })
                     }
                 }
             }
@@ -2206,34 +2283,34 @@ impl AetherCore {
                 let api_key = match config.api_key {
                     Some(ref key) if !key.is_empty() => key.clone(),
                     _ => {
-                        return ProviderTestResult {
+                        return Ok(ProviderTestResult {
                             success: false,
                             latency_ms: 0,
                             error_message: "Google CSE requires an API key".to_string(),
                             error_type: "config".to_string(),
-                        }
+                        })
                     }
                 };
                 let engine_id = match config.engine_id {
                     Some(ref id) if !id.is_empty() => id.clone(),
                     _ => {
-                        return ProviderTestResult {
+                        return Ok(ProviderTestResult {
                             success: false,
                             latency_ms: 0,
                             error_message: "Google CSE requires an engine ID".to_string(),
                             error_type: "config".to_string(),
-                        }
+                        })
                     }
                 };
                 match GoogleProvider::new(api_key, engine_id) {
                     Ok(p) => Box::new(p),
                     Err(e) => {
-                        return ProviderTestResult {
+                        return Ok(ProviderTestResult {
                             success: false,
                             latency_ms: 0,
                             error_message: format!("Failed to create Google provider: {}", e),
                             error_type: "config".to_string(),
-                        }
+                        })
                     }
                 }
             }
@@ -2241,23 +2318,23 @@ impl AetherCore {
                 let api_key = match config.api_key {
                     Some(ref key) if !key.is_empty() => key.clone(),
                     _ => {
-                        return ProviderTestResult {
+                        return Ok(ProviderTestResult {
                             success: false,
                             latency_ms: 0,
                             error_message: "Bing requires an API key".to_string(),
                             error_type: "config".to_string(),
-                        }
+                        })
                     }
                 };
                 match BingProvider::new(api_key) {
                     Ok(p) => Box::new(p),
                     Err(e) => {
-                        return ProviderTestResult {
+                        return Ok(ProviderTestResult {
                             success: false,
                             latency_ms: 0,
                             error_message: format!("Failed to create Bing provider: {}", e),
                             error_type: "config".to_string(),
-                        }
+                        })
                     }
                 }
             }
@@ -2265,37 +2342,37 @@ impl AetherCore {
                 let api_key = match config.api_key {
                     Some(ref key) if !key.is_empty() => key.clone(),
                     _ => {
-                        return ProviderTestResult {
+                        return Ok(ProviderTestResult {
                             success: false,
                             latency_ms: 0,
                             error_message: "Exa requires an API key".to_string(),
                             error_type: "config".to_string(),
-                        }
+                        })
                     }
                 };
                 match ExaProvider::new(api_key) {
                     Ok(p) => Box::new(p),
                     Err(e) => {
-                        return ProviderTestResult {
+                        return Ok(ProviderTestResult {
                             success: false,
                             latency_ms: 0,
                             error_message: format!("Failed to create Exa provider: {}", e),
                             error_type: "config".to_string(),
-                        }
+                        })
                     }
                 }
             }
             unknown => {
-                return ProviderTestResult {
+                return Ok(ProviderTestResult {
                     success: false,
                     latency_ms: 0,
                     error_message: format!("Unknown provider type: {}", unknown),
                     error_type: "config".to_string(),
-                }
+                })
             }
         };
 
-        // Execute test search
+        // Execute test search within tokio runtime
         let test_options = SearchOptions {
             max_results: 1,
             timeout_seconds: 5,
@@ -2303,15 +2380,15 @@ impl AetherCore {
         };
 
         let start = Instant::now();
-        match provider.search("test", &test_options).await {
+        match self.runtime.block_on(provider.search("test", &test_options)) {
             Ok(_) => {
                 let latency = start.elapsed().as_millis() as u32;
-                ProviderTestResult {
+                Ok(ProviderTestResult {
                     success: true,
                     latency_ms: latency,
                     error_message: String::new(),
                     error_type: String::new(),
-                }
+                })
             }
             Err(e) => {
                 let error_message = e.to_string();
@@ -2330,12 +2407,12 @@ impl AetherCore {
                     "unknown"
                 };
 
-                ProviderTestResult {
+                Ok(ProviderTestResult {
                     success: false,
                     latency_ms: 0,
                     error_message,
                     error_type: error_type.to_string(),
-                }
+                })
             }
         }
     }

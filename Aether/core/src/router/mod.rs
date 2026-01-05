@@ -38,6 +38,7 @@ pub mod decision;
 
 use crate::config::Config;
 use crate::error::{AetherError, Result};
+use crate::payload::Capability;
 use crate::providers::{create_provider, AiProvider};
 use regex::Regex;
 use std::collections::HashMap;
@@ -268,6 +269,8 @@ pub struct MatchedCommandRule {
     pub system_prompt: Option<String>,
     /// Input with command prefix stripped (e.g., "/draw cat" → "cat")
     pub cleaned_input: String,
+    /// Capabilities enabled for this rule (Memory, Search, etc.)
+    pub capabilities: Vec<Capability>,
     /// Index of the matched rule (for debugging/logging)
     pub rule_index: usize,
 }
@@ -326,6 +329,16 @@ impl RoutingMatch {
             // Join with double newline for clear separation
             Some(prompts.join("\n\n"))
         }
+    }
+
+    /// Get capabilities from the matched command rule
+    ///
+    /// Returns an empty vec if no command rule matched.
+    pub fn get_capabilities(&self) -> Vec<Capability> {
+        self.command_rule
+            .as_ref()
+            .map(|c| c.capabilities.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -710,10 +723,14 @@ impl Router {
                     "Command rule matched (first-match-stops)"
                 );
 
+                // Get capabilities from the rule config
+                let capabilities = self.rule_configs[*index].get_capabilities();
+
                 result.command_rule = Some(MatchedCommandRule {
                     provider_name: rule.provider_name().to_string(),
                     system_prompt: rule.system_prompt().map(|s| s.to_string()),
                     cleaned_input,
+                    capabilities,
                     rule_index: *index,
                 });
 
@@ -1646,6 +1663,7 @@ mod tests {
             provider_name: "gemini".to_string(),
             system_prompt: None,
             cleaned_input: "test".to_string(),
+            capabilities: vec![],
             rule_index: 0,
         });
 
