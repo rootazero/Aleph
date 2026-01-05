@@ -266,7 +266,8 @@ struct ProviderCard: View {
                 stopSequences: nil,
                 thinkingLevel: nil,
                 mediaResolution: nil,
-                repeatPenalty: nil
+                repeatPenalty: nil,
+                systemPromptMode: nil
             )
         ),
         isSelected: false,
@@ -300,7 +301,8 @@ struct ProviderCard: View {
                 stopSequences: nil,
                 thinkingLevel: nil,
                 mediaResolution: nil,
-                repeatPenalty: nil
+                repeatPenalty: nil,
+                systemPromptMode: nil
             )
         ),
         isSelected: true,
@@ -334,7 +336,8 @@ struct ProviderCard: View {
                 stopSequences: nil,
                 thinkingLevel: nil,
                 mediaResolution: nil,
-                repeatPenalty: nil
+                repeatPenalty: nil,
+                systemPromptMode: nil
             )
         ),
         isSelected: false,
@@ -369,7 +372,8 @@ struct ProviderCard: View {
                     stopSequences: nil,
                     thinkingLevel: nil,
                     mediaResolution: nil,
-                    repeatPenalty: nil
+                    repeatPenalty: nil,
+                    systemPromptMode: nil
                 )
             ),
             isSelected: true,
@@ -399,7 +403,8 @@ struct ProviderCard: View {
                     stopSequences: nil,
                     thinkingLevel: nil,
                     mediaResolution: nil,
-                    repeatPenalty: nil
+                    repeatPenalty: nil,
+                    systemPromptMode: nil
                 )
             ),
             isSelected: false,
@@ -429,7 +434,8 @@ struct ProviderCard: View {
                     stopSequences: nil,
                     thinkingLevel: nil,
                     mediaResolution: nil,
-                    repeatPenalty: nil
+                    repeatPenalty: nil,
+                    systemPromptMode: nil
                 )
             ),
             isSelected: false,

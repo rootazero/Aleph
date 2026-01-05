@@ -37,7 +37,8 @@ struct PresetProvider: Equatable {
             stopSequences: nil,
             thinkingLevel: nil,
             mediaResolution: nil,
-            repeatPenalty: nil
+            repeatPenalty: nil,
+            systemPromptMode: nil
         )
     }
 }

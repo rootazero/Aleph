@@ -356,7 +356,8 @@ struct ProviderConfigView: View {
                 stopSequences: nil,
                 thinkingLevel: nil,
                 mediaResolution: nil,
-                repeatPenalty: nil
+                repeatPenalty: nil,
+                systemPromptMode: nil
             )
 
             // Test connection with temporary config (does not persist to disk)
@@ -402,7 +403,8 @@ struct ProviderConfigView: View {
                     stopSequences: nil,
                     thinkingLevel: nil,
                     mediaResolution: nil,
-                    repeatPenalty: nil
+                    repeatPenalty: nil,
+                    systemPromptMode: nil
                 )
 
                 // Save to Rust core and persist to config.toml

@@ -910,7 +910,8 @@ struct ProviderEditPanel: View {
                 stopSequences: stopSequences.isEmpty ? nil : stopSequences,
                 thinkingLevel: (providerType == "gemini" && !thinkingLevel.isEmpty) ? thinkingLevel : nil,
                 mediaResolution: (providerType == "gemini" && !mediaResolution.isEmpty) ? mediaResolution : nil,
-                repeatPenalty: repeatPenalty.isEmpty ? nil : Float(repeatPenalty)
+                repeatPenalty: repeatPenalty.isEmpty ? nil : Float(repeatPenalty),
+                systemPromptMode: nil
             )
 
             // Test connection with temporary config (does not persist to disk)
@@ -1029,7 +1030,8 @@ struct ProviderEditPanel: View {
             stopSequences: stopSequences.isEmpty ? nil : stopSequences,
             thinkingLevel: (providerType == "gemini" && !thinkingLevel.isEmpty) ? thinkingLevel : nil,
             mediaResolution: (providerType == "gemini" && !mediaResolution.isEmpty) ? mediaResolution : nil,
-            repeatPenalty: repeatPenalty.isEmpty ? nil : Float(repeatPenalty)
+            repeatPenalty: repeatPenalty.isEmpty ? nil : Float(repeatPenalty),
+            systemPromptMode: nil
         )
 
         if persist {

@@ -359,7 +359,8 @@ struct ProviderDetailPanel: View {
                 stopSequences: nil,
                 thinkingLevel: nil,
                 mediaResolution: nil,
-                repeatPenalty: nil
+                repeatPenalty: nil,
+                systemPromptMode: nil
             )
         ),
         hasApiKey: true,
@@ -391,7 +392,8 @@ struct ProviderDetailPanel: View {
                 stopSequences: nil,
                 thinkingLevel: nil,
                 mediaResolution: nil,
-                repeatPenalty: nil
+                repeatPenalty: nil,
+                systemPromptMode: nil
             )
         ),
         hasApiKey: true,
@@ -423,7 +425,8 @@ struct ProviderDetailPanel: View {
                 stopSequences: nil,
                 thinkingLevel: nil,
                 mediaResolution: nil,
-                repeatPenalty: nil
+                repeatPenalty: nil,
+                systemPromptMode: nil
             )
         ),
         hasApiKey: false,
