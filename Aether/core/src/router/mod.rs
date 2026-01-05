@@ -223,6 +223,112 @@ impl RoutingRule {
     }
 }
 
+// ============================================================================
+// Routing Match Types (Command + Keyword rule matching result)
+// ============================================================================
+
+/// Result of routing rule matching
+///
+/// Contains the matched command rule (if any) and all matched keyword rules.
+/// Command rules use first-match-stops semantics, keyword rules use all-match.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let result = router.match_rules("/draw 一幅山水画");
+///
+/// // Command rule matched: provider + cleaned input
+/// if let Some(cmd) = &result.command_rule {
+///     println!("Provider: {}", cmd.provider_name);
+///     println!("Cleaned input: {}", cmd.cleaned_input);
+/// }
+///
+/// // Multiple keyword rules can match
+/// for keyword in &result.keyword_rules {
+///     println!("Keyword prompt: {}", keyword.system_prompt);
+/// }
+///
+/// // Get combined system prompt
+/// let final_prompt = result.assemble_prompt();
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct RoutingMatch {
+    /// Matched command rule (if any) - first-match-stops
+    pub command_rule: Option<MatchedCommandRule>,
+    /// All matched keyword rules - all-match semantics
+    pub keyword_rules: Vec<MatchedKeywordRule>,
+}
+
+/// A matched command rule with provider and cleaned input
+#[derive(Debug, Clone)]
+pub struct MatchedCommandRule {
+    /// Name of the provider to use
+    pub provider_name: String,
+    /// System prompt from the rule (if any)
+    pub system_prompt: Option<String>,
+    /// Input with command prefix stripped (e.g., "/draw cat" → "cat")
+    pub cleaned_input: String,
+    /// Index of the matched rule (for debugging/logging)
+    pub rule_index: usize,
+}
+
+/// A matched keyword rule with system prompt
+#[derive(Debug, Clone)]
+pub struct MatchedKeywordRule {
+    /// System prompt to add to the final prompt
+    pub system_prompt: String,
+    /// Index of the matched rule (for debugging/logging)
+    pub rule_index: usize,
+}
+
+impl RoutingMatch {
+    /// Check if any rule was matched
+    pub fn has_match(&self) -> bool {
+        self.command_rule.is_some() || !self.keyword_rules.is_empty()
+    }
+
+    /// Get the provider name (from command rule, or None for keyword-only)
+    pub fn provider_name(&self) -> Option<&str> {
+        self.command_rule.as_ref().map(|c| c.provider_name.as_str())
+    }
+
+    /// Get the cleaned input (command prefix stripped if applicable)
+    pub fn cleaned_input(&self) -> Option<&str> {
+        self.command_rule.as_ref().map(|c| c.cleaned_input.as_str())
+    }
+
+    /// Combine all prompts into final system prompt
+    ///
+    /// Order: command rule prompt first, then keyword rule prompts
+    /// Separator: double newline (\n\n) for clear separation
+    pub fn assemble_prompt(&self) -> Option<String> {
+        let mut prompts = Vec::new();
+
+        // Add command rule prompt first
+        if let Some(ref cmd) = self.command_rule {
+            if let Some(ref prompt) = cmd.system_prompt {
+                if !prompt.is_empty() {
+                    prompts.push(prompt.as_str());
+                }
+            }
+        }
+
+        // Add all keyword rule prompts
+        for keyword in &self.keyword_rules {
+            if !keyword.system_prompt.is_empty() {
+                prompts.push(&keyword.system_prompt);
+            }
+        }
+
+        if prompts.is_empty() {
+            None
+        } else {
+            // Join with double newline for clear separation
+            Some(prompts.join("\n\n"))
+        }
+    }
+}
+
 /// Smart router that selects AI providers based on input patterns
 ///
 /// The router maintains:
@@ -256,10 +362,14 @@ impl RoutingRule {
 /// # }
 /// ```
 pub struct Router {
-    /// Ordered list of routing rules (first match wins)
+    /// Ordered list of routing rules (first match wins) - legacy, kept for compatibility
     rules: Vec<RoutingRule>,
     /// Rule configurations (parallel to rules, for accessing capabilities/intent)
     rule_configs: Vec<crate::config::RoutingRuleConfig>,
+    /// Command rules (first-match-stops, requires provider, strips prefix)
+    command_rules: Vec<(usize, RoutingRule)>, // (index, rule)
+    /// Keyword rules (all-match, prompt only)
+    keyword_rules: Vec<(usize, RoutingRule)>, // (index, rule)
     /// Registry of available providers (name → provider instance)
     providers: HashMap<String, Arc<dyn AiProvider>>,
     /// Optional default provider name (fallback when no rule matches)
@@ -409,9 +519,29 @@ impl Router {
             rule_configs.push(rule_config.clone());
         }
 
+        // Split rules into command and keyword categories
+        let mut command_rules = Vec::new();
+        let mut keyword_rules = Vec::new();
+
+        for (index, (rule, config)) in rules.iter().zip(rule_configs.iter()).enumerate() {
+            if config.is_command_rule() {
+                command_rules.push((index, rule.clone()));
+            } else {
+                keyword_rules.push((index, rule.clone()));
+            }
+        }
+
+        debug!(
+            command_count = command_rules.len(),
+            keyword_count = keyword_rules.len(),
+            "Split rules into command and keyword categories"
+        );
+
         Ok(Self {
             rules,
             rule_configs,
+            command_rules,
+            keyword_rules,
             providers,
             default_provider: config.general.default_provider.clone(),
         })
@@ -528,6 +658,129 @@ impl Router {
         result
     }
 
+    /// Match input against all rules and return combined result
+    ///
+    /// This is the new two-phase matching system:
+    /// - Phase 1: Command rules (first-match-stops) - determines provider
+    /// - Phase 2: Keyword rules (all-match) - adds additional prompts
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The user input text to match against rules
+    ///
+    /// # Returns
+    ///
+    /// A `RoutingMatch` containing:
+    /// - `command_rule`: The first matched command rule (if any)
+    /// - `keyword_rules`: All matched keyword rules
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let result = router.match_rules("/draw 一幅山水画");
+    ///
+    /// // Get provider from command rule
+    /// let provider_name = result.provider_name().unwrap_or("default");
+    ///
+    /// // Get cleaned input (command prefix stripped)
+    /// let cleaned = result.cleaned_input().unwrap_or(input);
+    ///
+    /// // Get combined system prompt
+    /// let prompt = result.assemble_prompt();
+    /// ```
+    pub fn match_rules(&self, input: &str) -> RoutingMatch {
+        let mut result = RoutingMatch::default();
+
+        info!(
+            input_length = input.len(),
+            command_rules = self.command_rules.len(),
+            keyword_rules = self.keyword_rules.len(),
+            "Starting match_rules with two-phase matching"
+        );
+
+        // Phase 1: Find command rule (first-match-stops)
+        for (index, rule) in &self.command_rules {
+            if rule.matches(input) {
+                let cleaned_input = rule.strip_matched_prefix(input);
+
+                info!(
+                    rule_index = index,
+                    provider = %rule.provider_name(),
+                    cleaned_input_length = cleaned_input.len(),
+                    "Command rule matched (first-match-stops)"
+                );
+
+                result.command_rule = Some(MatchedCommandRule {
+                    provider_name: rule.provider_name().to_string(),
+                    system_prompt: rule.system_prompt().map(|s| s.to_string()),
+                    cleaned_input,
+                    rule_index: *index,
+                });
+
+                break; // First match stops for command rules
+            }
+        }
+
+        // Phase 2: Find all matching keyword rules (all-match)
+        for (index, rule) in &self.keyword_rules {
+            if rule.matches(input) {
+                if let Some(prompt) = rule.system_prompt() {
+                    debug!(
+                        rule_index = index,
+                        prompt_preview = %prompt.chars().take(50).collect::<String>(),
+                        "Keyword rule matched (all-match)"
+                    );
+
+                    result.keyword_rules.push(MatchedKeywordRule {
+                        system_prompt: prompt.to_string(),
+                        rule_index: *index,
+                    });
+                }
+            }
+        }
+
+        debug!(
+            has_command = result.command_rule.is_some(),
+            keyword_count = result.keyword_rules.len(),
+            "Match result summary"
+        );
+
+        result
+    }
+
+    /// Match rules and get provider with combined prompt
+    ///
+    /// This is a convenience method that combines `match_rules()` with provider lookup.
+    /// It returns the provider instance and the assembled system prompt.
+    ///
+    /// # Returns
+    ///
+    /// - `Some((provider, cleaned_input, system_prompt))` if a provider was determined
+    /// - `None` if no command rule matched and no default provider is configured
+    pub fn match_and_get_provider(
+        &self,
+        input: &str,
+    ) -> Option<(&dyn AiProvider, String, Option<String>)> {
+        let routing_match = self.match_rules(input);
+        let assembled_prompt = routing_match.assemble_prompt();
+
+        // Determine provider: command rule provider or default
+        let provider_name = routing_match
+            .provider_name()
+            .map(|s| s.to_string())
+            .or_else(|| self.default_provider.clone())?;
+
+        let provider = self.providers.get(&provider_name)?;
+
+        // Determine cleaned input: from command rule or original
+        let cleaned_input = routing_match
+            .cleaned_input()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| input.to_string());
+
+        Some((provider.as_ref(), cleaned_input, assembled_prompt))
+    }
+
     /// Get the regex pattern for a rule by index (for logging purposes)
     fn get_rule_pattern(&self, index: usize) -> Option<&str> {
         self.rules.get(index).map(|r| r.regex.as_str())
@@ -551,6 +804,16 @@ impl Router {
     /// Get the default provider name (if configured)
     pub fn default_provider_name(&self) -> Option<&str> {
         self.default_provider.as_deref()
+    }
+
+    /// Get the number of command rules
+    pub fn command_rule_count(&self) -> usize {
+        self.command_rules.len()
+    }
+
+    /// Get the number of keyword rules
+    pub fn keyword_rule_count(&self) -> usize {
+        self.keyword_rules.len()
     }
 
     /// Route context and provide fallback provider if requested provider fails
@@ -1129,5 +1392,299 @@ mod tests {
         assert_eq!(keyword_rule.get_rule_type(), "keyword");
         assert!(keyword_rule.is_keyword_rule());
         assert!(!keyword_rule.is_command_rule());
+    }
+
+    // ============================================================================
+    // Tests for match_rules (two-phase command/keyword matching)
+    // ============================================================================
+
+    #[test]
+    fn test_match_rules_command_only() {
+        let mut config = Config::default();
+
+        // Add provider
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
+        config.general.default_provider = Some("openai".to_string());
+
+        // Add command rule
+        config
+            .rules
+            .push(RoutingRuleConfig::command(r"^/draw", "openai", Some("You are an artist.")));
+
+        let router = Router::new(&config).unwrap();
+
+        // Match command rule
+        let result = router.match_rules("/draw a beautiful sunset");
+
+        // Should have command rule matched
+        assert!(result.command_rule.is_some());
+        assert!(result.keyword_rules.is_empty());
+
+        let cmd = result.command_rule.unwrap();
+        assert_eq!(cmd.provider_name, "openai");
+        assert_eq!(cmd.system_prompt, Some("You are an artist.".to_string()));
+        assert_eq!(cmd.cleaned_input, "a beautiful sunset"); // prefix stripped
+
+        // Check assembled prompt
+        let result = router.match_rules("/draw a cat");
+        assert_eq!(result.assemble_prompt(), Some("You are an artist.".to_string()));
+    }
+
+    #[test]
+    fn test_match_rules_keyword_only() {
+        let mut config = Config::default();
+
+        // Add provider
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
+        config.general.default_provider = Some("openai".to_string());
+
+        // Add keyword rules
+        config
+            .rules
+            .push(RoutingRuleConfig::keyword("翻译成英文", "翻译目标语言为英文"));
+        config
+            .rules
+            .push(RoutingRuleConfig::keyword("请帮我", "语气友好礼貌"));
+
+        let router = Router::new(&config).unwrap();
+
+        // Match keyword rules
+        let result = router.match_rules("请帮我翻译成英文：你好世界");
+
+        // Should have no command rule but multiple keyword rules
+        assert!(result.command_rule.is_none());
+        assert_eq!(result.keyword_rules.len(), 2);
+
+        // Check prompts
+        let prompts: Vec<_> = result.keyword_rules.iter().map(|k| k.system_prompt.as_str()).collect();
+        assert!(prompts.contains(&"翻译目标语言为英文"));
+        assert!(prompts.contains(&"语气友好礼貌"));
+
+        // Check assembled prompt (joined with \n\n)
+        let assembled = result.assemble_prompt().unwrap();
+        assert!(assembled.contains("翻译目标语言为英文"));
+        assert!(assembled.contains("语气友好礼貌"));
+        assert!(assembled.contains("\n\n")); // Double newline separator
+    }
+
+    #[test]
+    fn test_match_rules_command_and_keyword() {
+        let mut config = Config::default();
+
+        // Add provider (use mock type)
+        config.providers.insert("artist".to_string(), {
+            let mut c = ProviderConfig::test_config("test-model");
+            c.provider_type = Some("mock".to_string());
+            c
+        });
+        config.general.default_provider = Some("artist".to_string());
+
+        // Add command rule
+        config
+            .rules
+            .push(RoutingRuleConfig::command(r"^/draw", "artist", Some("You are an AI artist.")));
+
+        // Add keyword rule
+        config
+            .rules
+            .push(RoutingRuleConfig::keyword("山水画", "中国传统山水画风格"));
+
+        let router = Router::new(&config).unwrap();
+
+        // Match both command and keyword rules
+        let result = router.match_rules("/draw 一幅山水画");
+
+        // Should have both
+        assert!(result.command_rule.is_some());
+        assert_eq!(result.keyword_rules.len(), 1);
+
+        let cmd = result.command_rule.as_ref().unwrap();
+        assert_eq!(cmd.provider_name, "artist");
+        assert_eq!(cmd.cleaned_input, "一幅山水画");
+
+        // Check assembled prompt (command first, then keywords)
+        let assembled = result.assemble_prompt().unwrap();
+        assert!(assembled.starts_with("You are an AI artist."));
+        assert!(assembled.contains("中国传统山水画风格"));
+    }
+
+    #[test]
+    fn test_match_rules_no_match() {
+        let mut config = Config::default();
+
+        // Add provider
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
+        config.general.default_provider = Some("openai".to_string());
+
+        // Add rules that won't match
+        config
+            .rules
+            .push(RoutingRuleConfig::command(r"^/draw", "openai", Some("You are an artist.")));
+
+        let router = Router::new(&config).unwrap();
+
+        // No match
+        let result = router.match_rules("Hello world");
+
+        assert!(result.command_rule.is_none());
+        assert!(result.keyword_rules.is_empty());
+        assert!(!result.has_match());
+        assert!(result.assemble_prompt().is_none());
+    }
+
+    #[test]
+    fn test_match_rules_command_first_match_stops() {
+        let mut config = Config::default();
+
+        // Add provider
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
+        config
+            .providers
+            .insert("claude".to_string(), {
+                let mut c = ProviderConfig::test_config("claude-3-5-sonnet");
+                c.provider_type = Some("claude".to_string());
+                c
+            });
+        config.general.default_provider = Some("openai".to_string());
+
+        // Add two command rules that could both match
+        config
+            .rules
+            .push(RoutingRuleConfig::command(r"^/code", "openai", Some("First rule")));
+        config
+            .rules
+            .push(RoutingRuleConfig::command(r"^/code", "claude", Some("Second rule")));
+
+        let router = Router::new(&config).unwrap();
+
+        // First match should win for command rules
+        let result = router.match_rules("/code write a function");
+
+        assert!(result.command_rule.is_some());
+        let cmd = result.command_rule.unwrap();
+        assert_eq!(cmd.provider_name, "openai"); // First rule's provider
+        assert_eq!(cmd.system_prompt, Some("First rule".to_string()));
+    }
+
+    #[test]
+    fn test_match_rules_keyword_all_match() {
+        let mut config = Config::default();
+
+        // Add provider
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
+        config.general.default_provider = Some("openai".to_string());
+
+        // Add multiple keyword rules
+        config
+            .rules
+            .push(RoutingRuleConfig::keyword("test", "Prompt A"));
+        config
+            .rules
+            .push(RoutingRuleConfig::keyword("test", "Prompt B"));
+        config
+            .rules
+            .push(RoutingRuleConfig::keyword("test", "Prompt C"));
+
+        let router = Router::new(&config).unwrap();
+
+        // All keyword rules should match (all-match semantics)
+        let result = router.match_rules("this is a test input");
+
+        assert!(result.command_rule.is_none());
+        assert_eq!(result.keyword_rules.len(), 3);
+
+        // All prompts should be included
+        let prompts: Vec<_> = result.keyword_rules.iter().map(|k| k.system_prompt.as_str()).collect();
+        assert!(prompts.contains(&"Prompt A"));
+        assert!(prompts.contains(&"Prompt B"));
+        assert!(prompts.contains(&"Prompt C"));
+    }
+
+    #[test]
+    fn test_match_and_get_provider() {
+        let mut config = Config::default();
+
+        // Add provider
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
+        config.general.default_provider = Some("openai".to_string());
+
+        // Add command rule
+        config
+            .rules
+            .push(RoutingRuleConfig::command(r"^/test", "openai", Some("Test prompt")));
+
+        let router = Router::new(&config).unwrap();
+
+        // Match and get provider
+        let result = router.match_and_get_provider("/test hello world");
+        assert!(result.is_some());
+
+        let (provider, cleaned_input, prompt) = result.unwrap();
+        assert_eq!(provider.name(), "openai");
+        assert_eq!(cleaned_input, "hello world");
+        assert_eq!(prompt, Some("Test prompt".to_string()));
+    }
+
+    #[test]
+    fn test_routing_match_provider_name() {
+        let mut routing_match = RoutingMatch::default();
+        assert!(routing_match.provider_name().is_none());
+
+        routing_match.command_rule = Some(MatchedCommandRule {
+            provider_name: "gemini".to_string(),
+            system_prompt: None,
+            cleaned_input: "test".to_string(),
+            rule_index: 0,
+        });
+
+        assert_eq!(routing_match.provider_name(), Some("gemini"));
+    }
+
+    #[test]
+    fn test_command_and_keyword_rule_counts() {
+        let mut config = Config::default();
+
+        // Add provider
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
+        config.general.default_provider = Some("openai".to_string());
+
+        // Add 2 command rules
+        config
+            .rules
+            .push(RoutingRuleConfig::command(r"^/draw", "openai", Some("Artist")));
+        config
+            .rules
+            .push(RoutingRuleConfig::command(r"^/code", "openai", Some("Coder")));
+
+        // Add 3 keyword rules
+        config
+            .rules
+            .push(RoutingRuleConfig::keyword("polite", "Be polite"));
+        config
+            .rules
+            .push(RoutingRuleConfig::keyword("formal", "Be formal"));
+        config
+            .rules
+            .push(RoutingRuleConfig::keyword("brief", "Be brief"));
+
+        let router = Router::new(&config).unwrap();
+
+        // Check counts (builtin rules + custom rules)
+        assert!(router.command_rule_count() >= 2); // At least 2 custom + builtin
+        assert_eq!(router.keyword_rule_count(), 3); // Exactly 3 keyword rules
     }
 }
