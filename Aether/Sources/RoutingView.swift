@@ -413,7 +413,11 @@ struct RoutingView: View {
 
                         // Default provider badge
                         HStack(spacing: DesignTokens.Spacing.xs) {
-                            ProviderIcon(providerType: defaultName, size: 10)
+                            if let color = defaultProviderColor {
+                                Circle()
+                                    .fill(color)
+                                    .frame(width: 6, height: 6)
+                            }
                             Text(defaultName)
                                 .font(DesignTokens.Typography.caption)
                                 .fontWeight(.semibold)
@@ -440,6 +444,14 @@ struct RoutingView: View {
         return core.getDefaultProvider()
     }
 
+    /// Get default provider color
+    private var defaultProviderColor: Color? {
+        guard let defaultName = defaultProviderName,
+              let provider = providers.first(where: { $0.name == defaultName }) else {
+            return nil
+        }
+        return Color(hex: provider.config.color)
+    }
 
     // MARK: - Data Loading
 
@@ -943,7 +955,9 @@ struct RuleCard: View {
 
                         if let provider = provider {
                             HStack(spacing: DesignTokens.Spacing.xs) {
-                                ProviderIcon(providerType: provider.name, size: 12)
+                                Circle()
+                                    .fill(Color(hex: provider.config.color) ?? .gray)
+                                    .frame(width: 8, height: 8)
                                 Text(provider.name)
                                     .font(DesignTokens.Typography.body)
                                     .foregroundColor(DesignTokens.Colors.textPrimary)
