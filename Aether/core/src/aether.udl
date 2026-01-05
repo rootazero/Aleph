@@ -221,6 +221,11 @@ interface AetherCore {
   // SEARCH PROVIDER TESTING (integrate-search-registry)
   [Async]
   ProviderTestResult test_search_provider(string provider_name);
+
+  // Test search provider with ad-hoc config (without requiring saved config)
+  // This allows testing provider credentials before saving to config file
+  [Async]
+  ProviderTestResult test_search_provider_with_config(SearchProviderTestConfig config);
 };
 
 // Callback interface for events from Rust to client
@@ -350,6 +355,14 @@ dictionary ProviderTestResult {
   u32 latency_ms;
   string error_message;
   string error_type;  // "auth", "network", "config", or empty if success
+};
+
+// Configuration for ad-hoc search provider testing (without saved config)
+dictionary SearchProviderTestConfig {
+  string provider_type;    // "tavily", "brave", "searxng", "google", "bing", "exa"
+  string? api_key;         // API key (required for most providers)
+  string? base_url;        // Base URL (required for SearXNG)
+  string? engine_id;       // Engine ID (required for Google CSE)
 };
 
 // Routing rule configuration (Phase 6 - Task 1.5)

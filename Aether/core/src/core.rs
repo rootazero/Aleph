@@ -1497,25 +1497,59 @@ impl AetherCore {
             "Built routing context for provider selection"
         );
 
-        // Step 2: Build and enrich AgentPayload using new architecture
+        // Step 2: Route FIRST to get capabilities from routing rule
+        // Use route_with_extended_info to get full RoutingDecision with capabilities
+        let routing_decision = router
+            .route_with_extended_info(&routing_context)
+            .ok_or(AetherError::NoProviderAvailable {
+                suggestion: Some(
+                    "No routing rules matched. Configure routing rules in Settings → Routing"
+                        .to_string(),
+                ),
+            })?;
+
+        let provider_name = routing_decision.provider_name.clone();
+        let provider_color = routing_decision.provider.color().to_string();
+        let rule_system_prompt = routing_decision.system_prompt.clone();
+        let rule_capabilities = routing_decision.capabilities.clone();
+        let fallback_provider = routing_decision.fallback;
+
+        info!(
+            provider = %provider_name,
+            color = %provider_color,
+            has_fallback = fallback_provider.is_some(),
+            rule_capabilities_count = rule_capabilities.len(),
+            rule_capabilities = ?rule_capabilities,
+            "Routed to AI provider with extended info"
+        );
+
+        // Step 3: Build and enrich AgentPayload using new architecture
         let config = self.lock_config();
         let base_system_prompt = "You are a helpful AI assistant.".to_string();
         let perf_logging_enabled = config.general.enable_performance_logging;
         let memory_enabled = config.memory.enabled;
         drop(config); // Release lock before async operations
 
-        // Determine capabilities to execute (MVP: only Memory)
-        let capabilities = if memory_enabled {
-            vec![crate::payload::Capability::Memory]
-        } else {
-            vec![]
-        };
+        // Determine capabilities to execute:
+        // 1. Start with capabilities from routing rule (e.g., /search has Search capability)
+        // 2. Add Memory capability if memory is enabled in config (unless already present)
+        let mut capabilities = rule_capabilities;
+        if memory_enabled && !capabilities.contains(&crate::payload::Capability::Memory) {
+            capabilities.push(crate::payload::Capability::Memory);
+        }
+
+        info!(
+            final_capabilities = ?capabilities,
+            "Final capabilities to execute (rule + config)"
+        );
 
         // NEW ARCHITECTURE: Build enriched payload with CapabilityExecutor
         let enriched_payload = if !capabilities.is_empty() {
-            // Notify UI that we're retrieving memory
-            self.event_handler
-                .on_state_changed(ProcessingState::RetrievingMemory);
+            // Notify UI that we're retrieving memory/search
+            if capabilities.contains(&crate::payload::Capability::Memory) {
+                self.event_handler
+                    .on_state_changed(ProcessingState::RetrievingMemory);
+            }
 
             // Performance monitoring for payload enrichment
             let _memory_timer = if perf_logging_enabled {
@@ -1529,13 +1563,10 @@ impl AetherCore {
                 None
             };
 
-            // Get provider name from routing (temporary - we'll get it from router later)
-            let temp_provider = "temp".to_string();
-
             match self.runtime.block_on(self.build_enriched_payload(
                 input.clone(),
                 context.clone(),
-                temp_provider,
+                provider_name.clone(),
                 capabilities,
             )) {
                 Ok(payload) => {
@@ -1545,6 +1576,12 @@ impl AetherCore {
                             .memory_snippets
                             .as_ref()
                             .map(|m| m.len())
+                            .unwrap_or(0),
+                        search_count = payload
+                            .context
+                            .search_results
+                            .as_ref()
+                            .map(|s| s.len())
                             .unwrap_or(0),
                         "Payload enrichment succeeded"
                     );
@@ -1571,35 +1608,11 @@ impl AetherCore {
         let memory_time = start_time.elapsed();
         debug!(
             duration_ms = memory_time.as_millis(),
-            "Memory retrieval completed"
-        );
-
-        // Step 3: Route to appropriate provider with fallback support
-        // IMPORTANT: Use routing_context (window + clipboard) for routing decision
-        // This enables context-aware routing based on the active application
-        let ((provider, system_prompt_override), fallback_provider) = router
-            .route_with_fallback(&routing_context)
-            .ok_or(AetherError::NoProviderAvailable {
-                suggestion: Some(
-                    "No routing rules matched. Configure routing rules in Settings → Routing"
-                        .to_string(),
-                ),
-            })?;
-
-        let provider_name = provider.name().to_string();
-        let provider_color = provider.color().to_string();
-
-        // Log routing decision with system prompt info
-        info!(
-            provider = %provider_name,
-            color = %provider_color,
-            has_fallback = fallback_provider.is_some(),
-            has_custom_system_prompt = system_prompt_override.is_some(),
-            system_prompt_preview = ?system_prompt_override.map(|s| s.chars().take(50).collect::<String>()),
-            "Routed to AI provider"
+            "Capability enrichment completed"
         );
 
         // Notify UI about AI processing start (Task 7.4)
+        // Note: Routing was already done in Step 2, we reuse routing_decision
         self.event_handler
             .on_ai_processing_started(provider_name.clone(), provider_color.clone());
         self.event_handler
@@ -1608,8 +1621,14 @@ impl AetherCore {
         // Step 4: Call AI provider with retry and fallback logic (Task 10.1 & 10.2)
         let routing_time = start_time.elapsed();
 
-        // Use custom system prompt from routing rule, or assembled prompt with memory context
-        let system_prompt = system_prompt_override.unwrap_or(&assembled_system_prompt);
+        // Use custom system prompt from routing rule, or assembled prompt with memory/search context
+        // Priority: rule system prompt > assembled (contains context) > base
+        let system_prompt = if !rule_system_prompt.is_empty() {
+            // Combine rule system prompt with assembled context
+            format!("{}\n\n{}", rule_system_prompt, assembled_system_prompt)
+        } else {
+            assembled_system_prompt.clone()
+        };
 
         // Strip command prefix from input if rule has strip_prefix enabled
         // This removes patterns like "/en" from "/en Hello world" before sending to AI
@@ -1618,12 +1637,15 @@ impl AetherCore {
 
         // Log the final system prompt being used
         info!(
-            using_custom_prompt = system_prompt_override.is_some(),
+            has_rule_prompt = !rule_system_prompt.is_empty(),
             system_prompt_preview = %system_prompt.chars().take(80).collect::<String>(),
             prefix_stripped = prefix_was_stripped,
             final_input_preview = %final_input.chars().take(50).collect::<String>(),
             "Final system prompt for AI request"
         );
+
+        // Get provider reference from routing decision
+        let provider = routing_decision.provider;
 
         // Try primary provider with retry
         let response = {
@@ -1645,7 +1667,7 @@ impl AetherCore {
                 // Attempt with primary provider (with retry)
                 // Use final_input which has command prefix stripped if applicable
                 let primary_result = retry_with_backoff(
-                    || provider.process(&final_input, Some(system_prompt)),
+                    || provider.process(&final_input, Some(&system_prompt)),
                     Some(3),
                 )
                 .await;
@@ -1678,7 +1700,7 @@ impl AetherCore {
                             // Try fallback provider (with retry)
                             // Also use final_input with command prefix stripped
                             retry_with_backoff(
-                                || fallback.process(&final_input, Some(system_prompt)),
+                                || fallback.process(&final_input, Some(&system_prompt)),
                                 Some(3),
                             )
                             .await
@@ -2068,6 +2090,251 @@ impl AetherCore {
                     latency_ms: 0,
                     error_message: "Search capability not enabled in configuration".to_string(),
                     error_type: "config".to_string(),
+                }
+            }
+        }
+    }
+
+    /// Test a search provider with ad-hoc configuration
+    ///
+    /// This method allows testing provider credentials without requiring the provider
+    /// to be saved in the configuration file. It creates a temporary provider instance
+    /// to validate connectivity and credentials.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Ad-hoc configuration containing provider type and credentials
+    ///
+    /// # Returns
+    ///
+    /// * `ProviderTestResult` - Test result with success status, latency, and error details
+    ///
+    /// # Example (from Swift)
+    ///
+    /// ```swift
+    /// let config = SearchProviderTestConfig(
+    ///     providerType: "tavily",
+    ///     apiKey: "tvly-xxx",
+    ///     baseUrl: nil,
+    ///     engineId: nil
+    /// )
+    /// let result = await core.testSearchProviderWithConfig(config: config)
+    /// ```
+    pub async fn test_search_provider_with_config(
+        &self,
+        config: crate::search::SearchProviderTestConfig,
+    ) -> crate::search::ProviderTestResult {
+        use crate::search::providers::*;
+        use crate::search::{ProviderTestResult, SearchOptions, SearchProvider};
+        use std::time::Instant;
+
+        // Create temporary provider based on type
+        let provider: Box<dyn SearchProvider> = match config.provider_type.as_str() {
+            "tavily" => {
+                let api_key = match config.api_key {
+                    Some(ref key) if !key.is_empty() => key.clone(),
+                    _ => {
+                        return ProviderTestResult {
+                            success: false,
+                            latency_ms: 0,
+                            error_message: "Tavily requires an API key".to_string(),
+                            error_type: "config".to_string(),
+                        }
+                    }
+                };
+                match TavilyProvider::new(api_key) {
+                    Ok(p) => Box::new(p),
+                    Err(e) => {
+                        return ProviderTestResult {
+                            success: false,
+                            latency_ms: 0,
+                            error_message: format!("Failed to create Tavily provider: {}", e),
+                            error_type: "config".to_string(),
+                        }
+                    }
+                }
+            }
+            "brave" => {
+                let api_key = match config.api_key {
+                    Some(ref key) if !key.is_empty() => key.clone(),
+                    _ => {
+                        return ProviderTestResult {
+                            success: false,
+                            latency_ms: 0,
+                            error_message: "Brave requires an API key".to_string(),
+                            error_type: "config".to_string(),
+                        }
+                    }
+                };
+                match BraveProvider::new(api_key) {
+                    Ok(p) => Box::new(p),
+                    Err(e) => {
+                        return ProviderTestResult {
+                            success: false,
+                            latency_ms: 0,
+                            error_message: format!("Failed to create Brave provider: {}", e),
+                            error_type: "config".to_string(),
+                        }
+                    }
+                }
+            }
+            "searxng" => {
+                let base_url = match config.base_url {
+                    Some(ref url) if !url.is_empty() => url.clone(),
+                    _ => {
+                        return ProviderTestResult {
+                            success: false,
+                            latency_ms: 0,
+                            error_message: "SearXNG requires a base URL".to_string(),
+                            error_type: "config".to_string(),
+                        }
+                    }
+                };
+                match SearxngProvider::new(base_url) {
+                    Ok(p) => Box::new(p),
+                    Err(e) => {
+                        return ProviderTestResult {
+                            success: false,
+                            latency_ms: 0,
+                            error_message: format!("Failed to create SearXNG provider: {}", e),
+                            error_type: "config".to_string(),
+                        }
+                    }
+                }
+            }
+            "google" => {
+                let api_key = match config.api_key {
+                    Some(ref key) if !key.is_empty() => key.clone(),
+                    _ => {
+                        return ProviderTestResult {
+                            success: false,
+                            latency_ms: 0,
+                            error_message: "Google CSE requires an API key".to_string(),
+                            error_type: "config".to_string(),
+                        }
+                    }
+                };
+                let engine_id = match config.engine_id {
+                    Some(ref id) if !id.is_empty() => id.clone(),
+                    _ => {
+                        return ProviderTestResult {
+                            success: false,
+                            latency_ms: 0,
+                            error_message: "Google CSE requires an engine ID".to_string(),
+                            error_type: "config".to_string(),
+                        }
+                    }
+                };
+                match GoogleProvider::new(api_key, engine_id) {
+                    Ok(p) => Box::new(p),
+                    Err(e) => {
+                        return ProviderTestResult {
+                            success: false,
+                            latency_ms: 0,
+                            error_message: format!("Failed to create Google provider: {}", e),
+                            error_type: "config".to_string(),
+                        }
+                    }
+                }
+            }
+            "bing" => {
+                let api_key = match config.api_key {
+                    Some(ref key) if !key.is_empty() => key.clone(),
+                    _ => {
+                        return ProviderTestResult {
+                            success: false,
+                            latency_ms: 0,
+                            error_message: "Bing requires an API key".to_string(),
+                            error_type: "config".to_string(),
+                        }
+                    }
+                };
+                match BingProvider::new(api_key) {
+                    Ok(p) => Box::new(p),
+                    Err(e) => {
+                        return ProviderTestResult {
+                            success: false,
+                            latency_ms: 0,
+                            error_message: format!("Failed to create Bing provider: {}", e),
+                            error_type: "config".to_string(),
+                        }
+                    }
+                }
+            }
+            "exa" => {
+                let api_key = match config.api_key {
+                    Some(ref key) if !key.is_empty() => key.clone(),
+                    _ => {
+                        return ProviderTestResult {
+                            success: false,
+                            latency_ms: 0,
+                            error_message: "Exa requires an API key".to_string(),
+                            error_type: "config".to_string(),
+                        }
+                    }
+                };
+                match ExaProvider::new(api_key) {
+                    Ok(p) => Box::new(p),
+                    Err(e) => {
+                        return ProviderTestResult {
+                            success: false,
+                            latency_ms: 0,
+                            error_message: format!("Failed to create Exa provider: {}", e),
+                            error_type: "config".to_string(),
+                        }
+                    }
+                }
+            }
+            unknown => {
+                return ProviderTestResult {
+                    success: false,
+                    latency_ms: 0,
+                    error_message: format!("Unknown provider type: {}", unknown),
+                    error_type: "config".to_string(),
+                }
+            }
+        };
+
+        // Execute test search
+        let test_options = SearchOptions {
+            max_results: 1,
+            timeout_seconds: 5,
+            ..Default::default()
+        };
+
+        let start = Instant::now();
+        match provider.search("test", &test_options).await {
+            Ok(_) => {
+                let latency = start.elapsed().as_millis() as u32;
+                ProviderTestResult {
+                    success: true,
+                    latency_ms: latency,
+                    error_message: String::new(),
+                    error_type: String::new(),
+                }
+            }
+            Err(e) => {
+                let error_message = e.to_string();
+                let error_type = if error_message.contains("401")
+                    || error_message.contains("403")
+                    || error_message.contains("unauthorized")
+                    || error_message.contains("invalid")
+                {
+                    "auth"
+                } else if error_message.contains("timeout")
+                    || error_message.contains("connection")
+                    || error_message.contains("network")
+                {
+                    "network"
+                } else {
+                    "unknown"
+                };
+
+                ProviderTestResult {
+                    success: false,
+                    latency_ms: 0,
+                    error_message,
+                    error_type: error_type.to_string(),
                 }
             }
         }

@@ -20,20 +20,6 @@ struct SearchSettingsView: View {
     // Saved provider fields (for comparison)
     @State private var savedProviderFields: [String: [String: String]] = [:]
 
-    // PII settings
-    @State private var piiEnabled: Bool = false
-    @State private var piiScrubEmail: Bool = true
-    @State private var piiScrubPhone: Bool = true
-    @State private var piiScrubSSN: Bool = true
-    @State private var piiScrubCreditCard: Bool = true
-
-    // Saved PII settings (for comparison)
-    @State private var savedPiiEnabled: Bool = false
-    @State private var savedPiiScrubEmail: Bool = true
-    @State private var savedPiiScrubPhone: Bool = true
-    @State private var savedPiiScrubSSN: Bool = true
-    @State private var savedPiiScrubCreditCard: Bool = true
-
     // UI state
     @State private var isSaving = false
     @State private var errorMessage: String?
@@ -41,9 +27,7 @@ struct SearchSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                headerSection
                 providerConfigurationSection
-                piiScrubbingSection
                 fallbackOrderPlaceholder
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -56,35 +40,18 @@ struct SearchSettingsView: View {
             updateSaveBarState()
         }
         .onChange(of: providerFields) { _, _ in updateSaveBarState() }
-        .onChange(of: piiEnabled) { _, _ in updateSaveBarState() }
-        .onChange(of: piiScrubEmail) { _, _ in updateSaveBarState() }
-        .onChange(of: piiScrubPhone) { _, _ in updateSaveBarState() }
-        .onChange(of: piiScrubSSN) { _, _ in updateSaveBarState() }
-        .onChange(of: piiScrubCreditCard) { _, _ in updateSaveBarState() }
         .onChange(of: isSaving) { _, _ in updateSaveBarState() }
     }
 
     // MARK: - View Components
 
-    private var headerSection: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-            Text(LocalizedStringKey("settings.search.title"))
-                .font(DesignTokens.Typography.title)
-                .foregroundColor(DesignTokens.Colors.textPrimary)
-
-            Text(LocalizedStringKey("settings.search.description"))
-                .font(DesignTokens.Typography.caption)
-                .foregroundColor(DesignTokens.Colors.textSecondary)
-        }
-    }
-
     private var providerConfigurationSection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(LocalizedStringKey("settings.search.providers"), systemImage: "magnifyingglass")
+            Label(L("settings.search.providers"), systemImage: "magnifyingglass")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(LocalizedStringKey("settings.search.providers_description"))
+            Text(L("settings.search.providers_description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
@@ -103,98 +70,13 @@ struct SearchSettingsView: View {
         }
     }
 
-    private var piiScrubbingSection: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(LocalizedStringKey("settings.search.pii_scrubbing"), systemImage: "lock.shield")
-                .font(DesignTokens.Typography.heading)
-                .foregroundColor(DesignTokens.Colors.textPrimary)
-
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                Toggle(LocalizedStringKey("settings.search.pii_scrubbing_enable"), isOn: $piiEnabled)
-                    .toggleStyle(.switch)
-                    .font(DesignTokens.Typography.body)
-
-                Text(LocalizedStringKey("settings.search.pii_scrubbing_description"))
-                    .font(DesignTokens.Typography.caption)
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                if piiEnabled {
-                    Divider()
-
-                    Text(LocalizedStringKey("settings.search.pii_types_label"))
-                        .font(DesignTokens.Typography.caption)
-                        .fontWeight(.semibold)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-                        piiToggle(
-                            title: "settings.search.pii_type_email",
-                            icon: "envelope",
-                            example: "settings.search.pii_example_email",
-                            binding: $piiScrubEmail
-                        )
-
-                        piiToggle(
-                            title: "settings.search.pii_type_phone",
-                            icon: "phone",
-                            example: "settings.search.pii_example_phone",
-                            binding: $piiScrubPhone
-                        )
-
-                        piiToggle(
-                            title: "settings.search.pii_type_ssn",
-                            icon: "lock.shield",
-                            example: "settings.search.pii_example_ssn",
-                            binding: $piiScrubSSN
-                        )
-
-                        piiToggle(
-                            title: "settings.search.pii_type_credit_card",
-                            icon: "creditcard",
-                            example: "settings.search.pii_example_credit_card",
-                            binding: $piiScrubCreditCard
-                        )
-                    }
-                }
-            }
-            .padding(DesignTokens.Spacing.md)
-            .background(DesignTokens.Colors.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
-        }
-    }
-
-    @ViewBuilder
-    private func piiToggle(
-        title: String,
-        icon: String,
-        example: String,
-        binding: Binding<Bool>
-    ) -> some View {
-        Toggle(isOn: binding) {
-            HStack(spacing: DesignTokens.Spacing.sm) {
-                Image(systemName: icon)
-                    .foregroundColor(DesignTokens.Colors.warning)
-                    .frame(width: 20)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(LocalizedStringKey(title))
-                        .font(DesignTokens.Typography.body)
-                    Text(LocalizedStringKey(example))
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-                }
-            }
-        }
-        .toggleStyle(.checkbox)
-    }
-
     private var fallbackOrderPlaceholder: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(LocalizedStringKey("settings.search.fallback_order"), systemImage: "arrow.triangle.2.circlepath")
+            Label(L("settings.search.fallback_order"), systemImage: "arrow.triangle.2.circlepath")
                 .font(DesignTokens.Typography.heading)
                 .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(LocalizedStringKey("settings.search.fallback_order_placeholder"))
+            Text(L("settings.search.fallback_order_placeholder"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
                 .italic()
@@ -209,12 +91,7 @@ struct SearchSettingsView: View {
 
     /// Check if current state differs from saved state
     private var hasUnsavedChanges: Bool {
-        return providerFields != savedProviderFields ||
-               piiEnabled != savedPiiEnabled ||
-               piiScrubEmail != savedPiiScrubEmail ||
-               piiScrubPhone != savedPiiScrubPhone ||
-               piiScrubSSN != savedPiiScrubSSN ||
-               piiScrubCreditCard != savedPiiScrubCreditCard
+        return providerFields != savedProviderFields
     }
 
     /// Status message for UnifiedSaveBar
@@ -223,7 +100,7 @@ struct SearchSettingsView: View {
             return error
         }
         if hasUnsavedChanges {
-            return NSLocalizedString("settings.unsaved_changes.title", comment: "")
+            return L("settings.unsaved_changes.title")
         }
         return nil
     }
@@ -253,7 +130,26 @@ struct SearchSettingsView: View {
             )
         }
 
-        return await core.testSearchProvider(providerName: providerId)
+        // Find preset to get provider type
+        guard let preset = SearchProviderPresets.find(byId: providerId) else {
+            return ProviderTestResult(
+                success: false,
+                latencyMs: 0,
+                errorMessage: "Unknown provider: \(providerId)",
+                errorType: "config"
+            )
+        }
+
+        // Create ad-hoc config from fields
+        let testConfig = SearchProviderTestConfig(
+            providerType: preset.providerType,
+            apiKey: fields["api_key"],
+            baseUrl: fields["base_url"],
+            engineId: fields["engine_id"]
+        )
+
+        // Use the new method that tests with ad-hoc config
+        return await core.testSearchProviderWithConfig(config: testConfig)
     }
 
     /// Load settings from config
@@ -285,21 +181,6 @@ struct SearchSettingsView: View {
                         }
 
                         savedProviderFields = providerFields
-
-                        // Load PII settings
-                        if let piiConfig = searchConfig.pii {
-                            piiEnabled = piiConfig.enabled
-                            piiScrubEmail = piiConfig.scrubEmail
-                            piiScrubPhone = piiConfig.scrubPhone
-                            piiScrubSSN = piiConfig.scrubSsn
-                            piiScrubCreditCard = piiConfig.scrubCreditCard
-
-                            savedPiiEnabled = piiEnabled
-                            savedPiiScrubEmail = piiScrubEmail
-                            savedPiiScrubPhone = piiScrubPhone
-                            savedPiiScrubSSN = piiScrubSSN
-                            savedPiiScrubCreditCard = piiScrubCreditCard
-                        }
                     }
                 }
             } catch {
@@ -312,7 +193,7 @@ struct SearchSettingsView: View {
     private func saveSettings() async {
         guard core != nil else {
             await MainActor.run {
-                errorMessage = NSLocalizedString("error.core_not_initialized", comment: "")
+                errorMessage = L("error.core_not_initialized")
             }
             return
         }
@@ -325,32 +206,14 @@ struct SearchSettingsView: View {
         // TODO: Implement search config save when backend support is ready
         // For now, just log the settings that would be saved
 
-        // let piiConfig = PiiConfig(
-        //     enabled: piiEnabled,
-        //     scrubEmail: piiScrubEmail,
-        //     scrubPhone: piiScrubPhone,
-        //     scrubSsn: piiScrubSSN,
-        //     scrubCreditCard: piiScrubCreditCard
-        // )
-
         // Note: This will require adding updateSearchConfig() method to AetherCore
         // try core.updateSearchConfig(search: searchConfig)
 
-        print("Search settings saved successfully:")
-        print("  PII Enabled: \(piiEnabled)")
-        print("  PII Scrub Email: \(piiScrubEmail)")
-        print("  PII Scrub Phone: \(piiScrubPhone)")
-        print("  PII Scrub SSN: \(piiScrubSSN)")
-        print("  PII Scrub Credit Card: \(piiScrubCreditCard)")
+        print("Search settings saved successfully")
 
         await MainActor.run {
             // Update saved state to match current state
             savedProviderFields = providerFields
-            savedPiiEnabled = piiEnabled
-            savedPiiScrubEmail = piiScrubEmail
-            savedPiiScrubPhone = piiScrubPhone
-            savedPiiScrubSSN = piiScrubSSN
-            savedPiiScrubCreditCard = piiScrubCreditCard
 
             isSaving = false
             errorMessage = nil
@@ -360,11 +223,6 @@ struct SearchSettingsView: View {
     /// Cancel editing and revert to saved state
     private func cancelEditing() {
         providerFields = savedProviderFields
-        piiEnabled = savedPiiEnabled
-        piiScrubEmail = savedPiiScrubEmail
-        piiScrubPhone = savedPiiScrubPhone
-        piiScrubSSN = savedPiiScrubSSN
-        piiScrubCreditCard = savedPiiScrubCreditCard
         errorMessage = nil
     }
 

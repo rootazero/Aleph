@@ -596,6 +596,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func testSearchProvider(providerName: String) async  -> ProviderTestResult
     
+    func testSearchProviderWithConfig(config: SearchProviderTestConfig) async  -> ProviderTestResult
+    
     func testStreamingResponse() 
     
     func testTypedError(errorType: ErrorType, message: String) 
@@ -862,6 +864,24 @@ open func testSearchProvider(providerName: String)async  -> ProviderTestResult {
                 uniffi_aethecore_fn_method_aethercore_test_search_provider(
                     self.uniffiClonePointer(),
                     FfiConverterString.lower(providerName)
+                )
+            },
+            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
+            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
+            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeProviderTestResult.lift,
+            errorHandler: nil
+            
+        )
+}
+    
+open func testSearchProviderWithConfig(config: SearchProviderTestConfig)async  -> ProviderTestResult {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_aethecore_fn_method_aethercore_test_search_provider_with_config(
+                    self.uniffiClonePointer(),
+                    FfiConverterTypeSearchProviderTestConfig.lower(config)
                 )
             },
             pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
@@ -2529,6 +2549,88 @@ public func FfiConverterTypeSearchConfig_lower(_ value: SearchConfig) -> RustBuf
 }
 
 
+public struct SearchProviderTestConfig {
+    public var providerType: String
+    public var apiKey: String?
+    public var baseUrl: String?
+    public var engineId: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(providerType: String, apiKey: String?, baseUrl: String?, engineId: String?) {
+        self.providerType = providerType
+        self.apiKey = apiKey
+        self.baseUrl = baseUrl
+        self.engineId = engineId
+    }
+}
+
+
+
+extension SearchProviderTestConfig: Equatable, Hashable {
+    public static func ==(lhs: SearchProviderTestConfig, rhs: SearchProviderTestConfig) -> Bool {
+        if lhs.providerType != rhs.providerType {
+            return false
+        }
+        if lhs.apiKey != rhs.apiKey {
+            return false
+        }
+        if lhs.baseUrl != rhs.baseUrl {
+            return false
+        }
+        if lhs.engineId != rhs.engineId {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(providerType)
+        hasher.combine(apiKey)
+        hasher.combine(baseUrl)
+        hasher.combine(engineId)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSearchProviderTestConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SearchProviderTestConfig {
+        return
+            try SearchProviderTestConfig(
+                providerType: FfiConverterString.read(from: &buf), 
+                apiKey: FfiConverterOptionString.read(from: &buf), 
+                baseUrl: FfiConverterOptionString.read(from: &buf), 
+                engineId: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SearchProviderTestConfig, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.providerType, into: &buf)
+        FfiConverterOptionString.write(value.apiKey, into: &buf)
+        FfiConverterOptionString.write(value.baseUrl, into: &buf)
+        FfiConverterOptionString.write(value.engineId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchProviderTestConfig_lift(_ buf: RustBuffer) throws -> SearchProviderTestConfig {
+    return try FfiConverterTypeSearchProviderTestConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSearchProviderTestConfig_lower(_ value: SearchProviderTestConfig) -> RustBuffer {
+    return FfiConverterTypeSearchProviderTestConfig.lower(value)
+}
+
+
 public struct ShortcutsConfig {
     public var summon: String
     public var cancel: String?
@@ -4152,6 +4254,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_test_search_provider() != 57532) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_test_search_provider_with_config() != 46815) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_test_streaming_response() != 24597) {

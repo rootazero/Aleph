@@ -108,7 +108,7 @@ pub use crate::memory::database::MemoryStats;
 pub use crate::metrics::StageTimer;
 pub use crate::providers::AiProvider;
 pub use crate::router::{Router, RoutingRule};
-pub use crate::search::ProviderTestResult;
+pub use crate::search::{ProviderTestResult, SearchProviderTestConfig};
 pub use crate::utils::pii;
 
 // Test-only exports

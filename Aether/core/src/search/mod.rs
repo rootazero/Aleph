@@ -68,3 +68,19 @@ pub struct ProviderTestResult {
     /// Error type: "auth", "network", "config", or empty if success
     pub error_type: String,
 }
+
+/// Configuration for ad-hoc search provider testing
+///
+/// This allows testing provider credentials without saving to config file.
+/// Used by the UI to validate provider settings before committing changes.
+#[derive(Debug, Clone)]
+pub struct SearchProviderTestConfig {
+    /// Provider type: "tavily", "brave", "searxng", "google", "bing", "exa"
+    pub provider_type: String,
+    /// API key (required for most providers)
+    pub api_key: Option<String>,
+    /// Base URL (required for SearXNG)
+    pub base_url: Option<String>,
+    /// Engine ID (required for Google CSE)
+    pub engine_id: Option<String>,
+}
