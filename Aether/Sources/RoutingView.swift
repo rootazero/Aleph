@@ -29,7 +29,6 @@ struct RoutingView: View {
     // UI state
     @State private var showingRuleEditor: Bool = false
     @State private var editingRuleIndex: Int?
-    @State private var editingRuleType: RuleType?  // Track which type we're adding
     @State private var showingDeleteConfirmation: Bool = false
     @State private var deletingRuleIndex: Int?
 
@@ -83,7 +82,7 @@ struct RoutingView: View {
             if let index = editingRuleIndex {
                 RuleEditorView(rules: $customRules, core: core, providers: providers, editing: index)
             } else {
-                RuleEditorView(rules: $customRules, core: core, providers: providers, initialType: editingRuleType)
+                RuleEditorView(rules: $customRules, core: core, providers: providers)
             }
         }
         .alert(L("settings.routing.delete_rule"), isPresented: $showingDeleteConfirmation) {
@@ -168,6 +167,11 @@ struct RoutingView: View {
                 }
                 .buttonStyle(.plain)
                 .help(L("settings.routing.import_export_help"))
+
+                // Add Rule button
+                ActionButton(L("settings.routing.add_rule"), icon: "plus.circle.fill", style: .primary) {
+                    addNewRule()
+                }
             }
 
             // Custom rules list or empty state
@@ -191,13 +195,8 @@ struct RoutingView: View {
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                         .multilineTextAlignment(.center)
 
-                    HStack(spacing: DesignTokens.Spacing.md) {
-                        ActionButton(L("settings.routing.add_command_rule"), icon: "plus.circle.fill", style: .primary) {
-                            addNewRule(type: .command)
-                        }
-                        ActionButton(L("settings.routing.add_keyword_rule"), icon: "plus.circle.fill", style: .secondary) {
-                            addNewRule(type: .keyword)
-                        }
+                    ActionButton(L("settings.routing.add_rule"), icon: "plus.circle.fill", style: .primary) {
+                        addNewRule()
                     }
                     .padding(.top, DesignTokens.Spacing.sm)
                 }
@@ -211,20 +210,10 @@ struct RoutingView: View {
 
                 // Divider between sections
                 if !commandRules.isEmpty && !keywordRules.isEmpty {
-                    HStack(spacing: DesignTokens.Spacing.md) {
-                        Rectangle()
-                            .fill(DesignTokens.Colors.textSecondary.opacity(0.2))
-                            .frame(height: 1)
-
-                        Text(L("settings.routing.section_divider"))
-                            .font(DesignTokens.Typography.caption)
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                        Rectangle()
-                            .fill(DesignTokens.Colors.textSecondary.opacity(0.2))
-                            .frame(height: 1)
-                    }
-                    .padding(.vertical, DesignTokens.Spacing.sm)
+                    Rectangle()
+                        .fill(DesignTokens.Colors.textSecondary.opacity(0.2))
+                        .frame(height: 1)
+                        .padding(.vertical, DesignTokens.Spacing.sm)
                 }
 
                 // Keyword rules section
@@ -242,25 +231,17 @@ struct RoutingView: View {
     private var commandRulesSubsection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
             // Subsection header
-            HStack {
-                HStack(spacing: DesignTokens.Spacing.xs) {
-                    Image(systemName: "command")
-                        .font(.system(size: 12))
-                        .foregroundColor(DesignTokens.Colors.accentBlue)
-                    Text(L("settings.routing.command_rules_title"))
-                        .font(DesignTokens.Typography.body)
-                        .fontWeight(.medium)
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
-                    Text("(\(commandRules.count))")
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-                }
-
-                Spacer()
-
-                ActionButton(L("settings.routing.add"), icon: "plus", style: .secondary, size: .small) {
-                    addNewRule(type: .command)
-                }
+            HStack(spacing: DesignTokens.Spacing.xs) {
+                Image(systemName: "command")
+                    .font(.system(size: 12))
+                    .foregroundColor(DesignTokens.Colors.accentBlue)
+                Text(L("settings.routing.command_rules_title"))
+                    .font(DesignTokens.Typography.body)
+                    .fontWeight(.medium)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                Text("(\(commandRules.count))")
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
             }
 
             if commandRules.isEmpty {
@@ -299,25 +280,17 @@ struct RoutingView: View {
     private var keywordRulesSubsection: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
             // Subsection header
-            HStack {
-                HStack(spacing: DesignTokens.Spacing.xs) {
-                    Image(systemName: "text.magnifyingglass")
-                        .font(.system(size: 12))
-                        .foregroundColor(DesignTokens.Colors.success)
-                    Text(L("settings.routing.keyword_rules_title"))
-                        .font(DesignTokens.Typography.body)
-                        .fontWeight(.medium)
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
-                    Text("(\(keywordRules.count))")
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-                }
-
-                Spacer()
-
-                ActionButton(L("settings.routing.add"), icon: "plus", style: .secondary, size: .small) {
-                    addNewRule(type: .keyword)
-                }
+            HStack(spacing: DesignTokens.Spacing.xs) {
+                Image(systemName: "text.magnifyingglass")
+                    .font(.system(size: 12))
+                    .foregroundColor(DesignTokens.Colors.success)
+                Text(L("settings.routing.keyword_rules_title"))
+                    .font(DesignTokens.Typography.body)
+                    .fontWeight(.medium)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+                Text("(\(keywordRules.count))")
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
             }
 
             if keywordRules.isEmpty {
@@ -367,7 +340,7 @@ struct RoutingView: View {
         commands.move(fromOffsets: source, toOffset: destination)
 
         // Rebuild customRules: new command order + existing keyword order
-        var updatedRules = commands + keywordRules
+        let updatedRules = commands + keywordRules
 
         // Save to config
         saveReorderedRules(updatedRules)
@@ -382,7 +355,7 @@ struct RoutingView: View {
         keywords.move(fromOffsets: source, toOffset: destination)
 
         // Rebuild customRules: existing command order + new keyword order
-        var updatedRules = commandRules + keywords
+        let updatedRules = commandRules + keywords
 
         // Save to config
         saveReorderedRules(updatedRules)
@@ -500,9 +473,8 @@ struct RoutingView: View {
 
     // MARK: - Actions
 
-    private func addNewRule(type: RuleType? = nil) {
+    private func addNewRule() {
         editingRuleIndex = nil
-        editingRuleType = type
         showingRuleEditor = true
     }
 
