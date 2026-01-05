@@ -157,6 +157,43 @@ extension RoutingRuleConfig {
     var ruleTypeColor: String {
         isCommandRule ? "#007AFF" : "#34C759"  // Blue for command, Green for keyword
     }
+
+    /// Get user-friendly display name from regex pattern
+    ///
+    /// For command rules: `^/en\s+` → `/en`
+    /// For keyword rules: `.*keyword.*` → `keyword`
+    var displayName: String {
+        if isCommandRule {
+            // Extract command name from pattern like "^/en\s+" or "^/translate\s+"
+            if regex.hasPrefix("^/") {
+                var name = String(regex.dropFirst(2))  // Remove "^/"
+                // Remove trailing \s+ if present
+                if name.hasSuffix("\\s+") {
+                    name = String(name.dropLast(4))
+                }
+                // Remove trailing \s* if present
+                if name.hasSuffix("\\s*") {
+                    name = String(name.dropLast(4))
+                }
+                return "/\(name)"
+            }
+        } else {
+            // Extract keyword from pattern like ".*keyword.*"
+            if regex.hasPrefix(".*") && regex.hasSuffix(".*") {
+                let inner = String(regex.dropFirst(2).dropLast(2))
+                // Unescape common regex escapes
+                return inner
+                    .replacingOccurrences(of: "\\.", with: ".")
+                    .replacingOccurrences(of: "\\(", with: "(")
+                    .replacingOccurrences(of: "\\)", with: ")")
+                    .replacingOccurrences(of: "\\[", with: "[")
+                    .replacingOccurrences(of: "\\]", with: "]")
+                    .replacingOccurrences(of: "\\\\", with: "\\")
+            }
+        }
+        // Fallback to raw regex if pattern doesn't match expected format
+        return regex
+    }
 }
 
 // MARK: - Preset Rule Detection

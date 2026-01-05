@@ -934,8 +934,8 @@ struct RuleCard: View {
                     .background(ruleTypeColor)
                     .cornerRadius(DesignTokens.CornerRadius.small)
 
-                    // Pattern
-                    Text(rule.regex)
+                    // Display name (user-friendly)
+                    Text(rule.displayName)
                         .font(DesignTokens.Typography.code)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
                 }
