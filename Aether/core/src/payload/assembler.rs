@@ -201,12 +201,19 @@ fn format_timestamp(timestamp: i64) -> String {
         .unwrap_or_else(|| "Unknown".to_string())
 }
 
-/// Truncate text to max length
-fn truncate_text(text: &str, max_len: usize) -> String {
-    if text.len() <= max_len {
+/// Truncate text to max length (character-safe, not byte-based)
+fn truncate_text(text: &str, max_chars: usize) -> String {
+    let char_count = text.chars().count();
+    if char_count <= max_chars {
         text.to_string()
     } else {
-        format!("{}...", &text[..max_len])
+        // Find the byte index of the max_chars-th character boundary
+        let truncate_at = text
+            .char_indices()
+            .nth(max_chars)
+            .map(|(idx, _)| idx)
+            .unwrap_or(text.len());
+        format!("{}...", &text[..truncate_at])
     }
 }
 
@@ -316,6 +323,25 @@ mod tests {
             truncate_text("This is a very long text", 10),
             "This is a ..."
         );
+    }
+
+    #[test]
+    fn test_truncate_text_utf8() {
+        // Test with Chinese characters (3 bytes each in UTF-8)
+        let chinese_text = "美军披露马杜罗被抓全过程";
+        assert_eq!(truncate_text(chinese_text, 5), "美军披露马...");
+        assert_eq!(truncate_text(chinese_text, 12), chinese_text);
+
+        // Test with mixed content
+        let mixed = "Hello 世界 Test 测试";
+        assert_eq!(truncate_text(mixed, 8), "Hello 世界...");
+
+        // Test edge case: truncate at exactly 300 chars with Chinese
+        let long_chinese = "中".repeat(150);
+        let truncated = truncate_text(&long_chinese, 100);
+        assert!(truncated.ends_with("..."));
+        // Should have 100 Chinese chars + "..."
+        assert_eq!(truncated.chars().count(), 103); // 100 + 3 for "..."
     }
 
     #[test]
