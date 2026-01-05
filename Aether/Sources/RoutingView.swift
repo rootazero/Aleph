@@ -276,7 +276,7 @@ struct RoutingView: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
-                .frame(height: CGFloat(commandRules.count) * 110)  // Fixed height per rule
+                .frame(height: CGFloat(commandRules.count) * 120)  // Fixed height per rule
             }
         }
     }
@@ -325,7 +325,7 @@ struct RoutingView: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
-                .frame(height: CGFloat(keywordRules.count) * 110)  // Fixed height per rule
+                .frame(height: CGFloat(keywordRules.count) * 120)  // Fixed height per rule
             }
         }
     }
