@@ -403,14 +403,6 @@ private struct CyberpunkProcessingWithAIView: View {
                     .clipShape(HexagonShape())
                     .blendMode(.screen)
             }
-
-            // Provider name
-            if let name = providerName {
-                Text(name)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundColor(textColor)
-                    .shadow(color: textColor, radius: 5)
-            }
         }
     }
 }

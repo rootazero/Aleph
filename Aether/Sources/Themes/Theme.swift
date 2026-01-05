@@ -155,19 +155,11 @@ extension HaloTheme {
 
     func processingWithAIView(providerColor: Color, providerName: String?) -> AnyView {
         AnyView(
-            VStack(spacing: 8) {
-                Circle()
-                    .trim(from: 0, to: 0.7)
-                    .stroke(providerColor, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                    .frame(width: 60, height: 60)
-                    .rotationEffect(.degrees(0))
-
-                if let name = providerName {
-                    Text(name)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(textColor)
-                }
-            }
+            Circle()
+                .trim(from: 0, to: 0.7)
+                .stroke(providerColor, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .frame(width: 60, height: 60)
+                .rotationEffect(.degrees(0))
         )
     }
 

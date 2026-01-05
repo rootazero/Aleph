@@ -349,13 +349,6 @@ private struct ZenProcessingWithAIView: View {
                     }
                 }
             }
-
-            // Provider name
-            if let name = providerName {
-                Text(name)
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundColor(.primary)
-            }
         }
     }
 }

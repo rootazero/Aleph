@@ -480,14 +480,6 @@ private struct JarvisProcessingWithAIView: View {
                     .rotationEffect(.degrees(Double(i) * 90))
                 }
             }
-
-            // Provider name
-            if let name = providerName {
-                Text(name)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundColor(textColor)
-                    .shadow(color: color, radius: 5)
-            }
         }
     }
 }
