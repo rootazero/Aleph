@@ -43,6 +43,40 @@ struct ActionButton: View {
         }
     }
 
+    /// Available button size variants
+    enum Size {
+        case small
+        case medium
+        case large
+
+        /// Horizontal padding for each size
+        var horizontalPadding: CGFloat {
+            switch self {
+            case .small: return DesignTokens.Spacing.sm
+            case .medium: return DesignTokens.Spacing.md
+            case .large: return DesignTokens.Spacing.lg
+            }
+        }
+
+        /// Vertical padding for each size
+        var verticalPadding: CGFloat {
+            switch self {
+            case .small: return DesignTokens.Spacing.xs
+            case .medium: return DesignTokens.Spacing.sm
+            case .large: return DesignTokens.Spacing.md
+            }
+        }
+
+        /// Font for each size
+        var font: Font {
+            switch self {
+            case .small: return DesignTokens.Typography.caption
+            case .medium: return DesignTokens.Typography.body
+            case .large: return DesignTokens.Typography.heading
+            }
+        }
+    }
+
     // MARK: - Properties
 
     /// Button title text
@@ -53,6 +87,9 @@ struct ActionButton: View {
 
     /// Button style variant
     let style: Style
+
+    /// Button size variant
+    let size: Size
 
     /// Whether the button is disabled
     let isDisabled: Bool
@@ -69,12 +106,14 @@ struct ActionButton: View {
         _ title: String,
         icon: String? = nil,
         style: Style = .primary,
+        size: Size = .medium,
         isDisabled: Bool = false,
         action: @escaping () -> Void
     ) {
         self.title = title
         self.icon = icon
         self.style = style
+        self.size = size
         self.isDisabled = isDisabled
         self.action = action
     }
@@ -87,15 +126,15 @@ struct ActionButton: View {
                 // Optional leading icon
                 if let icon = icon {
                     Image(systemName: icon)
-                        .font(DesignTokens.Typography.body)
+                        .font(size.font)
                 }
 
                 // Button title
                 Text(title)
-                    .font(DesignTokens.Typography.body)
+                    .font(size.font)
             }
-            .padding(.horizontal, DesignTokens.Spacing.md)
-            .padding(.vertical, DesignTokens.Spacing.sm)
+            .padding(.horizontal, size.horizontalPadding)
+            .padding(.vertical, size.verticalPadding)
             .foregroundColor(isDisabled ? DesignTokens.Colors.textDisabled : style.foregroundColor)
             .background(
                 RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small)

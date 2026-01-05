@@ -486,6 +486,14 @@
 "settings.routing.custom_rules_subtitle" = "用户定义的路由规则。拖动可重新排列优先级（优先级高的规则先评估）。";
 "settings.routing.no_custom_rules" = "无自定义规则";
 "settings.routing.no_custom_rules_message" = "点击上方「添加规则」来创建自定义路由模式。";
+"settings.routing.add_command_rule" = "添加命令规则";
+"settings.routing.add_keyword_rule" = "添加关键词规则";
+"settings.routing.command_rules_title" = "命令规则";
+"settings.routing.keyword_rules_title" = "关键词规则";
+"settings.routing.no_command_rules" = "暂无命令规则";
+"settings.routing.no_keyword_rules" = "暂无关键词规则";
+"settings.routing.section_divider" = "关键词规则区";
+"settings.routing.add" = "添加";
 
 // MARK: - Preset Rule Descriptions and Usage
 "settings.routing.usage" = "用法：";

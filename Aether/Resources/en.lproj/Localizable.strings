@@ -486,6 +486,14 @@
 "settings.routing.custom_rules_subtitle" = "User-defined routing rules. Drag to reorder priority (higher rules are evaluated first).";
 "settings.routing.no_custom_rules" = "No Custom Rules";
 "settings.routing.no_custom_rules_message" = "Click 'Add Rule' above to create custom routing patterns.";
+"settings.routing.add_command_rule" = "Add Command Rule";
+"settings.routing.add_keyword_rule" = "Add Keyword Rule";
+"settings.routing.command_rules_title" = "Command Rules";
+"settings.routing.keyword_rules_title" = "Keyword Rules";
+"settings.routing.no_command_rules" = "No command rules";
+"settings.routing.no_keyword_rules" = "No keyword rules";
+"settings.routing.section_divider" = "Keyword Rules";
+"settings.routing.add" = "Add";
 
 // MARK: - Preset Rule Descriptions and Usage
 "settings.routing.usage" = "Usage:";

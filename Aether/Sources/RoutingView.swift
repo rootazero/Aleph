@@ -18,9 +18,18 @@ struct RoutingView: View {
     @State private var isLoading: Bool = true
     @State private var errorMessage: String?
 
+    // Separated rules by type
+    private var commandRules: [RoutingRuleConfig] {
+        customRules.filter { $0.isCommandRule }
+    }
+    private var keywordRules: [RoutingRuleConfig] {
+        customRules.filter { $0.isKeywordRule }
+    }
+
     // UI state
     @State private var showingRuleEditor: Bool = false
     @State private var editingRuleIndex: Int?
+    @State private var editingRuleType: RuleType?  // Track which type we're adding
     @State private var showingDeleteConfirmation: Bool = false
     @State private var deletingRuleIndex: Int?
 
@@ -74,7 +83,7 @@ struct RoutingView: View {
             if let index = editingRuleIndex {
                 RuleEditorView(rules: $customRules, core: core, providers: providers, editing: index)
             } else {
-                RuleEditorView(rules: $customRules, core: core, providers: providers)
+                RuleEditorView(rules: $customRules, core: core, providers: providers, initialType: editingRuleType)
             }
         }
         .alert(L("settings.routing.delete_rule"), isPresented: $showingDeleteConfirmation) {
@@ -159,11 +168,6 @@ struct RoutingView: View {
                 }
                 .buttonStyle(.plain)
                 .help(L("settings.routing.import_export_help"))
-
-                // Add Rule button
-                ActionButton(L("settings.routing.add_rule"), icon: "plus.circle.fill", style: .primary) {
-                    addNewRule()
-                }
             }
 
             // Custom rules list or empty state
@@ -187,8 +191,13 @@ struct RoutingView: View {
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                         .multilineTextAlignment(.center)
 
-                    ActionButton(L("settings.routing.add_rule"), icon: "plus.circle.fill", style: .secondary) {
-                        addNewRule()
+                    HStack(spacing: DesignTokens.Spacing.md) {
+                        ActionButton(L("settings.routing.add_command_rule"), icon: "plus.circle.fill", style: .primary) {
+                            addNewRule(type: .command)
+                        }
+                        ActionButton(L("settings.routing.add_keyword_rule"), icon: "plus.circle.fill", style: .secondary) {
+                            addNewRule(type: .keyword)
+                        }
                     }
                     .padding(.top, DesignTokens.Spacing.sm)
                 }
@@ -197,23 +206,206 @@ struct RoutingView: View {
                 .background(DesignTokens.Colors.cardBackground.opacity(0.5))
                 .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
             } else {
-                // Custom rules cards
-                VStack(spacing: DesignTokens.Spacing.sm) {
-                    ForEach(Array(customRules.enumerated()), id: \.offset) { index, rule in
-                        RuleCard(
-                            rule: rule,
-                            index: index,
-                            provider: providers.first(where: { $0.name == rule.provider }),
-                            onEdit: { editRule(at: index) },
-                            onDelete: { confirmDelete(at: index) }
-                        )
+                // Command rules section
+                commandRulesSubsection
+
+                // Divider between sections
+                if !commandRules.isEmpty && !keywordRules.isEmpty {
+                    HStack(spacing: DesignTokens.Spacing.md) {
+                        Rectangle()
+                            .fill(DesignTokens.Colors.textSecondary.opacity(0.2))
+                            .frame(height: 1)
+
+                        Text(L("settings.routing.section_divider"))
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                        Rectangle()
+                            .fill(DesignTokens.Colors.textSecondary.opacity(0.2))
+                            .frame(height: 1)
                     }
+                    .padding(.vertical, DesignTokens.Spacing.sm)
                 }
+
+                // Keyword rules section
+                keywordRulesSubsection
             }
         }
         .padding(DesignTokens.Spacing.md)
         .background(DesignTokens.Colors.cardBackground.opacity(0.3))
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.large, style: .continuous))
+        .disableWindowDrag()  // Prevent window drag when reordering rules
+    }
+
+    // MARK: - Command Rules Subsection
+
+    private var commandRulesSubsection: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            // Subsection header
+            HStack {
+                HStack(spacing: DesignTokens.Spacing.xs) {
+                    Image(systemName: "command")
+                        .font(.system(size: 12))
+                        .foregroundColor(DesignTokens.Colors.accentBlue)
+                    Text(L("settings.routing.command_rules_title"))
+                        .font(DesignTokens.Typography.body)
+                        .fontWeight(.medium)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
+                    Text("(\(commandRules.count))")
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+
+                Spacer()
+
+                ActionButton(L("settings.routing.add"), icon: "plus", style: .secondary, size: .small) {
+                    addNewRule(type: .command)
+                }
+            }
+
+            if commandRules.isEmpty {
+                Text(L("settings.routing.no_command_rules"))
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, DesignTokens.Spacing.md)
+            } else {
+                // Command rules list with drag reordering
+                List {
+                    ForEach(Array(commandRules.enumerated()), id: \.element.regex) { index, rule in
+                        let globalIndex = findGlobalIndex(for: rule)
+                        RuleCard(
+                            rule: rule,
+                            index: index,
+                            provider: providers.first(where: { $0.name == rule.provider }),
+                            onEdit: { editRule(at: globalIndex) },
+                            onDelete: { confirmDelete(at: globalIndex) }
+                        )
+                        .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                    }
+                    .onMove(perform: moveCommandRules)
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: CGFloat(commandRules.count) * 80, maxHeight: CGFloat(commandRules.count) * 100)
+            }
+        }
+    }
+
+    // MARK: - Keyword Rules Subsection
+
+    private var keywordRulesSubsection: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            // Subsection header
+            HStack {
+                HStack(spacing: DesignTokens.Spacing.xs) {
+                    Image(systemName: "text.magnifyingglass")
+                        .font(.system(size: 12))
+                        .foregroundColor(DesignTokens.Colors.success)
+                    Text(L("settings.routing.keyword_rules_title"))
+                        .font(DesignTokens.Typography.body)
+                        .fontWeight(.medium)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
+                    Text("(\(keywordRules.count))")
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+
+                Spacer()
+
+                ActionButton(L("settings.routing.add"), icon: "plus", style: .secondary, size: .small) {
+                    addNewRule(type: .keyword)
+                }
+            }
+
+            if keywordRules.isEmpty {
+                Text(L("settings.routing.no_keyword_rules"))
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, DesignTokens.Spacing.md)
+            } else {
+                // Keyword rules list with drag reordering
+                List {
+                    ForEach(Array(keywordRules.enumerated()), id: \.element.regex) { index, rule in
+                        let globalIndex = findGlobalIndex(for: rule)
+                        RuleCard(
+                            rule: rule,
+                            index: index,
+                            provider: providers.first(where: { $0.name == rule.provider }),
+                            onEdit: { editRule(at: globalIndex) },
+                            onDelete: { confirmDelete(at: globalIndex) }
+                        )
+                        .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                    }
+                    .onMove(perform: moveKeywordRules)
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: CGFloat(keywordRules.count) * 80, maxHeight: CGFloat(keywordRules.count) * 100)
+            }
+        }
+    }
+
+    // MARK: - Drag Reorder Helpers
+
+    /// Find the global index of a rule in customRules array
+    private func findGlobalIndex(for rule: RoutingRuleConfig) -> Int {
+        customRules.firstIndex(where: { $0.regex == rule.regex }) ?? 0
+    }
+
+    /// Move command rules within command section only
+    private func moveCommandRules(from source: IndexSet, to destination: Int) {
+        // Get current command rules
+        var commands = commandRules
+
+        // Perform move within command rules
+        commands.move(fromOffsets: source, toOffset: destination)
+
+        // Rebuild customRules: new command order + existing keyword order
+        var updatedRules = commands + keywordRules
+
+        // Save to config
+        saveReorderedRules(updatedRules)
+    }
+
+    /// Move keyword rules within keyword section only
+    private func moveKeywordRules(from source: IndexSet, to destination: Int) {
+        // Get current keyword rules
+        var keywords = keywordRules
+
+        // Perform move within keyword rules
+        keywords.move(fromOffsets: source, toOffset: destination)
+
+        // Rebuild customRules: existing command order + new keyword order
+        var updatedRules = commandRules + keywords
+
+        // Save to config
+        saveReorderedRules(updatedRules)
+    }
+
+    /// Save reordered rules to config
+    private func saveReorderedRules(_ rules: [RoutingRuleConfig]) {
+        Task {
+            do {
+                try core.updateRoutingRules(rules: rules)
+
+                // Reload config
+                let config = try core.loadConfig()
+
+                await MainActor.run {
+                    customRules = config.rules.filter { !$0.isPreset }
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Failed to reorder rules: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
     // MARK: - Footer Info Section
@@ -308,8 +500,9 @@ struct RoutingView: View {
 
     // MARK: - Actions
 
-    private func addNewRule() {
+    private func addNewRule(type: RuleType? = nil) {
         editingRuleIndex = nil
+        editingRuleType = type
         showingRuleEditor = true
     }
 

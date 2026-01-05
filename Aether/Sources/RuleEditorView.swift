@@ -76,12 +76,16 @@ struct RuleEditorView: View {
         }
     }
 
-    // Initialize for new rule
-    init(rules: Binding<[RoutingRuleConfig]>, core: AetherCore, providers: [ProviderConfigEntry]) {
+    // Initial rule type for new rules
+    private let initialRuleType: RuleType?
+
+    // Initialize for new rule with optional initial type
+    init(rules: Binding<[RoutingRuleConfig]>, core: AetherCore, providers: [ProviderConfigEntry], initialType: RuleType? = nil) {
         self._rules = rules
         self.core = core
         self.providers = providers
         self.editingIndex = nil
+        self.initialRuleType = initialType
     }
 
     // Initialize for editing existing rule
@@ -90,6 +94,7 @@ struct RuleEditorView: View {
         self.core = core
         self.providers = providers
         self.editingIndex = index
+        self.initialRuleType = nil
     }
 
     var body: some View {
@@ -468,8 +473,8 @@ struct RuleEditorView: View {
             selectedProvider = rule.provider ?? ""
             systemPrompt = rule.systemPrompt ?? ""
         } else {
-            // New rule: set defaults
-            ruleType = .command
+            // New rule: set defaults (use initialRuleType if provided)
+            ruleType = initialRuleType ?? .command
             commandName = ""
             keyword = ""
             systemPrompt = ""
@@ -562,7 +567,17 @@ struct RuleEditorView: View {
                 if let index = editingIndex {
                     updatedRules[index] = newRule
                 } else {
-                    updatedRules.insert(newRule, at: 0)
+                    // Insert new rule at the correct position based on type
+                    // Command rules go to the front of command section (index 0)
+                    // Keyword rules go to the front of keyword section (after all command rules)
+                    if ruleType == .command {
+                        // Insert at the very beginning
+                        updatedRules.insert(newRule, at: 0)
+                    } else {
+                        // Find the first keyword rule position (after all command rules)
+                        let firstKeywordIndex = updatedRules.firstIndex(where: { $0.isKeywordRule }) ?? updatedRules.count
+                        updatedRules.insert(newRule, at: firstKeywordIndex)
+                    }
                 }
 
                 // Save via Rust core
