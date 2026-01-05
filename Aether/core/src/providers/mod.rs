@@ -216,6 +216,42 @@ pub trait AiProvider: Send + Sync {
         })
     }
 
+    /// Process input with MediaAttachment and return AI-generated response
+    ///
+    /// This is the preferred method for multimodal content as it supports
+    /// the new MediaAttachment type from add-multimodal-content-support.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The user input text to process
+    /// * `attachments` - Optional media attachments (images, etc.)
+    /// * `system_prompt` - Optional system prompt to guide AI behavior
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(String)` - The AI-generated response text
+    /// * `Err(AetherError)` - Various errors (same as `process()`)
+    ///
+    /// # Default Implementation
+    ///
+    /// Default implementation calls `process()` and ignores attachments.
+    /// Vision-capable providers should override this method.
+    fn process_with_attachments(
+        &self,
+        input: &str,
+        _attachments: Option<&[crate::core::MediaAttachment]>,
+        system_prompt: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        // Clone the data we need before moving into async block
+        let input = input.to_string();
+        let system_prompt = system_prompt.map(|s| s.to_string());
+
+        Box::pin(async move {
+            // Default: ignore attachments and call text-only process
+            self.process(&input, system_prompt.as_deref()).await
+        })
+    }
+
     /// Check if provider supports vision/image input
     ///
     /// # Returns

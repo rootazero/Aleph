@@ -10,8 +10,13 @@
 // - Native type conversions (NSImage, NSString)
 // - Can detect clipboard changes via changeCount
 // - Thread-safe (NSPasteboard is thread-safe)
+//
+// Multimodal content support (add-multimodal-content-support):
+// - Content extractors for images, RTFD, file URLs
+// - getMixedContent() for comprehensive content extraction
 
 import Cocoa
+import os.log
 
 /// Native clipboard manager using NSPasteboard
 ///
@@ -24,8 +29,36 @@ class ClipboardManager {
     /// Shared instance for convenient access
     static let shared = ClipboardManager()
 
+    // MARK: - Private Properties
+
+    private let logger = Logger(subsystem: "com.aether", category: "ClipboardManager")
+    private var extractorsSetup = false
+
     /// Private initializer to encourage singleton usage
-    private init() {}
+    private init() {
+        setupContentExtractors()
+    }
+
+    // MARK: - Content Extractor Setup
+
+    /// Setup content extractors for multimodal content support
+    ///
+    /// Registers all Phase 1 extractors with the ContentExtractorRegistry.
+    /// Called automatically during initialization.
+    private func setupContentExtractors() {
+        guard !extractorsSetup else { return }
+
+        let registry = ContentExtractorRegistry.shared
+
+        // Phase 1: Image support extractors (in priority order)
+        registry.register(DirectImageExtractor())
+        registry.register(RTFDExtractor())
+        registry.register(FileURLExtractor())
+        registry.register(PlainTextExtractor())
+
+        extractorsSetup = true
+        logger.info("Content extractors registered: \(registry.registeredCount)")
+    }
 
     // MARK: - Text Operations
 
@@ -161,6 +194,66 @@ class ClipboardManager {
     /// - Returns: True if clipboard has no content
     func isEmpty() -> Bool {
         return NSPasteboard.general.types?.isEmpty ?? true
+    }
+
+    // MARK: - Multimodal Content Operations (add-multimodal-content-support)
+
+    /// Get mixed content from clipboard (text + media attachments)
+    ///
+    /// Uses the ContentExtractorRegistry to extract all available content
+    /// from the clipboard, including text and media attachments.
+    ///
+    /// - Returns: Tuple of (text, attachments)
+    func getMixedContent() -> (text: String?, attachments: [MediaAttachment]) {
+        let pasteboard = NSPasteboard.general
+
+        // Log available types for debugging
+        if let types = pasteboard.types {
+            logger.debug("Clipboard types: \(types.map(\.rawValue).joined(separator: ", "))")
+        }
+
+        // Delegate to ContentExtractorRegistry
+        let result = ContentExtractorRegistry.shared.extractAll(from: pasteboard)
+
+        // Log extraction summary
+        if result.attachments.isEmpty {
+            logger.debug("No media attachments found in clipboard")
+        } else {
+            logger.info("Extracted \(result.attachments.count) media attachments from clipboard")
+        }
+
+        return result
+    }
+
+    /// Get image as Base64 string (legacy wrapper)
+    ///
+    /// Convenience method for getting a single image as Base64.
+    /// For multiple images or mixed content, use getMixedContent() instead.
+    ///
+    /// - Returns: Base64-encoded image data, or nil if no image available
+    func getImageAsBase64() -> String? {
+        let (_, attachments) = getMixedContent()
+        return attachments.first?.data
+    }
+
+    /// Check if clipboard has file URLs
+    ///
+    /// - Returns: True if clipboard contains file URL references
+    func hasFileURLs() -> Bool {
+        let types = NSPasteboard.general.types ?? []
+        return types.contains(NSPasteboard.PasteboardType("public.file-url"))
+    }
+
+    /// Get file URLs from clipboard
+    ///
+    /// - Returns: Array of file URLs, or empty array if none
+    func getFileURLs() -> [URL] {
+        guard let urls = NSPasteboard.general.readObjects(forClasses: [NSURL.self], options: [
+            .urlReadingFileURLsOnly: true
+        ]) as? [URL] else {
+            return []
+        }
+        return urls
     }
 }
 

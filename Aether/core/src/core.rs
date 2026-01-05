@@ -31,11 +31,23 @@ struct RequestContext {
     retry_count: u32,
 }
 
+/// Media attachment for multimodal content (add-multimodal-content-support)
+/// Supports images, videos, and files from clipboard
+#[derive(Debug, Clone)]
+pub struct MediaAttachment {
+    pub media_type: String,    // "image", "video", "file"
+    pub mime_type: String,     // "image/png", "image/jpeg", "video/mp4", etc.
+    pub data: String,          // Base64-encoded content
+    pub filename: Option<String>,  // Optional original filename
+    pub size_bytes: u64,       // Original size in bytes for logging/validation
+}
+
 /// Captured context from active application (Swift → Rust)
 #[derive(Debug, Clone)]
 pub struct CapturedContext {
     pub app_bundle_id: String,
     pub window_title: Option<String>,
+    pub attachments: Option<Vec<MediaAttachment>>,  // Multimodal content support
 }
 
 /// Main core struct for Aether
@@ -1697,16 +1709,46 @@ impl AetherCore {
                 None
             };
 
+            // add-multimodal-content-support: Check if we have media attachments
+            let attachments = context.attachments.clone();
+            let has_attachments = attachments
+                .as_ref()
+                .map(|a| !a.is_empty())
+                .unwrap_or(false);
+
+            if has_attachments {
+                info!(
+                    attachment_count = attachments.as_ref().map(|a| a.len()).unwrap_or(0),
+                    "Processing with media attachments"
+                );
+            }
+
             self.runtime.block_on(async {
                 use crate::providers::retry_with_backoff;
 
                 // Attempt with primary provider (with retry)
                 // Use final_input which has command prefix stripped if applicable
-                let primary_result = retry_with_backoff(
-                    || provider.process(&final_input, Some(&system_prompt)),
-                    Some(3),
-                )
-                .await;
+                // add-multimodal-content-support: Use process_with_attachments if attachments present
+                let attachments_ref = attachments.as_deref();
+                let primary_result = if has_attachments && provider.supports_vision() {
+                    retry_with_backoff(
+                        || {
+                            provider.process_with_attachments(
+                                &final_input,
+                                attachments_ref,
+                                Some(&system_prompt),
+                            )
+                        },
+                        Some(3),
+                    )
+                    .await
+                } else {
+                    retry_with_backoff(
+                        || provider.process(&final_input, Some(&system_prompt)),
+                        Some(3),
+                    )
+                    .await
+                };
 
                 match primary_result {
                     Ok(response) => {
@@ -1735,11 +1777,26 @@ impl AetherCore {
 
                             // Try fallback provider (with retry)
                             // Also use final_input with command prefix stripped
-                            retry_with_backoff(
-                                || fallback.process(&final_input, Some(&system_prompt)),
-                                Some(3),
-                            )
-                            .await
+                            // add-multimodal-content-support: Use process_with_attachments for fallback too
+                            if has_attachments && fallback.supports_vision() {
+                                retry_with_backoff(
+                                    || {
+                                        fallback.process_with_attachments(
+                                            &final_input,
+                                            attachments_ref,
+                                            Some(&system_prompt),
+                                        )
+                                    },
+                                    Some(3),
+                                )
+                                .await
+                            } else {
+                                retry_with_backoff(
+                                    || fallback.process(&final_input, Some(&system_prompt)),
+                                    Some(3),
+                                )
+                                .await
+                            }
                         } else {
                             error!(
                                 provider = %provider_name,
@@ -2657,6 +2714,7 @@ mod tests {
         let context = CapturedContext {
             app_bundle_id: "com.apple.Notes".to_string(),
             window_title: Some("Test Document.txt".to_string()),
+            attachments: None,
         };
         core.set_current_context(context.clone());
 
@@ -2760,6 +2818,7 @@ mod tests {
         let context = CapturedContext {
             app_bundle_id: "com.apple.Notes".to_string(),
             window_title: Some("Rust Learning.txt".to_string()),
+            attachments: None,
         };
         core.set_current_context(context);
 

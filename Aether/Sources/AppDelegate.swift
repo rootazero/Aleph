@@ -1189,8 +1189,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         print("[AppDelegate] 📍 Text source: \(textSource), Input mode: \(useCutMode ? "replace" : "append")")
 
-        // Get the captured clipboard content
-        guard let clipboardText = ClipboardManager.shared.getText() else {
+        // Get the captured clipboard content (text + media attachments)
+        // add-multimodal-content-support: Use getMixedContent() for comprehensive extraction
+        let (extractedText, mediaAttachments) = ClipboardManager.shared.getMixedContent()
+
+        guard let clipboardText = extractedText else {
             print("[AppDelegate] ❌ Clipboard is empty after copy operation")
             // Restore original clipboard
             if let original = originalClipboardText {
@@ -1200,6 +1203,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
 
         print("[AppDelegate] Clipboard text: \(clipboardText.prefix(50))...")
+
+        // Log media attachments if present (add-multimodal-content-support)
+        if !mediaAttachments.isEmpty {
+            print("[AppDelegate] 📎 Extracted \(mediaAttachments.count) media attachment(s):")
+            for (index, attachment) in mediaAttachments.enumerated() {
+                print("[AppDelegate]   [\(index + 1)] \(attachment.mediaType)/\(attachment.mimeType) - \(attachment.sizeBytes) bytes")
+            }
+        }
 
         // IMPORTANT: Check for recent clipboard content (within 10 seconds)
         // This allows us to use previous clipboard as additional context
@@ -1237,10 +1248,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             guard let self = self else { return }
 
             do {
-                // Create captured context for Rust
+                // Create captured context for Rust (add-multimodal-content-support)
+                // Include media attachments if present
                 let capturedContext = CapturedContext(
                     appBundleId: windowContext.bundleId ?? "unknown",
-                    windowTitle: windowContext.windowTitle
+                    windowTitle: windowContext.windowTitle,
+                    attachments: mediaAttachments.isEmpty ? nil : mediaAttachments
                 )
 
                 // CRITICAL: Construct user input - clipboard content appended after window content

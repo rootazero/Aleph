@@ -133,6 +133,10 @@ pub struct AgentContext {
     /// **This implementation**: Field exists but always None
     /// **Solution C**: WorkflowEngine creates and updates this state
     pub workflow_state: Option<WorkflowState>,
+
+    /// Media attachments for multimodal content (add-multimodal-content-support)
+    /// Contains images, videos, or files from clipboard
+    pub attachments: Option<Vec<crate::core::MediaAttachment>>,
 }
 
 // ====== Reserved structures for future stages ======
@@ -197,5 +201,6 @@ mod tests {
         assert!(context.search_results.is_none());
         assert!(context.mcp_resources.is_none());
         assert!(context.workflow_state.is_none());
+        assert!(context.attachments.is_none());
     }
 }

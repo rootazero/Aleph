@@ -96,7 +96,9 @@ pub use crate::config::{
     ProviderConfigEntry, RoutingRuleConfig, SearchBackendConfig, SearchBackendEntry, SearchConfig,
     SearchConfigInternal, ShortcutsConfig, TestConnectionResult,
 };
-pub use crate::core::{AetherCore, AppMemoryInfo, CapturedContext, MemoryEntryFFI as MemoryEntry};
+pub use crate::core::{
+    AetherCore, AppMemoryInfo, CapturedContext, MediaAttachment, MemoryEntryFFI as MemoryEntry,
+};
 pub use crate::error::{AetherError, AetherException, Result};
 pub use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 pub use crate::initialization::{

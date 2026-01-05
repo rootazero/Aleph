@@ -123,6 +123,12 @@ impl PayloadBuilder {
         self
     }
 
+    /// Add media attachments to context (add-multimodal-content-support)
+    pub fn attachments(mut self, attachments: Vec<crate::core::MediaAttachment>) -> Self {
+        self.context.attachments = Some(attachments);
+        self
+    }
+
     /// Build the AgentPayload
     ///
     /// # Errors

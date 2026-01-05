@@ -1153,12 +1153,14 @@ public func FfiConverterTypeBehaviorConfig_lower(_ value: BehaviorConfig) -> Rus
 public struct CapturedContext {
     public var appBundleId: String
     public var windowTitle: String?
+    public var attachments: [MediaAttachment]?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(appBundleId: String, windowTitle: String?) {
+    public init(appBundleId: String, windowTitle: String?, attachments: [MediaAttachment]?) {
         self.appBundleId = appBundleId
         self.windowTitle = windowTitle
+        self.attachments = attachments
     }
 }
 
@@ -1172,12 +1174,16 @@ extension CapturedContext: Equatable, Hashable {
         if lhs.windowTitle != rhs.windowTitle {
             return false
         }
+        if lhs.attachments != rhs.attachments {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(appBundleId)
         hasher.combine(windowTitle)
+        hasher.combine(attachments)
     }
 }
 
@@ -1190,13 +1196,15 @@ public struct FfiConverterTypeCapturedContext: FfiConverterRustBuffer {
         return
             try CapturedContext(
                 appBundleId: FfiConverterString.read(from: &buf), 
-                windowTitle: FfiConverterOptionString.read(from: &buf)
+                windowTitle: FfiConverterOptionString.read(from: &buf), 
+                attachments: FfiConverterOptionSequenceTypeMediaAttachment.read(from: &buf)
         )
     }
 
     public static func write(_ value: CapturedContext, into buf: inout [UInt8]) {
         FfiConverterString.write(value.appBundleId, into: &buf)
         FfiConverterOptionString.write(value.windowTitle, into: &buf)
+        FfiConverterOptionSequenceTypeMediaAttachment.write(value.attachments, into: &buf)
     }
 }
 
@@ -1409,6 +1417,96 @@ public func FfiConverterTypeGeneralConfig_lift(_ buf: RustBuffer) throws -> Gene
 #endif
 public func FfiConverterTypeGeneralConfig_lower(_ value: GeneralConfig) -> RustBuffer {
     return FfiConverterTypeGeneralConfig.lower(value)
+}
+
+
+public struct MediaAttachment {
+    public var mediaType: String
+    public var mimeType: String
+    public var data: String
+    public var filename: String?
+    public var sizeBytes: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(mediaType: String, mimeType: String, data: String, filename: String?, sizeBytes: UInt64) {
+        self.mediaType = mediaType
+        self.mimeType = mimeType
+        self.data = data
+        self.filename = filename
+        self.sizeBytes = sizeBytes
+    }
+}
+
+
+
+extension MediaAttachment: Equatable, Hashable {
+    public static func ==(lhs: MediaAttachment, rhs: MediaAttachment) -> Bool {
+        if lhs.mediaType != rhs.mediaType {
+            return false
+        }
+        if lhs.mimeType != rhs.mimeType {
+            return false
+        }
+        if lhs.data != rhs.data {
+            return false
+        }
+        if lhs.filename != rhs.filename {
+            return false
+        }
+        if lhs.sizeBytes != rhs.sizeBytes {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(mediaType)
+        hasher.combine(mimeType)
+        hasher.combine(data)
+        hasher.combine(filename)
+        hasher.combine(sizeBytes)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMediaAttachment: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MediaAttachment {
+        return
+            try MediaAttachment(
+                mediaType: FfiConverterString.read(from: &buf), 
+                mimeType: FfiConverterString.read(from: &buf), 
+                data: FfiConverterString.read(from: &buf), 
+                filename: FfiConverterOptionString.read(from: &buf), 
+                sizeBytes: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MediaAttachment, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.mediaType, into: &buf)
+        FfiConverterString.write(value.mimeType, into: &buf)
+        FfiConverterString.write(value.data, into: &buf)
+        FfiConverterOptionString.write(value.filename, into: &buf)
+        FfiConverterUInt64.write(value.sizeBytes, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMediaAttachment_lift(_ buf: RustBuffer) throws -> MediaAttachment {
+    return try FfiConverterTypeMediaAttachment.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMediaAttachment_lower(_ value: MediaAttachment) -> RustBuffer {
+    return FfiConverterTypeMediaAttachment.lower(value)
 }
 
 
@@ -3941,6 +4039,30 @@ fileprivate struct FfiConverterOptionSequenceString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionSequenceTypeMediaAttachment: FfiConverterRustBuffer {
+    typealias SwiftType = [MediaAttachment]?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterSequenceTypeMediaAttachment.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterSequenceTypeMediaAttachment.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -3983,6 +4105,31 @@ fileprivate struct FfiConverterSequenceTypeAppMemoryInfo: FfiConverterRustBuffer
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeAppMemoryInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeMediaAttachment: FfiConverterRustBuffer {
+    typealias SwiftType = [MediaAttachment]
+
+    public static func write(_ value: [MediaAttachment], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeMediaAttachment.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [MediaAttachment] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [MediaAttachment]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeMediaAttachment.read(from: &buf))
         }
         return seq
     }

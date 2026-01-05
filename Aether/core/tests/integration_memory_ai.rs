@@ -81,6 +81,7 @@ fn test_process_with_ai_pipeline_structure() {
     let context = CapturedContext {
         app_bundle_id: "com.apple.Notes".to_string(),
         window_title: Some("Test.txt".to_string()),
+        attachments: None,
     };
     core.set_current_context(context.clone());
 
@@ -106,6 +107,7 @@ fn test_memory_augmentation_integration() {
     let context = CapturedContext {
         app_bundle_id: "com.apple.Notes".to_string(),
         window_title: Some("Rust Learning.txt".to_string()),
+        attachments: None,
     };
     core.set_current_context(context);
 
@@ -133,6 +135,7 @@ fn test_context_capture_and_retrieval() {
     let context1 = CapturedContext {
         app_bundle_id: "com.apple.Notes".to_string(),
         window_title: Some("Document1.txt".to_string()),
+        attachments: None,
     };
     core.set_current_context(context1.clone());
 
@@ -140,6 +143,7 @@ fn test_context_capture_and_retrieval() {
     let context2 = CapturedContext {
         app_bundle_id: "com.google.Chrome".to_string(),
         window_title: Some("GitHub - Mozilla Firefox".to_string()),
+        attachments: None,
     };
     core.set_current_context(context2.clone());
 
@@ -205,6 +209,7 @@ fn test_ai_pipeline_error_handling() {
     let context = CapturedContext {
         app_bundle_id: "com.test.app".to_string(),
         window_title: Some("Test".to_string()),
+        attachments: None,
     };
     core.set_current_context(context.clone());
 
@@ -233,6 +238,7 @@ fn test_full_pipeline_flow() {
     let context = CapturedContext {
         app_bundle_id: "com.apple.TextEdit".to_string(),
         window_title: Some("Project Notes.txt".to_string()),
+        attachments: None,
     };
     core.set_current_context(context.clone());
 
@@ -280,6 +286,7 @@ fn test_concurrent_context_updates() {
             let context = CapturedContext {
                 app_bundle_id: format!("com.test.app{}", i),
                 window_title: Some(format!("Window{}", i)),
+                attachments: None,
             };
             core_ref.set_current_context(context);
         });

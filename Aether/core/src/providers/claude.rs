@@ -313,6 +313,60 @@ impl ClaudeProvider {
         }
     }
 
+    /// Build request body with MediaAttachment for vision API (add-multimodal-content-support)
+    fn build_multimodal_request(
+        &self,
+        input: &str,
+        attachments: &[crate::core::MediaAttachment],
+        system_prompt: Option<&str>,
+    ) -> MessagesRequest {
+        // Build multimodal user message with text and images
+        let mut content_blocks = Vec::new();
+
+        // Add text if not empty
+        if !input.is_empty() {
+            content_blocks.push(ClaudeContentBlock::Text {
+                text: input.to_string(),
+            });
+        } else {
+            // Default prompt for image-only requests
+            content_blocks.push(ClaudeContentBlock::Text {
+                text: "Describe this image in detail.".to_string(),
+            });
+        }
+
+        // Add images from MediaAttachment
+        for attachment in attachments {
+            if attachment.media_type == "image" {
+                // Claude expects Base64 data WITHOUT the "data:image/...;base64," prefix
+                // MediaAttachment.data is already raw Base64 encoded
+                content_blocks.push(ClaudeContentBlock::Image {
+                    source: ImageSource {
+                        source_type: "base64".to_string(),
+                        media_type: attachment.mime_type.clone(),
+                        data: attachment.data.clone(),
+                    },
+                });
+            }
+        }
+
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Multimodal {
+                content: content_blocks,
+            },
+        }];
+
+        // Use higher max_tokens for vision responses
+        MessagesRequest {
+            model: self.config.model.clone(),
+            messages,
+            max_tokens: self.config.max_tokens.unwrap_or(4096),
+            system: system_prompt.map(|s| s.to_string()),
+            temperature: self.config.temperature,
+        }
+    }
+
     /// Parse error response and convert to AetherError
     async fn handle_error(&self, response: reqwest::Response) -> AetherError {
         let status = response.status();
@@ -546,6 +600,110 @@ impl AiProvider for ClaudeProvider {
         // Claude 3 Haiku does not support vision (as of API docs)
         // We'll return true for all Claude 3+ models to be safe
         true
+    }
+
+    fn process_with_attachments(
+        &self,
+        input: &str,
+        attachments: Option<&[crate::core::MediaAttachment]>,
+        system_prompt: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        // Clone the data we need before moving into async block
+        let input = input.to_string();
+        let attachments = attachments.map(|a| a.to_vec());
+        let system_prompt = system_prompt.map(|s| s.to_string());
+
+        Box::pin(async move {
+            // Check if we have any image attachments
+            let image_attachments: Option<Vec<_>> = attachments.as_ref().and_then(|atts| {
+                let images: Vec<_> = atts
+                    .iter()
+                    .filter(|a| a.media_type == "image")
+                    .cloned()
+                    .collect();
+                if images.is_empty() {
+                    None
+                } else {
+                    Some(images)
+                }
+            });
+
+            // If no image attachments, fall back to text-only
+            let Some(images) = image_attachments else {
+                return self.process(&input, system_prompt.as_deref()).await;
+            };
+
+            debug!(
+                model = %self.config.model,
+                input_length = input.len(),
+                image_count = images.len(),
+                has_system_prompt = system_prompt.is_some(),
+                "Sending multimodal request to Claude"
+            );
+
+            // Build multimodal request body
+            let request_body =
+                self.build_multimodal_request(&input, &images, system_prompt.as_deref());
+
+            // Send POST request with Claude-specific headers
+            let response = self
+                .client
+                .post(&self.endpoint)
+                .header(
+                    "x-api-key",
+                    self.config.api_key.as_ref().unwrap_or(&String::new()),
+                )
+                .header("anthropic-version", ANTHROPIC_VERSION)
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await
+                .map_err(|e| {
+                    if e.is_timeout() {
+                        error!("Claude multimodal request timed out");
+                        AetherError::Timeout {
+                            suggestion: Some("Try again in a few moments".to_string()),
+                        }
+                    } else if e.is_connect() {
+                        error!(error = %e, "Failed to connect to Claude");
+                        AetherError::network(format!("Failed to connect to Claude: {}", e))
+                    } else {
+                        error!(error = %e, "Claude network error");
+                        AetherError::network(format!("Network error: {}", e))
+                    }
+                })?;
+
+            // Check status code
+            if !response.status().is_success() {
+                let status = response.status();
+                debug!(status = %status, "Claude multimodal request failed");
+                return Err(self.handle_error(response).await);
+            }
+
+            // Parse response
+            let messages_response: MessagesResponse = response.json().await.map_err(|e| {
+                error!(error = %e, "Failed to parse Claude multimodal response");
+                AetherError::provider(format!("Failed to parse Claude response: {}", e))
+            })?;
+
+            // Extract text from first content block
+            let text = messages_response
+                .content
+                .first()
+                .ok_or_else(|| {
+                    error!("Claude returned no content");
+                    AetherError::provider("No response from Claude")
+                })?
+                .text
+                .clone();
+
+            info!(
+                response_length = text.len(),
+                "Claude multimodal request completed successfully"
+            );
+
+            Ok(text)
+        })
     }
 
     fn name(&self) -> &str {

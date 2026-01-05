@@ -293,6 +293,84 @@ impl OpenAiProvider {
         }
     }
 
+    /// Build request body with MediaAttachment for vision API (add-multimodal-content-support)
+    fn build_multimodal_request(
+        &self,
+        input: &str,
+        attachments: &[crate::core::MediaAttachment],
+        system_prompt: Option<&str>,
+    ) -> ChatCompletionRequest {
+        let mut messages = Vec::new();
+
+        // Add system prompt if provided
+        if let Some(prompt) = system_prompt {
+            messages.push(Message {
+                role: "system".to_string(),
+                content: MessageContent::Text {
+                    content: prompt.to_string(),
+                },
+            });
+        }
+
+        // Build multimodal user message with text and images
+        let mut content_blocks = Vec::new();
+
+        // Add text if not empty
+        if !input.is_empty() {
+            content_blocks.push(ContentBlock::Text {
+                text: input.to_string(),
+            });
+        } else {
+            // Default prompt for image-only requests
+            content_blocks.push(ContentBlock::Text {
+                text: "Describe this image in detail.".to_string(),
+            });
+        }
+
+        // Add images from MediaAttachment
+        for attachment in attachments {
+            if attachment.media_type == "image" {
+                // Build data URI from MediaAttachment
+                // Format: data:image/png;base64,<base64_data>
+                let data_uri = format!("data:{};base64,{}", attachment.mime_type, attachment.data);
+                content_blocks.push(ContentBlock::ImageUrl {
+                    image_url: ImageUrl { url: data_uri },
+                });
+            }
+        }
+
+        messages.push(Message {
+            role: "user".to_string(),
+            content: MessageContent::Multimodal {
+                content: content_blocks,
+            },
+        });
+
+        // Use vision-capable model and higher max_tokens for image analysis
+        // Prefer the configured model if it supports vision, otherwise fallback to gpt-4o
+        let model = if self.is_vision_capable_model() {
+            self.config.model.clone()
+        } else {
+            "gpt-4o".to_string()
+        };
+
+        ChatCompletionRequest {
+            model,
+            messages,
+            max_tokens: Some(self.config.max_tokens.unwrap_or(4096)),
+            temperature: self.config.temperature,
+        }
+    }
+
+    /// Check if the configured model supports vision
+    fn is_vision_capable_model(&self) -> bool {
+        let model = self.config.model.to_lowercase();
+        model.contains("gpt-4o")
+            || model.contains("gpt-4-turbo")
+            || model.contains("gpt-4-vision")
+            || model.contains("vision")
+    }
+
     /// Parse error response and convert to AetherError
     async fn handle_error(&self, response: reqwest::Response) -> AetherError {
         let status = response.status();
@@ -512,6 +590,116 @@ impl AiProvider for OpenAiProvider {
     fn supports_vision(&self) -> bool {
         // OpenAI supports vision through gpt-4o and gpt-4-vision-preview
         true
+    }
+
+    fn process_with_attachments(
+        &self,
+        input: &str,
+        attachments: Option<&[crate::core::MediaAttachment]>,
+        system_prompt: Option<&str>,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        // Clone the data we need before moving into async block
+        let input = input.to_string();
+        let attachments = attachments.map(|a| a.to_vec());
+        let system_prompt = system_prompt.map(|s| s.to_string());
+
+        Box::pin(async move {
+            // Check if we have any image attachments
+            let image_attachments: Option<Vec<_>> = attachments.as_ref().and_then(|atts| {
+                let images: Vec<_> = atts
+                    .iter()
+                    .filter(|a| a.media_type == "image")
+                    .cloned()
+                    .collect();
+                if images.is_empty() {
+                    None
+                } else {
+                    Some(images)
+                }
+            });
+
+            // If no image attachments, fall back to text-only
+            let Some(images) = image_attachments else {
+                return self.process(&input, system_prompt.as_deref()).await;
+            };
+
+            debug!(
+                model = %self.config.model,
+                input_length = input.len(),
+                image_count = images.len(),
+                has_system_prompt = system_prompt.is_some(),
+                "Sending multimodal request to OpenAI"
+            );
+
+            // Build multimodal request body
+            let request_body =
+                self.build_multimodal_request(&input, &images, system_prompt.as_deref());
+
+            // Send POST request
+            let response = self
+                .client
+                .post(&self.endpoint)
+                .header(
+                    "Authorization",
+                    format!(
+                        "Bearer {}",
+                        self.config.api_key.as_ref().unwrap_or(&String::new())
+                    ),
+                )
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await
+                .map_err(|e| {
+                    if e.is_timeout() {
+                        error!("OpenAI multimodal request timed out");
+                        AetherError::Timeout {
+                            suggestion: Some(
+                                "The OpenAI service is taking too long. Try again or switch providers."
+                                    .to_string(),
+                            ),
+                        }
+                    } else if e.is_connect() {
+                        error!(error = %e, "Failed to connect to OpenAI");
+                        AetherError::network(format!("Failed to connect to OpenAI: {}", e))
+                    } else {
+                        error!(error = %e, "OpenAI network error");
+                        AetherError::network(format!("Network error: {}", e))
+                    }
+                })?;
+
+            // Check status code
+            if !response.status().is_success() {
+                let status = response.status();
+                debug!(status = %status, "OpenAI multimodal request failed");
+                return Err(self.handle_error(response).await);
+            }
+
+            // Parse response
+            let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
+                error!(error = %e, "Failed to parse OpenAI multimodal response");
+                AetherError::provider(format!("Failed to parse OpenAI response: {}", e))
+            })?;
+
+            // Extract message content
+            let content = completion
+                .choices
+                .first()
+                .ok_or_else(|| {
+                    error!("OpenAI returned no choices");
+                    AetherError::provider("No response from OpenAI")
+                })?
+                .message
+                .content
+                .clone();
+
+            info!(
+                response_length = content.len(),
+                "OpenAI multimodal request completed successfully"
+            );
+
+            Ok(content)
+        })
     }
 
     fn name(&self) -> &str {
