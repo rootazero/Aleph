@@ -327,6 +327,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
+        // CRITICAL: Switch to regular activation policy for keyboard shortcuts to work
+        // Accessory apps don't properly respond to Cmd+V/C/X in TextFields
+        NSApp.setActivationPolicy(.regular)
+        print("[AppDelegate] Switched to regular activation policy for settings window")
+
         // Check if settings window already exists and is valid
         // First check if reference exists and window is still alive (not released)
         if let window = settingsWindow {
@@ -1645,11 +1650,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
 extension AppDelegate: NSWindowDelegate {
     /// Called when settings window is about to close
-    /// Clear the window reference to ensure next open creates a fresh window with default size
+    /// Clear the window reference and switch back to accessory policy
     func windowWillClose(_ notification: Notification) {
         if let window = notification.object as? NSWindow, window == settingsWindow {
             print("[AppDelegate] Settings window closing, clearing reference")
             settingsWindow = nil
+
+            // CRITICAL: Switch back to accessory policy when settings window closes
+            // This hides the app from Dock again (menu bar only mode)
+            NSApp.setActivationPolicy(.accessory)
+            print("[AppDelegate] Switched back to accessory activation policy")
         }
     }
 }
