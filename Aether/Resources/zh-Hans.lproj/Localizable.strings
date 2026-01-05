@@ -167,13 +167,21 @@
 "settings.routing.type.command" = "命令";
 "settings.routing.type.keyword" = "关键词";
 "settings.routing.keyword_hint" = "多重匹配: 提示会添加到匹配的请求中";
-"settings.routing.editor.command_hint" = "首次匹配即停止，需要指定提供商";
-"settings.routing.editor.keyword_hint" = "多重匹配，仅提示";
-"settings.routing.editor.valid_pattern" = "有效的正则表达式";
-"settings.routing.editor.pattern_help" = "使用正则表达式匹配剪贴板内容。例如：\n• ^/draw - 命令规则（以 /draw 开头）\n• .*code.* - 关键词规则（包含 'code'）";
+"settings.routing.editor.rule_type" = "规则类型";
+"settings.routing.editor.command_description" = "当用户输入 /命令 时，路由到指定的 AI 提供商";
+"settings.routing.editor.keyword_description" = "当内容包含关键词时，添加系统提示";
+"settings.routing.editor.command_name" = "命令名称";
+"settings.routing.editor.command_placeholder" = "例如：draw, translate, code";
+"settings.routing.editor.command_help" = "输入命令名（不含斜杠）。例如：输入 'draw' 将匹配 '/draw ...'";
+"settings.routing.editor.keyword_name" = "关键词";
+"settings.routing.editor.keyword_placeholder" = "例如：紧急, 代码, 审查";
+"settings.routing.editor.keyword_help" = "输入要匹配的关键词。例如：'紧急' 将匹配任何包含 '紧急' 的文本";
 "settings.routing.editor.no_providers" = "未配置提供商。请先在提供商标签页中添加提供商。";
-"settings.routing.editor.prompt_help_command" = "此规则的自定义指令。留空则使用默认值。";
-"settings.routing.editor.prompt_help_keyword" = "关键词规则匹配时添加的系统提示。关键词规则必须填写。";
+"settings.routing.editor.prompt_help_command" = "此命令的自定义指令。留空则使用默认值。";
+"settings.routing.editor.prompt_help_keyword" = "关键词匹配时添加的系统提示。关键词规则必须填写。";
+"settings.routing.editor.preview" = "预览";
+"settings.routing.editor.generated_pattern" = "生成的正则：";
+"settings.routing.editor.example_match" = "匹配示例：";
 
 // MARK: - Settings Window - Shortcuts Tab
 "settings.shortcuts.title" = "快捷键";
