@@ -347,6 +347,11 @@ dictionary ProviderConfig {
 
   // Ollama-specific parameters
   f32? repeat_penalty;
+
+  // System prompt handling mode
+  // "system" (default): Use separate system message
+  // "prepend": Prepend system prompt to user message (for APIs that ignore system role)
+  string? system_prompt_mode;
 };
 
 // Test connection result (for provider connection testing)

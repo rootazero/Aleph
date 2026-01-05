@@ -213,23 +213,46 @@ impl OpenAiProvider {
     fn build_request(&self, input: &str, system_prompt: Option<&str>) -> ChatCompletionRequest {
         let mut messages = Vec::new();
 
-        // Add system prompt if provided
-        if let Some(prompt) = system_prompt {
+        // Check system_prompt_mode: "prepend" means prepend to user message instead of using system role
+        let use_prepend_mode = self
+            .config
+            .system_prompt_mode
+            .as_ref()
+            .map(|m| m.to_lowercase() == "prepend")
+            .unwrap_or(false);
+
+        if use_prepend_mode {
+            // Prepend system prompt to user message (for APIs that ignore system role)
+            let user_content = if let Some(prompt) = system_prompt {
+                format!("{}\n\n{}", prompt, input)
+            } else {
+                input.to_string()
+            };
+
             messages.push(Message {
-                role: "system".to_string(),
+                role: "user".to_string(),
                 content: MessageContent::Text {
-                    content: prompt.to_string(),
+                    content: user_content,
+                },
+            });
+        } else {
+            // Standard mode: use separate system message
+            if let Some(prompt) = system_prompt {
+                messages.push(Message {
+                    role: "system".to_string(),
+                    content: MessageContent::Text {
+                        content: prompt.to_string(),
+                    },
+                });
+            }
+
+            messages.push(Message {
+                role: "user".to_string(),
+                content: MessageContent::Text {
+                    content: input.to_string(),
                 },
             });
         }
-
-        // Add user input
-        messages.push(Message {
-            role: "user".to_string(),
-            content: MessageContent::Text {
-                content: input.to_string(),
-            },
-        });
 
         ChatCompletionRequest {
             model: self.config.model.clone(),
@@ -248,30 +271,49 @@ impl OpenAiProvider {
     ) -> ChatCompletionRequest {
         let mut messages = Vec::new();
 
-        // Add system prompt if provided
-        if let Some(prompt) = system_prompt {
-            messages.push(Message {
-                role: "system".to_string(),
-                content: MessageContent::Text {
-                    content: prompt.to_string(),
-                },
-            });
+        // Check system_prompt_mode: "prepend" means prepend to user message instead of using system role
+        let use_prepend_mode = self
+            .config
+            .system_prompt_mode
+            .as_ref()
+            .map(|m| m.to_lowercase() == "prepend")
+            .unwrap_or(false);
+
+        // Add system prompt if provided and not using prepend mode
+        if !use_prepend_mode {
+            if let Some(prompt) = system_prompt {
+                messages.push(Message {
+                    role: "system".to_string(),
+                    content: MessageContent::Text {
+                        content: prompt.to_string(),
+                    },
+                });
+            }
         }
 
         // Build multimodal user message with text and image
         let mut content_blocks = Vec::new();
 
-        // Add text if not empty
-        if !input.is_empty() {
-            content_blocks.push(ContentBlock::Text {
-                text: input.to_string(),
-            });
+        // Determine text content (with prepended system prompt if in prepend mode)
+        let text_content = if use_prepend_mode {
+            if let Some(prompt) = system_prompt {
+                if !input.is_empty() {
+                    format!("{}\n\n{}", prompt, input)
+                } else {
+                    format!("{}\n\nDescribe this image in detail.", prompt)
+                }
+            } else if !input.is_empty() {
+                input.to_string()
+            } else {
+                "Describe this image in detail.".to_string()
+            }
+        } else if !input.is_empty() {
+            input.to_string()
         } else {
-            // Default prompt for image-only requests
-            content_blocks.push(ContentBlock::Text {
-                text: "Describe this image in detail.".to_string(),
-            });
-        }
+            "Describe this image in detail.".to_string()
+        };
+
+        content_blocks.push(ContentBlock::Text { text: text_content });
 
         // Add image as data URI
         content_blocks.push(ContentBlock::ImageUrl {
@@ -306,30 +348,49 @@ impl OpenAiProvider {
     ) -> ChatCompletionRequest {
         let mut messages = Vec::new();
 
-        // Add system prompt if provided
-        if let Some(prompt) = system_prompt {
-            messages.push(Message {
-                role: "system".to_string(),
-                content: MessageContent::Text {
-                    content: prompt.to_string(),
-                },
-            });
+        // Check system_prompt_mode: "prepend" means prepend to user message instead of using system role
+        let use_prepend_mode = self
+            .config
+            .system_prompt_mode
+            .as_ref()
+            .map(|m| m.to_lowercase() == "prepend")
+            .unwrap_or(false);
+
+        // Add system prompt if provided and not using prepend mode
+        if !use_prepend_mode {
+            if let Some(prompt) = system_prompt {
+                messages.push(Message {
+                    role: "system".to_string(),
+                    content: MessageContent::Text {
+                        content: prompt.to_string(),
+                    },
+                });
+            }
         }
 
         // Build multimodal user message with text and images
         let mut content_blocks = Vec::new();
 
-        // Add text if not empty
-        if !input.is_empty() {
-            content_blocks.push(ContentBlock::Text {
-                text: input.to_string(),
-            });
+        // Determine text content (with prepended system prompt if in prepend mode)
+        let text_content = if use_prepend_mode {
+            if let Some(prompt) = system_prompt {
+                if !input.is_empty() {
+                    format!("{}\n\n{}", prompt, input)
+                } else {
+                    format!("{}\n\nDescribe this image in detail.", prompt)
+                }
+            } else if !input.is_empty() {
+                input.to_string()
+            } else {
+                "Describe this image in detail.".to_string()
+            }
+        } else if !input.is_empty() {
+            input.to_string()
         } else {
-            // Default prompt for image-only requests
-            content_blocks.push(ContentBlock::Text {
-                text: "Describe this image in detail.".to_string(),
-            });
-        }
+            "Describe this image in detail.".to_string()
+        };
+
+        content_blocks.push(ContentBlock::Text { text: text_content });
 
         // Add images from MediaAttachment
         for attachment in attachments {
@@ -435,6 +496,14 @@ impl AiProvider for OpenAiProvider {
 
             // Build request body
             let request_body = self.build_request(&input, system_prompt.as_deref());
+
+            // Log the actual request body for debugging
+            if let Ok(json_body) = serde_json::to_string_pretty(&request_body) {
+                info!(
+                    request_body = %json_body,
+                    "OpenAI request body (full JSON)"
+                );
+            }
 
             // Send POST request
             let response = self

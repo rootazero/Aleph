@@ -524,6 +524,13 @@ pub struct ProviderConfig {
     /// Repeat penalty for Ollama (default 1.1)
     #[serde(default)]
     pub repeat_penalty: Option<f32>,
+
+    // System prompt handling mode
+    /// How to send system prompts to the API:
+    /// - "system" (default): Use a separate system message
+    /// - "prepend": Prepend system prompt to user message (for APIs that ignore system role)
+    #[serde(default)]
+    pub system_prompt_mode: Option<String>,
 }
 
 fn default_provider_color() -> String {
@@ -591,6 +598,7 @@ impl ProviderConfig {
             thinking_level: None,
             media_resolution: None,
             repeat_penalty: None,
+            system_prompt_mode: None,
         }
     }
 }

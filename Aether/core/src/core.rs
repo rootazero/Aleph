@@ -1501,6 +1501,14 @@ impl AetherCore {
 
         // Step 1.5: Build routing context string (clipboard content + window context)
         let routing_context = Self::build_routing_context(&context, &input);
+
+        // DEBUG: Log raw input and routing context for command debugging
+        info!(
+            raw_input_length = input.len(),
+            raw_input_preview = %input.chars().take(50).collect::<String>(),
+            raw_input_starts_with_slash = input.starts_with('/'),
+            "Raw input from Swift"
+        );
         info!(
             context_length = routing_context.len(),
             app = %context.app_bundle_id,
@@ -1513,6 +1521,16 @@ impl AetherCore {
         // - Command rules: first-match-stops, returns provider + cleaned input
         // - Keyword rules: all-match, adds prompts
         let routing_match = router.match_rules(&routing_context);
+
+        // DEBUG: Log routing match result
+        info!(
+            command_matched = routing_match.command_rule.is_some(),
+            keyword_count = routing_match.keyword_rules.len(),
+            matched_provider = ?routing_match.provider_name(),
+            cleaned_input_preview = ?routing_match.cleaned_input().map(|s| s.chars().take(50).collect::<String>()),
+            system_prompt_preview = ?routing_match.assemble_prompt().map(|s| s.chars().take(50).collect::<String>()),
+            "Routing match result"
+        );
 
         // Determine provider name (command rule or default)
         let provider_name = routing_match
@@ -1674,9 +1692,12 @@ impl AetherCore {
             .cleaned_input()
             .map(|s| {
                 // Remove routing context suffix if present
-                // The suffix format is "\n---\n[AppName] WindowTitle"
+                // The suffix can be "\n---\n" or "\n\n---\n" depending on input formatting
+                // Use a more robust pattern to find the separator
                 if let Some(idx) = s.find("\n---\n") {
-                    s[..idx].to_string()
+                    // Find the start of the separator, accounting for possible leading newlines
+                    let trimmed = s[..idx].trim_end_matches('\n');
+                    trimmed.to_string()
                 } else {
                     s.to_string()
                 }

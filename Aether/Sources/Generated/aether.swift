@@ -1920,10 +1920,11 @@ public struct ProviderConfig {
     public var thinkingLevel: String?
     public var mediaResolution: String?
     public var repeatPenalty: Float?
+    public var systemPromptMode: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(providerType: String?, apiKey: String?, model: String, baseUrl: String?, color: String, timeoutSeconds: UInt64, enabled: Bool, maxTokens: UInt32?, temperature: Float?, topP: Float?, topK: UInt32?, frequencyPenalty: Float?, presencePenalty: Float?, stopSequences: String?, thinkingLevel: String?, mediaResolution: String?, repeatPenalty: Float?) {
+    public init(providerType: String?, apiKey: String?, model: String, baseUrl: String?, color: String, timeoutSeconds: UInt64, enabled: Bool, maxTokens: UInt32?, temperature: Float?, topP: Float?, topK: UInt32?, frequencyPenalty: Float?, presencePenalty: Float?, stopSequences: String?, thinkingLevel: String?, mediaResolution: String?, repeatPenalty: Float?, systemPromptMode: String?) {
         self.providerType = providerType
         self.apiKey = apiKey
         self.model = model
@@ -1941,6 +1942,7 @@ public struct ProviderConfig {
         self.thinkingLevel = thinkingLevel
         self.mediaResolution = mediaResolution
         self.repeatPenalty = repeatPenalty
+        self.systemPromptMode = systemPromptMode
     }
 }
 
@@ -1999,6 +2001,9 @@ extension ProviderConfig: Equatable, Hashable {
         if lhs.repeatPenalty != rhs.repeatPenalty {
             return false
         }
+        if lhs.systemPromptMode != rhs.systemPromptMode {
+            return false
+        }
         return true
     }
 
@@ -2020,6 +2025,7 @@ extension ProviderConfig: Equatable, Hashable {
         hasher.combine(thinkingLevel)
         hasher.combine(mediaResolution)
         hasher.combine(repeatPenalty)
+        hasher.combine(systemPromptMode)
     }
 }
 
@@ -2047,7 +2053,8 @@ public struct FfiConverterTypeProviderConfig: FfiConverterRustBuffer {
                 stopSequences: FfiConverterOptionString.read(from: &buf), 
                 thinkingLevel: FfiConverterOptionString.read(from: &buf), 
                 mediaResolution: FfiConverterOptionString.read(from: &buf), 
-                repeatPenalty: FfiConverterOptionFloat.read(from: &buf)
+                repeatPenalty: FfiConverterOptionFloat.read(from: &buf), 
+                systemPromptMode: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -2069,6 +2076,7 @@ public struct FfiConverterTypeProviderConfig: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.thinkingLevel, into: &buf)
         FfiConverterOptionString.write(value.mediaResolution, into: &buf)
         FfiConverterOptionFloat.write(value.repeatPenalty, into: &buf)
+        FfiConverterOptionString.write(value.systemPromptMode, into: &buf)
     }
 }
 
