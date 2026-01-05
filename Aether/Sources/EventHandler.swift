@@ -242,9 +242,9 @@ class EventHandler: AetherEventHandler {
             }
 
         case .typewriting:
-            // Show typewriter state with progress
-            haloWindow?.updateState(.typewriting(progress: 0.0))
-            announceToVoiceOver("Typewriter animation started. Press Escape to skip.")
+            // Ignore typewriting state - Halo is hidden during output
+            // to reduce visual distractions (keyboard icon removed)
+            break
         }
     }
 

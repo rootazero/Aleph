@@ -1326,8 +1326,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                         // Create cancellation token for ESC key to cancel typewriter
                         self.typewriterCancellation = CancellationToken()
 
-                        // Update Halo to typewriter state
-                        self.haloWindow?.updateState(.typewriting(progress: 0.0))
+                        // Hide Halo during typewriting (keyboard icon distracted users)
+                        self.haloWindow?.hide()
 
                         Task {
                             let typedCount = await KeyboardSimulator.shared.typeText(
