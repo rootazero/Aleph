@@ -47,10 +47,11 @@ final class FileURLExtractor: ContentExtractor {
         var attachments: [MediaAttachment] = []
 
         for url in urls {
-            // Check file extension is supported
+            // Check file extension is a supported image type (not document)
+            // Documents (PDF, TXT, MD) are handled by DocumentExtractor
             let ext = url.pathExtension.lowercased()
-            guard SupportedMediaType.isSupported(ext) else {
-                logger.info("Skipping unsupported file type: \(ext)")
+            guard SupportedMediaType.isImageSupported(ext) else {
+                logger.info("Skipping non-image file type: \(ext)")
                 continue
             }
 
