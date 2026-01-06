@@ -64,6 +64,9 @@ pub struct GeneralConfig {
     /// Preferred language override (e.g., 'en', 'zh-Hans'). If None, use system language.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// Show command hints in command mode (default: true)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_command_hints: Option<bool>,
 }
 
 fn default_log_retention_days() -> u32 {
@@ -268,6 +271,17 @@ pub struct RoutingRuleConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_format: Option<String>,
 
+    // ===== Command Mode Display fields =====
+    /// SF Symbol icon name for command mode display
+    /// Default: based on command type (bolt for Action, text.quote for Prompt)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+
+    /// Short hint text for command mode display (max ~80px width)
+    /// For builtin commands, this is overridden by localized hints
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+
     // ===== Skills fields (reserved) =====
     /// Skills ID (e.g., "build-macos-apps", "pdf")
     /// Only valid when intent_type = "skills:xxx"
@@ -294,6 +308,29 @@ pub struct RoutingRuleConfig {
     pub knowledge_base: Option<String>,
 }
 
+impl Default for RoutingRuleConfig {
+    fn default() -> Self {
+        Self {
+            rule_type: None,
+            is_builtin: false,
+            regex: String::new(),
+            provider: None,
+            system_prompt: None,
+            strip_prefix: None,
+            capabilities: None,
+            intent_type: None,
+            context_format: None,
+            icon: None,
+            hint: None,
+            skill_id: None,
+            skill_version: None,
+            workflow: None,
+            tools: None,
+            knowledge_base: None,
+        }
+    }
+}
+
 impl RoutingRuleConfig {
     /// Create a test config (for tests only)
     /// Note: This creates a command rule since it has an explicit provider
@@ -308,6 +345,8 @@ impl RoutingRuleConfig {
             capabilities: None,
             intent_type: None,
             context_format: None,
+            icon: None,
+            hint: None,
             skill_id: None,
             skill_version: None,
             workflow: None,
@@ -328,6 +367,8 @@ impl RoutingRuleConfig {
             capabilities: None,
             intent_type: None,
             context_format: None,
+            icon: None,
+            hint: None,
             skill_id: None,
             skill_version: None,
             workflow: None,
@@ -348,6 +389,8 @@ impl RoutingRuleConfig {
             capabilities: None,
             intent_type: None,
             context_format: None,
+            icon: None,
+            hint: None,
             skill_id: None,
             skill_version: None,
             workflow: None,
@@ -918,6 +961,8 @@ impl Default for Config {
                     workflow: None,
                     tools: None,
                     knowledge_base: None,
+                    icon: None,
+                    hint: None,
                 },
                 // /mcp command - Model Context Protocol integration (reserved for future)
                 RoutingRuleConfig {
@@ -935,6 +980,8 @@ impl Default for Config {
                     workflow: None,
                     tools: None,
                     knowledge_base: None,
+                    icon: None,
+                    hint: None,
                 },
                 // /skill command - Skills workflow execution (reserved for future)
                 RoutingRuleConfig {
@@ -952,6 +999,8 @@ impl Default for Config {
                     workflow: None,
                     tools: None,
                     knowledge_base: None,
+                    icon: None,
+                    hint: None,
                 },
                 // /video command - YouTube video transcript analysis
                 RoutingRuleConfig {
@@ -969,6 +1018,8 @@ impl Default for Config {
                     workflow: None,
                     tools: None,
                     knowledge_base: None,
+                    icon: None,
+                    hint: None,
                 },
             ],
             shortcuts: Some(ShortcutsConfig::default()),
@@ -1144,6 +1195,8 @@ impl Config {
                 workflow: None,
                 tools: None,
                 knowledge_base: None,
+                icon: None,
+                hint: None,
             },
             // /mcp command - Model Context Protocol integration (reserved for future)
             RoutingRuleConfig {
@@ -1161,6 +1214,8 @@ impl Config {
                 workflow: None,
                 tools: None,
                 knowledge_base: None,
+                icon: None,
+                hint: None,
             },
             // /skill command - Skills workflow execution (reserved for future)
             RoutingRuleConfig {
@@ -1178,6 +1233,8 @@ impl Config {
                 workflow: None,
                 tools: None,
                 knowledge_base: None,
+                icon: None,
+                hint: None,
             },
         ]
     }

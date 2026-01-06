@@ -228,13 +228,14 @@ impl OpenAiProvider {
     fn build_request(&self, input: &str, system_prompt: Option<&str>) -> ChatCompletionRequest {
         let mut messages = Vec::new();
 
-        // Check system_prompt_mode: "prepend" means prepend to user message instead of using system role
+        // Check system_prompt_mode: default to prepend for better compatibility
+        // Only use standard mode if explicitly set to "standard"
         let use_prepend_mode = self
             .config
             .system_prompt_mode
             .as_ref()
-            .map(|m| m.to_lowercase() == "prepend")
-            .unwrap_or(false);
+            .map(|m| m.to_lowercase() != "standard")
+            .unwrap_or(true);
 
         if use_prepend_mode {
             // Prepend system prompt to user message (for APIs that ignore system role)
@@ -292,13 +293,14 @@ impl OpenAiProvider {
     ) -> ChatCompletionRequest {
         let mut messages = Vec::new();
 
-        // Check system_prompt_mode: "prepend" means prepend to user message instead of using system role
+        // Check system_prompt_mode: default to prepend for better compatibility
+        // Only use standard mode if explicitly set to "standard"
         let use_prepend_mode = self
             .config
             .system_prompt_mode
             .as_ref()
-            .map(|m| m.to_lowercase() == "prepend")
-            .unwrap_or(false);
+            .map(|m| m.to_lowercase() != "standard")
+            .unwrap_or(true);
 
         // Add system prompt if provided and not using prepend mode
         if !use_prepend_mode {
@@ -369,13 +371,14 @@ impl OpenAiProvider {
     ) -> ChatCompletionRequest {
         let mut messages = Vec::new();
 
-        // Check system_prompt_mode: "prepend" means prepend to user message instead of using system role
+        // Check system_prompt_mode: default to prepend for better compatibility
+        // Only use standard mode if explicitly set to "standard"
         let use_prepend_mode = self
             .config
             .system_prompt_mode
             .as_ref()
-            .map(|m| m.to_lowercase() == "prepend")
-            .unwrap_or(false);
+            .map(|m| m.to_lowercase() != "standard")
+            .unwrap_or(true);
 
         // Add system prompt if provided and not using prepend mode
         if !use_prepend_mode {

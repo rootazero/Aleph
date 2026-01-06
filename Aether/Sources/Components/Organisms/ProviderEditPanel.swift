@@ -50,6 +50,10 @@ struct ProviderEditPanel: View {
     // Form fields - Ollama-specific
     @State private var repeatPenalty: String = ""
 
+    // Form fields - OpenAI-compatible specific
+    // Default to "prepend" for better compatibility with third-party APIs
+    @State private var systemPromptMode: String = "prepend"
+
     // Provider active state
     @State private var isProviderActive: Bool = false
 
@@ -71,6 +75,7 @@ struct ProviderEditPanel: View {
     @State private var savedThinkingLevel: String = "HIGH"
     @State private var savedMediaResolution: String = "MEDIUM"
     @State private var savedRepeatPenalty: String = ""
+    @State private var savedSystemPromptMode: String = "prepend"
     @State private var savedIsProviderActive: Bool = false
 
     // UI state
@@ -477,6 +482,18 @@ struct ProviderEditPanel: View {
                                 .font(DesignTokens.Typography.caption)
                                 .foregroundColor(DesignTokens.Colors.textSecondary)
                         }
+
+                        FormField(title: L("provider.field.system_prompt_mode")) {
+                            Picker("", selection: $systemPromptMode) {
+                                Text(L("provider.system_prompt_mode.standard")).tag("standard")
+                                Text(L("provider.system_prompt_mode.prepend")).tag("prepend")
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 280)
+                            Text(L("provider.help.system_prompt_mode"))
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                        }
                     }
 
                     // Claude/Gemini/Ollama stop sequences
@@ -585,6 +602,7 @@ struct ProviderEditPanel: View {
                    thinkingLevel != savedThinkingLevel ||
                    mediaResolution != savedMediaResolution ||
                    repeatPenalty != savedRepeatPenalty ||
+                   systemPromptMode != savedSystemPromptMode ||
                    isProviderActive != savedIsProviderActive
         }
     }
@@ -757,6 +775,9 @@ struct ProviderEditPanel: View {
         // Ollama-specific
         repeatPenalty = provider.config.repeatPenalty.map { String($0) } ?? ""
 
+        // OpenAI-compatible specific - default to prepend for better compatibility
+        systemPromptMode = provider.config.systemPromptMode == "standard" ? "standard" : "prepend"
+
         // Load active state from config
         isProviderActive = provider.config.enabled
 
@@ -786,6 +807,7 @@ struct ProviderEditPanel: View {
         savedThinkingLevel = thinkingLevel
         savedMediaResolution = mediaResolution
         savedRepeatPenalty = repeatPenalty
+        savedSystemPromptMode = systemPromptMode
         savedIsProviderActive = isProviderActive
     }
 
@@ -1031,7 +1053,8 @@ struct ProviderEditPanel: View {
             thinkingLevel: (providerType == "gemini" && !thinkingLevel.isEmpty) ? thinkingLevel : nil,
             mediaResolution: (providerType == "gemini" && !mediaResolution.isEmpty) ? mediaResolution : nil,
             repeatPenalty: repeatPenalty.isEmpty ? nil : Float(repeatPenalty),
-            systemPromptMode: nil
+            // Save systemPromptMode: "prepend" is default, only save when explicitly set
+            systemPromptMode: providerType == "openai" ? systemPromptMode : nil
         )
 
         if persist {

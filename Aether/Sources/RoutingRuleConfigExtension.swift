@@ -26,6 +26,8 @@ extension RoutingRuleConfig: Codable {
         case workflow
         case tools
         case knowledgeBase = "knowledge_base"
+        case icon
+        case hint
     }
 
     public init(from decoder: Decoder) throws {
@@ -44,6 +46,8 @@ extension RoutingRuleConfig: Codable {
         let workflow = try container.decodeIfPresent(String.self, forKey: .workflow)
         let tools = try container.decodeIfPresent(String.self, forKey: .tools)
         let knowledgeBase = try container.decodeIfPresent(String.self, forKey: .knowledgeBase)
+        let icon = try container.decodeIfPresent(String.self, forKey: .icon)
+        let hint = try container.decodeIfPresent(String.self, forKey: .hint)
 
         self.init(
             ruleType: ruleType,
@@ -59,7 +63,9 @@ extension RoutingRuleConfig: Codable {
             skillVersion: skillVersion,
             workflow: workflow,
             tools: tools,
-            knowledgeBase: knowledgeBase
+            knowledgeBase: knowledgeBase,
+            icon: icon,
+            hint: hint
         )
     }
 
@@ -102,6 +108,12 @@ extension RoutingRuleConfig: Codable {
         }
         if let knowledgeBase = knowledgeBase {
             try container.encode(knowledgeBase, forKey: .knowledgeBase)
+        }
+        if let icon = icon {
+            try container.encode(icon, forKey: .icon)
+        }
+        if let hint = hint {
+            try container.encode(hint, forKey: .hint)
         }
     }
 }

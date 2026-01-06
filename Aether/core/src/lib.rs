@@ -73,6 +73,7 @@
 // Clipboard operations are handled by Swift ClipboardManager
 pub mod capability;
 mod clipboard;
+pub mod command; // NEW: Command completion system
 mod config;
 mod core;
 mod error;
@@ -92,6 +93,7 @@ pub mod video; // NEW: Video transcript extraction (YouTube)
 // Re-export public types
 // NOTE: ImageData/ImageFormat still exported for AI provider image encoding
 pub use crate::clipboard::{ImageData, ImageFormat};
+pub use crate::command::{CommandExecutionResult, CommandNode, CommandRegistry, CommandType};
 pub use crate::config::{
     BehaviorConfig, Config, FullConfig, GeneralConfig, MemoryConfig, PIIConfig, ProviderConfig,
     ProviderConfigEntry, RoutingRuleConfig, SearchBackendConfig, SearchBackendEntry, SearchConfig,

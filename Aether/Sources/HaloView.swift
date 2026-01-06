@@ -37,6 +37,14 @@ struct HaloView: View {
                 theme.listeningView()
                     .transition(.scale.combined(with: .opacity))
 
+            case .commandMode:
+                CommandListView(
+                    manager: viewModel.commandManager,
+                    maxHeight: 320
+                )
+                .frame(width: 400)
+                .transition(.scale.combined(with: .opacity))
+
             case .retrievingMemory:
                 theme.retrievingMemoryView()
                     .transition(.scale.combined(with: .opacity))
@@ -113,6 +121,8 @@ struct HaloView: View {
             return "Select input mode: Replace or Append"
         case .listening:
             return "Listening for input"
+        case .commandMode:
+            return "Command completion mode"
         case .retrievingMemory:
             return "Retrieving memories"
         case .processingWithAI(_, let providerName):
@@ -183,6 +193,8 @@ struct HaloView: View {
         switch state {
         case .awaitingInputMode:
             return 220  // Wider for input mode selection buttons
+        case .commandMode:
+            return 400  // Width for command list (wider for hints)
         case .retrievingMemory, .processingWithAI:
             return 120
         case .processing(_, let text):
@@ -206,6 +218,13 @@ struct HaloView: View {
         switch state {
         case .awaitingInputMode:
             return 100  // Height for input mode selection
+        case .commandMode:
+            // Dynamic height based on command count, max 300
+            let commandCount = viewModel.commandManager.displayedCommands.count
+            let itemHeight: CGFloat = 32  // Each command row height (compact)
+            let headerHeight: CGFloat = 36  // Header + divider (compact)
+            let calculatedHeight = headerHeight + min(CGFloat(commandCount), 8) * itemHeight + 12
+            return min(320, max(100, calculatedHeight))
         case .retrievingMemory, .processingWithAI:
             return 120
         case .processing(_, let text):

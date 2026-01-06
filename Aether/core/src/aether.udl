@@ -47,6 +47,13 @@ enum LogLevel {
   "Trace"      // All logs (very verbose)
 };
 
+// Command type for command completion system (add-command-completion-system)
+enum CommandType {
+  "Action",     // Execute immediately (has capabilities like search)
+  "Prompt",     // Load system prompt, await user input
+  "Namespace"   // Container with child commands (e.g., /mcp)
+};
+
 // REMOVED: ImageFormat enum - image handling now in Swift layer (ClipboardManager)
 
 // Error types for typed error handling
@@ -232,6 +239,21 @@ interface AetherCore {
   // This allows testing provider credentials before saving to config file
   [Throws=AetherException]
   ProviderTestResult test_search_provider_with_config(SearchProviderTestConfig config);
+
+  // COMMAND COMPLETION METHODS (add-command-completion-system)
+  // These methods support the command completion UI for input assistance
+
+  // Get all root-level commands for command completion UI
+  // Returns commands parsed from config.toml routing rules with ^/ prefix
+  sequence<CommandNode> get_root_commands();
+
+  // Get children of a namespace command (e.g., /mcp)
+  // Returns empty for most namespaces (MCP integration reserved for future)
+  sequence<CommandNode> get_command_children(string parent_key);
+
+  // Filter commands by key prefix (case-insensitive)
+  // Used for autocomplete as user types (e.g., "se" matches "search", "settings")
+  sequence<CommandNode> filter_commands(string prefix);
 };
 
 // Callback interface for events from Rust to client
@@ -306,6 +328,7 @@ dictionary GeneralConfig {
   u32 log_retention_days;
   boolean enable_performance_logging;
   string? language;
+  boolean? show_command_hints;
 };
 
 dictionary MemoryConfig {
@@ -403,6 +426,10 @@ dictionary RoutingRuleConfig {
   string? workflow;          // Skills workflow definition (JSON string)
   string? tools;             // Skills tools list (JSON string array)
   string? knowledge_base;    // Skills knowledge base path
+
+  // ===== Command Mode Display fields =====
+  string? icon;              // SF Symbol name for command mode display
+  string? hint;              // Short hint text for command mode (max ~80px width)
 };
 
 // Shortcuts configuration (Phase 6 - Task 4.2)
@@ -515,4 +542,16 @@ dictionary MediaAttachment {
   string data;          // Base64-encoded content
   string? filename;     // Optional original filename
   u64 size_bytes;       // Original size in bytes for logging/validation
+};
+
+// Command node for command completion UI (add-command-completion-system)
+// Represents a command in the command tree (root or child)
+dictionary CommandNode {
+  string key;           // Unique identifier (e.g., "search", "en", "mcp")
+  string description;   // Human-readable description for display
+  string icon;          // SF Symbol name for visual representation
+  string? hint;         // Short hint text (max ~80px width, localized)
+  CommandType node_type;  // Action, Prompt, or Namespace
+  boolean has_children; // Whether this node has child commands
+  string? source_id;    // Optional source identifier (e.g., "rule:search", "mcp:git")
 };

@@ -52,6 +52,9 @@
 "settings.general.language_restart_message" = "Language will change after restarting Aether. Restart now?";
 "settings.general.language_restart_now" = "Restart Now";
 "settings.general.language_restart_later" = "Later";
+"settings.general.command_completion" = "Command Completion";
+"settings.general.show_command_hints" = "Show Command Hints";
+"settings.general.show_command_hints_description" = "Show command hints when typing slash commands (e.g., /translate, /summary).";
 "settings.general.updates" = "Updates";
 "settings.general.check_updates" = "Check for Updates";
 "settings.general.check_updates_help" = "Check for Aether updates";
@@ -96,6 +99,11 @@
 "provider.field.top_k" = "Top K";
 "provider.field.top_k_optional" = "Top-K (Optional)";
 "provider.field.timeout" = "Timeout (seconds)";
+"provider.field.system_prompt_mode" = "System Prompt Mode";
+
+"provider.system_prompt_mode.standard" = "Standard";
+"provider.system_prompt_mode.prepend" = "Prepend to Message";
+"provider.help.system_prompt_mode" = "For APIs that ignore system messages, use 'Prepend' mode";
 
 "provider.placeholder.provider_name" = "Enter a unique identifier";
 "provider.placeholder.api_key" = "Enter your API key";
@@ -191,6 +199,9 @@
 "settings.routing.editor.preview" = "Preview";
 "settings.routing.editor.generated_pattern" = "Generated Pattern:";
 "settings.routing.editor.example_match" = "Example Match:";
+"settings.routing.editor.hint" = "Hint";
+"settings.routing.editor.hint_placeholder" = "e.g., Translate text to English";
+"settings.routing.editor.hint_help" = "A brief description shown in command completion. Helps users understand what this command does.";
 
 // MARK: - Settings Window - Shortcuts Tab
 "settings.shortcuts.title" = "Keyboard Shortcuts";
@@ -520,3 +531,13 @@
 
 "settings.routing.preset.video.description" = "YouTube Video Analysis - Extract and analyze video content via transcripts";
 "settings.routing.preset.video.usage" = "/video <YouTube URL>";
+
+// MARK: - Command Mode (add-command-completion-system)
+"command.mode.title" = "Command Mode";
+"command.mode.navigate" = "Navigate";
+"command.mode.select" = "Select";
+"command.mode.cancel" = "Cancel";
+"command.mode.no_results" = "No matching commands";
+"command.type.action" = "Action";
+"command.type.prompt" = "Prompt";
+"command.type.namespace" = "Namespace";

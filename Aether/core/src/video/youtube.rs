@@ -292,6 +292,8 @@ impl YouTubeExtractor {
     ///
     /// yt-dlp has sophisticated anti-bot bypass mechanisms that often work
     /// when direct HTTP requests fail. Will auto-install yt-dlp if not found.
+    ///
+    /// Tries preferred language first, falls back to English, then any available language.
     async fn fetch_caption_via_ytdlp(video_id: &str, preferred_lang: &str) -> Result<String> {
         use std::process::Command;
         use std::fs;
@@ -310,12 +312,20 @@ impl YouTubeExtractor {
 
         debug!(video_id = %video_id, lang = %preferred_lang, "Fetching caption via yt-dlp");
 
-        // Run yt-dlp to download subtitles
+        // Build language priority list: preferred language, then English as fallback
+        // Use comma-separated list for --sub-langs to try multiple languages
+        let lang_list = if preferred_lang == "en" {
+            "en".to_string()
+        } else {
+            format!("{},en", preferred_lang)
+        };
+
+        // Run yt-dlp to download subtitles with language fallback
         let output = Command::new(&ytdlp)
             .args([
                 "--no-check-certificates",  // Bypass SSL issues
                 "--write-auto-sub",         // Download auto-generated subtitles
-                "--sub-lang", preferred_lang,
+                "--sub-langs", &lang_list,  // Try multiple languages (preferred, then en)
                 "--sub-format", "vtt",
                 "--skip-download",          // Don't download video
                 "-o", output_template.to_str().unwrap_or("/tmp/aether_sub"),
@@ -324,6 +334,8 @@ impl YouTubeExtractor {
             .output()
             .map_err(|e| AetherError::video(format!("Failed to run yt-dlp: {}", e)))?;
 
+        // Note: yt-dlp may exit successfully even if no subtitles found (just logs a warning)
+        // So we need to check for actual subtitle files instead of just exit status
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             debug!(stderr = %stderr, "yt-dlp failed");
@@ -333,13 +345,15 @@ impl YouTubeExtractor {
             ));
         }
 
-        // Find the downloaded subtitle file
+        // Find the downloaded subtitle file, trying in priority order
         let vtt_path = temp_dir.join(format!("aether_sub_{}.{}.vtt", video_id, preferred_lang));
         let en_vtt_path = temp_dir.join(format!("aether_sub_{}.en.vtt", video_id));
 
         let subtitle_path = if vtt_path.exists() {
+            debug!(lang = %preferred_lang, "Found preferred language subtitle");
             vtt_path
         } else if en_vtt_path.exists() {
+            debug!("Preferred language not available, using English fallback");
             en_vtt_path
         } else {
             // Try to find any .vtt file that matches
@@ -349,6 +363,7 @@ impl YouTubeExtractor {
                 for entry in entries.flatten() {
                     let name = entry.file_name().to_string_lossy().to_string();
                     if name.starts_with(&pattern) && name.ends_with(".vtt") {
+                        debug!(file = %name, "Found alternative subtitle file");
                         found_path = Some(entry.path());
                         break;
                     }
@@ -356,7 +371,14 @@ impl YouTubeExtractor {
             }
 
             found_path.ok_or_else(|| {
-                AetherError::video("yt-dlp did not produce subtitle file")
+                // Log the stdout/stderr for debugging
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                debug!(stdout = %stdout, stderr = %stderr, "No subtitle files found after yt-dlp");
+                AetherError::video_with_suggestion(
+                    "No subtitles available for this video",
+                    "The video may not have captions (auto-generated or manual) in any supported language.",
+                )
             })?
         };
 

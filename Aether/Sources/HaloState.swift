@@ -60,6 +60,7 @@ enum HaloState: Equatable {
     case idle
     case awaitingInputMode(onSelect: (InputModeChoice) -> Void)  // Waiting for user to select input mode
     case listening
+    case commandMode  // Command completion mode (add-command-completion-system)
     case retrievingMemory  // Phase 9: Retrieving memories from database
     case processingWithAI(providerColor: Color, providerName: String?)  // Phase 9: AI provider is processing
     case processing(providerColor: Color, streamingText: String? = nil)  // Generic processing (backward compatibility)
@@ -78,6 +79,8 @@ enum HaloState: Equatable {
             // Closures can't be compared, so we just check if both are awaiting
             return true
         case (.listening, .listening):
+            return true
+        case (.commandMode, .commandMode):
             return true
         case (.retrievingMemory, .retrievingMemory):
             return true

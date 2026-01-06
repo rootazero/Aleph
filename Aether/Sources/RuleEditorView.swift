@@ -53,6 +53,7 @@ struct RuleEditorView: View {
     @State private var keyword: String = ""          // For keyword rules: just the keyword (e.g., "urgent")
     @State private var selectedProvider: String = ""
     @State private var systemPrompt: String = ""
+    @State private var hint: String = ""             // Command hint/description for completion UI
 
     // UI state
     @State private var isSaving: Bool = false
@@ -130,6 +131,9 @@ struct RuleEditorView: View {
                     // System Prompt
                     systemPromptSection
 
+                    // Hint (for command completion UI)
+                    hintSection
+
                     // Preview section
                     previewSection
 
@@ -146,7 +150,7 @@ struct RuleEditorView: View {
             // Footer buttons
             footerSection
         }
-        .frame(width: 550, height: 580)
+        .frame(width: 550, height: 650)
         .onAppear {
             loadFormData()
         }
@@ -352,6 +356,28 @@ struct RuleEditorView: View {
         }
     }
 
+    // MARK: - Hint Section
+
+    private var hintSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(L("settings.routing.editor.hint"))
+                    .font(.headline)
+
+                Text("(\(L("common.optional")))")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            TextField(L("settings.routing.editor.hint_placeholder"), text: $hint)
+                .textFieldStyle(.roundedBorder)
+
+            Text(L("settings.routing.editor.hint_help"))
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
     // MARK: - Preview Section
 
     private var previewSection: some View {
@@ -475,12 +501,14 @@ struct RuleEditorView: View {
 
             selectedProvider = rule.provider ?? ""
             systemPrompt = rule.systemPrompt ?? ""
+            hint = rule.hint ?? ""
         } else {
             // New rule: set defaults (use initialRuleType if provided)
             ruleType = initialRuleType ?? .command
             commandName = ""
             keyword = ""
             systemPrompt = ""
+            hint = ""
             if let firstProvider = providers.first {
                 selectedProvider = firstProvider.name
             } else {
@@ -562,7 +590,9 @@ struct RuleEditorView: View {
                     skillVersion: nil,
                     workflow: nil,
                     tools: nil,
-                    knowledgeBase: nil
+                    knowledgeBase: nil,
+                    icon: nil,
+                    hint: hint.isEmpty ? nil : hint
                 )
 
                 // Update rules array

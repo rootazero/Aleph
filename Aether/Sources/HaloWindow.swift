@@ -16,6 +16,11 @@ class HaloWindow: NSWindow {
     private let themeEngine: ThemeEngine
     private weak var eventHandler: EventHandler?
 
+    /// Public accessor for viewModel (used by AppDelegate for command mode)
+    var viewModel: HaloViewModel {
+        return haloViewModel
+    }
+
     /// Track when Halo started showing (for minimum display time before errors)
     private(set) var showTime: Date?
 
@@ -135,6 +140,78 @@ class HaloWindow: NSWindow {
         })
     }
 
+    /// Show window with top-left corner aligned to the given position
+    ///
+    /// The window appears below and to the right of the caret/mouse,
+    /// ensuring the input position is never obscured.
+    /// - Parameter position: The caret or mouse position (window's top-left aligns here)
+    func showBelow(at position: NSPoint) {
+        // Record show time for minimum display duration before errors
+        showTime = Date()
+
+        // CRITICAL: Invalidate any pending hide completion handlers
+        hideSequence += 1
+
+        // Find the screen containing the cursor position
+        let targetScreen = NSScreen.screens.first { screen in
+            NSPointInRect(position, screen.frame)
+        } ?? NSScreen.main ?? NSScreen.screens.first
+
+        guard let screen = targetScreen else {
+            print("[HaloWindow] Warning: No screen found, cannot display Halo")
+            return
+        }
+
+        let screenFrame = screen.frame
+
+        // Get dynamic window size based on current state
+        let windowSize = getWindowSize()
+        self.setContentSize(windowSize)
+
+        // Position window with TOP-LEFT corner below the text line
+        // This ensures the input line is fully visible above the window
+        // NSWindow origin is at BOTTOM-LEFT, so:
+        // - x: same as position (window extends to the right)
+        // - y: position minus window height minus offset (window extends downward)
+        //
+        // The position should be the bottom of the caret, but due to coordinate
+        // system complexities, we add a generous offset to clear typical text sizes
+        let verticalOffset: CGFloat = 32  // Comfortable gap below text line
+        var windowOrigin = NSPoint(
+            x: position.x,
+            y: position.y - windowSize.height - verticalOffset
+        )
+
+        // If window would go off the bottom of the screen, show it ABOVE instead
+        if windowOrigin.y < screenFrame.minY {
+            // Place window above with a small gap
+            windowOrigin.y = position.y + verticalOffset
+        }
+
+        // If window would go off the right edge, shift left
+        if windowOrigin.x + windowSize.width > screenFrame.maxX {
+            windowOrigin.x = screenFrame.maxX - windowSize.width
+        }
+
+        // Clamp to screen bounds
+        windowOrigin.x = max(screenFrame.minX, windowOrigin.x)
+        windowOrigin.y = max(screenFrame.minY, windowOrigin.y)
+
+        self.setFrameOrigin(windowOrigin)
+
+        // Show window WITHOUT activating (critical for focus preservation)
+        self.orderFrontRegardless()
+
+        // Fade in animation
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            self.animator().alphaValue = 1.0
+        })
+
+        NSLog("[HaloWindow] showBelow - size: (%.0f, %.0f), input position: (%.1f, %.1f), window origin: (%.1f, %.1f)",
+              windowSize.width, windowSize.height, position.x, position.y, windowOrigin.x, windowOrigin.y)
+    }
+
     func hide() {
         // Reset show time
         showTime = nil
@@ -184,9 +261,9 @@ class HaloWindow: NSWindow {
         haloViewModel.state = state
 
         // Enable/disable mouse events based on state
-        // awaitingInputMode, error, permissionRequired, and toast states need mouse interaction
+        // awaitingInputMode, commandMode, error, permissionRequired, and toast states need mouse interaction
         switch state {
-        case .awaitingInputMode, .error, .permissionRequired, .toast:
+        case .awaitingInputMode, .commandMode, .error, .permissionRequired, .toast:
             self.ignoresMouseEvents = false
         default:
             self.ignoresMouseEvents = true
@@ -203,9 +280,19 @@ class HaloWindow: NSWindow {
             let widthDiff = newSize.width - newFrame.size.width
             let heightDiff = newSize.height - newFrame.size.height
 
-            // Keep window centered during resize
-            newFrame.origin.x -= widthDiff / 2
-            newFrame.origin.y -= heightDiff / 2
+            // For command mode, keep TOP-LEFT corner fixed (like IDE autocomplete)
+            // For other states, keep window centered during resize
+            if case .commandMode = state {
+                // TOP-LEFT fixed: only adjust y to account for height change
+                // NSWindow origin is BOTTOM-LEFT, so when height increases,
+                // we need to move origin DOWN to keep top-left fixed
+                newFrame.origin.y -= heightDiff
+                // x stays the same (left edge fixed)
+            } else {
+                // Keep window centered during resize
+                newFrame.origin.x -= widthDiff / 2
+                newFrame.origin.y -= heightDiff / 2
+            }
             newFrame.size = newSize
 
             self.animator().setFrame(newFrame, display: true)
@@ -301,6 +388,15 @@ class HaloWindow: NSWindow {
             // Input mode selection buttons
             return NSSize(width: 220, height: 100)
 
+        case .commandMode:
+            // Command completion list - dynamic height based on command count
+            let commandCount = haloViewModel.commandManager.displayedCommands.count
+            let itemHeight: CGFloat = 32
+            let headerHeight: CGFloat = 36
+            let calculatedHeight = headerHeight + min(CGFloat(commandCount), 8) * itemHeight + 12
+            let height = min(320, max(100, calculatedHeight))
+            return NSSize(width: 400, height: height)
+
         case .processing(_, let text), .success(let text):
             let width: CGFloat = text != nil ? 300 : 120
             let height: CGFloat
@@ -356,4 +452,7 @@ class HaloWindow: NSWindow {
 class HaloViewModel: ObservableObject {
     @Published var state: HaloState = .idle
     weak var eventHandler: EventHandler?
+
+    /// Command completion manager (add-command-completion-system)
+    let commandManager = CommandCompletionManager()
 }

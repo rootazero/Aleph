@@ -351,12 +351,19 @@ impl CapabilityExecutor {
 
         match extractor.extract_transcript(&video_url).await {
             Ok(transcript) => {
+                let formatted = transcript.format_for_context();
                 info!(
                     video_id = %transcript.video_id,
                     title = %transcript.title,
                     segments = transcript.segments.len(),
                     truncated = transcript.was_truncated,
+                    formatted_len = formatted.len(),
                     "Successfully extracted video transcript"
+                );
+                // Debug: print first 500 chars of formatted transcript
+                debug!(
+                    preview = %formatted.chars().take(500).collect::<String>(),
+                    "Transcript preview"
                 );
                 payload.context.video_transcript = Some(transcript);
             }

@@ -52,6 +52,9 @@
 "settings.general.language_restart_message" = "语言将在重启 Aether 后更改。是否立即重启？";
 "settings.general.language_restart_now" = "立即重启";
 "settings.general.language_restart_later" = "稍后";
+"settings.general.command_completion" = "命令补全";
+"settings.general.show_command_hints" = "显示命令提示";
+"settings.general.show_command_hints_description" = "输入斜杠命令时显示命令提示（例如 /translate、/summary）。";
 "settings.general.updates" = "更新";
 "settings.general.check_updates" = "检查更新";
 "settings.general.check_updates_help" = "检查 Aether 更新";
@@ -96,6 +99,11 @@
 "provider.field.top_k" = "Top K";
 "provider.field.top_k_optional" = "Top-K（可选）";
 "provider.field.timeout" = "超时（秒）";
+"provider.field.system_prompt_mode" = "系统提示词模式";
+
+"provider.system_prompt_mode.standard" = "标准模式";
+"provider.system_prompt_mode.prepend" = "合并到用户消息";
+"provider.help.system_prompt_mode" = "对于忽略系统消息的 API，请使用「合并」模式";
 
 "provider.placeholder.provider_name" = "输入唯一标识符";
 "provider.placeholder.api_key" = "输入您的 API 密钥";
@@ -191,6 +199,9 @@
 "settings.routing.editor.preview" = "预览";
 "settings.routing.editor.generated_pattern" = "生成的正则：";
 "settings.routing.editor.example_match" = "匹配示例：";
+"settings.routing.editor.hint" = "备注";
+"settings.routing.editor.hint_placeholder" = "例如：将文本翻译成英文";
+"settings.routing.editor.hint_help" = "命令补全时显示的简短描述，帮助用户理解此命令的功能。";
 
 // MARK: - Settings Window - Shortcuts Tab
 "settings.shortcuts.title" = "快捷键";
@@ -520,3 +531,13 @@
 
 "settings.routing.preset.video.description" = "YouTube 视频分析 - 通过字幕提取和分析视频内容";
 "settings.routing.preset.video.usage" = "/video <YouTube 链接>";
+
+// MARK: - Command Mode (add-command-completion-system)
+"command.mode.title" = "命令模式";
+"command.mode.navigate" = "导航";
+"command.mode.select" = "选择";
+"command.mode.cancel" = "取消";
+"command.mode.no_results" = "无匹配命令";
+"command.type.action" = "动作";
+"command.type.prompt" = "提示";
+"command.type.namespace" = "命名空间";

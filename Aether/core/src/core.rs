@@ -1626,7 +1626,12 @@ impl AetherCore {
                 capabilities,
             )) {
                 Ok(payload) => {
-                    debug!(
+                    let has_video = payload.context.video_transcript.is_some();
+                    let video_title = payload.context.video_transcript
+                        .as_ref()
+                        .map(|t| t.title.clone())
+                        .unwrap_or_default();
+                    info!(
                         memory_count = payload
                             .context
                             .memory_snippets
@@ -1639,6 +1644,8 @@ impl AetherCore {
                             .as_ref()
                             .map(|s| s.len())
                             .unwrap_or(0),
+                        has_video_transcript = has_video,
+                        video_title = %video_title,
                         "Payload enrichment succeeded"
                     );
                     Some(payload)
@@ -1685,17 +1692,16 @@ impl AetherCore {
         let routing_time = start_time.elapsed();
 
         // Check if provider uses prepend mode for system prompts
-        // If so, we only use rule_system_prompt (not assembled) because prepend mode
-        // means the system prompt goes directly in the user message, and including
-        // memory context would confuse the model
+        // Default to prepend mode for better compatibility with third-party APIs
+        // Only use standard mode if explicitly set to "standard"
         let provider_uses_prepend = {
             let config = self.lock_config();
             config
                 .providers
                 .get(&provider_name)
                 .and_then(|p| p.system_prompt_mode.as_ref())
-                .map(|m| m == "prepend")
-                .unwrap_or(false)
+                .map(|m| m != "standard")  // prepend unless explicitly "standard"
+                .unwrap_or(true)  // default to prepend
         };
 
         // Use custom system prompt from routing rule, or assembled prompt with memory/search context
@@ -1740,6 +1746,33 @@ impl AetherCore {
             })
             .unwrap_or_else(|| input.clone());
         let prefix_was_stripped = final_input.len() < input.len();
+
+        // If video transcript was successfully extracted, replace YouTube URL in user message
+        // with a placeholder. This prevents AI from reflexively saying "I can't access the video"
+        // when it sees a YouTube URL, even though the transcript is already in the system prompt.
+        let final_input = if enriched_payload
+            .as_ref()
+            .and_then(|p| p.context.video_transcript.as_ref())
+            .is_some()
+        {
+            // Replace YouTube URLs with placeholder
+            let youtube_regex =
+                regex::Regex::new(r"https?://(www\.)?(youtube\.com/watch\?v=|youtu\.be/)[\w-]+")
+                    .unwrap();
+            let replaced = youtube_regex
+                .replace_all(&final_input, "[视频字幕已提取，请基于上方字幕内容进行分析]")
+                .to_string();
+            if replaced != final_input {
+                info!(
+                    original_len = final_input.len(),
+                    replaced_len = replaced.len(),
+                    "Replaced YouTube URL with placeholder to prevent AI confusion"
+                );
+            }
+            replaced
+        } else {
+            final_input
+        };
 
         // Log the final system prompt being used
         info!(
@@ -2466,6 +2499,77 @@ impl AetherCore {
                 })
             }
         }
+    }
+
+    // ========== COMMAND COMPLETION METHODS (add-command-completion-system) ==========
+
+    /// Get all root-level commands for command completion UI
+    ///
+    /// Returns commands parsed from config.toml routing rules with ^/ prefix.
+    /// Commands are sorted alphabetically by key.
+    ///
+    /// # Returns
+    /// * `Vec<CommandNode>` - List of root commands with key, description, icon, hint, type
+    ///
+    /// # Example (from Swift)
+    /// ```swift
+    /// let commands = core.getRootCommands()
+    /// for cmd in commands {
+    ///     print("/\(cmd.key) - \(cmd.description)")
+    /// }
+    /// ```
+    pub fn get_root_commands(&self) -> Vec<crate::command::CommandNode> {
+        let config = self.lock_config();
+        let language = config
+            .general
+            .language
+            .as_deref()
+            .unwrap_or("en");
+        let registry = crate::command::CommandRegistry::from_config(&config, language);
+        registry.get_root_commands()
+    }
+
+    /// Get children of a namespace command
+    ///
+    /// For namespace commands like /mcp, returns the list of child commands.
+    /// Currently returns empty for most namespaces (MCP integration reserved for future).
+    ///
+    /// # Arguments
+    /// * `parent_key` - The key of the parent namespace (e.g., "mcp")
+    ///
+    /// # Returns
+    /// * `Vec<CommandNode>` - List of child commands
+    pub fn get_command_children(&self, parent_key: String) -> Vec<crate::command::CommandNode> {
+        let config = self.lock_config();
+        let language = config
+            .general
+            .language
+            .as_deref()
+            .unwrap_or("en");
+        let registry = crate::command::CommandRegistry::from_config(&config, language);
+        registry.get_children(&parent_key)
+    }
+
+    /// Filter commands by key prefix (case-insensitive)
+    ///
+    /// Used for autocomplete as user types. Returns commands whose keys
+    /// start with the given prefix.
+    ///
+    /// # Arguments
+    /// * `prefix` - The prefix to filter by (e.g., "se" matches "search", "settings")
+    ///
+    /// # Returns
+    /// * `Vec<CommandNode>` - Filtered list of matching commands
+    ///
+    /// # Example (from Swift)
+    /// ```swift
+    /// // User types "/se"
+    /// let matches = core.filterCommands(prefix: "se")
+    /// // Returns: [search, settings, ...]
+    /// ```
+    pub fn filter_commands(&self, prefix: String) -> Vec<crate::command::CommandNode> {
+        let commands = self.get_root_commands();
+        crate::command::CommandRegistry::filter_by_prefix(&commands, &prefix)
     }
 }
 

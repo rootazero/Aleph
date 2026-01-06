@@ -556,6 +556,10 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func deleteProvider(name: String) throws 
     
+    func filterCommands(prefix: String)  -> [CommandNode]
+    
+    func getCommandChildren(parentKey: String)  -> [CommandNode]
+    
     func getDefaultProvider()  -> String?
     
     func getEnabledProviders()  -> [String]
@@ -569,6 +573,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func getMemoryConfig()  -> MemoryConfig
     
     func getMemoryStats() throws  -> MemoryStats
+    
+    func getRootCommands()  -> [CommandNode]
     
     func loadConfig() throws  -> FullConfig
     
@@ -714,6 +720,22 @@ open func deleteProvider(name: String)throws  {try rustCallWithError(FfiConverte
 }
 }
     
+open func filterCommands(prefix: String) -> [CommandNode] {
+    return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_filter_commands(self.uniffiClonePointer(),
+        FfiConverterString.lower(prefix),$0
+    )
+})
+}
+    
+open func getCommandChildren(parentKey: String) -> [CommandNode] {
+    return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_command_children(self.uniffiClonePointer(),
+        FfiConverterString.lower(parentKey),$0
+    )
+})
+}
+    
 open func getDefaultProvider() -> String? {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_get_default_provider(self.uniffiClonePointer(),$0
@@ -759,6 +781,13 @@ open func getMemoryConfig() -> MemoryConfig {
 open func getMemoryStats()throws  -> MemoryStats {
     return try  FfiConverterTypeMemoryStats.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_get_memory_stats(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getRootCommands() -> [CommandNode] {
+    return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_root_commands(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -1224,6 +1253,112 @@ public func FfiConverterTypeCapturedContext_lower(_ value: CapturedContext) -> R
 }
 
 
+public struct CommandNode {
+    public var key: String
+    public var description: String
+    public var icon: String
+    public var hint: String?
+    public var nodeType: CommandType
+    public var hasChildren: Bool
+    public var sourceId: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(key: String, description: String, icon: String, hint: String?, nodeType: CommandType, hasChildren: Bool, sourceId: String?) {
+        self.key = key
+        self.description = description
+        self.icon = icon
+        self.hint = hint
+        self.nodeType = nodeType
+        self.hasChildren = hasChildren
+        self.sourceId = sourceId
+    }
+}
+
+
+
+extension CommandNode: Equatable, Hashable {
+    public static func ==(lhs: CommandNode, rhs: CommandNode) -> Bool {
+        if lhs.key != rhs.key {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.icon != rhs.icon {
+            return false
+        }
+        if lhs.hint != rhs.hint {
+            return false
+        }
+        if lhs.nodeType != rhs.nodeType {
+            return false
+        }
+        if lhs.hasChildren != rhs.hasChildren {
+            return false
+        }
+        if lhs.sourceId != rhs.sourceId {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(key)
+        hasher.combine(description)
+        hasher.combine(icon)
+        hasher.combine(hint)
+        hasher.combine(nodeType)
+        hasher.combine(hasChildren)
+        hasher.combine(sourceId)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCommandNode: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CommandNode {
+        return
+            try CommandNode(
+                key: FfiConverterString.read(from: &buf), 
+                description: FfiConverterString.read(from: &buf), 
+                icon: FfiConverterString.read(from: &buf), 
+                hint: FfiConverterOptionString.read(from: &buf), 
+                nodeType: FfiConverterTypeCommandType.read(from: &buf), 
+                hasChildren: FfiConverterBool.read(from: &buf), 
+                sourceId: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CommandNode, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.key, into: &buf)
+        FfiConverterString.write(value.description, into: &buf)
+        FfiConverterString.write(value.icon, into: &buf)
+        FfiConverterOptionString.write(value.hint, into: &buf)
+        FfiConverterTypeCommandType.write(value.nodeType, into: &buf)
+        FfiConverterBool.write(value.hasChildren, into: &buf)
+        FfiConverterOptionString.write(value.sourceId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCommandNode_lift(_ buf: RustBuffer) throws -> CommandNode {
+    return try FfiConverterTypeCommandNode.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCommandNode_lower(_ value: CommandNode) -> RustBuffer {
+    return FfiConverterTypeCommandNode.lower(value)
+}
+
+
 public struct FullConfig {
     public var defaultHotkey: String
     public var general: GeneralConfig
@@ -1343,14 +1478,16 @@ public struct GeneralConfig {
     public var logRetentionDays: UInt32
     public var enablePerformanceLogging: Bool
     public var language: String?
+    public var showCommandHints: Bool?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultProvider: String?, logRetentionDays: UInt32, enablePerformanceLogging: Bool, language: String?) {
+    public init(defaultProvider: String?, logRetentionDays: UInt32, enablePerformanceLogging: Bool, language: String?, showCommandHints: Bool?) {
         self.defaultProvider = defaultProvider
         self.logRetentionDays = logRetentionDays
         self.enablePerformanceLogging = enablePerformanceLogging
         self.language = language
+        self.showCommandHints = showCommandHints
     }
 }
 
@@ -1370,6 +1507,9 @@ extension GeneralConfig: Equatable, Hashable {
         if lhs.language != rhs.language {
             return false
         }
+        if lhs.showCommandHints != rhs.showCommandHints {
+            return false
+        }
         return true
     }
 
@@ -1378,6 +1518,7 @@ extension GeneralConfig: Equatable, Hashable {
         hasher.combine(logRetentionDays)
         hasher.combine(enablePerformanceLogging)
         hasher.combine(language)
+        hasher.combine(showCommandHints)
     }
 }
 
@@ -1392,7 +1533,8 @@ public struct FfiConverterTypeGeneralConfig: FfiConverterRustBuffer {
                 defaultProvider: FfiConverterOptionString.read(from: &buf), 
                 logRetentionDays: FfiConverterUInt32.read(from: &buf), 
                 enablePerformanceLogging: FfiConverterBool.read(from: &buf), 
-                language: FfiConverterOptionString.read(from: &buf)
+                language: FfiConverterOptionString.read(from: &buf), 
+                showCommandHints: FfiConverterOptionBool.read(from: &buf)
         )
     }
 
@@ -1401,6 +1543,7 @@ public struct FfiConverterTypeGeneralConfig: FfiConverterRustBuffer {
         FfiConverterUInt32.write(value.logRetentionDays, into: &buf)
         FfiConverterBool.write(value.enablePerformanceLogging, into: &buf)
         FfiConverterOptionString.write(value.language, into: &buf)
+        FfiConverterOptionBool.write(value.showCommandHints, into: &buf)
     }
 }
 
@@ -2259,10 +2402,12 @@ public struct RoutingRuleConfig {
     public var workflow: String?
     public var tools: String?
     public var knowledgeBase: String?
+    public var icon: String?
+    public var hint: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(ruleType: String?, isBuiltin: Bool, regex: String, provider: String?, systemPrompt: String?, stripPrefix: Bool?, capabilities: [String]?, intentType: String?, contextFormat: String?, skillId: String?, skillVersion: String?, workflow: String?, tools: String?, knowledgeBase: String?) {
+    public init(ruleType: String?, isBuiltin: Bool, regex: String, provider: String?, systemPrompt: String?, stripPrefix: Bool?, capabilities: [String]?, intentType: String?, contextFormat: String?, skillId: String?, skillVersion: String?, workflow: String?, tools: String?, knowledgeBase: String?, icon: String?, hint: String?) {
         self.ruleType = ruleType
         self.isBuiltin = isBuiltin
         self.regex = regex
@@ -2277,6 +2422,8 @@ public struct RoutingRuleConfig {
         self.workflow = workflow
         self.tools = tools
         self.knowledgeBase = knowledgeBase
+        self.icon = icon
+        self.hint = hint
     }
 }
 
@@ -2326,6 +2473,12 @@ extension RoutingRuleConfig: Equatable, Hashable {
         if lhs.knowledgeBase != rhs.knowledgeBase {
             return false
         }
+        if lhs.icon != rhs.icon {
+            return false
+        }
+        if lhs.hint != rhs.hint {
+            return false
+        }
         return true
     }
 
@@ -2344,6 +2497,8 @@ extension RoutingRuleConfig: Equatable, Hashable {
         hasher.combine(workflow)
         hasher.combine(tools)
         hasher.combine(knowledgeBase)
+        hasher.combine(icon)
+        hasher.combine(hint)
     }
 }
 
@@ -2368,7 +2523,9 @@ public struct FfiConverterTypeRoutingRuleConfig: FfiConverterRustBuffer {
                 skillVersion: FfiConverterOptionString.read(from: &buf), 
                 workflow: FfiConverterOptionString.read(from: &buf), 
                 tools: FfiConverterOptionString.read(from: &buf), 
-                knowledgeBase: FfiConverterOptionString.read(from: &buf)
+                knowledgeBase: FfiConverterOptionString.read(from: &buf), 
+                icon: FfiConverterOptionString.read(from: &buf), 
+                hint: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -2387,6 +2544,8 @@ public struct FfiConverterTypeRoutingRuleConfig: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.workflow, into: &buf)
         FfiConverterOptionString.write(value.tools, into: &buf)
         FfiConverterOptionString.write(value.knowledgeBase, into: &buf)
+        FfiConverterOptionString.write(value.icon, into: &buf)
+        FfiConverterOptionString.write(value.hint, into: &buf)
     }
 }
 
@@ -2927,6 +3086,77 @@ extension AetherException: Foundation.LocalizedError {
         String(reflecting: self)
     }
 }
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum CommandType {
+    
+    case action
+    case prompt
+    case namespace
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCommandType: FfiConverterRustBuffer {
+    typealias SwiftType = CommandType
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CommandType {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .action
+        
+        case 2: return .prompt
+        
+        case 3: return .namespace
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: CommandType, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .action:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .prompt:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .namespace:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCommandType_lift(_ buf: RustBuffer) throws -> CommandType {
+    return try FfiConverterTypeCommandType.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCommandType_lower(_ value: CommandType) -> RustBuffer {
+    return FfiConverterTypeCommandType.lower(value)
+}
+
+
+
+extension CommandType: Equatable, Hashable {}
+
+
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
@@ -4121,6 +4351,31 @@ fileprivate struct FfiConverterSequenceTypeAppMemoryInfo: FfiConverterRustBuffer
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeCommandNode: FfiConverterRustBuffer {
+    typealias SwiftType = [CommandNode]
+
+    public static func write(_ value: [CommandNode], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeCommandNode.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [CommandNode] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [CommandNode]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeCommandNode.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeMediaAttachment: FfiConverterRustBuffer {
     typealias SwiftType = [MediaAttachment]
 
@@ -4310,6 +4565,12 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_delete_provider() != 56010) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_filter_commands() != 53560) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_command_children() != 60196) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_get_default_provider() != 56435) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4329,6 +4590,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_get_memory_stats() != 10285) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_root_commands() != 47120) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_load_config() != 33928) {

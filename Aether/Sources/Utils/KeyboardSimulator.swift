@@ -62,6 +62,14 @@ class KeyboardSimulator {
         return simulateShortcut(key: CGKeyCode(kVK_ANSI_A))
     }
 
+    /// Simulate Cmd+Z (Undo)
+    ///
+    /// - Returns: True if successful, false otherwise
+    @discardableResult
+    func simulateUndo() -> Bool {
+        return simulateShortcut(key: CGKeyCode(kVK_ANSI_Z))
+    }
+
     /// Simulate Cmd+Down Arrow (Move to end of document)
     ///
     /// On macOS, Cmd+End doesn't work reliably. Use Cmd+Down Arrow instead.
@@ -69,6 +77,42 @@ class KeyboardSimulator {
     @discardableResult
     func simulateMoveToEnd() -> Bool {
         return simulateShortcut(key: CGKeyCode(kVK_DownArrow))
+    }
+
+    /// Simulate Shift+Left Arrow (Select one character to the left)
+    ///
+    /// - Returns: True if successful, false otherwise
+    @discardableResult
+    func simulateShiftLeftArrow() -> Bool {
+        let keyCode = CGKeyCode(kVK_LeftArrow)
+
+        // Create key down event with Shift modifier
+        guard let keyDown = CGEvent(
+            keyboardEventSource: nil,
+            virtualKey: keyCode,
+            keyDown: true
+        ) else {
+            print("[KeyboardSimulator] ERROR: Failed to create Shift+Left key down event")
+            return false
+        }
+        keyDown.flags = .maskShift
+        keyDown.post(tap: .cghidEventTap)
+
+        usleep(10_000) // 10ms
+
+        // Create key up event
+        guard let keyUp = CGEvent(
+            keyboardEventSource: nil,
+            virtualKey: keyCode,
+            keyDown: false
+        ) else {
+            print("[KeyboardSimulator] ERROR: Failed to create Shift+Left key up event")
+            return false
+        }
+        keyUp.flags = .maskShift
+        keyUp.post(tap: .cghidEventTap)
+
+        return true
     }
 
     /// Simulate a single key press (without modifiers)
@@ -159,6 +203,50 @@ class KeyboardSimulator {
             }
         }
         return success
+    }
+
+    /// Type backspace characters to delete text
+    ///
+    /// Uses the same reliable CGEvent pattern as typeCharacter
+    /// - Parameter count: Number of backspaces to type
+    /// - Returns: True if successful
+    @discardableResult
+    func typeBackspaces(count: Int) -> Bool {
+        guard count > 0 else { return true }
+
+        // Use privateState to isolate from current modifier key state
+        let eventSource = CGEventSource(stateID: .privateState)
+        let backspaceKeyCode = CGKeyCode(kVK_Delete)  // kVK_Delete is backspace on Mac
+
+        NSLog("[KeyboardSimulator] typeBackspaces: deleting %d characters", count)
+
+        for i in 0..<count {
+            // Key down
+            guard let keyDown = CGEvent(keyboardEventSource: eventSource, virtualKey: backspaceKeyCode, keyDown: true) else {
+                NSLog("[KeyboardSimulator] Failed to create backspace key down event at index %d", i)
+                return false
+            }
+            // CRITICAL: Clear modifier flags to ensure plain backspace (not Cmd+Backspace)
+            keyDown.flags = []
+            keyDown.post(tap: .cghidEventTap)
+
+            usleep(5_000) // 5ms
+
+            // Key up
+            guard let keyUp = CGEvent(keyboardEventSource: eventSource, virtualKey: backspaceKeyCode, keyDown: false) else {
+                NSLog("[KeyboardSimulator] Failed to create backspace key up event at index %d", i)
+                return false
+            }
+            keyUp.flags = []
+            keyUp.post(tap: .cghidEventTap)
+
+            NSLog("[KeyboardSimulator] Backspace %d/%d sent", i + 1, count)
+
+            // Delay between backspaces for reliability
+            usleep(20_000) // 20ms between backspaces
+        }
+
+        return true
     }
 
     // MARK: - Private Methods
