@@ -1,33 +1,36 @@
-// FileURLExtractor.swift
+// FileImageExtractor.swift
 // Extracts images from file URLs copied to clipboard (e.g., from Finder)
 //
-// When files are copied in Finder, the clipboard contains file URLs, not the
-// actual file content. This extractor loads the file content from disk.
+// When image files are copied in Finder, the clipboard contains file URLs,
+// not the actual file content. This extractor loads the image content from disk.
+// Document files (PDF, TXT, MD) are handled by DocumentExtractor.
 //
 // add-multimodal-content-support
 
 import Cocoa
 import os.log
 
-/// Extractor for file URLs (Finder copied files)
+/// Extractor for image files from file URLs (Finder copied files)
 ///
 /// Priority: 40 (requires disk I/O)
 ///
-/// Handles files copied from:
+/// Handles image files copied from:
 /// - Finder file selection (Cmd+C on files)
 /// - Desktop file selection
 /// - Other file browsers
-final class FileURLExtractor: ContentExtractor {
+///
+/// Note: Document files (PDF, TXT, MD) are handled by DocumentExtractor
+final class FileImageExtractor: ContentExtractor {
     // MARK: - ContentExtractor Protocol
 
-    let identifier = "file-url"
+    let identifier = "file-image"
     let priority = 40
 
     let supportedTypes: [NSPasteboard.PasteboardType] = [
         NSPasteboard.PasteboardType("public.file-url")
     ]
 
-    private let logger = Logger(subsystem: "com.aether", category: "FileURLExtractor")
+    private let logger = Logger(subsystem: "com.aether", category: "FileImageExtractor")
 
     // MARK: - Extraction
 
@@ -99,7 +102,7 @@ final class FileURLExtractor: ContentExtractor {
             )
 
             attachments.append(attachment)
-            logger.debug("Extracted file: \(url.lastPathComponent) (\(sizeBytes) bytes)")
+            logger.debug("Extracted image file: \(url.lastPathComponent) (\(sizeBytes) bytes)")
         }
 
         // Don't mark public.file-url as handled so DocumentExtractor can also process it

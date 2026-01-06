@@ -53,7 +53,7 @@ class ClipboardManager {
         // Image support extractors (in priority order)
         registry.register(DirectImageExtractor())
         registry.register(RTFDExtractor())
-        registry.register(FileURLExtractor())
+        registry.register(FileImageExtractor())
         // Document support extractors
         registry.register(DocumentExtractor())
         // Fallback text extractor
