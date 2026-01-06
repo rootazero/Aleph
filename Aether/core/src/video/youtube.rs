@@ -13,9 +13,21 @@ use std::sync::LazyLock;
 use std::time::Duration;
 use tracing::{debug, info};
 
-/// Find yt-dlp executable path
+/// Get yt-dlp path in Aether config directory
+fn get_ytdlp_config_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    std::path::PathBuf::from(home).join(".config").join("yt-dlp")
+}
+
+/// Find yt-dlp executable path, auto-installing if needed
 fn which_ytdlp() -> Option<std::path::PathBuf> {
-    // Check common paths
+    // First check Aether's config directory
+    let config_path = get_ytdlp_config_path();
+    if config_path.exists() {
+        return Some(config_path);
+    }
+
+    // Check common system paths as fallback
     let paths = [
         "/opt/homebrew/bin/yt-dlp",
         "/usr/local/bin/yt-dlp",
@@ -43,6 +55,53 @@ fn which_ytdlp() -> Option<std::path::PathBuf> {
             }
             None
         })
+}
+
+/// Auto-install yt-dlp to ~/.config/yt-dlp using curl
+fn install_ytdlp() -> Result<std::path::PathBuf> {
+    use std::process::Command;
+    use std::fs;
+
+    let config_path = get_ytdlp_config_path();
+
+    // Ensure ~/.config directory exists
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            AetherError::video(format!("Failed to create config directory: {}", e))
+        })?;
+    }
+
+    info!("Installing yt-dlp to {:?}", config_path);
+
+    // Download yt-dlp using curl (built-in on macOS)
+    let download_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
+    let output = Command::new("curl")
+        .args([
+            "-L",                                    // Follow redirects
+            "--insecure",                            // Skip SSL verification (for environments with SSL issues)
+            "-o", config_path.to_str().unwrap_or(""),
+            download_url,
+        ])
+        .output()
+        .map_err(|e| AetherError::video(format!("Failed to run curl: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AetherError::video(format!("Failed to download yt-dlp: {}", stderr)));
+    }
+
+    // Make it executable
+    let chmod_output = Command::new("chmod")
+        .args(["a+rx", config_path.to_str().unwrap_or("")])
+        .output()
+        .map_err(|e| AetherError::video(format!("Failed to chmod yt-dlp: {}", e)))?;
+
+    if !chmod_output.status.success() {
+        return Err(AetherError::video("Failed to make yt-dlp executable"));
+    }
+
+    info!("yt-dlp installed successfully");
+    Ok(config_path)
 }
 
 /// Regex pattern for matching YouTube URLs and extracting video IDs
@@ -232,21 +291,19 @@ impl YouTubeExtractor {
     /// Fetch caption using yt-dlp command-line tool as fallback
     ///
     /// yt-dlp has sophisticated anti-bot bypass mechanisms that often work
-    /// when direct HTTP requests fail.
+    /// when direct HTTP requests fail. Will auto-install yt-dlp if not found.
     async fn fetch_caption_via_ytdlp(video_id: &str, preferred_lang: &str) -> Result<String> {
         use std::process::Command;
         use std::fs;
 
-        // Check if yt-dlp is available
-        let ytdlp_path = which_ytdlp();
-        if ytdlp_path.is_none() {
-            return Err(AetherError::video_with_suggestion(
-                "YouTube returned empty caption data and yt-dlp is not available",
-                "Install yt-dlp for better YouTube support: brew install yt-dlp",
-            ));
-        }
-
-        let ytdlp = ytdlp_path.unwrap();
+        // Check if yt-dlp is available, auto-install if not
+        let ytdlp = match which_ytdlp() {
+            Some(path) => path,
+            None => {
+                info!("yt-dlp not found, attempting auto-install...");
+                install_ytdlp()?
+            }
+        };
         let temp_dir = std::env::temp_dir();
         let output_template = temp_dir.join(format!("aether_sub_{}", video_id));
         let url = format!("https://www.youtube.com/watch?v={}", video_id);
