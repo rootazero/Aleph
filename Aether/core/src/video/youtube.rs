@@ -16,7 +16,7 @@ use tracing::{debug, info};
 /// Get yt-dlp path in Aether config directory
 fn get_ytdlp_config_path() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(home).join(".config").join("yt-dlp")
+    std::path::PathBuf::from(home).join(".config").join("aether").join("yt-dlp")
 }
 
 /// Find yt-dlp executable path, auto-installing if needed
