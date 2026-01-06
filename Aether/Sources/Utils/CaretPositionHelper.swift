@@ -31,16 +31,57 @@ enum CaretPositionHelper {
     /// Attempts to get text caret position first, falls back to mouse position.
     /// - Returns: Screen coordinates for Halo positioning (bottom of text line)
     static func getBestPosition() -> NSPoint {
+        let mousePosition = NSEvent.mouseLocation
+
         if let caretInfo = getCaretInfo() {
-            print("[CaretPositionHelper] Using caret position: \(caretInfo.position), lineHeight: \(caretInfo.lineHeight ?? defaultLineHeight)")
-            return caretInfo.position
+            let pos = caretInfo.position
+
+            // Validate caret position - some apps (like WeChat) return invalid coordinates
+            let (isValid, reason) = isValidScreenPosition(pos)
+            if isValid {
+                NSLog("[CaretPositionHelper] Using caret position: (%.1f, %.1f), lineHeight: %.1f",
+                      pos.x, pos.y, caretInfo.lineHeight ?? defaultLineHeight)
+                return pos
+            } else {
+                NSLog("[CaretPositionHelper] Caret position INVALID: (%.1f, %.1f), reason: %@, using mouse: (%.1f, %.1f)",
+                      pos.x, pos.y, reason, mousePosition.x, mousePosition.y)
+            }
+        } else {
+            NSLog("[CaretPositionHelper] No caret info, using mouse: (%.1f, %.1f)",
+                  mousePosition.x, mousePosition.y)
         }
 
-        // Fallback to mouse position with default offset
-        // The mouse position doesn't have line height info, so we use default
-        let mousePosition = NSEvent.mouseLocation
-        print("[CaretPositionHelper] Caret unavailable, using mouse position: \(mousePosition)")
         return mousePosition
+    }
+
+    /// Validate if a position is within reasonable screen bounds
+    ///
+    /// Some apps return (0,0) or other invalid coordinates even when
+    /// the Accessibility API call "succeeds". This function checks if
+    /// the position is actually usable.
+    /// - Returns: Tuple of (isValid, reason) for debugging
+    private static func isValidScreenPosition(_ position: NSPoint) -> (Bool, String) {
+        // Check for suspicious near-zero X coordinate
+        if position.x < 10 {
+            return (false, "x too small (\(position.x))")
+        }
+
+        // Check for suspicious near-zero Y coordinate
+        if position.y < 10 {
+            return (false, "y too small (\(position.y))")
+        }
+
+        // Check if position is within any screen bounds
+        for screen in NSScreen.screens {
+            let frame = screen.frame
+            // Allow some margin outside screen (caret could be at edge)
+            let expandedFrame = frame.insetBy(dx: -50, dy: -50)
+            if expandedFrame.contains(position) {
+                return (true, "within screen bounds")
+            }
+        }
+
+        return (false, "outside all screens")
     }
 
     /// Get text caret info via Accessibility API

@@ -12,15 +12,27 @@ import SwiftUI
 struct CommandRow: View {
     let command: CommandNode
     let isSelected: Bool
+    let index: Int
 
     @Environment(\.colorScheme) private var colorScheme
 
+    /// Alternating row background for visual rhythm
+    private var rowBackground: Color {
+        if isSelected {
+            return Color.accentColor
+        }
+        // Alternate between slightly different backgrounds
+        return index % 2 == 0
+            ? Color.clear
+            : Color.secondary.opacity(0.06)
+    }
+
     var body: some View {
         HStack(spacing: 8) {
-            // Command icon
-            Image(systemName: command.icon)
+            // Command icon - unified style
+            Image(systemName: "text.quote")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(isSelected ? .white : command.typeColor)
+                .foregroundColor(isSelected ? .white : .secondary)
                 .frame(width: 18)
 
             // Command key
@@ -51,7 +63,7 @@ struct CommandRow: View {
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? Color.accentColor : Color.clear)
+                .fill(rowBackground)
         )
         .contentShape(Rectangle())
     }
@@ -71,7 +83,7 @@ struct CommandListView: View {
                 Image(systemName: "command")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.secondary)
-                Text(NSLocalizedString("command.mode.title", comment: "Command Mode"))
+                Text(L("command.mode.title"))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.secondary)
                 Spacer()
@@ -93,7 +105,7 @@ struct CommandListView: View {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 24))
                         .foregroundColor(.secondary)
-                    Text(NSLocalizedString("command.mode.no_results", comment: "No matching commands"))
+                    Text(L("command.mode.no_results"))
                         .font(.system(size: 13))
                         .foregroundColor(.secondary)
                 }
@@ -107,7 +119,8 @@ struct CommandListView: View {
                                 let command = manager.displayedCommands[index]
                                 CommandRow(
                                     command: command,
-                                    isSelected: index == manager.selectedIndex
+                                    isSelected: index == manager.selectedIndex,
+                                    index: index
                                 )
                                 .id("\(manager.inputPrefix)-\(index)")
                                 .onTapGesture {
@@ -132,7 +145,6 @@ struct CommandListView: View {
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(colorScheme == .dark ? Color(white: 0.15) : Color.white)
-                .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12)
