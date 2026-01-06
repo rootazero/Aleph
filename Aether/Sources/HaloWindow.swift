@@ -16,6 +16,9 @@ class HaloWindow: NSWindow {
     private let themeEngine: ThemeEngine
     private weak var eventHandler: EventHandler?
 
+    /// Track when Halo started showing (for minimum display time before errors)
+    private(set) var showTime: Date?
+
     init(themeEngine: ThemeEngine) {
         self.themeEngine = themeEngine
 
@@ -83,6 +86,9 @@ class HaloWindow: NSWindow {
     }
 
     func show(at position: NSPoint) {
+        // Record show time for minimum display duration before errors
+        showTime = Date()
+
         // Find the screen containing the cursor position
         // This properly handles multi-monitor setups
         let targetScreen = NSScreen.screens.first { screen in
@@ -123,6 +129,9 @@ class HaloWindow: NSWindow {
     }
 
     func hide() {
+        // Reset show time
+        showTime = nil
+
         // Fade out animation
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.3
@@ -190,6 +199,9 @@ class HaloWindow: NSWindow {
 
     /// Show Halo at screen center (for initialization feedback, errors, etc.)
     func showCentered() {
+        // Record show time for minimum display duration before errors
+        showTime = Date()
+
         guard let screen = NSScreen.main ?? NSScreen.screens.first else {
             print("[HaloWindow] Warning: No screen found, cannot display")
             return

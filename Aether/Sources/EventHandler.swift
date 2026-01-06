@@ -29,9 +29,6 @@ class EventHandler: AetherEventHandler {
     // Auto-dismiss timer for toast notifications
     private var toastDismissTimer: Timer?
 
-    // Track when Halo started showing (for minimum display time before errors)
-    private var haloShowTime: Date?
-
     // Minimum time Halo should display before showing error toast (in seconds)
     private let minHaloDisplayTime: TimeInterval = 1.0
 
@@ -77,8 +74,9 @@ class EventHandler: AetherEventHandler {
             guard let self = self else { return }
 
             // Calculate delay to ensure Halo displays for at least minHaloDisplayTime
+            // showTime is tracked by HaloWindow when show() is called
             let delay: TimeInterval
-            if let showTime = self.haloShowTime {
+            if let showTime = self.haloWindow?.showTime {
                 let elapsed = Date().timeIntervalSince(showTime)
                 delay = max(0, self.minHaloDisplayTime - elapsed)
                 print("[EventHandler] Halo displayed for \(String(format: "%.2f", elapsed))s, delaying toast by \(String(format: "%.2f", delay))s")
@@ -223,36 +221,28 @@ class EventHandler: AetherEventHandler {
         switch state {
         case .idle:
             haloWindow?.hide()
-            // Reset accumulated text and show time when going idle
+            // Reset accumulated text when going idle
             accumulatedText = ""
-            haloShowTime = nil
 
         case .listening:
             // Use processing animation for listening state (same as processingWithAI)
             // This unifies the visual feedback: processing icon → (hidden) → success
             haloWindow?.updateState(.processing(providerColor: .blue, streamingText: nil))
-            // Reset accumulated text and record show time for minimum display duration
+            // Reset accumulated text when starting new interaction
             accumulatedText = ""
-            haloShowTime = Date()
             announceToVoiceOver("Listening for input")
 
         case .retrievingMemory:
             haloWindow?.updateState(.retrievingMemory)
-            // Record show time if not already set
-            if haloShowTime == nil { haloShowTime = Date() }
             announceToVoiceOver("Retrieving memories")
 
         case .processingWithAi:
             // This state will be updated with provider details via onAiProcessingStarted callback
             haloWindow?.updateState(.processing(providerColor: .blue, streamingText: nil))
-            // Record show time if not already set
-            if haloShowTime == nil { haloShowTime = Date() }
             announceToVoiceOver("Processing with AI")
 
         case .processing:
             haloWindow?.updateState(.processing(providerColor: .green, streamingText: nil))
-            // Record show time if not already set
-            if haloShowTime == nil { haloShowTime = Date() }
             announceToVoiceOver("Processing request")
 
         case .success:
