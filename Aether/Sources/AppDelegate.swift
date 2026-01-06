@@ -692,9 +692,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // Reset retry count on success
             coreInitRetryCount = 0
 
-            // Hide startup Halo animation (initialization succeeded)
+            // Check if there are any enabled providers
+            let enabledProviders = core!.getEnabledProviders()
+            if enabledProviders.isEmpty {
+                print("[Aether] ⚠️ No enabled providers found - showing error")
+                // Keep Halo animation visible, show error toast after 0.8s
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                    self?.eventHandler?.showToast(
+                        type: .error,
+                        title: L("error.aether"),
+                        message: L("error.check_provider_config"),
+                        autoDismiss: false
+                    )
+                }
+                return
+            }
+
+            // Hide startup Halo animation (initialization succeeded with providers)
             haloWindow?.hide()
-            print("[Aether] Hiding Halo startup animation (init succeeded)")
+            print("[Aether] Hiding Halo startup animation (init succeeded with \(enabledProviders.count) providers)")
 
             // Update menu bar icon to show active state
             updateMenuBarIcon(state: .listening)
