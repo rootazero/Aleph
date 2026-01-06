@@ -242,6 +242,14 @@ impl AetherError {
         }
     }
 
+    /// Create a video transcript extraction error with a custom suggestion
+    pub fn video_with_suggestion<S: Into<String>, T: Into<String>>(msg: S, suggestion: T) -> Self {
+        AetherError::VideoError {
+            message: msg.into(),
+            suggestion: Some(suggestion.into()),
+        }
+    }
+
     /// Get the suggestion for this error, if available
     ///
     /// Returns a user-friendly actionable suggestion for how to resolve the error.
