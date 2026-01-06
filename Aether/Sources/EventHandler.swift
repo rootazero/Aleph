@@ -239,8 +239,9 @@ class EventHandler: AetherEventHandler {
             }
 
         case .error:
-            // Hide Halo - errors are shown via system alert only
-            haloWindow?.hide()
+            // Do NOT hide Halo here - errors are now shown via toast notification
+            // The toast is displayed by onError() callback which fires before this state change
+            // Hiding here would cause the toast to flash and disappear immediately
             announceToVoiceOver("Error occurred")
 
         case .typewriting:
