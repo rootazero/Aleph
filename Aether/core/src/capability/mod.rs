@@ -321,11 +321,9 @@ impl CapabilityExecutor {
     ///
     /// The payload with video_transcript populated (if URL found and extraction succeeds)
     async fn execute_video(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
-        // Check if video config is available and enabled
-        let Some(config) = &self.video_config else {
-            warn!("Video capability requested but no video config available");
-            return Ok(payload);
-        };
+        // Use provided config or default
+        let default_config = crate::config::VideoConfig::default();
+        let config = self.video_config.as_ref().map(|c| c.as_ref()).unwrap_or(&default_config);
 
         if !config.enabled {
             debug!("Video capability disabled in config");
@@ -349,7 +347,7 @@ impl CapabilityExecutor {
         );
 
         // Create extractor and fetch transcript
-        let extractor = YouTubeExtractor::new((**config).clone());
+        let extractor = YouTubeExtractor::new(config.clone());
 
         match extractor.extract_transcript(&video_url).await {
             Ok(transcript) => {
