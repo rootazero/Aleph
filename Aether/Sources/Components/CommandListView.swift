@@ -103,12 +103,13 @@ struct CommandListView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 2) {
-                            ForEach(Array(manager.displayedCommands.enumerated()), id: \.element.key) { index, command in
+                            ForEach(0..<manager.displayedCommands.count, id: \.self) { index in
+                                let command = manager.displayedCommands[index]
                                 CommandRow(
                                     command: command,
                                     isSelected: index == manager.selectedIndex
                                 )
-                                .id(index)
+                                .id("\(manager.inputPrefix)-\(index)")
                                 .onTapGesture {
                                     manager.selectedIndex = index
                                     manager.selectCurrentCommand()
@@ -120,10 +121,12 @@ struct CommandListView: View {
                     .frame(maxHeight: maxHeight - 50) // Account for header
                     .onChange(of: manager.selectedIndex) { _, newIndex in
                         withAnimation(.easeInOut(duration: 0.15)) {
-                            proxy.scrollTo(newIndex, anchor: .center)
+                            proxy.scrollTo("\(manager.inputPrefix)-\(newIndex)", anchor: .center)
                         }
                     }
                 }
+                // Force view recreation when filter changes
+                .id(manager.inputPrefix)
             }
         }
         .background(

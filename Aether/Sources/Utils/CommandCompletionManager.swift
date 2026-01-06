@@ -120,12 +120,17 @@ final class CommandCompletionManager: ObservableObject {
     /// Refresh commands from Rust Core
     func refreshCommands() {
         guard let core = core else {
+            NSLog("[CommandCompletionManager] refreshCommands: core is nil!")
             allCommands = []
             displayedCommands = []
             return
         }
 
         allCommands = core.getRootCommands()
+        NSLog("[CommandCompletionManager] refreshCommands: loaded %d commands", allCommands.count)
+        for cmd in allCommands {
+            NSLog("[CommandCompletionManager]   - /%@", cmd.key)
+        }
         filterCommands()
     }
 
@@ -133,14 +138,22 @@ final class CommandCompletionManager: ObservableObject {
 
     /// Filter commands by current input prefix
     private func filterCommands() {
+        NSLog("[CommandCompletionManager] filterCommands: prefix='%@', core=%@", inputPrefix, core != nil ? "available" : "nil")
+
         if inputPrefix.isEmpty {
             displayedCommands = allCommands
+            NSLog("[CommandCompletionManager] Empty prefix, showing all %d commands", allCommands.count)
         } else if let core = core {
             displayedCommands = core.filterCommands(prefix: inputPrefix)
+            NSLog("[CommandCompletionManager] Filtered via Rust core: %d results", displayedCommands.count)
+            for cmd in displayedCommands {
+                NSLog("[CommandCompletionManager]   - %@", cmd.key)
+            }
         } else {
             // Fallback: local filtering
             let lowercasedPrefix = inputPrefix.lowercased()
             displayedCommands = allCommands.filter { $0.key.lowercased().hasPrefix(lowercasedPrefix) }
+            NSLog("[CommandCompletionManager] Fallback filtering: %d results", displayedCommands.count)
         }
 
         // Reset selection if out of bounds

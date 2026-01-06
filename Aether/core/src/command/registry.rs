@@ -79,7 +79,7 @@ impl CommandRegistry {
             }
         }
 
-        // Sort commands alphabetically by key
+        // Sort commands alphabetically by key for consistent display
         registry
             .builtin_commands
             .sort_by(|a, b| a.key.cmp(&b.key));
@@ -104,6 +104,7 @@ impl CommandRegistry {
             };
 
             registry.builtin_commands.push(mcp_node);
+            // Re-sort after adding MCP
             registry
                 .builtin_commands
                 .sort_by(|a, b| a.key.cmp(&b.key));
@@ -216,16 +217,38 @@ impl CommandRegistry {
 
     /// Filter commands by key prefix (case-insensitive)
     pub fn filter_by_prefix(commands: &[CommandNode], prefix: &str) -> Vec<CommandNode> {
+        log::debug!(
+            "[CommandRegistry] filter_by_prefix: prefix='{}', commands_count={}",
+            prefix,
+            commands.len()
+        );
+
         if prefix.is_empty() {
             return commands.to_vec();
         }
 
         let prefix_lower = prefix.to_lowercase();
-        commands
+        let filtered: Vec<CommandNode> = commands
             .iter()
-            .filter(|cmd| cmd.key.to_lowercase().starts_with(&prefix_lower))
+            .filter(|cmd| {
+                let matches = cmd.key.to_lowercase().starts_with(&prefix_lower);
+                log::debug!(
+                    "[CommandRegistry] Checking '{}' against prefix '{}': {}",
+                    cmd.key,
+                    prefix_lower,
+                    matches
+                );
+                matches
+            })
             .cloned()
-            .collect()
+            .collect();
+
+        log::debug!(
+            "[CommandRegistry] filter_by_prefix result: {} matches",
+            filtered.len()
+        );
+
+        filtered
     }
 
     /// Execute a command by path

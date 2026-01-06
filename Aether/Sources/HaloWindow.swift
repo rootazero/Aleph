@@ -389,13 +389,8 @@ class HaloWindow: NSWindow {
             return NSSize(width: 220, height: 100)
 
         case .commandMode:
-            // Command completion list - dynamic height based on command count
-            let commandCount = haloViewModel.commandManager.displayedCommands.count
-            let itemHeight: CGFloat = 32
-            let headerHeight: CGFloat = 36
-            let calculatedHeight = headerHeight + min(CGFloat(commandCount), 8) * itemHeight + 12
-            let height = min(320, max(100, calculatedHeight))
-            return NSSize(width: 400, height: height)
+            // Fixed height for command mode to prevent window jumping during filtering
+            return NSSize(width: 400, height: 320)
 
         case .processing(_, let text), .success(let text):
             let width: CGFloat = text != nil ? 300 : 120
@@ -455,4 +450,18 @@ class HaloViewModel: ObservableObject {
 
     /// Command completion manager (add-command-completion-system)
     let commandManager = CommandCompletionManager()
+
+    /// Cancellable for forwarding commandManager changes
+    private var commandManagerCancellable: AnyCancellable?
+
+    init() {
+        // Forward commandManager's objectWillChange to this ViewModel
+        // This ensures HaloView re-renders when displayedCommands changes
+        // Use receive(on:) to ensure main thread and debounce to prevent rapid updates
+        commandManagerCancellable = commandManager.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+    }
 }

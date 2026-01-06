@@ -219,12 +219,9 @@ struct HaloView: View {
         case .awaitingInputMode:
             return 100  // Height for input mode selection
         case .commandMode:
-            // Dynamic height based on command count, max 300
-            let commandCount = viewModel.commandManager.displayedCommands.count
-            let itemHeight: CGFloat = 32  // Each command row height (compact)
-            let headerHeight: CGFloat = 36  // Header + divider (compact)
-            let calculatedHeight = headerHeight + min(CGFloat(commandCount), 8) * itemHeight + 12
-            return min(320, max(100, calculatedHeight))
+            // Fixed height for command mode to prevent window jumping during filtering
+            // Height fits 8 commands (max visible) + header
+            return 320
         case .retrievingMemory, .processingWithAI:
             return 120
         case .processing(_, let text):
