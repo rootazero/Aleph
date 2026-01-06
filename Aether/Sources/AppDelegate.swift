@@ -969,7 +969,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     self?.haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
                 }
             }
-            processWithInputMode(.replace)
+            processWithInputMode(useCutMode: true)
 
         case .copy:
             // Direct copy mode: Show Halo immediately and process with append
@@ -985,13 +985,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     self?.haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
                 }
             }
-            processWithInputMode(.append)
+            processWithInputMode(useCutMode: false)
         }
     }
 
-    /// Process input after input mode is determined (either from config or user selection)
-    private func processWithInputMode(_ choice: InputModeChoice) {
-        print("[AppDelegate] Processing with input mode choice: \(choice)")
+    /// Process input with specified mode (cut = replace original, copy = append to original)
+    private func processWithInputMode(useCutMode: Bool) {
+        print("[AppDelegate] Processing with cut mode: \(useCutMode)")
 
         guard core != nil else {
             print("[AppDelegate] ⚠️ Core not initialized")
@@ -1018,7 +1018,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             Thread.sleep(forTimeInterval: 0.15)  // Give time for activation
         }
 
-        let useCutMode = (choice == .replace)
         print("[AppDelegate] 📋 Using cut mode: \(useCutMode)")
 
         // Track where the text came from - this determines output strategy
@@ -2020,7 +2019,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
 
         // Process with replace mode (AI response replaces original text)
-        processWithInputMode(.replace)
+        processWithInputMode(useCutMode: true)
     }
 
     /// Handle Append trigger (double-tap append hotkey, default: right Shift)
@@ -2055,7 +2054,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
 
         // Process with append mode (AI response appends after original text)
-        processWithInputMode(.append)
+        processWithInputMode(useCutMode: false)
     }
 
     // MARK: - Language Preference

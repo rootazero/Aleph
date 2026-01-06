@@ -7,12 +7,6 @@
 
 import SwiftUI
 
-/// Input mode selection for user choice before AI processing
-enum InputModeChoice {
-    case replace  // Cut original text, replace with AI response
-    case append   // Copy original text, append AI response after it
-}
-
 /// Toast notification types for Halo overlay
 enum ToastType: Equatable {
     case info      // Blue accent, info.circle icon - for success/confirmation

@@ -70,7 +70,7 @@ Final Data = Window Text + Clipboard Text Context + Clipboard Attachments + Wind
 | "Translate this" | ImageC | "Translate this" + ImageC |
 | "Hello" | "World" | "Hello" + "World" |
 
-**Implementation:** See `AppDelegate.swift` → `processWithInputModeChoice()` for the merging logic.
+**Implementation:** See `AppDelegate.swift` → `processWithInputMode(useCutMode:)` for the merging logic.
 
 ---
 
