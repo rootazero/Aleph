@@ -986,34 +986,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 }
             }
             processWithInputMode(.append)
-
-        case .halo:
-            // Halo selection mode: Show selection UI first
-            print("[AppDelegate] Mode: halo - showing selection UI")
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                self.haloWindow?.show(at: haloPosition)
-                self.haloWindow?.updateState(.awaitingInputMode { [weak self] choice in
-                    guard let self = self else {
-                        print("[AppDelegate] ❌ Self is nil when user selected input mode")
-                        return
-                    }
-
-                    // User selected input mode, proceed with processing
-                    print("[AppDelegate] 📋 User selected: \(choice)")
-
-                    // CRITICAL: Hide the input mode selection and show processing state
-                    // This must happen before processing to avoid focus issues
-                    // Use .processing state to show the theme's processing animation (purple + 3 arcs for Zen theme)
-                    self.haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
-
-                    // CRITICAL: Add a small delay to let the Halo UI update
-                    // and ensure the original app regains focus
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                        self?.processWithInputMode(choice)
-                    }
-                })
-            }
         }
     }
 

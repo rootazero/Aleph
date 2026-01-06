@@ -261,9 +261,9 @@ class HaloWindow: NSWindow {
         haloViewModel.state = state
 
         // Enable/disable mouse events based on state
-        // awaitingInputMode, commandMode, error, permissionRequired, and toast states need mouse interaction
+        // commandMode, error, permissionRequired, and toast states need mouse interaction
         switch state {
-        case .awaitingInputMode, .commandMode, .error, .permissionRequired, .toast:
+        case .commandMode, .error, .permissionRequired, .toast:
             self.ignoresMouseEvents = false
         default:
             self.ignoresMouseEvents = true
@@ -384,10 +384,6 @@ class HaloWindow: NSWindow {
 
     private func getWindowSize() -> NSSize {
         switch haloViewModel.state {
-        case .awaitingInputMode:
-            // Input mode selection buttons
-            return NSSize(width: 220, height: 100)
-
         case .commandMode:
             // Fixed height for command mode to prevent window jumping during filtering
             return NSSize(width: 400, height: 320)

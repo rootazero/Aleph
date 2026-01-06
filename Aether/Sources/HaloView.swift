@@ -29,10 +29,6 @@ struct HaloView: View {
             case .idle:
                 EmptyView()
 
-            case .awaitingInputMode(let onSelect):
-                InputModeSelectionView(onSelect: onSelect)
-                    .transition(.scale.combined(with: .opacity))
-
             case .listening:
                 theme.listeningView()
                     .transition(.scale.combined(with: .opacity))
@@ -117,8 +113,6 @@ struct HaloView: View {
         switch state {
         case .idle:
             return "Aether is idle"
-        case .awaitingInputMode:
-            return "Select input mode: Replace or Append"
         case .listening:
             return "Listening for input"
         case .commandMode:
@@ -191,8 +185,6 @@ struct HaloView: View {
     // Dynamic sizing based on state
     private var dynamicWidth: CGFloat {
         switch state {
-        case .awaitingInputMode:
-            return 220  // Wider for input mode selection buttons
         case .commandMode:
             return 400  // Width for command list (wider for hints)
         case .retrievingMemory, .processingWithAI:
@@ -216,8 +208,6 @@ struct HaloView: View {
 
     private var dynamicHeight: CGFloat {
         switch state {
-        case .awaitingInputMode:
-            return 100  // Height for input mode selection
         case .commandMode:
             // Fixed height for command mode to prevent window jumping during filtering
             // Height fits 8 commands (max visible) + header
@@ -336,98 +326,6 @@ struct ErrorView: View {
                 shake.toggle()
             }
         }
-    }
-}
-
-// MARK: - Input Mode Selection View
-
-struct InputModeSelectionView: View {
-    let onSelect: (InputModeChoice) -> Void
-    @State private var isAppearing = false
-    @State private var hoveredButton: InputModeChoice?
-
-    var body: some View {
-        VStack(spacing: 12) {
-            // Title
-            Text(L("halo.input_mode.title"))
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.secondary)
-
-            // Buttons
-            HStack(spacing: 12) {
-                // Replace button
-                InputModeButton(
-                    icon: "scissors",
-                    label: L("halo.input_mode.replace"),
-                    isHovered: hoveredButton == .replace,
-                    color: .orange
-                ) {
-                    onSelect(.replace)
-                }
-                .onHover { isHovered in
-                    hoveredButton = isHovered ? .replace : nil
-                }
-
-                // Append button
-                InputModeButton(
-                    icon: "text.append",
-                    label: L("halo.input_mode.append"),
-                    isHovered: hoveredButton == .append,
-                    color: .blue
-                ) {
-                    onSelect(.append)
-                }
-                .onHover { isHovered in
-                    hoveredButton = isHovered ? .append : nil
-                }
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(.ultraThinMaterial)
-                .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 5)
-        )
-        .scaleEffect(isAppearing ? 1.0 : 0.8)
-        .opacity(isAppearing ? 1.0 : 0.0)
-        .onAppear {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                isAppearing = true
-            }
-        }
-    }
-}
-
-struct InputModeButton: View {
-    let icon: String
-    let label: String
-    let isHovered: Bool
-    let color: Color
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 18, weight: .medium))
-                Text(label)
-                    .font(.system(size: 10, weight: .medium))
-            }
-            .foregroundColor(isHovered ? .white : color)
-            .frame(width: 70, height: 50)
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(isHovered ? color : color.opacity(0.15))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(color.opacity(0.3), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-        .scaleEffect(isHovered ? 1.05 : 1.0)
-        .animation(.easeInOut(duration: 0.15), value: isHovered)
     }
 }
 

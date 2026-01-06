@@ -58,25 +58,21 @@ enum ToastType: Equatable {
 
 enum HaloState: Equatable {
     case idle
-    case awaitingInputMode(onSelect: (InputModeChoice) -> Void)  // Waiting for user to select input mode
     case listening
     case commandMode  // Command completion mode (add-command-completion-system)
-    case retrievingMemory  // Phase 9: Retrieving memories from database
-    case processingWithAI(providerColor: Color, providerName: String?)  // Phase 9: AI provider is processing
-    case processing(providerColor: Color, streamingText: String? = nil)  // Generic processing (backward compatibility)
-    case typewriting(progress: Float)  // Phase 7.2: Typewriter animation in progress
+    case retrievingMemory  // Retrieving memories from database
+    case processingWithAI(providerColor: Color, providerName: String?)  // AI provider is processing
+    case processing(providerColor: Color, streamingText: String? = nil)  // Generic processing
+    case typewriting(progress: Float)  // Typewriter animation in progress
     case success(finalText: String? = nil)
-    case error(type: ErrorType, message: String, suggestion: String? = nil)  // Phase 7.4: Error with optional suggestion
-    case permissionRequired(type: PermissionType)  // Permission prompt (replaces system NSAlert)
-    case toast(type: ToastType, title: String, message: String, autoDismiss: Bool, onDismiss: (() -> Void)?)  // Toast notification (replaces NSAlert)
+    case error(type: ErrorType, message: String, suggestion: String? = nil)  // Error with optional suggestion
+    case permissionRequired(type: PermissionType)  // Permission prompt
+    case toast(type: ToastType, title: String, message: String, autoDismiss: Bool, onDismiss: (() -> Void)?)  // Toast notification
 
     // Equatable conformance
     static func == (lhs: HaloState, rhs: HaloState) -> Bool {
         switch (lhs, rhs) {
         case (.idle, .idle):
-            return true
-        case (.awaitingInputMode, .awaitingInputMode):
-            // Closures can't be compared, so we just check if both are awaiting
             return true
         case (.listening, .listening):
             return true

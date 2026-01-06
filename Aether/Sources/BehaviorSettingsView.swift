@@ -413,13 +413,11 @@ struct BehaviorSettingsView: View {
 enum InputMode: String, CaseIterable {
     case cut = "cut"
     case copy = "copy"
-    case halo = "halo"
 
     var displayName: String {
         switch self {
         case .cut: return L("settings.behavior.input_mode_cut")
         case .copy: return L("settings.behavior.input_mode_copy")
-        case .halo: return L("settings.behavior.input_mode_halo")
         }
     }
 
@@ -427,7 +425,6 @@ enum InputMode: String, CaseIterable {
         switch self {
         case .cut: return "scissors"
         case .copy: return "doc.on.doc"
-        case .halo: return "circle.circle"
         }
     }
 
@@ -437,8 +434,6 @@ enum InputMode: String, CaseIterable {
             return L("settings.behavior.input_mode_cut_description")
         case .copy:
             return L("settings.behavior.input_mode_copy_description")
-        case .halo:
-            return L("settings.behavior.input_mode_halo_description")
         }
     }
 
