@@ -40,6 +40,7 @@ use crate::config::Config;
 use crate::error::{AetherError, Result};
 use crate::payload::Capability;
 use crate::providers::{create_provider, AiProvider};
+use crate::video::extract_youtube_url;
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -970,6 +971,12 @@ impl Router {
             "Starting extended route decision"
         );
 
+        // Check for YouTube URL in context (for auto-enabling Video capability)
+        let has_youtube_url = extract_youtube_url(context).is_some();
+        if has_youtube_url {
+            debug!("YouTube URL detected in context, Video capability will be auto-enabled");
+        }
+
         // Find the first matching rule
         for (index, rule) in self.rules.iter().enumerate() {
             if rule.matches(context) {
@@ -989,18 +996,27 @@ impl Router {
                     // Use the actual rule configuration (has capabilities, intent_type, etc.)
                     let rule_config = &self.rule_configs[index];
 
-                    let decision = RoutingDecision::from_rule(
+                    let mut decision = RoutingDecision::from_rule(
                         provider.as_ref(),
                         rule.provider_name.clone(),
                         rule_config,
                         fallback,
                     );
 
+                    // Auto-add Video capability if YouTube URL detected and not already present
+                    if has_youtube_url && !decision.capabilities.contains(&Capability::Video) {
+                        decision.capabilities.push(Capability::Video);
+                        info!(
+                            "Auto-enabled Video capability due to YouTube URL in context"
+                        );
+                    }
+
                     info!(
                         rule_index = index,
                         provider = %decision.provider_name,
                         intent = %decision.intent,
                         capabilities_count = decision.capabilities.len(),
+                        has_youtube_url = has_youtube_url,
                         "Extended routing decision created"
                     );
 
@@ -1017,11 +1033,23 @@ impl Router {
                     "Using default provider (no rules matched)"
                 );
 
-                return Some(RoutingDecision::basic(
-                    provider.as_ref(),
-                    default_name.clone(),
-                    "You are a helpful AI assistant.".to_string(),
-                ));
+                // For default routing, also auto-add Video capability if YouTube URL detected
+                let capabilities = if has_youtube_url {
+                    info!("Auto-enabled Video capability for default route due to YouTube URL");
+                    vec![Capability::Video]
+                } else {
+                    vec![]
+                };
+
+                return Some(RoutingDecision {
+                    provider: provider.as_ref(),
+                    provider_name: default_name.clone(),
+                    system_prompt: "You are a helpful AI assistant.".to_string(),
+                    capabilities,
+                    intent: crate::payload::Intent::GeneralChat,
+                    context_format: crate::payload::ContextFormat::Markdown,
+                    fallback: None,
+                });
             }
         }
 

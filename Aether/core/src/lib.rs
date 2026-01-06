@@ -87,6 +87,7 @@ pub mod providers;
 pub mod router;
 pub mod search; // NEW: Search capability with multiple provider support
 pub mod utils; // NEW: Capability executor for enriching payloads
+pub mod video; // NEW: Video transcript extraction (YouTube)
 
 // Re-export public types
 // NOTE: ImageData/ImageFormat still exported for AI provider image encoding
@@ -94,7 +95,7 @@ pub use crate::clipboard::{ImageData, ImageFormat};
 pub use crate::config::{
     BehaviorConfig, Config, FullConfig, GeneralConfig, MemoryConfig, PIIConfig, ProviderConfig,
     ProviderConfigEntry, RoutingRuleConfig, SearchBackendConfig, SearchBackendEntry, SearchConfig,
-    SearchConfigInternal, ShortcutsConfig, TestConnectionResult,
+    SearchConfigInternal, ShortcutsConfig, TestConnectionResult, VideoConfig,
 };
 pub use crate::core::{
     AetherCore, AppMemoryInfo, CapturedContext, MediaAttachment, MemoryEntryFFI as MemoryEntry,

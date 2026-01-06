@@ -137,6 +137,10 @@ pub struct AgentContext {
     /// Media attachments for multimodal content (add-multimodal-content-support)
     /// Contains images, videos, or files from clipboard
     pub attachments: Option<Vec<crate::core::MediaAttachment>>,
+
+    /// Video transcript for video analysis capability
+    /// Contains extracted transcript from YouTube or other video platforms
+    pub video_transcript: Option<crate::video::VideoTranscript>,
 }
 
 // ====== Reserved structures for future stages ======

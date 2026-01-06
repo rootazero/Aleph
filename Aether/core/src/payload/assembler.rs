@@ -83,6 +83,12 @@ impl PromptAssembler {
             }
         }
 
+        // Video transcript section
+        if let Some(transcript) = &context.video_transcript {
+            let video_section = transcript.format_for_context();
+            sections.push(video_section);
+        }
+
         // MCP section (reserved for future)
         if let Some(_resources) = &context.mcp_resources {
             // TODO: Implement MCP formatting

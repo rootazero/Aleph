@@ -1,20 +1,21 @@
 /// Capability Executor - Execute capabilities in priority order
 ///
-/// This module orchestrates the execution of different capabilities (Memory, Search, MCP)
+/// This module orchestrates the execution of different capabilities (Memory, Search, MCP, Video)
 /// in a fixed priority order, enriching the AgentPayload with context data.
-use crate::config::MemoryConfig;
+use crate::config::{MemoryConfig, VideoConfig};
 use crate::error::{AetherError, Result};
 use crate::memory::{EmbeddingModel, MemoryRetrieval, VectorDatabase};
 use crate::payload::{AgentPayload, Capability};
 use crate::search::{SearchOptions, SearchRegistry};
 use crate::utils::pii;
+use crate::video::{extract_youtube_url, YouTubeExtractor};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 /// Capability executor that enriches AgentPayload with context data
 ///
-/// Executes capabilities in priority order: Memory → Search → MCP
+/// Executes capabilities in priority order: Memory → Search → MCP → Video
 pub struct CapabilityExecutor {
     /// Optional memory database for vector retrieval
     memory_db: Option<Arc<VectorDatabase>>,
@@ -26,6 +27,8 @@ pub struct CapabilityExecutor {
     search_options: SearchOptions,
     /// Enable PII (Personally Identifiable Information) scrubbing
     pii_scrubbing_enabled: bool,
+    /// Video transcript configuration
+    video_config: Option<Arc<VideoConfig>>,
 }
 
 impl CapabilityExecutor {
@@ -38,6 +41,7 @@ impl CapabilityExecutor {
     /// * `search_registry` - Optional search registry for Search capability
     /// * `search_options` - Search options (timeout, max results, etc.)
     /// * `pii_scrubbing_enabled` - Enable PII scrubbing for search queries
+    /// * `video_config` - Optional video transcript configuration
     pub fn new(
         memory_db: Option<Arc<VectorDatabase>>,
         memory_config: Option<Arc<MemoryConfig>>,
@@ -51,7 +55,14 @@ impl CapabilityExecutor {
             search_registry,
             search_options: search_options.unwrap_or_default(),
             pii_scrubbing_enabled,
+            video_config: None,
         }
+    }
+
+    /// Create a new capability executor with video config
+    pub fn with_video_config(mut self, video_config: Option<Arc<VideoConfig>>) -> Self {
+        self.video_config = video_config;
+        self
     }
 
     /// Get embedding model directory
@@ -112,6 +123,9 @@ impl CapabilityExecutor {
             Capability::Mcp => {
                 warn!("MCP capability not implemented yet (reserved for future)");
                 // Future: Call MCP client and populate payload.context.mcp_resources
+            }
+            Capability::Video => {
+                payload = self.execute_video(payload).await?;
             }
         }
 
@@ -288,6 +302,73 @@ impl CapabilityExecutor {
                     "Search timed out, continuing without results"
                 );
                 payload.context.search_results = None;
+            }
+        }
+
+        Ok(payload)
+    }
+
+    /// Execute Video capability
+    ///
+    /// Extracts transcript from YouTube video if URL is found in user input.
+    /// Falls back gracefully if extraction fails.
+    ///
+    /// # Arguments
+    ///
+    /// * `payload` - The agent payload
+    ///
+    /// # Returns
+    ///
+    /// The payload with video_transcript populated (if URL found and extraction succeeds)
+    async fn execute_video(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
+        // Check if video config is available and enabled
+        let Some(config) = &self.video_config else {
+            warn!("Video capability requested but no video config available");
+            return Ok(payload);
+        };
+
+        if !config.enabled {
+            debug!("Video capability disabled in config");
+            return Ok(payload);
+        }
+
+        if !config.youtube_transcript {
+            debug!("YouTube transcript extraction disabled in config");
+            return Ok(payload);
+        }
+
+        // Extract YouTube URL from user input
+        let Some(video_url) = extract_youtube_url(&payload.user_input) else {
+            debug!("No YouTube URL found in user input");
+            return Ok(payload);
+        };
+
+        info!(
+            video_url = %video_url,
+            "Found YouTube URL in user input, extracting transcript"
+        );
+
+        // Create extractor and fetch transcript
+        let extractor = YouTubeExtractor::new((**config).clone());
+
+        match extractor.extract_transcript(&video_url).await {
+            Ok(transcript) => {
+                info!(
+                    video_id = %transcript.video_id,
+                    title = %transcript.title,
+                    segments = transcript.segments.len(),
+                    truncated = transcript.was_truncated,
+                    "Successfully extracted video transcript"
+                );
+                payload.context.video_transcript = Some(transcript);
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    video_url = %video_url,
+                    "Failed to extract video transcript, continuing without it"
+                );
+                // Don't fail the request - continue without transcript
             }
         }
 

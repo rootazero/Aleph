@@ -517,3 +517,6 @@
 "settings.routing.preset.skills.usage" = "/skill <name>";
 "settings.routing.preset.skills.sub.list" = "List available skills";
 "settings.routing.preset.skills.sub.skill" = "Execute specific skill";
+
+"settings.routing.preset.video.description" = "YouTube Video Analysis - Extract and analyze video content via transcripts";
+"settings.routing.preset.video.usage" = "/video <YouTube URL>";

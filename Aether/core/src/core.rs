@@ -592,7 +592,12 @@ impl AetherCore {
                     })
                     .unwrap_or(false)
             },
-        );
+        )
+        .with_video_config({
+            // Pass VideoConfig from config
+            let cfg = self.lock_config();
+            cfg.video.as_ref().map(|v| Arc::new(v.clone()))
+        });
 
         executor.execute_all(payload).await
     }

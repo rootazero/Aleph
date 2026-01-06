@@ -106,6 +106,13 @@ pub enum AetherError {
         message: String,
         suggestion: Option<String>,
     },
+
+    /// Video transcript extraction error
+    #[error("Video error: {message}")]
+    VideoError {
+        message: String,
+        suggestion: Option<String>,
+    },
 }
 
 impl AetherError {
@@ -227,6 +234,14 @@ impl AetherError {
         }
     }
 
+    /// Create a video transcript extraction error with a message
+    pub fn video<S: Into<String>>(msg: S) -> Self {
+        AetherError::VideoError {
+            message: msg.into(),
+            suggestion: Some("Check if the video has captions available. Try a different video or ensure you have internet connectivity.".to_string()),
+        }
+    }
+
     /// Get the suggestion for this error, if available
     ///
     /// Returns a user-friendly actionable suggestion for how to resolve the error.
@@ -246,7 +261,8 @@ impl AetherError {
             | AetherError::InvalidConfig { suggestion, .. }
             | AetherError::KeychainError { suggestion, .. }
             | AetherError::Other { suggestion, .. }
-            | AetherError::PermissionDenied { suggestion, .. } => suggestion.as_deref(),
+            | AetherError::PermissionDenied { suggestion, .. }
+            | AetherError::VideoError { suggestion, .. } => suggestion.as_deref(),
         }
     }
 
@@ -338,6 +354,12 @@ impl AetherError {
             AetherError::PermissionDenied { message, .. } => {
                 format!(
                     "Permission denied: {}. Please grant required permissions in System Settings.",
+                    message
+                )
+            }
+            AetherError::VideoError { message, .. } => {
+                format!(
+                    "Video processing error: {}. Check if the video has captions available.",
                     message
                 )
             }

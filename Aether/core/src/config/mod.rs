@@ -44,6 +44,9 @@ pub struct Config {
     /// Search configuration (Search Capability Integration)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search: Option<SearchConfigInternal>,
+    /// Video transcript configuration (YouTube transcript extraction)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<VideoConfig>,
 }
 
 /// General configuration settings
@@ -840,6 +843,56 @@ impl From<SearchConfig> for SearchConfigInternal {
     }
 }
 
+/// Video transcript extraction configuration
+///
+/// Enables extracting transcripts from video platforms (currently YouTube)
+/// and injecting them into the AI context for analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoConfig {
+    /// Enable video transcript extraction
+    #[serde(default = "default_video_enabled")]
+    pub enabled: bool,
+
+    /// Enable YouTube transcript extraction
+    #[serde(default = "default_youtube_transcript")]
+    pub youtube_transcript: bool,
+
+    /// Preferred language for transcripts (ISO 639-1 code, e.g., "en", "zh")
+    #[serde(default = "default_preferred_language")]
+    pub preferred_language: String,
+
+    /// Maximum transcript length in characters (0 = no limit)
+    #[serde(default = "default_max_transcript_length")]
+    pub max_transcript_length: usize,
+}
+
+fn default_video_enabled() -> bool {
+    true
+}
+
+fn default_youtube_transcript() -> bool {
+    true
+}
+
+fn default_preferred_language() -> String {
+    "en".to_string()
+}
+
+fn default_max_transcript_length() -> usize {
+    50000 // ~12,500 words, roughly 25-30 minutes of video
+}
+
+impl Default for VideoConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_video_enabled(),
+            youtube_transcript: default_youtube_transcript(),
+            preferred_language: default_preferred_language(),
+            max_transcript_length: default_max_transcript_length(),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -900,10 +953,28 @@ impl Default for Config {
                     tools: None,
                     knowledge_base: None,
                 },
+                // /video command - YouTube video transcript analysis
+                RoutingRuleConfig {
+                    rule_type: Some("command".to_string()),
+                    is_builtin: true,
+                    regex: r"^/video\s+".to_string(),
+                    provider: Some("openai".to_string()), // Default, user can override
+                    system_prompt: Some("You are a video content analyst. Analyze the following video transcript and provide insights, summaries, or answer questions about the video content.".to_string()),
+                    strip_prefix: Some(true),
+                    capabilities: Some(vec!["video".to_string(), "memory".to_string()]),
+                    intent_type: Some("video_analysis".to_string()),
+                    context_format: Some("markdown".to_string()),
+                    skill_id: None,
+                    skill_version: None,
+                    workflow: None,
+                    tools: None,
+                    knowledge_base: None,
+                },
             ],
             shortcuts: Some(ShortcutsConfig::default()),
             behavior: Some(BehaviorConfig::default()),
             search: None,
+            video: Some(VideoConfig::default()),
         }
     }
 }

@@ -738,6 +738,16 @@ enum PresetRules {
                     isImplemented: false
                 )
             ]
+        ),
+        PresetRule(
+            command: "/video",
+            description: "Analyze YouTube video content via transcript extraction",
+            descriptionKey: "settings.routing.preset.video.description",
+            isImplemented: true,
+            icon: "play.rectangle",
+            usage: "/video <YouTube URL>",
+            usageKey: "settings.routing.preset.video.usage",
+            subcommands: []  // Auto-detects YouTube URLs in input
         )
     ]
 }

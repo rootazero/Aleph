@@ -517,3 +517,6 @@
 "settings.routing.preset.skills.usage" = "/skill <技能名>";
 "settings.routing.preset.skills.sub.list" = "列出可用的技能";
 "settings.routing.preset.skills.sub.skill" = "执行指定的技能";
+
+"settings.routing.preset.video.description" = "YouTube 视频分析 - 通过字幕提取和分析视频内容";
+"settings.routing.preset.video.usage" = "/video <YouTube 链接>";
