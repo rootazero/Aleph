@@ -29,6 +29,12 @@ class EventHandler: AetherEventHandler {
     // Auto-dismiss timer for toast notifications
     private var toastDismissTimer: Timer?
 
+    // Track when Halo started showing (for minimum display time before errors)
+    private var haloShowTime: Date?
+
+    // Minimum time Halo should display before showing error toast (in seconds)
+    private let minHaloDisplayTime: TimeInterval = 1.0
+
     init(haloWindow: HaloWindow?) {
         self.haloWindow = haloWindow
         setupEscapeKeyMonitor()
@@ -68,9 +74,24 @@ class EventHandler: AetherEventHandler {
         }
 
         DispatchQueue.main.async { [weak self] in
-            // Show error toast notification (do NOT call hide() first - it has a delayed
-            // orderOut that would hide the toast after it appears)
-            self?.showErrorNotification(message: message, suggestion: suggestion)
+            guard let self = self else { return }
+
+            // Calculate delay to ensure Halo displays for at least minHaloDisplayTime
+            let delay: TimeInterval
+            if let showTime = self.haloShowTime {
+                let elapsed = Date().timeIntervalSince(showTime)
+                delay = max(0, self.minHaloDisplayTime - elapsed)
+                print("[EventHandler] Halo displayed for \(String(format: "%.2f", elapsed))s, delaying toast by \(String(format: "%.2f", delay))s")
+            } else {
+                // Halo not showing, show error immediately
+                delay = 0
+                print("[EventHandler] No Halo show time recorded, showing toast immediately")
+            }
+
+            // Show error toast after delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.showErrorNotification(message: message, suggestion: suggestion)
+            }
         }
     }
 
@@ -202,28 +223,36 @@ class EventHandler: AetherEventHandler {
         switch state {
         case .idle:
             haloWindow?.hide()
-            // Reset accumulated text when going idle
+            // Reset accumulated text and show time when going idle
             accumulatedText = ""
+            haloShowTime = nil
 
         case .listening:
             // Use processing animation for listening state (same as processingWithAI)
             // This unifies the visual feedback: processing icon → (hidden) → success
             haloWindow?.updateState(.processing(providerColor: .blue, streamingText: nil))
-            // Reset accumulated text when starting new interaction
+            // Reset accumulated text and record show time for minimum display duration
             accumulatedText = ""
+            haloShowTime = Date()
             announceToVoiceOver("Listening for input")
 
         case .retrievingMemory:
             haloWindow?.updateState(.retrievingMemory)
+            // Record show time if not already set
+            if haloShowTime == nil { haloShowTime = Date() }
             announceToVoiceOver("Retrieving memories")
 
         case .processingWithAi:
             // This state will be updated with provider details via onAiProcessingStarted callback
             haloWindow?.updateState(.processing(providerColor: .blue, streamingText: nil))
+            // Record show time if not already set
+            if haloShowTime == nil { haloShowTime = Date() }
             announceToVoiceOver("Processing with AI")
 
         case .processing:
             haloWindow?.updateState(.processing(providerColor: .green, streamingText: nil))
+            // Record show time if not already set
+            if haloShowTime == nil { haloShowTime = Date() }
             announceToVoiceOver("Processing request")
 
         case .success:
