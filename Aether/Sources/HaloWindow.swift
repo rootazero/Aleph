@@ -154,9 +154,9 @@ class HaloWindow: NSWindow {
         haloViewModel.state = state
 
         // Enable/disable mouse events based on state
-        // awaitingInputMode and error states need mouse interaction
+        // awaitingInputMode, error, permissionRequired, and toast states need mouse interaction
         switch state {
-        case .awaitingInputMode, .error, .permissionRequired:
+        case .awaitingInputMode, .error, .permissionRequired, .toast:
             self.ignoresMouseEvents = false
         default:
             self.ignoresMouseEvents = true
@@ -188,6 +188,35 @@ class HaloWindow: NSWindow {
         haloViewModel.state = .typewriting(progress: progress)
     }
 
+    /// Show toast at screen center (unlike regular Halo which shows at cursor)
+    func showToastCentered() {
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+            print("[HaloWindow] Warning: No screen found, cannot display toast")
+            return
+        }
+
+        let screenFrame = screen.visibleFrame
+        let windowSize = getWindowSize()
+        self.setContentSize(windowSize)
+
+        // Center on screen
+        let windowOrigin = NSPoint(
+            x: screenFrame.midX - windowSize.width / 2,
+            y: screenFrame.midY - windowSize.height / 2
+        )
+
+        self.setFrameOrigin(windowOrigin)
+
+        // Show window WITHOUT activating (critical for focus preservation)
+        self.orderFrontRegardless()
+
+        // Fade in animation
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            self.animator().alphaValue = 1.0
+        })
+    }
+
     // MARK: - Private Helpers
 
     private func getWindowSize() -> NSSize {
@@ -212,6 +241,12 @@ class HaloWindow: NSWindow {
 
         case .error:
             return NSSize(width: 300, height: 180)
+
+        case .toast(_, _, let message, _, _):
+            // Dynamic height based on message length
+            let lineCount = min(5, max(1, message.count / 50 + 1))
+            let height = CGFloat(80 + lineCount * 16)
+            return NSSize(width: 400, height: height)
 
         default:
             return NSSize(width: 120, height: 120)

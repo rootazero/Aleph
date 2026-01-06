@@ -13,6 +13,49 @@ enum InputModeChoice {
     case append   // Copy original text, append AI response after it
 }
 
+/// Toast notification types for Halo overlay
+enum ToastType: Equatable {
+    case info      // Blue accent, info.circle icon - for success/confirmation
+    case warning   // Orange accent, exclamationmark.triangle icon - for warnings
+    case error     // Red accent, xmark.circle icon - for errors
+
+    /// SF Symbol icon name for each toast type
+    var iconName: String {
+        switch self {
+        case .info:
+            return "info.circle.fill"
+        case .warning:
+            return "exclamationmark.triangle.fill"
+        case .error:
+            return "xmark.circle.fill"
+        }
+    }
+
+    /// Accent color for each toast type
+    var accentColor: Color {
+        switch self {
+        case .info:
+            return Color(red: 0, green: 0.478, blue: 1.0)  // #007AFF
+        case .warning:
+            return Color(red: 1.0, green: 0.584, blue: 0)  // #FF9500
+        case .error:
+            return Color(red: 1.0, green: 0.231, blue: 0.188)  // #FF3B30
+        }
+    }
+
+    /// Display name for accessibility
+    var displayName: String {
+        switch self {
+        case .info:
+            return "Information"
+        case .warning:
+            return "Warning"
+        case .error:
+            return "Error"
+        }
+    }
+}
+
 enum HaloState: Equatable {
     case idle
     case awaitingInputMode(onSelect: (InputModeChoice) -> Void)  // Waiting for user to select input mode
@@ -24,6 +67,7 @@ enum HaloState: Equatable {
     case success(finalText: String? = nil)
     case error(type: ErrorType, message: String, suggestion: String? = nil)  // Phase 7.4: Error with optional suggestion
     case permissionRequired(type: PermissionType)  // Permission prompt (replaces system NSAlert)
+    case toast(type: ToastType, title: String, message: String, autoDismiss: Bool, onDismiss: (() -> Void)?)  // Toast notification (replaces NSAlert)
 
     // Equatable conformance
     static func == (lhs: HaloState, rhs: HaloState) -> Bool {
@@ -49,6 +93,9 @@ enum HaloState: Equatable {
             return type1 == type2 && msg1 == msg2 && sug1 == sug2
         case (.permissionRequired(let type1), .permissionRequired(let type2)):
             return type1 == type2
+        case (.toast(let type1, let title1, let msg1, let auto1, _), .toast(let type2, let title2, let msg2, let auto2, _)):
+            // Closures can't be compared, so we compare other fields
+            return type1 == type2 && title1 == title2 && msg1 == msg2 && auto1 == auto2
         default:
             return false
         }

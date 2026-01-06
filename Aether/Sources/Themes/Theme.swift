@@ -105,6 +105,19 @@ protocol HaloTheme {
         onDismiss: (() -> Void)?
     ) -> AnyView
 
+    /// View rendered for toast notifications
+    /// - Parameters:
+    ///   - type: Toast type (info, warning, error)
+    ///   - title: Toast title text
+    ///   - message: Toast message text
+    ///   - onDismiss: Optional dismiss callback
+    @ViewBuilder func toastView(
+        type: ToastType,
+        title: String,
+        message: String,
+        onDismiss: (() -> Void)?
+    ) -> AnyView
+
     // MARK: - Animations
 
     /// Duration for state transition animations
@@ -194,6 +207,23 @@ extension HaloTheme {
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Typewriter animation in progress")
             .accessibilityHint("AI response is being typed character by character. Press Escape to paste remaining text instantly.")
+        )
+    }
+
+    // Default implementation for toast notifications
+    func toastView(
+        type: ToastType,
+        title: String,
+        message: String,
+        onDismiss: (() -> Void)?
+    ) -> AnyView {
+        AnyView(
+            HaloToastView(
+                type: type,
+                title: title,
+                message: message,
+                onDismiss: onDismiss
+            )
         )
     }
 }

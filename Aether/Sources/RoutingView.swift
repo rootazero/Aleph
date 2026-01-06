@@ -539,7 +539,7 @@ struct RoutingView: View {
 
                 // Show success notification
                 DispatchQueue.main.async {
-                    showInfoAlert(
+                    showInfoToast(
                         title: L("alert.routing.export_title"),
                         message: String(format: L("alert.routing.export_message"), url.lastPathComponent)
                     )
@@ -619,7 +619,7 @@ struct RoutingView: View {
                     customRules = config.rules.filter { !$0.isPreset }
 
                     // Show success message
-                    showInfoAlert(
+                    showInfoToast(
                         title: L("alert.routing.import_success_append"),
                         message: String(format: L("alert.routing.import_success_append_message"), importedRules.count)
                     )
@@ -644,7 +644,7 @@ struct RoutingView: View {
                     customRules = config.rules.filter { !$0.isPreset }
 
                     // Show success message
-                    showInfoAlert(
+                    showInfoToast(
                         title: L("alert.routing.import_success_replace"),
                         message: String(format: L("alert.routing.import_success_replace_message"), importedRules.count)
                     )

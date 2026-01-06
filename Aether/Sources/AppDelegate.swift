@@ -27,8 +27,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Published to trigger UI updates when initialized
     @Published internal var core: AetherCore?
 
-    // Event handler for Rust callbacks
-    private var eventHandler: EventHandler?
+    // Event handler for Rust callbacks (internal for toast access)
+    internal var eventHandler: EventHandler?
 
     // Halo overlay window
     private var haloWindow: HaloWindow?
@@ -298,7 +298,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     @objc private func showAbout() {
-        showInfoAlert(title: L("alert.about.title"), message: L("alert.about.message", "0.1.0 (Phase 2)"))
+        eventHandler?.showToast(
+            type: .info,
+            title: L("alert.about.title"),
+            message: L("alert.about.message", "0.1.0 (Phase 2)"),
+            autoDismiss: true
+        )
     }
 
     @objc private func showSettings() {
@@ -311,7 +316,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // CRITICAL: Check if core is initialized before opening settings
         guard let core = core else {
             print("[Aether] ERROR: Core not initialized, cannot open settings")
-            showWarningAlert(title: L("error.core_not_initialized"), message: L("error.core_not_initialized.suggestion"))
+            eventHandler?.showToast(
+                type: .warning,
+                title: L("error.core_not_initialized"),
+                message: L("error.core_not_initialized.suggestion"),
+                autoDismiss: false
+            )
             return
         }
 
@@ -506,9 +516,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // (Could add a toast notification here in the future)
         } catch {
             print("[AppDelegate] ❌ Error setting default provider: \(error)")
-            showWarningAlert(
+            eventHandler?.showToast(
+                type: .warning,
                 title: "Failed to set default provider",
-                message: "Could not set '\(providerName)' as default provider.\n\nError: \(error.localizedDescription)"
+                message: "Could not set '\(providerName)' as default provider.\n\nError: \(error.localizedDescription)",
+                autoDismiss: false
             )
         }
     }
@@ -594,9 +606,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         } catch {
             print("[AppDelegate] ❌ Error setting input mode: \(error)")
-            showWarningAlert(
+            eventHandler?.showToast(
+                type: .warning,
                 title: "Failed to set input mode",
-                message: "Could not set input mode to '\(inputMode)'.\n\nError: \(error.localizedDescription)"
+                message: "Could not set input mode to '\(inputMode)'.\n\nError: \(error.localizedDescription)",
+                autoDismiss: false
             )
         }
     }
@@ -695,7 +709,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             } else {
                 // Max retries exceeded, show error to user
                 print("[Aether] Max retry attempts exceeded, giving up")
-                showErrorAlert(title: L("error.aether"), message: "Failed to initialize Aether core after \(maxRetryAttempts) attempts.\n\nError: \(error)\n\nPlease check:\n1. Accessibility permissions are granted\n2. Input Monitoring permissions are granted\n3. libaethecore.dylib is properly bundled\n4. Rust core is built correctly\n\nYou may need to restart your Mac for permissions to take full effect.")
+                let errorMessage = "Failed to initialize Aether core after \(maxRetryAttempts) attempts.\n\nError: \(error)\n\nPlease check:\n1. Accessibility permissions are granted\n2. Input Monitoring permissions are granted\n3. libaethecore.dylib is properly bundled\n4. Rust core is built correctly\n\nYou may need to restart your Mac for permissions to take full effect."
+
+                // Try toast first, fallback to NSAlert if eventHandler not available
+                if let handler = self.eventHandler {
+                    handler.showToast(
+                        type: .error,
+                        title: L("error.aether"),
+                        message: errorMessage,
+                        autoDismiss: false
+                    )
+                } else {
+                    // Fallback: eventHandler not available during early init failure
+                    showErrorAlert(title: L("error.aether"), message: errorMessage)
+                }
             }
         }
     }
@@ -1213,10 +1240,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             if let original = originalClipboardText {
                 ClipboardManager.shared.setText(original)
             }
-            // Hide Halo and show error alert to user
+            // Hide Halo and show error toast to user
             DispatchQueue.main.async { [weak self] in
                 self?.haloWindow?.hide()
-                showWarningAlert(title: L("error.file_size"), message: error)
+                self?.eventHandler?.showToast(
+                    type: .warning,
+                    title: L("error.file_size"),
+                    message: error,
+                    autoDismiss: false
+                )
             }
             return
         }

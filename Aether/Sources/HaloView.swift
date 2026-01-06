@@ -83,6 +83,15 @@ struct HaloView: View {
                     }
                 )
                 .transition(.scale.combined(with: .opacity))
+
+            case .toast(let type, let title, let message, _, let onDismiss):
+                theme.toastView(
+                    type: type,
+                    title: title,
+                    message: message,
+                    onDismiss: onDismiss
+                )
+                .transition(.scale.combined(with: .opacity))
             }
         }
         .frame(width: dynamicWidth, height: dynamicHeight)
@@ -134,6 +143,8 @@ struct HaloView: View {
             return "\(errorTypeString) error occurred"
         case .permissionRequired(let permissionType):
             return permissionType.title
+        case .toast(let type, let title, _, _, _):
+            return "\(type.displayName): \(title)"
         }
     }
 
@@ -146,6 +157,8 @@ struct HaloView: View {
             return text
         case .success(let text):
             return text
+        case .toast(_, _, let message, _, _):
+            return message
         default:
             return nil
         }
@@ -158,7 +171,7 @@ struct HaloView: View {
             return [.updatesFrequently]
         case .processing, .retrievingMemory, .processingWithAI:
             return [.updatesFrequently]
-        case .error, .permissionRequired:
+        case .error, .permissionRequired, .toast:
             return [.isStaticText]
         default:
             return []
@@ -182,6 +195,8 @@ struct HaloView: View {
             return 300
         case .permissionRequired:
             return 480  // Wider for permission prompt
+        case .toast:
+            return 400  // Max width for toast
         default:
             return 120
         }
@@ -203,6 +218,10 @@ struct HaloView: View {
             return 180
         case .permissionRequired:
             return 450  // Taller for permission prompt
+        case .toast(_, _, let message, _, _):
+            // Dynamic height based on message length
+            let lineCount = min(5, max(1, message.count / 50 + 1))
+            return CGFloat(80 + lineCount * 16)
         default:
             return 120
         }

@@ -26,6 +26,9 @@ class EventHandler: AetherEventHandler {
     // Escape key monitor for cancelling typewriter
     private var escapeKeyMonitor: Any?
 
+    // Auto-dismiss timer for toast notifications
+    private var toastDismissTimer: Timer?
+
     init(haloWindow: HaloWindow?) {
         self.haloWindow = haloWindow
         setupEscapeKeyMonitor()
@@ -34,6 +37,7 @@ class EventHandler: AetherEventHandler {
 
     deinit {
         removeEscapeKeyMonitor()
+        toastDismissTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -324,6 +328,64 @@ class EventHandler: AetherEventHandler {
         accumulatedText = ""
     }
 
+    // MARK: - Toast Notifications
+
+    /// Show toast notification in Halo window
+    ///
+    /// - Parameters:
+    ///   - type: Toast type (info, warning, error)
+    ///   - title: Toast title text
+    ///   - message: Toast message text
+    ///   - autoDismiss: Whether to auto-dismiss (3s for info, disabled for warning/error)
+    func showToast(type: ToastType, title: String, message: String, autoDismiss: Bool = true) {
+        print("[EventHandler] Showing toast: \(type) - \(title)")
+
+        // Cancel any existing dismiss timer
+        toastDismissTimer?.invalidate()
+        toastDismissTimer = nil
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            // Create dismiss closure
+            let dismissAction: () -> Void = { [weak self] in
+                self?.dismissToast()
+            }
+
+            // Update Halo state to toast
+            let shouldAutoDismiss = autoDismiss && type == .info
+            self.haloWindow?.updateState(.toast(
+                type: type,
+                title: title,
+                message: message,
+                autoDismiss: shouldAutoDismiss,
+                onDismiss: dismissAction
+            ))
+
+            // Show at screen center
+            self.haloWindow?.showToastCentered()
+
+            // Setup auto-dismiss timer for info toasts
+            if shouldAutoDismiss {
+                self.toastDismissTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
+                    self?.dismissToast()
+                }
+            }
+        }
+    }
+
+    /// Dismiss current toast notification
+    func dismissToast() {
+        print("[EventHandler] Dismissing toast")
+
+        toastDismissTimer?.invalidate()
+        toastDismissTimer = nil
+
+        DispatchQueue.main.async { [weak self] in
+            self?.haloWindow?.hide()
+        }
+    }
+
     /// Show permission prompt in Halo window
     /// DEPRECATED: Now using PermissionGateView instead of Halo for permission prompts
     /// Kept for backward compatibility but does not show any UI
@@ -345,19 +407,14 @@ class EventHandler: AetherEventHandler {
     // MARK: - Error Notification
 
     private func showErrorNotification(message: String, suggestion: String?) {
-        let alert = NSAlert()
-        alert.messageText = L("error.aether")
-
         // Combine message and suggestion
         var fullMessage = message
         if let sug = suggestion {
-            fullMessage += "\n\n💡 Suggestion: \(sug)"
+            fullMessage += "\n\n\(sug)"
         }
 
-        alert.informativeText = fullMessage
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: L("common.ok"))
-        alert.runModal()
+        // Use toast notification instead of NSAlert
+        showToast(type: .error, title: L("error.aether"), message: fullMessage, autoDismiss: false)
     }
 
     // MARK: - Config Reload Notification
