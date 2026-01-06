@@ -188,6 +188,35 @@ class HaloWindow: NSWindow {
         haloViewModel.state = .typewriting(progress: progress)
     }
 
+    /// Show Halo at screen center (for initialization feedback, errors, etc.)
+    func showCentered() {
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+            print("[HaloWindow] Warning: No screen found, cannot display")
+            return
+        }
+
+        let screenFrame = screen.visibleFrame
+        let windowSize = NSSize(width: 120, height: 120)  // Standard Halo size
+        self.setContentSize(windowSize)
+
+        // Center on screen
+        let windowOrigin = NSPoint(
+            x: screenFrame.midX - windowSize.width / 2,
+            y: screenFrame.midY - windowSize.height / 2
+        )
+
+        self.setFrameOrigin(windowOrigin)
+
+        // Show window WITHOUT activating (critical for focus preservation)
+        self.orderFrontRegardless()
+
+        // Fade in animation
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            self.animator().alphaValue = 1.0
+        })
+    }
+
     /// Show toast at screen center (unlike regular Halo which shows at cursor)
     func showToastCentered() {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else {

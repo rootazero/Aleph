@@ -711,17 +711,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 print("[Aether] Max retry attempts exceeded, giving up")
                 let errorMessage = "Failed to initialize Aether core after \(maxRetryAttempts) attempts.\n\nError: \(error)\n\nPlease check:\n1. Accessibility permissions are granted\n2. Input Monitoring permissions are granted\n3. libaethecore.dylib is properly bundled\n4. Rust core is built correctly\n\nYou may need to restart your Mac for permissions to take full effect."
 
-                // Try toast first, fallback to NSAlert if eventHandler not available
-                if let handler = self.eventHandler {
-                    handler.showToast(
-                        type: .error,
-                        title: L("error.aether"),
-                        message: errorMessage,
-                        autoDismiss: false
-                    )
-                } else {
-                    // Fallback: eventHandler not available during early init failure
-                    showErrorAlert(title: L("error.aether"), message: errorMessage)
+                // Better UX: Show Halo processing animation briefly before error toast
+                // This gives visual feedback that app tried to initialize
+                self.haloWindow?.updateState(.processing(providerColor: .blue, streamingText: nil))
+                self.haloWindow?.showCentered()
+
+                // After 0.8s animation, show error toast
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                    // Try toast first, fallback to NSAlert if eventHandler not available
+                    if let handler = self?.eventHandler {
+                        handler.showToast(
+                            type: .error,
+                            title: L("error.aether"),
+                            message: errorMessage,
+                            autoDismiss: false
+                        )
+                    } else {
+                        // Fallback: eventHandler not available during early init failure
+                        showErrorAlert(title: L("error.aether"), message: errorMessage)
+                    }
                 }
             }
         }
