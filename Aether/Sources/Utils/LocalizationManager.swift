@@ -146,7 +146,8 @@ final class LocalizationManager {
         }
 
         // Parse language field from [general] section
-        let pattern = #"language\s*=\s*"([^"]+)""#
+        // Use word boundary \b to avoid matching preferred_language or other compound keys
+        let pattern = #"\blanguage\s*=\s*"([^"]+)""#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
               let match = regex.firstMatch(in: content, options: [], range: NSRange(content.startIndex..., in: content)),
               let languageRange = Range(match.range(at: 1), in: content) else {
