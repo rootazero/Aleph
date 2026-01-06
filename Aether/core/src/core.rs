@@ -1403,34 +1403,6 @@ impl AetherCore {
         }
     }
 
-    /// DEPRECATED: Old entry point for AI processing (kept for backward compatibility)
-    ///
-    /// This method is kept to avoid breaking existing tests and Swift code during migration.
-    /// New code should use `process_input()` instead.
-    ///
-    /// # Migration Note
-    /// This will be removed in Phase 2 cleanup after all Swift code is updated.
-    #[deprecated(since = "0.2.0", note = "Use process_input() instead")]
-    pub fn process_with_ai(&self, input: String, _context: CapturedContext) -> Result<String> {
-        use std::time::Instant;
-
-        let start_time = Instant::now();
-        info!(
-            input_length = input.len(),
-            "Starting AI pipeline processing"
-        );
-
-        // Wrapper to handle errors with user-friendly messages
-        let result = self.process_with_ai_internal(input, _context, start_time);
-
-        // If error occurred, use centralized error handler
-        if let Err(ref e) = result {
-            let _ = self.handle_processing_error(e);
-        }
-
-        result
-    }
-
     /// Build routing context string from window context and clipboard content
     ///
     /// Format: `ClipboardContent\n---\n[AppName] WindowTitle`

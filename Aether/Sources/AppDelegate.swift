@@ -2086,23 +2086,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         processWithInputMode(.append)
     }
 
-    // MARK: - Accessibility Permission Check (Legacy - now using PermissionGate)
-
-    private func checkAccessibilityPermission() {
-        // This method is now deprecated in favor of the permission gate
-        // Kept for backward compatibility but not used in current flow
-        if !ContextCapture.hasAccessibilityPermission() {
-            print("[Aether] Accessibility permission not granted, showing prompt...")
-
-            // Use unified software popup instead of system NSAlert
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                self?.eventHandler?.showPermissionPrompt(type: .accessibility)
-            }
-        } else {
-            print("[Aether] Accessibility permission already granted")
-        }
-    }
-
     // MARK: - Language Preference
 
     /// Initialize localization system on app launch

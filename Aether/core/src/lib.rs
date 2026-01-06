@@ -82,8 +82,7 @@ pub mod initialization;
 pub mod logging;
 pub mod memory;
 pub mod metrics;
-pub mod payload; // NEW: Complete payload module with structured protocol
-pub mod prompt; // LEGACY: Initial structured context protocol implementation
+pub mod payload; // Structured context protocol with capability support
 pub mod providers;
 pub mod router;
 pub mod search; // NEW: Search capability with multiple provider support
