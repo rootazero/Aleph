@@ -426,8 +426,17 @@ impl Router {
         // Initialize provider registry
         let mut providers = HashMap::new();
 
-        // Create provider instances from config
+        // Create provider instances from config (only enabled providers)
         for (name, provider_config) in &config.providers {
+            // Skip disabled providers
+            if !provider_config.enabled {
+                info!(
+                    provider = %name,
+                    "Skipping disabled provider"
+                );
+                continue;
+            }
+
             let provider = create_provider(name, provider_config.clone())?;
             providers.insert(name.clone(), provider);
         }
@@ -435,13 +444,20 @@ impl Router {
         // Validate at least one provider exists
         if providers.is_empty() {
             return Err(AetherError::invalid_config(
-                "No providers configured. At least one provider is required.",
+                "No enabled providers configured. At least one enabled provider is required.",
             ));
         }
 
-        // Validate default provider exists (if specified)
+        // Validate default provider exists AND is enabled (if specified)
         if let Some(ref default_name) = config.general.default_provider {
             if !providers.contains_key(default_name) {
+                // Check if it exists but is disabled
+                if config.providers.contains_key(default_name) {
+                    return Err(AetherError::invalid_config(format!(
+                        "Default provider '{}' is disabled. Enable it or choose a different default provider.",
+                        default_name
+                    )));
+                }
                 return Err(AetherError::invalid_config(format!(
                     "Default provider '{}' not found in configured providers",
                     default_name
