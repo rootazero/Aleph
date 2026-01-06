@@ -232,14 +232,19 @@ final class ContentExtractorRegistry {
 
 // MARK: - Shared Utilities
 
-/// Supported media types for Phase 1 (images only)
+/// Supported media types for multimodal content
 enum SupportedMediaType: String, CaseIterable {
+    // Images
     case png
     case jpg
     case jpeg
     case gif
     case webp
     case tiff
+    // Documents
+    case pdf
+    case txt
+    case md
 
     /// Get MIME type for this media type
     var mimeType: String {
@@ -249,12 +254,38 @@ enum SupportedMediaType: String, CaseIterable {
         case .gif: return "image/gif"
         case .webp: return "image/webp"
         case .tiff: return "image/tiff"
+        case .pdf: return "application/pdf"
+        case .txt: return "text/plain"
+        case .md: return "text/markdown"
         }
+    }
+
+    /// Check if this type is a document (PDF, TXT, MD)
+    var isDocument: Bool {
+        switch self {
+        case .pdf, .txt, .md: return true
+        default: return false
+        }
+    }
+
+    /// Check if this type is an image
+    var isImage: Bool {
+        !isDocument
     }
 
     /// Check if a file extension is supported
     static func isSupported(_ extension: String) -> Bool {
         allCases.map(\.rawValue).contains(`extension`.lowercased())
+    }
+
+    /// Check if a file extension is a supported document type
+    static func isDocumentSupported(_ extension: String) -> Bool {
+        from(extension: `extension`)?.isDocument ?? false
+    }
+
+    /// Check if a file extension is a supported image type
+    static func isImageSupported(_ extension: String) -> Bool {
+        from(extension: `extension`)?.isImage ?? false
     }
 
     /// Get SupportedMediaType from file extension
@@ -273,6 +304,15 @@ enum MediaSizeLimits {
 
     /// Human-readable maximum size for error messages
     static let maxImageSizeDescription: String = "10MB"
+
+    /// Maximum allowed document size in bytes (20MB)
+    static let maxDocumentSizeBytes: UInt64 = 20 * 1024 * 1024
+
+    /// Maximum document text length in characters (100K)
+    static let maxDocumentTextLength: Int = 100_000
+
+    /// Human-readable maximum document size for error messages
+    static let maxDocumentSizeDescription: String = "20MB"
 }
 
 /// Image format converter for API compatibility

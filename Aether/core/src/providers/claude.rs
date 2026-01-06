@@ -320,13 +320,44 @@ impl ClaudeProvider {
         attachments: &[crate::core::MediaAttachment],
         system_prompt: Option<&str>,
     ) -> MessagesRequest {
+        // Separate images and documents
+        let images: Vec<_> = attachments
+            .iter()
+            .filter(|a| a.media_type == "image")
+            .collect();
+        let documents: Vec<_> = attachments
+            .iter()
+            .filter(|a| a.media_type == "document")
+            .collect();
+
+        // Build document context (prepend to user input)
+        let doc_context = if !documents.is_empty() {
+            documents
+                .iter()
+                .map(|d| {
+                    let name = d.filename.as_deref().unwrap_or("document");
+                    format!("--- {} ---\n{}", name, d.data)
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        } else {
+            String::new()
+        };
+
+        // Build final input with document context
+        let full_input = if doc_context.is_empty() {
+            input.to_string()
+        } else {
+            format!("{}\n\n{}", doc_context, input)
+        };
+
         // Build multimodal user message with text and images
         let mut content_blocks = Vec::new();
 
         // Add text if not empty
-        if !input.is_empty() {
+        if !full_input.is_empty() {
             content_blocks.push(ClaudeContentBlock::Text {
-                text: input.to_string(),
+                text: full_input,
             });
         } else {
             // Default prompt for image-only requests
@@ -336,18 +367,16 @@ impl ClaudeProvider {
         }
 
         // Add images from MediaAttachment
-        for attachment in attachments {
-            if attachment.media_type == "image" {
-                // Claude expects Base64 data WITHOUT the "data:image/...;base64," prefix
-                // MediaAttachment.data is already raw Base64 encoded
-                content_blocks.push(ClaudeContentBlock::Image {
-                    source: ImageSource {
-                        source_type: "base64".to_string(),
-                        media_type: attachment.mime_type.clone(),
-                        data: attachment.data.clone(),
-                    },
-                });
-            }
+        for attachment in images {
+            // Claude expects Base64 data WITHOUT the "data:image/...;base64," prefix
+            // MediaAttachment.data is already raw Base64 encoded
+            content_blocks.push(ClaudeContentBlock::Image {
+                source: ImageSource {
+                    source_type: "base64".to_string(),
+                    media_type: attachment.mime_type.clone(),
+                    data: attachment.data.clone(),
+                },
+            });
         }
 
         let messages = vec![Message {
@@ -614,36 +643,37 @@ impl AiProvider for ClaudeProvider {
         let system_prompt = system_prompt.map(|s| s.to_string());
 
         Box::pin(async move {
-            // Check if we have any image attachments
-            let image_attachments: Option<Vec<_>> = attachments.as_ref().and_then(|atts| {
-                let images: Vec<_> = atts
-                    .iter()
-                    .filter(|a| a.media_type == "image")
-                    .cloned()
-                    .collect();
-                if images.is_empty() {
-                    None
-                } else {
-                    Some(images)
-                }
-            });
-
-            // If no image attachments, fall back to text-only
-            let Some(images) = image_attachments else {
+            // Check if we have any attachments (images or documents)
+            let Some(all_attachments) = attachments.as_ref() else {
                 return self.process(&input, system_prompt.as_deref()).await;
             };
+
+            let image_count = all_attachments
+                .iter()
+                .filter(|a| a.media_type == "image")
+                .count();
+            let document_count = all_attachments
+                .iter()
+                .filter(|a| a.media_type == "document")
+                .count();
+
+            // If no useful attachments, fall back to text-only
+            if image_count == 0 && document_count == 0 {
+                return self.process(&input, system_prompt.as_deref()).await;
+            }
 
             debug!(
                 model = %self.config.model,
                 input_length = input.len(),
-                image_count = images.len(),
+                image_count = image_count,
+                document_count = document_count,
                 has_system_prompt = system_prompt.is_some(),
                 "Sending multimodal request to Claude"
             );
 
             // Build multimodal request body
             let request_body =
-                self.build_multimodal_request(&input, &images, system_prompt.as_deref());
+                self.build_multimodal_request(&input, all_attachments, system_prompt.as_deref());
 
             // Send POST request with Claude-specific headers
             let response = self

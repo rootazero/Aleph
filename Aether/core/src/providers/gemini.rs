@@ -230,12 +230,43 @@ impl GeminiProvider {
         attachments: &[crate::core::MediaAttachment],
         system_prompt: Option<&str>,
     ) -> GenerateContentRequest {
+        // Separate images and documents
+        let images: Vec<_> = attachments
+            .iter()
+            .filter(|a| a.media_type == "image")
+            .collect();
+        let documents: Vec<_> = attachments
+            .iter()
+            .filter(|a| a.media_type == "document")
+            .collect();
+
+        // Build document context (prepend to user input)
+        let doc_context = if !documents.is_empty() {
+            documents
+                .iter()
+                .map(|d| {
+                    let name = d.filename.as_deref().unwrap_or("document");
+                    format!("--- {} ---\n{}", name, d.data)
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        } else {
+            String::new()
+        };
+
+        // Build final input with document context
+        let full_input = if doc_context.is_empty() {
+            input.to_string()
+        } else {
+            format!("{}\n\n{}", doc_context, input)
+        };
+
         let mut parts = Vec::new();
 
         // Add text if not empty
-        if !input.is_empty() {
+        if !full_input.is_empty() {
             parts.push(Part::Text {
-                text: input.to_string(),
+                text: full_input,
             });
         } else {
             // Default prompt for image-only requests
@@ -245,29 +276,27 @@ impl GeminiProvider {
         }
 
         // Add images from MediaAttachment
-        for attachment in attachments {
-            if attachment.media_type == "image" {
-                // Gemini expects raw base64 data without data URI prefix
-                // The data from MediaAttachment should already be clean base64
-                let clean_data = if attachment.data.starts_with("data:") {
-                    // Strip data URI prefix if present
-                    attachment
-                        .data
-                        .split(',')
-                        .nth(1)
-                        .unwrap_or(&attachment.data)
-                        .to_string()
-                } else {
-                    attachment.data.clone()
-                };
+        for attachment in images {
+            // Gemini expects raw base64 data without data URI prefix
+            // The data from MediaAttachment should already be clean base64
+            let clean_data = if attachment.data.starts_with("data:") {
+                // Strip data URI prefix if present
+                attachment
+                    .data
+                    .split(',')
+                    .nth(1)
+                    .unwrap_or(&attachment.data)
+                    .to_string()
+            } else {
+                attachment.data.clone()
+            };
 
-                parts.push(Part::InlineData {
-                    inline_data: InlineData {
-                        mime_type: attachment.mime_type.clone(),
-                        data: clean_data,
-                    },
-                });
-            }
+            parts.push(Part::InlineData {
+                inline_data: InlineData {
+                    mime_type: attachment.mime_type.clone(),
+                    data: clean_data,
+                },
+            });
         }
 
         // Build system instruction if provided
@@ -444,36 +473,37 @@ impl AiProvider for GeminiProvider {
         let system_prompt = system_prompt.map(|s| s.to_string());
 
         Box::pin(async move {
-            // Check if we have any image attachments
-            let image_attachments: Option<Vec<_>> = attachments.as_ref().and_then(|atts| {
-                let images: Vec<_> = atts
-                    .iter()
-                    .filter(|a| a.media_type == "image")
-                    .cloned()
-                    .collect();
-                if images.is_empty() {
-                    None
-                } else {
-                    Some(images)
-                }
-            });
-
-            // If no image attachments, fall back to text-only
-            let Some(images) = image_attachments else {
+            // Check if we have any attachments (images or documents)
+            let Some(all_attachments) = attachments.as_ref() else {
                 return self.process(&input, system_prompt.as_deref()).await;
             };
+
+            let image_count = all_attachments
+                .iter()
+                .filter(|a| a.media_type == "image")
+                .count();
+            let document_count = all_attachments
+                .iter()
+                .filter(|a| a.media_type == "document")
+                .count();
+
+            // If no useful attachments, fall back to text-only
+            if image_count == 0 && document_count == 0 {
+                return self.process(&input, system_prompt.as_deref()).await;
+            }
 
             debug!(
                 model = %self.config.model,
                 input_length = input.len(),
-                image_count = images.len(),
+                image_count = image_count,
+                document_count = document_count,
                 has_system_prompt = system_prompt.is_some(),
                 "Sending multimodal request to Gemini"
             );
 
             // Build multimodal request body
             let request_body =
-                self.build_multimodal_request(&input, &images, system_prompt.as_deref());
+                self.build_multimodal_request(&input, all_attachments, system_prompt.as_deref());
 
             // Build endpoint URL
             let endpoint = self.build_endpoint();

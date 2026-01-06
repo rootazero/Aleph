@@ -43,17 +43,20 @@ class ClipboardManager {
 
     /// Setup content extractors for multimodal content support
     ///
-    /// Registers all Phase 1 extractors with the ContentExtractorRegistry.
+    /// Registers all extractors with the ContentExtractorRegistry.
     /// Called automatically during initialization.
     private func setupContentExtractors() {
         guard !extractorsSetup else { return }
 
         let registry = ContentExtractorRegistry.shared
 
-        // Phase 1: Image support extractors (in priority order)
+        // Image support extractors (in priority order)
         registry.register(DirectImageExtractor())
         registry.register(RTFDExtractor())
         registry.register(FileURLExtractor())
+        // Document support extractors
+        registry.register(DocumentExtractor())
+        // Fallback text extractor
         registry.register(PlainTextExtractor())
 
         extractorsSetup = true

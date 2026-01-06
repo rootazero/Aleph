@@ -229,19 +229,45 @@ impl OllamaProvider {
         attachments: &[crate::core::MediaAttachment],
         system_prompt: Option<&str>,
     ) -> GenerateRequest {
-        // Collect base64 image data (Ollama expects raw base64, not data URI)
+        // Separate images and documents
         let images: Vec<String> = attachments
             .iter()
             .filter(|a| a.media_type == "image")
             .map(|a| a.data.clone()) // Already base64 encoded
             .collect();
 
+        let documents: Vec<_> = attachments
+            .iter()
+            .filter(|a| a.media_type == "document")
+            .collect();
+
+        // Build document context (prepend to user input)
+        let doc_context = if !documents.is_empty() {
+            documents
+                .iter()
+                .map(|d| {
+                    let name = d.filename.as_deref().unwrap_or("document");
+                    format!("--- {} ---\n{}", name, d.data)
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        } else {
+            String::new()
+        };
+
+        // Build final input with document context
+        let full_input = if doc_context.is_empty() {
+            input.to_string()
+        } else {
+            format!("{}\n\n{}", doc_context, input)
+        };
+
         GenerateRequest {
             model: self.model.clone(),
-            prompt: if input.is_empty() {
+            prompt: if full_input.is_empty() {
                 "Describe this image in detail.".to_string()
             } else {
-                input.to_string()
+                full_input
             },
             system: system_prompt.map(|s| s.to_string()),
             images: if images.is_empty() {
@@ -368,45 +394,49 @@ impl AiProvider for OllamaProvider {
         let system_prompt = system_prompt.map(|s| s.to_string());
 
         Box::pin(async move {
-            // Check if we have image attachments
-            let image_attachments: Option<Vec<_>> = attachments.as_ref().and_then(|atts| {
-                let images: Vec<_> = atts
-                    .iter()
-                    .filter(|a| a.media_type == "image")
-                    .cloned()
-                    .collect();
-                if images.is_empty() {
-                    None
-                } else {
-                    Some(images)
-                }
-            });
-
-            // If no images, fall back to text-only
-            let Some(images) = image_attachments else {
+            // Check if we have any attachments (images or documents)
+            let Some(all_attachments) = attachments.as_ref() else {
                 return self.process(&input, system_prompt.as_deref()).await;
             };
 
-            // Check if model supports vision
-            if !self.is_vision_model() {
+            let image_count = all_attachments
+                .iter()
+                .filter(|a| a.media_type == "image")
+                .count();
+            let document_count = all_attachments
+                .iter()
+                .filter(|a| a.media_type == "document")
+                .count();
+
+            // If no useful attachments, fall back to text-only
+            if image_count == 0 && document_count == 0 {
+                return self.process(&input, system_prompt.as_deref()).await;
+            }
+
+            // Check if model supports vision (only needed for images)
+            if image_count > 0 && !self.is_vision_model() {
                 warn!(
                     model = %self.model,
-                    "Model does not support vision, falling back to text-only"
+                    "Model does not support vision, falling back to text-only with documents"
                 );
-                return self.process(&input, system_prompt.as_deref()).await;
+                // Still process documents even if vision is not supported
+                if document_count == 0 {
+                    return self.process(&input, system_prompt.as_deref()).await;
+                }
             }
 
             debug!(
                 model = %self.model,
                 input_length = input.len(),
-                image_count = images.len(),
+                image_count = image_count,
+                document_count = document_count,
                 has_system_prompt = system_prompt.is_some(),
                 "Sending multimodal request to Ollama"
             );
 
             // Build multimodal request body
             let request_body =
-                self.build_multimodal_request(&input, &images, system_prompt.as_deref());
+                self.build_multimodal_request(&input, all_attachments, system_prompt.as_deref());
 
             // Send POST request
             let response = self

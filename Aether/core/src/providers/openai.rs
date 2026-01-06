@@ -416,27 +416,56 @@ impl OpenAiProvider {
             }
         }
 
+        // Separate images and documents
+        let images: Vec<_> = attachments
+            .iter()
+            .filter(|a| a.media_type == "image")
+            .collect();
+        let documents: Vec<_> = attachments
+            .iter()
+            .filter(|a| a.media_type == "document")
+            .collect();
+
+        // Build document context (prepend to user input)
+        let doc_context = if !documents.is_empty() {
+            documents
+                .iter()
+                .map(|d| {
+                    let name = d.filename.as_deref().unwrap_or("document");
+                    format!("--- {} ---\n{}", name, d.data)
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        } else {
+            String::new()
+        };
+
+        // Build final input with document context
+        let full_input = if doc_context.is_empty() {
+            input.to_string()
+        } else {
+            format!("{}\n\n{}", doc_context, input)
+        };
+
         // Build multimodal user message with text and images
         let mut content_blocks = Vec::new();
 
         // Determine text content (with prepended system prompt if in prepend mode)
-        let text_content = Self::build_text_content(input, system_prompt, use_prepend_mode);
+        let text_content = Self::build_text_content(&full_input, system_prompt, use_prepend_mode);
 
         content_blocks.push(ContentBlock::Text { text: text_content });
 
         // Add images from MediaAttachment
-        for attachment in attachments {
-            if attachment.media_type == "image" {
-                // Build data URI from MediaAttachment
-                // Format: data:image/png;base64,<base64_data>
-                let data_uri = format!("data:{};base64,{}", attachment.mime_type, attachment.data);
-                content_blocks.push(ContentBlock::ImageUrl {
-                    image_url: ImageUrl {
-                        url: data_uri,
-                        detail: Some("auto".to_string()),
-                    },
-                });
-            }
+        for attachment in images {
+            // Build data URI from MediaAttachment
+            // Format: data:image/png;base64,<base64_data>
+            let data_uri = format!("data:{};base64,{}", attachment.mime_type, attachment.data);
+            content_blocks.push(ContentBlock::ImageUrl {
+                image_url: ImageUrl {
+                    url: data_uri,
+                    detail: Some("auto".to_string()),
+                },
+            });
         }
 
         messages.push(Message {
@@ -711,34 +740,35 @@ impl AiProvider for OpenAiProvider {
         let system_prompt = system_prompt.map(|s| s.to_string());
 
         Box::pin(async move {
-            // Check if we have any image attachments
-            let image_attachments: Option<Vec<_>> = attachments.as_ref().and_then(|atts| {
-                let images: Vec<_> = atts
-                    .iter()
-                    .filter(|a| a.media_type == "image")
-                    .cloned()
-                    .collect();
-                if images.is_empty() {
-                    None
-                } else {
-                    Some(images)
-                }
-            });
-
-            // If no image attachments, fall back to text-only
-            let Some(images) = image_attachments else {
+            // Check if we have any attachments (images or documents)
+            let Some(all_attachments) = attachments.as_ref() else {
                 return self.process(&input, system_prompt.as_deref()).await;
             };
 
+            let image_count = all_attachments
+                .iter()
+                .filter(|a| a.media_type == "image")
+                .count();
+            let document_count = all_attachments
+                .iter()
+                .filter(|a| a.media_type == "document")
+                .count();
+
+            // If no useful attachments, fall back to text-only
+            if image_count == 0 && document_count == 0 {
+                return self.process(&input, system_prompt.as_deref()).await;
+            }
+
             // Log detailed info about attachments for debugging
-            for (i, img) in images.iter().enumerate() {
+            for (i, att) in all_attachments.iter().enumerate() {
                 debug!(
                     index = i,
-                    media_type = %img.media_type,
-                    mime_type = %img.mime_type,
-                    data_len = img.data.len(),
-                    size_bytes = img.size_bytes,
-                    "Multimodal image attachment"
+                    media_type = %att.media_type,
+                    mime_type = %att.mime_type,
+                    data_len = att.data.len(),
+                    size_bytes = att.size_bytes,
+                    filename = ?att.filename,
+                    "Multimodal attachment"
                 );
             }
 
@@ -746,14 +776,15 @@ impl AiProvider for OpenAiProvider {
                 model = %self.config.model,
                 endpoint = %self.endpoint,
                 input_length = input.len(),
-                image_count = images.len(),
+                image_count = image_count,
+                document_count = document_count,
                 has_system_prompt = system_prompt.is_some(),
                 "Sending multimodal request to OpenAI"
             );
 
             // Build multimodal request body
             let request_body =
-                self.build_multimodal_request(&input, &images, system_prompt.as_deref());
+                self.build_multimodal_request(&input, all_attachments, system_prompt.as_deref());
 
             // Log request for debugging (truncate data for readability)
             debug!(
