@@ -580,31 +580,40 @@ struct ProviderEditPanel: View {
 
     /// Check if form has unsaved changes (simplified version)
     private var hasUnsavedFormChanges: Bool {
-        if isAddingNew {
-            // For new providers, consider "dirty" if any field is non-empty
-            return !providerName.isEmpty || !model.isEmpty || !apiKey.isEmpty
-        } else {
-            // For existing providers, compare current state with saved state
-            return providerName != savedProviderName ||
-                   providerType != savedProviderType ||
-                   apiKey != savedApiKey ||
-                   model != savedModel ||
-                   baseURL != savedBaseURL ||
-                   color != savedColor ||
-                   timeoutSeconds != savedTimeoutSeconds ||
-                   maxTokens != savedMaxTokens ||
-                   temperature != savedTemperature ||
-                   topP != savedTopP ||
-                   topK != savedTopK ||
-                   frequencyPenalty != savedFrequencyPenalty ||
-                   presencePenalty != savedPresencePenalty ||
-                   stopSequences != savedStopSequences ||
-                   thinkingLevel != savedThinkingLevel ||
-                   mediaResolution != savedMediaResolution ||
-                   repeatPenalty != savedRepeatPenalty ||
-                   systemPromptMode != savedSystemPromptMode ||
-                   isProviderActive != savedIsProviderActive
+        // Unconfigured preset - only "dirty" if API key entered
+        guard let provider = currentProvider else {
+            if isAddingNew {
+                // Custom provider: check if user entered name, base URL, or API key
+                if isCustomProvider {
+                    return !providerName.isEmpty || !baseURL.isEmpty || !apiKey.isEmpty
+                }
+                // Preset provider: only check API key (name/model are preset defaults)
+                return !apiKey.isEmpty
+            }
+            // Unconfigured preset - only show unsaved if user entered API key
+            return !apiKey.isEmpty
         }
+
+        // For existing providers, compare directly with saved config (not savedXxx state)
+        let config = provider.config
+        return providerName != provider.name ||
+               apiKey != (config.apiKey ?? "") ||
+               model != config.model ||
+               baseURL != (config.baseUrl ?? "") ||
+               color.toHex() != config.color ||  // Use hex string for reliable comparison
+               timeoutSeconds != String(config.timeoutSeconds) ||
+               maxTokens != (config.maxTokens.map { String($0) } ?? "") ||
+               temperature != (config.temperature.map { String($0) } ?? "") ||
+               topP != (config.topP.map { String($0) } ?? "") ||
+               topK != (config.topK.map { String($0) } ?? "") ||
+               frequencyPenalty != (config.frequencyPenalty.map { String($0) } ?? "") ||
+               presencePenalty != (config.presencePenalty.map { String($0) } ?? "") ||
+               stopSequences != (config.stopSequences ?? "") ||
+               thinkingLevel != (config.thinkingLevel ?? "HIGH") ||
+               mediaResolution != (config.mediaResolution ?? "MEDIUM") ||
+               repeatPenalty != (config.repeatPenalty.map { String($0) } ?? "") ||
+               systemPromptMode != (config.systemPromptMode == "standard" ? "standard" : "prepend") ||
+               isProviderActive != config.enabled
     }
 
     /// Status message for UnifiedSaveBar
@@ -833,6 +842,10 @@ struct ProviderEditPanel: View {
         temperature = ""
         isProviderActive = false  // New providers are disabled by default
         apiKey = ""
+
+        // Save initial state as baseline for change detection
+        // This prevents showing "unsaved" when user just views an unconfigured provider
+        saveSavedState()
     }
 
     func startNewProvider() {
@@ -841,6 +854,8 @@ struct ProviderEditPanel: View {
         providerType = "openai"
         isProviderActive = false  // New providers are disabled by default
         updateDefaultsForProviderType("openai")
+        // Save initial state as baseline for change detection
+        saveSavedState()
     }
 
     func startNewProviderFromPreset() {
@@ -851,6 +866,7 @@ struct ProviderEditPanel: View {
 
         resetForm()
         loadPresetDefaults(preset)
+        // Note: loadPresetDefaults already calls saveSavedState()
     }
 
     private func resetForm() {
@@ -971,41 +987,44 @@ struct ProviderEditPanel: View {
                     let config = try! core.loadConfig()
                     providers = config.providers
 
-                    // CRITICAL: Keep the current provider selected
-                    // This prevents jumping to the first provider
-                    selectedProvider = savedProviderName
-
-                    // Update selectedPreset for both custom and preset providers
-                    // This ensures the UI stays on the current provider after save
-                    if isCustomProvider {
-                        // For custom providers, create a temporary PresetProvider
-                        // This will be replaced when ProvidersView updates
-                        let customPreset = PresetProvider(
-                            id: savedProviderName,
-                            name: savedProviderName,
-                            iconName: "puzzlepiece.extension",
-                            color: color.toHex(),
-                            providerType: providerType,
-                            defaultModel: model,
-                            description: baseURL.isEmpty ? "Custom OpenAI-compatible provider" : "OpenAI-compatible API: \(baseURL)",
-                            baseUrl: baseURL.isEmpty ? nil : baseURL
-                        )
-                        selectedPreset = customPreset
-                    } else {
-                        // For preset providers, find and update the preset
-                        // This ensures the displayed information matches the saved provider
-                        if let preset = PresetProviders.find(byId: savedProviderName) {
-                            selectedPreset = preset
-                        }
-                    }
-
                     // Exit add mode if we were adding a new provider
                     isAddingNew = false
 
-                    isSaving = false
-
                     // Update saved state after successful save
                     saveSavedState()
+
+                    // CRITICAL: Set isSaving = false BEFORE updating selection
+                    // This allows onChange handlers to process the selection update
+                    isSaving = false
+
+                    // CRITICAL: Keep the current provider selected
+                    // This prevents jumping to the first provider
+                    // Use DispatchQueue to ensure this runs after SwiftUI processes the providers update
+                    DispatchQueue.main.async {
+                        selectedProvider = savedProviderName
+
+                        // Update selectedPreset for both custom and preset providers
+                        // This ensures the UI stays on the current provider after save
+                        if isCustomProvider {
+                            // For custom providers, create a temporary PresetProvider
+                            let customPreset = PresetProvider(
+                                id: savedProviderName,
+                                name: savedProviderName,
+                                iconName: "puzzlepiece.extension",
+                                color: color.toHex(),
+                                providerType: providerType,
+                                defaultModel: model,
+                                description: baseURL.isEmpty ? "Custom OpenAI-compatible provider" : "OpenAI-compatible API: \(baseURL)",
+                                baseUrl: baseURL.isEmpty ? nil : baseURL
+                            )
+                            selectedPreset = customPreset
+                        } else {
+                            // For preset providers, find and update the preset
+                            if let preset = PresetProviders.find(byId: savedProviderName) {
+                                selectedPreset = preset
+                            }
+                        }
+                    }
 
                     // Notify that configuration was saved internally
                     // This prevents ConfigWatcher from triggering a full view rebuild
