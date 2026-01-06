@@ -626,6 +626,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
+        // Show Halo animation immediately on startup (better UX feedback)
+        // Only show on first attempt to avoid repeated animations during retries
+        if coreInitRetryCount == 0 {
+            haloWindow?.updateState(.processing(providerColor: .blue, streamingText: nil))
+            haloWindow?.showCentered()
+            print("[Aether] Showing Halo startup animation")
+        }
+
         // CRITICAL: Re-verify permissions before initializing Core
         // This prevents crashes if permissions were revoked or not fully applied
         let hasAccessibility = PermissionChecker.hasAccessibilityPermission()
@@ -683,6 +691,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
             // Reset retry count on success
             coreInitRetryCount = 0
+
+            // Hide startup Halo animation (initialization succeeded)
+            haloWindow?.hide()
+            print("[Aether] Hiding Halo startup animation (init succeeded)")
 
             // Update menu bar icon to show active state
             updateMenuBarIcon(state: .listening)
