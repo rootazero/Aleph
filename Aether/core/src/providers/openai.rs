@@ -759,6 +759,35 @@ impl AiProvider for OpenAiProvider {
                 return self.process(&input, system_prompt.as_deref()).await;
             }
 
+            // If only documents (no images), inject document content into text and use text-only request
+            // This is important for APIs that don't support multimodal format
+            if image_count == 0 && document_count > 0 {
+                let documents: Vec<_> = all_attachments
+                    .iter()
+                    .filter(|a| a.media_type == "document")
+                    .collect();
+
+                let doc_context = documents
+                    .iter()
+                    .map(|d| {
+                        let name = d.filename.as_deref().unwrap_or("document");
+                        format!("--- {} ---\n{}", name, d.data)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+
+                let full_input = format!("{}\n\n{}", doc_context, input);
+
+                debug!(
+                    model = %self.config.model,
+                    document_count = document_count,
+                    full_input_length = full_input.len(),
+                    "Sending document-only request as text to OpenAI"
+                );
+
+                return self.process(&full_input, system_prompt.as_deref()).await;
+            }
+
             // Log detailed info about attachments for debugging
             for (i, att) in all_attachments.iter().enumerate() {
                 debug!(
@@ -782,7 +811,7 @@ impl AiProvider for OpenAiProvider {
                 "Sending multimodal request to OpenAI"
             );
 
-            // Build multimodal request body
+            // Build multimodal request body (only when we have images)
             let request_body =
                 self.build_multimodal_request(&input, all_attachments, system_prompt.as_deref());
 

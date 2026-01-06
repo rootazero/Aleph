@@ -413,16 +413,41 @@ impl AiProvider for OllamaProvider {
                 return self.process(&input, system_prompt.as_deref()).await;
             }
 
+            // If only documents (no images), inject document content into text and use text-only request
+            if image_count == 0 && document_count > 0 {
+                let documents: Vec<_> = all_attachments
+                    .iter()
+                    .filter(|a| a.media_type == "document")
+                    .collect();
+
+                let doc_context = documents
+                    .iter()
+                    .map(|d| {
+                        let name = d.filename.as_deref().unwrap_or("document");
+                        format!("--- {} ---\n{}", name, d.data)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+
+                let full_input = format!("{}\n\n{}", doc_context, input);
+
+                debug!(
+                    model = %self.model,
+                    document_count = document_count,
+                    full_input_length = full_input.len(),
+                    "Sending document-only request as text to Ollama"
+                );
+
+                return self.process(&full_input, system_prompt.as_deref()).await;
+            }
+
             // Check if model supports vision (only needed for images)
             if image_count > 0 && !self.is_vision_model() {
                 warn!(
                     model = %self.model,
-                    "Model does not support vision, falling back to text-only with documents"
+                    "Model does not support vision, falling back to text-only"
                 );
-                // Still process documents even if vision is not supported
-                if document_count == 0 {
-                    return self.process(&input, system_prompt.as_deref()).await;
-                }
+                return self.process(&input, system_prompt.as_deref()).await;
             }
 
             debug!(
@@ -434,7 +459,7 @@ impl AiProvider for OllamaProvider {
                 "Sending multimodal request to Ollama"
             );
 
-            // Build multimodal request body
+            // Build multimodal request body (only when we have images)
             let request_body =
                 self.build_multimodal_request(&input, all_attachments, system_prompt.as_deref());
 
