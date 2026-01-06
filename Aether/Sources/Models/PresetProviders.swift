@@ -75,7 +75,7 @@ struct PresetProviders {
             providerType: "gemini",
             defaultModel: "gemini-3-flash",
             description: "Google's multimodal AI models with advanced reasoning",
-            baseUrl: "https://generativelanguage.googleapis.com/v1beta"
+            baseUrl: nil  // Default: https://generativelanguage.googleapis.com
         ),
         PresetProvider(
             id: "ollama",
@@ -85,7 +85,7 @@ struct PresetProviders {
             providerType: "ollama",
             defaultModel: "llama3.2",
             description: "Run large language models locally on your machine",
-            baseUrl: "http://localhost:11434"
+            baseUrl: nil  // Default: http://localhost:11434
         ),
         PresetProvider(
             id: "deepseek",
@@ -95,7 +95,7 @@ struct PresetProviders {
             providerType: "openai",
             defaultModel: "deepseek-chat",
             description: "DeepSeek AI models with reasoning capabilities",
-            baseUrl: "https://api.deepseek.com"
+            baseUrl: nil  // Default: https://api.deepseek.com
         ),
         PresetProvider(
             id: "moonshot",
@@ -105,7 +105,7 @@ struct PresetProviders {
             providerType: "openai",
             defaultModel: "moonshot-v1-8k",
             description: "Moonshot AI long-context models",
-            baseUrl: "https://api.moonshot.cn/v1"
+            baseUrl: nil  // Default: https://api.moonshot.cn/v1
         ),
         PresetProvider(
             id: "openrouter",
@@ -115,7 +115,7 @@ struct PresetProviders {
             providerType: "openai",
             defaultModel: "openai/gpt-4o",
             description: "Access multiple AI models via unified API",
-            baseUrl: "https://openrouter.ai/api/v1"
+            baseUrl: nil  // Default: https://openrouter.ai/api/v1
         ),
         PresetProvider(
             id: "azure-openai",

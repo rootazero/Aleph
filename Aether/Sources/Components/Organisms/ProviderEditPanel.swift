@@ -404,12 +404,12 @@ struct ProviderEditPanel: View {
             }
 
             FormField(title: isCustomProvider ? L("provider.field.base_url") : L("provider.field.base_url_optional")) {
-                TextField(isCustomProvider ? L("provider.placeholder.base_url_custom") : L("provider.placeholder.base_url_official"), text: $baseURL)
+                TextField(getBaseUrlPlaceholder(), text: $baseURL)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: baseURL) {
                         testResult = nil // Clear test result when base URL changes
                     }
-                Text(isCustomProvider ? L("provider.help.base_url_custom") : L("provider.help.base_url_official"))
+                Text(getBaseUrlHelp())
                     .font(DesignTokens.Typography.caption)
                     .foregroundColor(DesignTokens.Colors.textSecondary)
             }
@@ -1237,5 +1237,68 @@ struct ProviderEditPanel: View {
         case "ollama": return "Controls randomness (higher = more creative)"
         default: return "Controls randomness (0.0-2.0, 0=deterministic)"
         }
+    }
+
+    /// Get the default base URL for the current provider
+    /// Returns nil if no default URL is available (e.g., Azure OpenAI, GitHub Copilot)
+    private func getDefaultBaseUrl() -> String? {
+        // Use provider name to determine default URL
+        let name = providerName.lowercased()
+        switch name {
+        case "openai":
+            return "https://api.openai.com/v1"
+        case "anthropic":
+            return "https://api.anthropic.com"
+        case "google-gemini":
+            return "https://generativelanguage.googleapis.com"
+        case "ollama":
+            return "http://localhost:11434"
+        case "deepseek":
+            return "https://api.deepseek.com"
+        case "moonshot":
+            return "https://api.moonshot.cn/v1"
+        case "openrouter":
+            return "https://openrouter.ai/api/v1"
+        // Azure OpenAI and GitHub Copilot require user configuration
+        case "azure-openai", "github-copilot":
+            return nil
+        default:
+            // For other providers, check by provider type
+            switch providerType {
+            case "claude":
+                return "https://api.anthropic.com"
+            case "gemini":
+                return "https://generativelanguage.googleapis.com"
+            case "ollama":
+                return "http://localhost:11434"
+            default:
+                return nil
+            }
+        }
+    }
+
+    /// Get placeholder for base URL field
+    /// Shows default URL for preset providers, or example URL for custom providers
+    private func getBaseUrlPlaceholder() -> String {
+        if isCustomProvider {
+            return L("provider.placeholder.base_url_custom")
+        }
+        // For preset providers, show default URL as placeholder if available
+        if let defaultUrl = getDefaultBaseUrl() {
+            return defaultUrl
+        }
+        return L("provider.placeholder.base_url_custom")
+    }
+
+    /// Get help text for base URL field
+    private func getBaseUrlHelp() -> String {
+        if isCustomProvider {
+            return L("provider.help.base_url_custom")
+        }
+        // For preset providers with default URL, show combined help text
+        if getDefaultBaseUrl() != nil {
+            return L("provider.help.base_url_with_default")
+        }
+        return L("provider.help.base_url_custom")
     }
 }

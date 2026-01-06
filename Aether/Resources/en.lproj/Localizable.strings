@@ -110,7 +110,7 @@
 "provider.placeholder.model" = "e.g., gpt-4o, claude-3-5-sonnet-20241022";
 "provider.placeholder.base_url" = "e.g., https://api.openai.com/v1";
 "provider.placeholder.base_url_custom" = "https://api.example.com/v1";
-"provider.placeholder.base_url_official" = "Leave empty for official API";
+"provider.placeholder.base_url_official" = "Leave empty for official URL";
 "provider.placeholder.top_p" = "0.0-1.0, leave empty for default";
 "provider.placeholder.top_k_default" = "Leave empty for default";
 "provider.placeholder.top_k_ollama" = "e.g., 40";
@@ -121,6 +121,7 @@
 "provider.help.base_url" = "Optional custom API endpoint";
 "provider.help.base_url_custom" = "OpenAI-compatible API endpoint";
 "provider.help.base_url_official" = "For custom OpenAI-compatible endpoints";
+"provider.help.base_url_with_default" = "For custom OpenAI-compatible endpoints, leave empty for default URL";
 "provider.help.temperature" = "Controls randomness (0-2)";
 "provider.help.max_tokens" = "Maximum length of generated response";
 "provider.help.top_p" = "Nucleus sampling threshold (higher = more diverse)";

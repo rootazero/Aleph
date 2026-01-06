@@ -194,11 +194,12 @@ impl OpenAiProvider {
             })?;
 
         // Build API endpoint
+        // Use provider-specific default URL if base_url is not configured
         let base_url = config
             .base_url
             .as_ref()
             .map(|s| s.trim_end_matches('/').to_string())
-            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+            .unwrap_or_else(|| Self::default_base_url(&name).to_string());
         let endpoint = format!("{}/chat/completions", base_url);
 
         Ok(Self {
@@ -207,6 +208,29 @@ impl OpenAiProvider {
             config,
             endpoint,
         })
+    }
+
+    /// Get the default base URL for a given provider name
+    ///
+    /// This allows different OpenAI-compatible providers to have their own default URLs
+    /// when the user doesn't specify a custom base_url in the configuration.
+    fn default_base_url(provider_name: &str) -> &'static str {
+        match provider_name.to_lowercase().as_str() {
+            // Official OpenAI API
+            "openai" => "https://api.openai.com/v1",
+            // DeepSeek AI
+            "deepseek" => "https://api.deepseek.com",
+            // Moonshot AI (Kimi)
+            "moonshot" => "https://api.moonshot.cn/v1",
+            // OpenRouter - unified API for multiple models
+            "openrouter" => "https://openrouter.ai/api/v1",
+            // Azure OpenAI - requires user configuration (no default)
+            // "azure-openai" => user must configure
+            // GitHub Copilot - requires user configuration (no default)
+            // "github-copilot" => user must configure
+            // Default to OpenAI for unknown providers
+            _ => "https://api.openai.com/v1",
+        }
     }
 
     /// Build text content for image/multimodal requests.

@@ -110,7 +110,7 @@
 "provider.placeholder.model" = "例如：gpt-4o, claude-3-5-sonnet-20241022";
 "provider.placeholder.base_url" = "例如：https://api.openai.com/v1";
 "provider.placeholder.base_url_custom" = "https://api.example.com/v1";
-"provider.placeholder.base_url_official" = "留空使用官方 API";
+"provider.placeholder.base_url_official" = "留空使用官方 URL";
 "provider.placeholder.top_p" = "0.0-1.0，留空使用默认值";
 "provider.placeholder.top_k_default" = "留空使用默认值";
 "provider.placeholder.top_k_ollama" = "例如：40";
@@ -121,6 +121,7 @@
 "provider.help.base_url" = "可选的自定义 API 端点";
 "provider.help.base_url_custom" = "OpenAI 兼容的 API 端点";
 "provider.help.base_url_official" = "用于自定义 OpenAI 兼容端点";
+"provider.help.base_url_with_default" = "用于自定义 OpenAI 兼容端点，留空使用默认 URL";
 "provider.help.temperature" = "控制随机性（0-2）";
 "provider.help.max_tokens" = "生成响应的最大长度";
 "provider.help.top_p" = "核采样阈值（越高越多样）";
