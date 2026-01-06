@@ -52,8 +52,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Global hotkey monitor (Swift layer)
     private var hotkeyMonitor: GlobalHotkeyMonitor?
 
-    // Command mode hotkey monitor (Cmd+Opt+/)
+    // Command mode hotkey monitor (configurable, default: Cmd+Opt+/)
     private var commandHotkeyMonitor: Any?
+    private var commandHotkeyModifiers: NSEvent.ModifierFlags = [.command, .option]
+    private var commandHotkeyKeyCode: UInt16 = 44  // "/" key
 
     // Command mode input listener (captures keyboard input while command mode is active)
     private var commandModeInputMonitor: Any?
@@ -272,15 +274,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         defaultProviderMenuItem.submenu = NSMenu()  // Create empty submenu for now
         menu.addItem(defaultProviderMenuItem)
 
-        // Add "Input Mode" submenu (will be populated by rebuildInputModeMenu)
-        let inputModeMenuItem = NSMenuItem(
-            title: L("menu.input_mode"),
-            action: nil,
-            keyEquivalent: ""
-        )
-        inputModeMenuItem.submenu = NSMenu()  // Create empty submenu for now
-        menu.addItem(inputModeMenuItem)
-
         menu.addItem(NSMenuItem.separator())
 
         // Create and store Settings menu item for enable/disable control
@@ -414,8 +407,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Generic menu rebuilder to eliminate duplication
     ///
-    /// This helper method extracts the common pattern used by `rebuildProvidersMenu()`
-    /// and `rebuildInputModeMenu()` to reduce code duplication.
+    /// This helper method extracts the common pattern used by `rebuildProvidersMenu()`.
     ///
     /// - Parameters:
     ///   - menuItemTitle: Localized title of the menu item containing the submenu
@@ -535,96 +527,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
 
-    // MARK: - Input Mode Menu Management (NEW for input mode management)
-
-    /// Rebuild the input mode submenu with current selection
-    private func rebuildInputModeMenu() {
-        guard let core = core else { return }
-
-        // Get current input mode from config
-        var currentInputMode = "cut"  // Default value
-        do {
-            let config = try core.loadConfig()
-            if let behavior = config.behavior {
-                currentInputMode = behavior.inputMode
-            }
-        } catch {
-            print("[AppDelegate] ⚠️ Failed to load config for input mode menu: \(error)")
-        }
-
-        // Define input modes with localized display names
-        let inputModes: [(String, String)] = [
-            ("cut", L("settings.behavior.input_mode_cut")),
-            ("copy", L("settings.behavior.input_mode_copy")),
-            ("halo", L("settings.behavior.input_mode_halo"))
-        ]
-
-        // Use generic menu builder
-        rebuildMenu(
-            menuItemTitle: L("menu.input_mode"),
-            items: inputModes,
-            currentSelection: currentInputMode,
-            action: #selector(selectInputMode(_:))
-        )
-    }
-
-    /// Handle input mode selection from menu bar (set as current)
-    @objc private func selectInputMode(_ sender: NSMenuItem) {
-        guard let inputMode = sender.representedObject as? String else {
-            print("[AppDelegate] ERROR: Invalid input mode sender")
-            return
-        }
-
-        print("[AppDelegate] User selected input mode from menu: \(inputMode)")
-
-        guard let core = core else {
-            print("[AppDelegate] ERROR: Core not initialized")
-            return
-        }
-
-        do {
-            // Load current config
-            let config = try core.loadConfig()
-
-            // Update input mode in behavior section
-            if var behavior = config.behavior {
-                behavior.inputMode = inputMode
-
-                // Use updateBehavior to save the change
-                try core.updateBehavior(behavior: behavior)
-                print("[AppDelegate] ✅ Input mode set to: \(inputMode)")
-            } else {
-                // Create behavior config if it doesn't exist
-                let newBehavior = BehaviorConfig(
-                    inputMode: inputMode,
-                    outputMode: "typewriter",
-                    typingSpeed: 50,
-                    piiScrubbingEnabled: false
-                )
-                try core.updateBehavior(behavior: newBehavior)
-                print("[AppDelegate] ✅ Input mode set to: \(inputMode) (created new behavior config)")
-            }
-
-            // Rebuild menu to update checkmark
-            rebuildInputModeMenu()
-
-            // Post notification for config change (for other components)
-            NotificationCenter.default.post(
-                name: NSNotification.Name("AetherConfigSavedInternally"),
-                object: nil
-            )
-
-        } catch {
-            print("[AppDelegate] ❌ Error setting input mode: \(error)")
-            eventHandler?.showToast(
-                type: .warning,
-                title: "Failed to set input mode",
-                message: "Could not set input mode to '\(inputMode)'.\n\nError: \(error.localizedDescription)",
-                autoDismiss: false
-            )
-        }
-    }
-
     // MARK: - Rust Core Initialization
 
     private var coreInitRetryCount = 0
@@ -677,21 +579,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // Set core reference in event handler for retry functionality
             eventHandler.setCore(core!)
 
-            // IMPORTANT: Initialize Swift-based global hotkey monitor
-            // This replaces the Rust-based EventTapListener to avoid thread conflicts
-            print("[Aether] Initializing Swift-based global hotkey monitor...")
+            // IMPORTANT: Initialize the trigger-based hotkey system
+            // This uses the two-callback architecture:
+            // - Replace hotkey (default: double-tap left Shift) → handleReplaceTriggered()
+            // - Append hotkey (default: double-tap right Shift) → handleAppendTriggered()
+            print("[Aether] Initializing trigger-based hotkey system...")
+            initializeTriggerSystem()
 
-            // Load hotkey configuration from config
-            let hotkeyMode = loadHotkeyConfiguration()
-            hotkeyMonitor = GlobalHotkeyMonitor(hotkeyMode: hotkeyMode) { [weak self] in
-                self?.handleHotkeyPressed()
-            }
-
-            // Start monitoring for hotkey
-            if hotkeyMonitor?.startMonitoring() == true {
-                print("[Aether] ✅ Global hotkey monitoring started successfully (\(hotkeyMode.displayString))")
-            } else {
-                print("[Aether] ❌ Failed to start global hotkey monitoring")
+            // Check if monitoring started successfully
+            guard hotkeyMonitor != nil else {
+                print("[Aether] ❌ Failed to initialize trigger system")
                 // Fall back to showing permission gate
                 DispatchQueue.main.async { [weak self] in
                     self?.showPermissionGate()
@@ -719,9 +616,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
             // Rebuild providers menu now that core is initialized
             rebuildProvidersMenu()
-
-            // Rebuild input mode menu now that core is initialized
-            rebuildInputModeMenu()
 
         } catch {
             print("[Aether] ❌ Error initializing core: \(error)")
@@ -1005,9 +899,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Handle config change notification (rebuild providers menu)
     @objc private func onConfigChanged() {
-        print("[AppDelegate] Config changed, rebuilding providers and input mode menus")
+        print("[AppDelegate] Config changed, rebuilding providers menu")
         rebuildProvidersMenu()
-        rebuildInputModeMenu()
     }
 
     // MARK: - Hotkey Handling
@@ -1683,21 +1576,105 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     // MARK: - Command Mode Hotkey (add-command-completion-system)
 
-    /// Setup global hotkey for command mode (Cmd+Opt+/)
+    /// Setup global hotkey for command mode (configurable, default: Cmd+Opt+/)
     private func setupCommandModeHotkey() {
-        // Key code for "/" is 44
-        let slashKeyCode: UInt16 = 44
-        let requiredModifiers: NSEvent.ModifierFlags = [.command, .option]
+        // Load command prompt hotkey from config
+        loadCommandPromptConfig()
 
         commandHotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            // Check for Cmd+Opt+/ (keyCode 44)
-            if event.keyCode == slashKeyCode &&
-               event.modifierFlags.contains(.command) &&
-               event.modifierFlags.contains(.option) {
-                self?.handleCommandModeHotkey()
+            guard let self = self else { return }
+            // Check for configured hotkey
+            var modifiersMatch = true
+            for modifier in [NSEvent.ModifierFlags.command, .option, .control, .shift] {
+                if self.commandHotkeyModifiers.contains(modifier) {
+                    if !event.modifierFlags.contains(modifier) {
+                        modifiersMatch = false
+                        break
+                    }
+                }
+            }
+            if modifiersMatch && event.keyCode == self.commandHotkeyKeyCode {
+                self.handleCommandModeHotkey()
             }
         }
-        print("[AppDelegate] Command mode hotkey (Cmd+Opt+/) monitor installed")
+        print("[AppDelegate] Command mode hotkey monitor installed (keyCode: \(commandHotkeyKeyCode), modifiers: \(commandHotkeyModifiers))")
+    }
+
+    /// Load command prompt hotkey configuration from config
+    private func loadCommandPromptConfig() {
+        guard let core = core else { return }
+
+        do {
+            let config = try core.loadConfig()
+            if let shortcuts = config.shortcuts {
+                parseAndApplyCommandPromptHotkey(shortcuts.commandPrompt)
+            }
+        } catch {
+            print("[AppDelegate] Failed to load command prompt config: \(error)")
+        }
+    }
+
+    /// Parse command prompt config string (e.g., "Command+Option+/") and apply it
+    private func parseAndApplyCommandPromptHotkey(_ configString: String) {
+        let parts = configString.split(separator: "+").map { String($0) }
+        guard parts.count == 3 else {
+            print("[AppDelegate] Invalid command prompt config: \(configString)")
+            return
+        }
+
+        var modifiers: NSEvent.ModifierFlags = []
+
+        // Parse first two parts as modifiers
+        for i in 0..<2 {
+            switch parts[i] {
+            case "Command": modifiers.insert(.command)
+            case "Option": modifiers.insert(.option)
+            case "Control": modifiers.insert(.control)
+            case "Shift": modifiers.insert(.shift)
+            default: break
+            }
+        }
+
+        // Parse third part as key code
+        let keyCode: UInt16
+        switch parts[2] {
+        case "/": keyCode = 44
+        case "`": keyCode = 50
+        case "\\": keyCode = 42
+        case ";": keyCode = 41
+        case ",": keyCode = 43
+        case ".": keyCode = 47
+        case "Space": keyCode = 49
+        default: keyCode = 44  // Default to /
+        }
+
+        commandHotkeyModifiers = modifiers
+        commandHotkeyKeyCode = keyCode
+        print("[AppDelegate] Command prompt hotkey configured: \(configString) (keyCode: \(keyCode), modifiers: \(modifiers))")
+    }
+
+    /// Update command prompt hotkey at runtime (called from ShortcutsView)
+    func updateCommandPromptHotkey(_ shortcuts: ShortcutsConfig) {
+        parseAndApplyCommandPromptHotkey(shortcuts.commandPrompt)
+
+        // Reinstall the monitor with new settings
+        removeCommandModeHotkey()
+        commandHotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return }
+            var modifiersMatch = true
+            for modifier in [NSEvent.ModifierFlags.command, .option, .control, .shift] {
+                if self.commandHotkeyModifiers.contains(modifier) {
+                    if !event.modifierFlags.contains(modifier) {
+                        modifiersMatch = false
+                        break
+                    }
+                }
+            }
+            if modifiersMatch && event.keyCode == self.commandHotkeyKeyCode {
+                self.handleCommandModeHotkey()
+            }
+        }
+        print("[AppDelegate] Command prompt hotkey updated and monitor reinstalled")
     }
 
     /// Remove command mode hotkey monitor
@@ -1969,47 +1946,144 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         return text
     }
 
-    // MARK: - Hotkey Configuration
+    // MARK: - Trigger System Configuration
 
-    /// Load hotkey configuration from config file
-    /// - Returns: The configured hotkey mode, or default (double-tap Space) if not configured
-    private func loadHotkeyConfiguration() -> HotkeyMode {
-        // Try to load from user config
-        let configPath = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/aether/config.toml")
+    /// Load trigger configuration from Rust Core
+    /// - Returns: TriggerConfig with mode, cut/copy hotkeys
+    private func loadTriggerConfiguration() -> TriggerConfig {
+        guard let core = core else {
+            print("[AppDelegate] Core not initialized, using default TriggerConfig")
+            return TriggerConfig.defaultConfig
+        }
 
-        if FileManager.default.fileExists(atPath: configPath.path) {
-            do {
-                let content = try String(contentsOf: configPath, encoding: .utf8)
+        do {
+            let config = try core.loadConfig()
+            if let trigger = config.trigger {
+                print("[AppDelegate] Loaded TriggerConfig: replace=\(trigger.replaceHotkey), append=\(trigger.appendHotkey)")
+                return trigger
+            }
+        } catch {
+            print("[AppDelegate] Failed to load TriggerConfig: \(error)")
+        }
 
-                // Parse [shortcuts] section for summon key
-                if let summonLine = content.split(separator: "\n").first(where: { $0.hasPrefix("summon") }) {
-                    let value = summonLine
-                        .split(separator: "=")
-                        .last?
-                        .trimmingCharacters(in: .whitespaces)
-                        .replacingOccurrences(of: "\"", with: "")
-                        ?? ""
+        return TriggerConfig.defaultConfig
+    }
 
-                    if let mode = HotkeyMode.from(configString: value) {
-                        print("[Aether] Loaded hotkey from config: \(mode.displayString)")
-                        return mode
-                    }
-                }
-            } catch {
-                print("[Aether] Failed to read config file: \(error)")
+    /// Initialize the trigger-based hotkey system (new architecture)
+    ///
+    /// Uses two callbacks for Replace and Append hotkeys:
+    /// - onReplaceTriggered: Double-tap replace key (default: left Shift) - AI replaces original text
+    /// - onAppendTriggered: Double-tap append key (default: right Shift) - AI appends after original text
+    private func initializeTriggerSystem() {
+        let triggerConfig = loadTriggerConfiguration()
+
+        // Extract Swift types from TriggerConfig
+        let replaceKey = triggerConfig.replaceKey
+        let appendKey = triggerConfig.appendKey
+
+        print("[AppDelegate] Initializing trigger system: replace=\(replaceKey.rawValue), append=\(appendKey.rawValue)")
+
+        // Create GlobalHotkeyMonitor with Replace/Append callbacks
+        hotkeyMonitor = GlobalHotkeyMonitor(
+            replaceKey: replaceKey,
+            appendKey: appendKey,
+            onReplaceTriggered: { [weak self] in
+                self?.handleReplaceTriggered()
+            },
+            onAppendTriggered: { [weak self] in
+                self?.handleAppendTriggered()
+            }
+        )
+
+        // Start monitoring
+        if hotkeyMonitor?.startMonitoring() == true {
+            print("[AppDelegate] ✅ Trigger system started")
+            print("[AppDelegate]   Replace: \(replaceKey.shortDisplayName), Append: \(appendKey.shortDisplayName)")
+        } else {
+            print("[AppDelegate] ❌ Failed to start trigger system")
+        }
+    }
+
+    /// Update trigger configuration at runtime
+    func updateTriggerConfiguration(_ triggerConfig: TriggerConfig) {
+        let replaceKey = triggerConfig.replaceKey
+        let appendKey = triggerConfig.appendKey
+
+        hotkeyMonitor?.configureTrigger(replaceKey: replaceKey, appendKey: appendKey)
+
+        print("[AppDelegate] Trigger config updated: replace=\(replaceKey.rawValue), append=\(appendKey.rawValue)")
+    }
+
+    // MARK: - Trigger Handlers (New Architecture)
+
+    /// Handle Replace trigger (double-tap replace hotkey, default: left Shift)
+    ///
+    /// AI response replaces the original selected text.
+    private func handleReplaceTriggered() {
+        print("[AppDelegate] 🔄 Replace triggered")
+
+        // Block if permission gate is active or core not initialized
+        guard !isPermissionGateActive, core != nil else {
+            print("[AppDelegate] ⚠️ Replace blocked - permission gate or core not ready")
+            NSSound.beep()
+            return
+        }
+
+        // Store frontmost app
+        previousFrontmostApp = NSWorkspace.shared.frontmostApplication
+        print("[AppDelegate] 📱 Stored frontmost app: \(previousFrontmostApp?.localizedName ?? "Unknown")")
+
+        // Get best position for Halo
+        let haloPosition = CaretPositionHelper.getBestPosition()
+
+        // Show Halo immediately with processing state
+        if Thread.isMainThread {
+            haloWindow?.show(at: haloPosition)
+            haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
+        } else {
+            DispatchQueue.main.sync { [weak self] in
+                self?.haloWindow?.show(at: haloPosition)
+                self?.haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
             }
         }
 
-        // Default: double-tap Space
-        print("[Aether] Using default hotkey: double-tap Space")
-        return .default
+        // Process with replace mode (AI response replaces original text)
+        processWithInputMode(.replace)
     }
 
-    /// Update hotkey configuration at runtime
-    func updateHotkeyConfiguration(_ mode: HotkeyMode) {
-        hotkeyMonitor?.updateHotkey(mode)
-        print("[AppDelegate] Hotkey updated to: \(mode.displayString)")
+    /// Handle Append trigger (double-tap append hotkey, default: right Shift)
+    ///
+    /// AI response appends after the original selected text.
+    private func handleAppendTriggered() {
+        print("[AppDelegate] ➕ Append triggered")
+
+        // Block if permission gate is active or core not initialized
+        guard !isPermissionGateActive, core != nil else {
+            print("[AppDelegate] ⚠️ Append blocked - permission gate or core not ready")
+            NSSound.beep()
+            return
+        }
+
+        // Store frontmost app
+        previousFrontmostApp = NSWorkspace.shared.frontmostApplication
+        print("[AppDelegate] 📱 Stored frontmost app: \(previousFrontmostApp?.localizedName ?? "Unknown")")
+
+        // Get best position for Halo
+        let haloPosition = CaretPositionHelper.getBestPosition()
+
+        // Show Halo immediately with processing state
+        if Thread.isMainThread {
+            haloWindow?.show(at: haloPosition)
+            haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
+        } else {
+            DispatchQueue.main.sync { [weak self] in
+                self?.haloWindow?.show(at: haloPosition)
+                self?.haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
+            }
+        }
+
+        // Process with append mode (AI response appends after original text)
+        processWithInputMode(.append)
     }
 
     // MARK: - Accessibility Permission Check (Legacy - now using PermissionGate)

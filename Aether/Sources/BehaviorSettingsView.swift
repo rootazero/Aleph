@@ -13,8 +13,7 @@ struct BehaviorSettingsView: View {
     let core: AetherCore?
     @ObservedObject var saveBarState: SettingsSaveBarState
 
-    // Working copy (editable state)
-    @State private var inputMode: InputMode = .cut
+    // Output settings
     @State private var outputMode: OutputMode = .typewriter
     @State private var typingSpeed: Double = 50.0
 
@@ -25,8 +24,7 @@ struct BehaviorSettingsView: View {
     @State private var piiScrubSSN: Bool = true
     @State private var piiScrubCreditCard: Bool = true
 
-    // Saved state (for comparison)
-    @State private var savedInputMode: InputMode = .cut
+    // Saved output settings (for comparison)
     @State private var savedOutputMode: OutputMode = .typewriter
     @State private var savedTypingSpeed: Double = 50.0
 
@@ -46,7 +44,6 @@ struct BehaviorSettingsView: View {
         // Scrollable content only (no internal save bar)
         ScrollView {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                inputModeCard
                 outputModeCard
 
                 if outputMode == .typewriter {
@@ -67,7 +64,6 @@ struct BehaviorSettingsView: View {
             loadSettings()
             updateSaveBarState()
         }
-        .onChange(of: inputMode) { _, _ in updateSaveBarState() }
         .onChange(of: outputMode) { _, _ in updateSaveBarState() }
         .onChange(of: typingSpeed) { _, _ in updateSaveBarState() }
         .onChange(of: piiEnabled) { _, _ in updateSaveBarState() }
@@ -79,44 +75,6 @@ struct BehaviorSettingsView: View {
     }
 
     // MARK: - View Components
-
-    private var inputModeCard: some View {
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                    Label(L("settings.behavior.input_mode"), systemImage: "arrow.down.doc")
-                        .font(DesignTokens.Typography.heading)
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
-
-                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                        Text(L("settings.behavior.input_mode_description"))
-                            .font(DesignTokens.Typography.caption)
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                        Picker("Input Mode", selection: $inputMode) {
-                            ForEach(InputMode.allCases, id: \.self) { mode in
-                                Label(mode.displayName, systemImage: mode.iconName)
-                                    .tag(mode)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-
-                        // Mode description
-                        HStack(spacing: DesignTokens.Spacing.sm) {
-                            Image(systemName: "info.circle")
-                                .foregroundColor(DesignTokens.Colors.info)
-                            Text(inputMode.description)
-                                .font(DesignTokens.Typography.caption)
-                                .foregroundColor(DesignTokens.Colors.textSecondary)
-                        }
-                        .padding(DesignTokens.Spacing.sm)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(DesignTokens.Colors.info.opacity(0.05))
-                        .cornerRadius(DesignTokens.CornerRadius.small)
-                    }
-                }
-                .padding(DesignTokens.Spacing.md)
-                .background(DesignTokens.Colors.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
-    }
 
     private var outputModeCard: some View {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
@@ -302,8 +260,7 @@ struct BehaviorSettingsView: View {
 
     /// Check if current state differs from saved state
     private var hasUnsavedChanges: Bool {
-        return inputMode != savedInputMode ||
-               outputMode != savedOutputMode ||
+        return outputMode != savedOutputMode ||
                abs(typingSpeed - savedTypingSpeed) > 0.1 ||
                piiEnabled != savedPiiEnabled ||
                piiScrubEmail != savedPiiScrubEmail ||
@@ -348,12 +305,9 @@ struct BehaviorSettingsView: View {
             do {
                 let config = try core.loadConfig()
 
-                if let behavior = config.behavior {
-                    await MainActor.run {
-                        // Load input mode
-                        inputMode = InputMode.from(string: behavior.inputMode)
-                        savedInputMode = inputMode
-
+                await MainActor.run {
+                    // Load output settings from behavior
+                    if let behavior = config.behavior {
                         // Load output mode
                         outputMode = OutputMode.from(string: behavior.outputMode)
                         savedOutputMode = outputMode
@@ -388,30 +342,22 @@ struct BehaviorSettingsView: View {
         }
 
         do {
-            // Create BehaviorConfig from current settings
+            // Save behavior config (output settings only, input_mode is legacy)
             let behaviorConfig = BehaviorConfig(
-                inputMode: inputMode.rawValue,
+                inputMode: "cut",  // Legacy field, not used in new system
                 outputMode: outputMode.rawValue,
                 typingSpeed: UInt32(typingSpeed),
                 piiScrubbingEnabled: piiEnabled
             )
-
-            // Update via Rust core
             try core.updateBehavior(behavior: behaviorConfig)
 
             print("Behavior settings saved successfully:")
-            print("  Input Mode: \(inputMode.rawValue)")
             print("  Output Mode: \(outputMode.rawValue)")
             print("  Typing Speed: \(Int(typingSpeed))")
             print("  PII Scrubbing Enabled: \(piiEnabled)")
-            print("  PII Scrub Email: \(piiScrubEmail)")
-            print("  PII Scrub Phone: \(piiScrubPhone)")
-            print("  PII Scrub SSN: \(piiScrubSSN)")
-            print("  PII Scrub Credit Card: \(piiScrubCreditCard)")
 
             await MainActor.run {
                 // Update saved state to match current state
-                savedInputMode = inputMode
                 savedOutputMode = outputMode
                 savedTypingSpeed = typingSpeed
                 savedPiiEnabled = piiEnabled
@@ -422,9 +368,15 @@ struct BehaviorSettingsView: View {
 
                 isSaving = false
                 errorMessage = nil
+
+                // Post notification for other components
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("AetherConfigSavedInternally"),
+                    object: nil
+                )
             }
         } catch {
-            print("Failed to save behavior settings: \(error)")
+            print("Failed to save settings: \(error)")
             await MainActor.run {
                 errorMessage = "Failed to save: \(error.localizedDescription)"
                 isSaving = false
@@ -434,7 +386,6 @@ struct BehaviorSettingsView: View {
 
     /// Cancel editing and revert to saved state
     private func cancelEditing() {
-        inputMode = savedInputMode
         outputMode = savedOutputMode
         typingSpeed = savedTypingSpeed
         piiEnabled = savedPiiEnabled

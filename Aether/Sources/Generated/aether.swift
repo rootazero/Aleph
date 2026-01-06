@@ -622,6 +622,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func updateShortcuts(shortcuts: ShortcutsConfig) throws 
     
+    func updateTriggerConfig(trigger: TriggerConfig) throws 
+    
     func validateRegex(pattern: String) throws  -> Bool
     
 }
@@ -964,6 +966,13 @@ open func updateSearchConfig(search: SearchConfig)throws  {try rustCallWithError
 open func updateShortcuts(shortcuts: ShortcutsConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_update_shortcuts(self.uniffiClonePointer(),
         FfiConverterTypeShortcutsConfig.lower(shortcuts),$0
+    )
+}
+}
+    
+open func updateTriggerConfig(trigger: TriggerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_update_trigger_config(self.uniffiClonePointer(),
+        FfiConverterTypeTriggerConfig.lower(trigger),$0
     )
 }
 }
@@ -1368,10 +1377,11 @@ public struct FullConfig {
     public var shortcuts: ShortcutsConfig?
     public var behavior: BehaviorConfig?
     public var search: SearchConfig?
+    public var trigger: TriggerConfig?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultHotkey: String, general: GeneralConfig, memory: MemoryConfig, providers: [ProviderConfigEntry], rules: [RoutingRuleConfig], shortcuts: ShortcutsConfig?, behavior: BehaviorConfig?, search: SearchConfig?) {
+    public init(defaultHotkey: String, general: GeneralConfig, memory: MemoryConfig, providers: [ProviderConfigEntry], rules: [RoutingRuleConfig], shortcuts: ShortcutsConfig?, behavior: BehaviorConfig?, search: SearchConfig?, trigger: TriggerConfig?) {
         self.defaultHotkey = defaultHotkey
         self.general = general
         self.memory = memory
@@ -1380,6 +1390,7 @@ public struct FullConfig {
         self.shortcuts = shortcuts
         self.behavior = behavior
         self.search = search
+        self.trigger = trigger
     }
 }
 
@@ -1411,6 +1422,9 @@ extension FullConfig: Equatable, Hashable {
         if lhs.search != rhs.search {
             return false
         }
+        if lhs.trigger != rhs.trigger {
+            return false
+        }
         return true
     }
 
@@ -1423,6 +1437,7 @@ extension FullConfig: Equatable, Hashable {
         hasher.combine(shortcuts)
         hasher.combine(behavior)
         hasher.combine(search)
+        hasher.combine(trigger)
     }
 }
 
@@ -1441,7 +1456,8 @@ public struct FfiConverterTypeFullConfig: FfiConverterRustBuffer {
                 rules: FfiConverterSequenceTypeRoutingRuleConfig.read(from: &buf), 
                 shortcuts: FfiConverterOptionTypeShortcutsConfig.read(from: &buf), 
                 behavior: FfiConverterOptionTypeBehaviorConfig.read(from: &buf), 
-                search: FfiConverterOptionTypeSearchConfig.read(from: &buf)
+                search: FfiConverterOptionTypeSearchConfig.read(from: &buf), 
+                trigger: FfiConverterOptionTypeTriggerConfig.read(from: &buf)
         )
     }
 
@@ -1454,6 +1470,7 @@ public struct FfiConverterTypeFullConfig: FfiConverterRustBuffer {
         FfiConverterOptionTypeShortcutsConfig.write(value.shortcuts, into: &buf)
         FfiConverterOptionTypeBehaviorConfig.write(value.behavior, into: &buf)
         FfiConverterOptionTypeSearchConfig.write(value.search, into: &buf)
+        FfiConverterOptionTypeTriggerConfig.write(value.trigger, into: &buf)
     }
 }
 
@@ -2904,12 +2921,14 @@ public func FfiConverterTypeSearchProviderTestConfig_lower(_ value: SearchProvid
 public struct ShortcutsConfig {
     public var summon: String
     public var cancel: String?
+    public var commandPrompt: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(summon: String, cancel: String?) {
+    public init(summon: String, cancel: String?, commandPrompt: String) {
         self.summon = summon
         self.cancel = cancel
+        self.commandPrompt = commandPrompt
     }
 }
 
@@ -2923,12 +2942,16 @@ extension ShortcutsConfig: Equatable, Hashable {
         if lhs.cancel != rhs.cancel {
             return false
         }
+        if lhs.commandPrompt != rhs.commandPrompt {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(summon)
         hasher.combine(cancel)
+        hasher.combine(commandPrompt)
     }
 }
 
@@ -2941,13 +2964,15 @@ public struct FfiConverterTypeShortcutsConfig: FfiConverterRustBuffer {
         return
             try ShortcutsConfig(
                 summon: FfiConverterString.read(from: &buf), 
-                cancel: FfiConverterOptionString.read(from: &buf)
+                cancel: FfiConverterOptionString.read(from: &buf), 
+                commandPrompt: FfiConverterString.read(from: &buf)
         )
     }
 
     public static func write(_ value: ShortcutsConfig, into buf: inout [UInt8]) {
         FfiConverterString.write(value.summon, into: &buf)
         FfiConverterOptionString.write(value.cancel, into: &buf)
+        FfiConverterString.write(value.commandPrompt, into: &buf)
     }
 }
 
@@ -3030,6 +3055,72 @@ public func FfiConverterTypeTestConnectionResult_lift(_ buf: RustBuffer) throws 
 #endif
 public func FfiConverterTypeTestConnectionResult_lower(_ value: TestConnectionResult) -> RustBuffer {
     return FfiConverterTypeTestConnectionResult.lower(value)
+}
+
+
+public struct TriggerConfig {
+    public var replaceHotkey: String
+    public var appendHotkey: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(replaceHotkey: String, appendHotkey: String) {
+        self.replaceHotkey = replaceHotkey
+        self.appendHotkey = appendHotkey
+    }
+}
+
+
+
+extension TriggerConfig: Equatable, Hashable {
+    public static func ==(lhs: TriggerConfig, rhs: TriggerConfig) -> Bool {
+        if lhs.replaceHotkey != rhs.replaceHotkey {
+            return false
+        }
+        if lhs.appendHotkey != rhs.appendHotkey {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(replaceHotkey)
+        hasher.combine(appendHotkey)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTriggerConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TriggerConfig {
+        return
+            try TriggerConfig(
+                replaceHotkey: FfiConverterString.read(from: &buf), 
+                appendHotkey: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TriggerConfig, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.replaceHotkey, into: &buf)
+        FfiConverterString.write(value.appendHotkey, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTriggerConfig_lift(_ buf: RustBuffer) throws -> TriggerConfig {
+    return try FfiConverterTypeTriggerConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTriggerConfig_lower(_ value: TriggerConfig) -> RustBuffer {
+    return FfiConverterTypeTriggerConfig.lower(value)
 }
 
 
@@ -4229,6 +4320,30 @@ fileprivate struct FfiConverterOptionTypeShortcutsConfig: FfiConverterRustBuffer
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeTriggerConfig: FfiConverterRustBuffer {
+    typealias SwiftType = TriggerConfig?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeTriggerConfig.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeTriggerConfig.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionCallbackInterfaceInitializationProgressHandler: FfiConverterRustBuffer {
     typealias SwiftType = InitializationProgressHandler?
 
@@ -4662,6 +4777,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_shortcuts() != 5200) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_update_trigger_config() != 14167) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_validate_regex() != 42285) {

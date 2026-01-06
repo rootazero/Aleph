@@ -249,6 +249,9 @@
 "settings.shortcuts.start_recording" = "开始录制";
 "settings.shortcuts.apply_hotkey" = "应用此热键";
 "settings.shortcuts.error_requires_modifier" = "必须包含至少一个修饰键（⌘⌥⇧⌃）";
+"settings.shortcuts.command_completion_description" = "按下热键在光标位置打开命令补全窗口。";
+"settings.shortcuts.command_completion_title" = "命令补全";
+"settings.shortcuts.command_completion_hint" = "在光标位置打开命令列表";
 
 // MARK: - Hotkey Display
 "hotkey.double_tap_shift" = "双击 Shift";
@@ -289,6 +292,31 @@
 "settings.behavior.pii_example_phone" = "例如：(555) 123-4567";
 "settings.behavior.pii_example_ssn" = "例如：123-45-6789";
 "settings.behavior.pii_example_credit_card" = "例如：1234-5678-9012-3456";
+
+// MARK: - Settings Window - Trigger System (Hotkey Configuration)
+"settings.trigger.title" = "触发热键";
+"settings.trigger.description" = "配置替换和追加模式的热键。双击指定的修饰键即可触发。";
+"settings.trigger.replace_hotkey" = "替换热键";
+"settings.trigger.append_hotkey" = "追加热键";
+"settings.trigger.same_key_warning" = "替换和追加使用了相同的热键！";
+
+// MARK: - Modifier Keys
+"modifier.left_shift" = "左 Shift";
+"modifier.right_shift" = "右 Shift";
+"modifier.left_control" = "左 Control";
+"modifier.right_control" = "右 Control";
+"modifier.left_option" = "左 Option";
+"modifier.right_option" = "右 Option";
+"modifier.left_command" = "左 Command";
+"modifier.right_command" = "右 Command";
+"modifier.side.left" = "左";
+"modifier.side.right" = "右";
+
+// MARK: - Hotkey Actions
+"action.replace" = "替换";
+"action.replace.description" = "AI 回复替换原文本";
+"action.append" = "追加";
+"action.append.description" = "AI 回复追加在原文本后面";
 
 // MARK: - Settings Window - Search Tab
 "settings.search.title" = "搜索引擎";
@@ -362,7 +390,6 @@
 "menu.quit" = "退出 Aether";
 "menu.about" = "关于 Aether";
 "menu.default_provider" = "默认提供商";
-"menu.input_mode" = "输入模式";
 "menu.no_providers" = "无可用提供商";
 
 // MARK: - Edit Menu (for TextField keyboard shortcuts)

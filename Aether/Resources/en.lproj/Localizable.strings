@@ -249,6 +249,9 @@
 "settings.shortcuts.start_recording" = "Start Recording";
 "settings.shortcuts.apply_hotkey" = "Apply This Hotkey";
 "settings.shortcuts.error_requires_modifier" = "Must include at least one modifier key (⌘⌥⇧⌃)";
+"settings.shortcuts.command_completion_description" = "Press the hotkey to open the command completion window at cursor position.";
+"settings.shortcuts.command_completion_title" = "Command Completion";
+"settings.shortcuts.command_completion_hint" = "Open command list at cursor position";
 
 // MARK: - Hotkey Display
 "hotkey.double_tap_shift" = "Double-tap Shift";
@@ -289,6 +292,29 @@
 "settings.behavior.pii_example_phone" = "e.g., (555) 123-4567";
 "settings.behavior.pii_example_ssn" = "e.g., 123-45-6789";
 "settings.behavior.pii_example_credit_card" = "e.g., 1234-5678-9012-3456";
+
+// MARK: - Settings Window - Trigger Hotkeys
+"settings.trigger.title" = "Trigger Hotkeys";
+"settings.trigger.description" = "Configure hotkeys for Replace and Append modes. Double-tap the configured modifier key to trigger.";
+"settings.trigger.same_key_warning" = "Replace and Append are using the same key!";
+
+// MARK: - Modifier Keys
+"modifier.left_shift" = "Left Shift";
+"modifier.right_shift" = "Right Shift";
+"modifier.left_control" = "Left Control";
+"modifier.right_control" = "Right Control";
+"modifier.left_option" = "Left Option";
+"modifier.right_option" = "Right Option";
+"modifier.left_command" = "Left Command";
+"modifier.right_command" = "Right Command";
+"modifier.side.left" = "L";
+"modifier.side.right" = "R";
+
+// MARK: - Hotkey Actions
+"action.replace" = "Replace";
+"action.replace.description" = "AI response replaces original text";
+"action.append" = "Append";
+"action.append.description" = "AI response appends after original text";
 
 // MARK: - Settings Window - Search Tab
 "settings.search.title" = "Search Engine";
@@ -362,7 +388,6 @@
 "menu.quit" = "Quit Aether";
 "menu.about" = "About Aether";
 "menu.default_provider" = "Default Provider";
-"menu.input_mode" = "Input Mode";
 "menu.no_providers" = "No providers available";
 
 // MARK: - Edit Menu (for TextField keyboard shortcuts)

@@ -97,7 +97,7 @@ pub use crate::command::{CommandExecutionResult, CommandNode, CommandRegistry, C
 pub use crate::config::{
     BehaviorConfig, Config, FullConfig, GeneralConfig, MemoryConfig, PIIConfig, ProviderConfig,
     ProviderConfigEntry, RoutingRuleConfig, SearchBackendConfig, SearchBackendEntry, SearchConfig,
-    SearchConfigInternal, ShortcutsConfig, TestConnectionResult, VideoConfig,
+    SearchConfigInternal, ShortcutsConfig, TestConnectionResult, TriggerConfig, VideoConfig,
 };
 pub use crate::core::{
     AetherCore, AppMemoryInfo, CapturedContext, MediaAttachment, MemoryEntryFFI as MemoryEntry,

@@ -240,7 +240,7 @@ struct RootContentView: View {
             }
 
         case .shortcuts:
-            ShortcutsView(saveBarState: saveBarState)
+            ShortcutsView(core: appDelegate.core, saveBarState: saveBarState)
 
         case .behavior:
             BehaviorSettingsView(core: appDelegate.core, saveBarState: saveBarState)

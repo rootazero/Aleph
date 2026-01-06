@@ -2,345 +2,538 @@
 //  ShortcutsView.swift
 //  Aether
 //
-//  Keyboard shortcuts configuration tab with hotkey recorder.
-//  Supports double-tap Space (default) and custom modifier + key combos.
+//  Keyboard shortcuts configuration tab for trigger hotkeys and command completion.
+//  Supports Replace/Append hotkeys (double-tap modifier) and Command Completion (modifier combo).
 //
 
 import SwiftUI
 import AppKit
 
 struct ShortcutsView: View {
+    // Dependencies
+    let core: AetherCore?
     @ObservedObject var saveBarState: SettingsSaveBarState
 
-    @State private var currentHotkeyMode: HotkeyMode = .default
-    @State private var showingCustomHotkeyRecorder = false
-    @State private var conflictWarning: String?
-    @State private var showingSaveConfirmation = false
+    // Trigger hotkeys (double-tap modifier keys)
+    @State private var replaceKey: ModifierKey = .leftShift
+    @State private var appendKey: ModifierKey = .rightShift
+
+    // Command completion hotkey (two modifiers + character)
+    @State private var commandModifier1: CommandModifier = .command
+    @State private var commandModifier2: CommandModifier = .option
+    @State private var commandCharKey: CommandCharKey = .slash
+
+    // Saved settings (for comparison)
+    @State private var savedReplaceKey: ModifierKey = .leftShift
+    @State private var savedAppendKey: ModifierKey = .rightShift
+    @State private var savedCommandModifier1: CommandModifier = .command
+    @State private var savedCommandModifier2: CommandModifier = .option
+    @State private var savedCommandCharKey: CommandCharKey = .slash
+
+    // UI state
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+
+    // Default values
+    private let defaultReplaceKey: ModifierKey = .leftShift
+    private let defaultAppendKey: ModifierKey = .rightShift
+    private let defaultCommandModifier1: CommandModifier = .command
+    private let defaultCommandModifier2: CommandModifier = .option
+    private let defaultCommandCharKey: CommandCharKey = .slash
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                // Global Hotkey Card
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                    Label(L("settings.shortcuts.global_hotkey"), systemImage: "keyboard")
-                        .font(DesignTokens.Typography.heading)
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
+                // Trigger Hotkeys Card (Replace/Append)
+                triggerHotkeyCard
 
-                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                        // Current hotkey display
-                        HStack {
-                            Text(L("settings.shortcuts.current_hotkey"))
-                                .font(DesignTokens.Typography.body)
-                                .frame(width: 80, alignment: .leading)
-
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(DesignTokens.Colors.cardBackground)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .stroke(DesignTokens.Colors.accentBlue.opacity(0.3), lineWidth: 1)
-                                    )
-                                    .frame(height: 36)
-
-                                Text(currentHotkeyMode.displayString)
-                                    .font(.system(.body, design: .monospaced))
-                                    .fontWeight(.medium)
-                                    .foregroundColor(DesignTokens.Colors.textPrimary)
-                            }
-                            .frame(minWidth: 200)
-
-                            Spacer()
-                        }
-
-                        // Mode description
-                        switch currentHotkeyMode {
-                        case .doubleTapShift:
-                            HStack(spacing: DesignTokens.Spacing.sm) {
-                                Image(systemName: "info.circle")
-                                    .foregroundColor(DesignTokens.Colors.accentBlue)
-                                Text(L("settings.shortcuts.double_tap_shift_description"))
-                                    .font(DesignTokens.Typography.caption)
-                                    .foregroundColor(DesignTokens.Colors.textSecondary)
-                            }
-                        case .doubleTap:
-                            HStack(spacing: DesignTokens.Spacing.sm) {
-                                Image(systemName: "info.circle")
-                                    .foregroundColor(DesignTokens.Colors.accentBlue)
-                                Text(L("settings.shortcuts.double_tap_description"))
-                                    .font(DesignTokens.Typography.caption)
-                                    .foregroundColor(DesignTokens.Colors.textSecondary)
-                            }
-                        case .modifierCombo:
-                            HStack(spacing: DesignTokens.Spacing.sm) {
-                                Image(systemName: "info.circle")
-                                    .foregroundColor(DesignTokens.Colors.accentBlue)
-                                Text(L("settings.shortcuts.modifier_combo_description"))
-                                    .font(DesignTokens.Typography.caption)
-                                    .foregroundColor(DesignTokens.Colors.textSecondary)
-                            }
-                        }
-
-                        // Conflict warning
-                        if let warning = conflictWarning {
-                            HStack(spacing: DesignTokens.Spacing.sm) {
-                                Image(systemName: "exclamationmark.triangle")
-                                    .foregroundColor(DesignTokens.Colors.warning)
-                                Text(warning)
-                                    .font(DesignTokens.Typography.caption)
-                                    .foregroundColor(DesignTokens.Colors.warning)
-                            }
-                            .padding(DesignTokens.Spacing.sm)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(DesignTokens.Colors.warning.opacity(0.1))
-                            .cornerRadius(DesignTokens.CornerRadius.small)
-                        }
-
-                        Divider()
-                            .padding(.vertical, DesignTokens.Spacing.sm)
-
-                        // Action buttons
-                        HStack(spacing: DesignTokens.Spacing.md) {
-                            ActionButton(L("settings.shortcuts.reset_default"), style: .secondary) {
-                                resetToDefault()
-                            }
-
-                            ActionButton(L("settings.shortcuts.custom_hotkey"), style: .secondary) {
-                                showingCustomHotkeyRecorder = true
-                            }
-
-                            Spacer()
-
-                            if showingSaveConfirmation {
-                                Label(L("settings.shortcuts.saved"), systemImage: "checkmark.circle.fill")
-                                    .foregroundColor(DesignTokens.Colors.providerActive)
-                                    .font(DesignTokens.Typography.caption)
-                            }
-                        }
-                    }
-                }
-                .padding(DesignTokens.Spacing.md)
-                .background(DesignTokens.Colors.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
-
-                // Preset Shortcuts Card
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                    Label(L("settings.shortcuts.presets"), systemImage: "star")
-                        .font(DesignTokens.Typography.heading)
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
-
-                    VStack(spacing: DesignTokens.Spacing.sm) {
-                        PresetHotkeyRow(
-                            name: L("settings.shortcuts.preset_double_tap_shift"),
-                            mode: .doubleTapShift,
-                            description: L("settings.shortcuts.preset_default_description"),
-                            isSelected: currentHotkeyMode == .doubleTapShift
-                        ) {
-                            applyHotkey(.doubleTapShift)
-                        }
-
-                        PresetHotkeyRow(
-                            name: "⌘ + `",
-                            mode: .modifierCombo(keyCode: 50, modifiers: .maskCommand),
-                            description: L("settings.shortcuts.preset_command_grave"),
-                            isSelected: currentHotkeyMode == .modifierCombo(keyCode: 50, modifiers: .maskCommand)
-                        ) {
-                            applyHotkey(.modifierCombo(keyCode: 50, modifiers: .maskCommand))
-                        }
-
-                        PresetHotkeyRow(
-                            name: "⌥ + ␣",
-                            mode: .modifierCombo(keyCode: 49, modifiers: .maskAlternate),
-                            description: L("settings.shortcuts.preset_option_space"),
-                            isSelected: currentHotkeyMode == .modifierCombo(keyCode: 49, modifiers: .maskAlternate)
-                        ) {
-                            applyHotkey(.modifierCombo(keyCode: 49, modifiers: .maskAlternate))
-                        }
-
-                        PresetHotkeyRow(
-                            name: "⌃ + ⌘ + A",
-                            mode: .modifierCombo(keyCode: 0, modifiers: [.maskControl, .maskCommand]),
-                            description: L("settings.shortcuts.preset_control_command_a"),
-                            isSelected: currentHotkeyMode == .modifierCombo(keyCode: 0, modifiers: [.maskControl, .maskCommand])
-                        ) {
-                            applyHotkey(.modifierCombo(keyCode: 0, modifiers: [.maskControl, .maskCommand]))
-                        }
-                    }
-                }
-                .padding(DesignTokens.Spacing.md)
-                .background(DesignTokens.Colors.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
+                // Command Completion Hotkey Card
+                commandCompletionCard
 
                 // Permission Card
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                    Label(L("settings.shortcuts.permission_required"), systemImage: "lock.shield")
-                        .font(DesignTokens.Typography.heading)
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
-
-                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                        Text(L("settings.shortcuts.permission_description"))
-                            .font(DesignTokens.Typography.body)
-                            .foregroundColor(DesignTokens.Colors.textPrimary)
-
-                        Text(L("settings.shortcuts.why_needed"))
-                            .font(DesignTokens.Typography.caption)
-                            .fontWeight(.semibold)
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
-
-                        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                            Label(L("settings.shortcuts.permission_detect"), systemImage: "checkmark.circle")
-                                .font(DesignTokens.Typography.caption)
-                                .foregroundColor(DesignTokens.Colors.textSecondary)
-                            Label(L("settings.shortcuts.permission_read"), systemImage: "checkmark.circle")
-                                .font(DesignTokens.Typography.caption)
-                                .foregroundColor(DesignTokens.Colors.textSecondary)
-                            Label(L("settings.shortcuts.permission_simulate"), systemImage: "checkmark.circle")
-                                .font(DesignTokens.Typography.caption)
-                                .foregroundColor(DesignTokens.Colors.textSecondary)
-                        }
-
-                        ActionButton(L("settings.shortcuts.open_settings_button"), icon: "gear", style: .primary) {
-                            openAccessibilitySettings()
-                        }
-                        .padding(.top, DesignTokens.Spacing.sm)
-                    }
-                }
-                .padding(DesignTokens.Spacing.md)
-                .background(DesignTokens.Colors.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
+                permissionCard
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .padding(DesignTokens.Spacing.lg)
         }
+        .scrollEdge(edges: [.top, .bottom], style: .hard())
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .sheet(isPresented: $showingCustomHotkeyRecorder) {
-            CustomHotkeyRecorderSheet { newMode in
-                applyHotkey(newMode)
-                showingCustomHotkeyRecorder = false
-            }
-        }
         .onAppear {
-            loadCurrentHotkey()
-            // Set save bar to disabled state for instant-save view
-            saveBarState.update(
-                hasUnsavedChanges: false,
-                isSaving: false,
-                statusMessage: nil,
-                onSave: nil,
-                onCancel: nil
-            )
+            loadSettings()
+            updateSaveBarState()
         }
+        .onChange(of: replaceKey) { _, _ in updateSaveBarState() }
+        .onChange(of: appendKey) { _, _ in updateSaveBarState() }
+        .onChange(of: commandModifier1) { _, newValue in
+            // Ensure modifier2 is different from modifier1
+            if commandModifier2 == newValue {
+                commandModifier2 = CommandModifier.allCases.first { $0 != newValue } ?? .option
+            }
+            updateSaveBarState()
+        }
+        .onChange(of: commandModifier2) { _, newValue in
+            // Ensure modifier1 is different from modifier2
+            if commandModifier1 == newValue {
+                commandModifier1 = CommandModifier.allCases.first { $0 != newValue } ?? .command
+            }
+            updateSaveBarState()
+        }
+        .onChange(of: commandCharKey) { _, _ in updateSaveBarState() }
+        .onChange(of: isSaving) { _, _ in updateSaveBarState() }
     }
 
-    private func loadCurrentHotkey() {
-        // Load from config file
-        let configPath = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/aether/config.toml")
+    // MARK: - View Components
 
-        if FileManager.default.fileExists(atPath: configPath.path) {
+    /// Trigger hotkey card (Replace/Append hotkeys configuration)
+    private var triggerHotkeyCard: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            Label(L("settings.trigger.title"), systemImage: "keyboard")
+                .font(DesignTokens.Typography.heading)
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                Text(L("settings.trigger.description"))
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                // Replace hotkey picker
+                hotkeyPicker(
+                    action: .replace,
+                    selection: $replaceKey,
+                    otherKey: appendKey,
+                    defaultKey: defaultReplaceKey
+                )
+
+                // Append hotkey picker
+                hotkeyPicker(
+                    action: .append,
+                    selection: $appendKey,
+                    otherKey: replaceKey,
+                    defaultKey: defaultAppendKey
+                )
+            }
+        }
+        .padding(DesignTokens.Spacing.md)
+        .background(DesignTokens.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
+    }
+
+    /// Hotkey picker row for Replace/Append configuration
+    @ViewBuilder
+    private func hotkeyPicker(
+        action: HotkeyAction,
+        selection: Binding<ModifierKey>,
+        otherKey: ModifierKey,
+        defaultKey: ModifierKey
+    ) -> some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            HStack {
+                Image(systemName: action.iconName)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(action.displayName)
+                        .font(DesignTokens.Typography.body)
+                    Text(action.description)
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+
+                Spacer()
+
+                // Show current hotkey display
+                Text(selection.wrappedValue.shortDisplayName)
+                    .font(DesignTokens.Typography.code)
+                    .foregroundColor(DesignTokens.Colors.accentBlue)
+                    .padding(.horizontal, DesignTokens.Spacing.sm)
+                    .padding(.vertical, DesignTokens.Spacing.xs)
+                    .background(DesignTokens.Colors.accentBlue.opacity(0.1))
+                    .cornerRadius(DesignTokens.CornerRadius.small)
+            }
+
+            HStack(spacing: DesignTokens.Spacing.sm) {
+                // Modifier key picker (grouped by type)
+                Picker("", selection: selection) {
+                    // Shift group
+                    Text(ModifierKey.leftShift.displayName).tag(ModifierKey.leftShift)
+                    Text(ModifierKey.rightShift.displayName).tag(ModifierKey.rightShift)
+
+                    Divider()
+
+                    // Control group
+                    Text(ModifierKey.leftControl.displayName).tag(ModifierKey.leftControl)
+                    Text(ModifierKey.rightControl.displayName).tag(ModifierKey.rightControl)
+
+                    Divider()
+
+                    // Option group
+                    Text(ModifierKey.leftOption.displayName).tag(ModifierKey.leftOption)
+                    Text(ModifierKey.rightOption.displayName).tag(ModifierKey.rightOption)
+
+                    Divider()
+
+                    // Command group
+                    Text(ModifierKey.leftCommand.displayName).tag(ModifierKey.leftCommand)
+                    Text(ModifierKey.rightCommand.displayName).tag(ModifierKey.rightCommand)
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+
+                // Reset to default button
+                if selection.wrappedValue != defaultKey {
+                    Button {
+                        selection.wrappedValue = defaultKey
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.counterclockwise")
+                            Text(L("common.reset"))
+                        }
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            // Warning if same key as other action
+            if selection.wrappedValue == otherKey {
+                HStack(spacing: DesignTokens.Spacing.xs) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(DesignTokens.Colors.warning)
+                    Text(L("settings.trigger.same_key_warning"))
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.warning)
+                }
+            }
+        }
+        .padding(DesignTokens.Spacing.sm)
+        .background(DesignTokens.Colors.border.opacity(0.3))
+        .cornerRadius(DesignTokens.CornerRadius.small)
+    }
+
+    /// Command completion hotkey card (customizable)
+    private var commandCompletionCard: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            Label(L("settings.general.command_completion"), systemImage: "command")
+                .font(DesignTokens.Typography.heading)
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                Text(L("settings.shortcuts.command_completion_description"))
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                // Command completion hotkey row
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                    HStack {
+                        Image(systemName: "terminal")
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                            .frame(width: 20)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L("settings.shortcuts.command_completion_title"))
+                                .font(DesignTokens.Typography.body)
+                            Text(L("settings.shortcuts.command_completion_hint"))
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                        }
+
+                        Spacer()
+
+                        // Show current hotkey
+                        Text(commandPromptDisplayString)
+                            .font(DesignTokens.Typography.code)
+                            .foregroundColor(DesignTokens.Colors.accentBlue)
+                            .padding(.horizontal, DesignTokens.Spacing.sm)
+                            .padding(.vertical, DesignTokens.Spacing.xs)
+                            .background(DesignTokens.Colors.accentBlue.opacity(0.1))
+                            .cornerRadius(DesignTokens.CornerRadius.small)
+                    }
+
+                    // Hotkey pickers
+                    HStack(spacing: DesignTokens.Spacing.sm) {
+                        // First modifier
+                        Picker("", selection: $commandModifier1) {
+                            ForEach(CommandModifier.allCases, id: \.self) { modifier in
+                                Text(modifier.displayName).tag(modifier)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .frame(width: 100)
+
+                        Text("+")
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                        // Second modifier (filtered to exclude first)
+                        Picker("", selection: $commandModifier2) {
+                            ForEach(CommandModifier.allCases.filter { $0 != commandModifier1 }, id: \.self) { modifier in
+                                Text(modifier.displayName).tag(modifier)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .frame(width: 100)
+
+                        Text("+")
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                        // Character key
+                        Picker("", selection: $commandCharKey) {
+                            ForEach(CommandCharKey.allCases, id: \.self) { key in
+                                Text(key.displayName).tag(key)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .frame(width: 80)
+
+                        Spacer()
+
+                        // Reset to default button
+                        if !isCommandPromptDefault {
+                            Button {
+                                commandModifier1 = defaultCommandModifier1
+                                commandModifier2 = defaultCommandModifier2
+                                commandCharKey = defaultCommandCharKey
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.counterclockwise")
+                                    Text(L("common.reset"))
+                                }
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(DesignTokens.Spacing.sm)
+                .background(DesignTokens.Colors.border.opacity(0.3))
+                .cornerRadius(DesignTokens.CornerRadius.small)
+            }
+        }
+        .padding(DesignTokens.Spacing.md)
+        .background(DesignTokens.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
+    }
+
+    /// Permission card
+    private var permissionCard: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            Label(L("settings.shortcuts.permission_required"), systemImage: "lock.shield")
+                .font(DesignTokens.Typography.heading)
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                Text(L("settings.shortcuts.permission_description"))
+                    .font(DesignTokens.Typography.body)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                Text(L("settings.shortcuts.why_needed"))
+                    .font(DesignTokens.Typography.caption)
+                    .fontWeight(.semibold)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                    Label(L("settings.shortcuts.permission_detect"), systemImage: "checkmark.circle")
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                    Label(L("settings.shortcuts.permission_read"), systemImage: "checkmark.circle")
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                    Label(L("settings.shortcuts.permission_simulate"), systemImage: "checkmark.circle")
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+
+                ActionButton(L("settings.shortcuts.open_settings_button"), icon: "gear", style: .primary) {
+                    openAccessibilitySettings()
+                }
+                .padding(.top, DesignTokens.Spacing.sm)
+            }
+        }
+        .padding(DesignTokens.Spacing.md)
+        .background(DesignTokens.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
+    }
+
+    // MARK: - Computed Properties
+
+    /// Display string for command prompt hotkey (e.g., "⌘ ⌥ /")
+    private var commandPromptDisplayString: String {
+        "\(commandModifier1.symbol) \(commandModifier2.symbol) \(commandCharKey.displayChar)"
+    }
+
+    /// Config string for command prompt (e.g., "Command+Option+/")
+    private var commandPromptConfigString: String {
+        "\(commandModifier1.rawValue)+\(commandModifier2.rawValue)+\(commandCharKey.rawValue)"
+    }
+
+    /// Check if command prompt is at default value
+    private var isCommandPromptDefault: Bool {
+        commandModifier1 == defaultCommandModifier1 &&
+        commandModifier2 == defaultCommandModifier2 &&
+        commandCharKey == defaultCommandCharKey
+    }
+
+    /// Check if current state differs from saved state
+    private var hasUnsavedChanges: Bool {
+        return replaceKey != savedReplaceKey ||
+               appendKey != savedAppendKey ||
+               commandModifier1 != savedCommandModifier1 ||
+               commandModifier2 != savedCommandModifier2 ||
+               commandCharKey != savedCommandCharKey
+    }
+
+    /// Status message for UnifiedSaveBar
+    private var statusMessage: String? {
+        if let error = errorMessage {
+            return error
+        }
+        if hasUnsavedChanges {
+            return L("settings.unsaved_changes.title")
+        }
+        return nil
+    }
+
+    // MARK: - Actions
+
+    private func loadSettings() {
+        guard let core = core else {
+            // Use defaults if core is not available
+            return
+        }
+
+        Task {
             do {
-                let content = try String(contentsOf: configPath, encoding: .utf8)
-                if let summonLine = content.split(separator: "\n").first(where: { $0.hasPrefix("summon") }) {
-                    let value = summonLine
-                        .split(separator: "=")
-                        .last?
-                        .trimmingCharacters(in: .whitespaces)
-                        .replacingOccurrences(of: "\"", with: "")
-                        ?? ""
+                let config = try core.loadConfig()
 
-                    if let mode = HotkeyMode.from(configString: value) {
-                        currentHotkeyMode = mode
-                        return
+                await MainActor.run {
+                    // Load trigger config (Replace/Append hotkeys)
+                    if let trigger = config.trigger {
+                        replaceKey = trigger.replaceKey
+                        savedReplaceKey = replaceKey
+
+                        appendKey = trigger.appendKey
+                        savedAppendKey = appendKey
+                    }
+
+                    // Load shortcuts config (Command completion)
+                    if let shortcuts = config.shortcuts {
+                        parseCommandPrompt(shortcuts.commandPrompt)
+                        savedCommandModifier1 = commandModifier1
+                        savedCommandModifier2 = commandModifier2
+                        savedCommandCharKey = commandCharKey
                     }
                 }
             } catch {
-                print("[ShortcutsView] Failed to read config: \(error)")
+                print("Failed to load shortcut settings: \(error)")
             }
-        }
-
-        // Default
-        currentHotkeyMode = .default
-    }
-
-    private func applyHotkey(_ mode: HotkeyMode) {
-        currentHotkeyMode = mode
-        conflictWarning = detectConflict(for: mode)
-        saveHotkey(mode)
-
-        // Update the running hotkey monitor
-        if let appDelegate = NSApp.delegate as? AppDelegate {
-            appDelegate.updateHotkeyConfiguration(mode)
         }
     }
 
-    private func detectConflict(for mode: HotkeyMode) -> String? {
-        // Check for common system hotkey conflicts
-        switch mode {
-        case .doubleTapShift, .doubleTap:
-            return nil // Double-tap is safe
+    /// Parse command prompt string (e.g., "Command+Option+/") into components
+    private func parseCommandPrompt(_ configString: String) {
+        let parts = configString.split(separator: "+").map { String($0) }
+        guard parts.count == 3 else { return }
 
-        case .modifierCombo(let keyCode, let modifiers):
-            // Check Command+Space (Spotlight)
-            if keyCode == 49 && modifiers == .maskCommand {
-                return L("settings.shortcuts.conflict_spotlight")
-            }
-            // Check Option+Space (some input methods)
-            if keyCode == 49 && modifiers == .maskAlternate {
-                return L("settings.shortcuts.conflict_input_method")
-            }
-            // Check Control+Space (input method switch)
-            if keyCode == 49 && modifiers == .maskControl {
-                return L("settings.shortcuts.conflict_input_switch")
-            }
-            return nil
+        if let mod1 = CommandModifier(rawValue: parts[0]) {
+            commandModifier1 = mod1
+        }
+        if let mod2 = CommandModifier(rawValue: parts[1]) {
+            commandModifier2 = mod2
+        }
+        if let key = CommandCharKey(rawValue: parts[2]) {
+            commandCharKey = key
         }
     }
 
-    private func saveHotkey(_ mode: HotkeyMode) {
-        // Save to config file
-        let configPath = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/aether/config.toml")
+    private func saveSettings() async {
+        guard let core = core else {
+            await MainActor.run {
+                errorMessage = L("error.core_not_initialized")
+            }
+            return
+        }
+
+        await MainActor.run {
+            isSaving = true
+            errorMessage = nil
+        }
 
         do {
-            var content = ""
-            if FileManager.default.fileExists(atPath: configPath.path) {
-                content = try String(contentsOf: configPath, encoding: .utf8)
-            }
+            // Save trigger config (Replace/Append hotkeys)
+            let triggerConfig = TriggerConfig.create(
+                replaceKey: replaceKey,
+                appendKey: appendKey
+            )
+            try core.updateTriggerConfig(trigger: triggerConfig)
 
-            // Update or add summon line in [shortcuts] section
-            let newSummon = "summon = \"\(mode.configString)\""
+            // Save shortcuts config (Command completion)
+            let shortcutsConfig = ShortcutsConfig(
+                summon: "Command+Grave",  // Legacy, not used
+                cancel: "Escape",
+                commandPrompt: commandPromptConfigString
+            )
+            try core.updateShortcuts(shortcuts: shortcutsConfig)
 
-            if content.contains("summon = ") {
-                // Replace existing summon line
-                content = content.replacingOccurrences(
-                    of: #"summon = \"[^\"]*\""#,
-                    with: newSummon,
-                    options: .regularExpression
+            print("Shortcut settings saved successfully:")
+            print("  Replace Key: \(replaceKey.rawValue)")
+            print("  Append Key: \(appendKey.rawValue)")
+            print("  Command Prompt: \(commandPromptConfigString)")
+
+            await MainActor.run {
+                // Update saved state to match current state
+                savedReplaceKey = replaceKey
+                savedAppendKey = appendKey
+                savedCommandModifier1 = commandModifier1
+                savedCommandModifier2 = commandModifier2
+                savedCommandCharKey = commandCharKey
+
+                isSaving = false
+                errorMessage = nil
+
+                // Notify AppDelegate to update trigger system at runtime
+                if let appDelegate = NSApp.delegate as? AppDelegate {
+                    appDelegate.updateTriggerConfiguration(triggerConfig)
+                    appDelegate.updateCommandPromptHotkey(shortcutsConfig)
+                }
+
+                // Post notification for other components
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("AetherConfigSavedInternally"),
+                    object: nil
                 )
-            } else if content.contains("[shortcuts]") {
-                // Add after [shortcuts] section
-                content = content.replacingOccurrences(
-                    of: "[shortcuts]",
-                    with: "[shortcuts]\n\(newSummon)"
-                )
-            } else {
-                // Add new section
-                content += "\n\n[shortcuts]\n\(newSummon)\n"
-            }
-
-            try content.write(to: configPath, atomically: true, encoding: .utf8)
-            print("[ShortcutsView] Saved hotkey: \(mode.configString)")
-
-            showingSaveConfirmation = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                showingSaveConfirmation = false
             }
         } catch {
-            print("[ShortcutsView] Failed to save hotkey: \(error)")
+            print("Failed to save shortcut settings: \(error)")
+            await MainActor.run {
+                errorMessage = "Failed to save: \(error.localizedDescription)"
+                isSaving = false
+            }
         }
     }
 
-    private func resetToDefault() {
-        applyHotkey(.default)
+    /// Cancel editing and revert to saved state
+    private func cancelEditing() {
+        replaceKey = savedReplaceKey
+        appendKey = savedAppendKey
+        commandModifier1 = savedCommandModifier1
+        commandModifier2 = savedCommandModifier2
+        commandCharKey = savedCommandCharKey
+        errorMessage = nil
+    }
+
+    /// Update saveBarState to reflect current state
+    private func updateSaveBarState() {
+        saveBarState.update(
+            hasUnsavedChanges: hasUnsavedChanges,
+            isSaving: isSaving,
+            statusMessage: statusMessage,
+            onSave: saveSettings,
+            onCancel: cancelEditing
+        )
     }
 
     private func openAccessibilitySettings() {
@@ -350,191 +543,91 @@ struct ShortcutsView: View {
     }
 }
 
-// MARK: - Preset Hotkey Row
+// MARK: - Command Modifier Enum
 
-struct PresetHotkeyRow: View {
-    let name: String
-    let mode: HotkeyMode
-    let description: String
-    let isSelected: Bool
-    let onSelect: () -> Void
+/// Modifier keys for command completion hotkey
+enum CommandModifier: String, CaseIterable {
+    case command = "Command"
+    case option = "Option"
+    case control = "Control"
+    case shift = "Shift"
 
-    var body: some View {
-        HStack(spacing: DesignTokens.Spacing.md) {
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                HStack(spacing: DesignTokens.Spacing.sm) {
-                    Text(name)
-                        .font(DesignTokens.Typography.code)
-                        .fontWeight(.semibold)
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
-
-                    if isSelected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(DesignTokens.Colors.providerActive)
-                    }
-                }
-
-                Text(description)
-                    .font(DesignTokens.Typography.caption)
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
-            }
-
-            Spacer()
-
-            ActionButton(L("settings.shortcuts.use_this"), style: .primary, isDisabled: isSelected) {
-                onSelect()
-            }
+    var displayName: String {
+        switch self {
+        case .command: return "Command"
+        case .option: return "Option"
+        case .control: return "Control"
+        case .shift: return "Shift"
         }
-        .padding(DesignTokens.Spacing.sm)
-        .background(isSelected ? DesignTokens.Colors.accentBlue.opacity(0.1) : Color.clear)
-        .cornerRadius(DesignTokens.CornerRadius.small)
+    }
+
+    var symbol: String {
+        switch self {
+        case .command: return "⌘"
+        case .option: return "⌥"
+        case .control: return "⌃"
+        case .shift: return "⇧"
+        }
+    }
+
+    var eventModifier: NSEvent.ModifierFlags {
+        switch self {
+        case .command: return .command
+        case .option: return .option
+        case .control: return .control
+        case .shift: return .shift
+        }
     }
 }
 
-// MARK: - Custom Hotkey Recorder Sheet
+// MARK: - Command Character Key Enum
 
-struct CustomHotkeyRecorderSheet: View {
-    let onSelect: (HotkeyMode) -> Void
-    @Environment(\.dismiss) private var dismiss
+/// Character keys for command completion hotkey
+enum CommandCharKey: String, CaseIterable {
+    case slash = "/"
+    case grave = "`"
+    case backslash = "\\"
+    case semicolon = ";"
+    case comma = ","
+    case period = "."
+    case space = "Space"
 
-    @State private var isRecording = false
-    @State private var recordedHotkey: HotkeyMode?
-    @State private var errorMessage: String?
-    @State private var eventMonitor: Any?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-            HStack {
-                Text(L("settings.shortcuts.custom_hotkey_title"))
-                    .font(DesignTokens.Typography.title)
-                    .foregroundColor(DesignTokens.Colors.textPrimary)
-                Spacer()
-                Button(L("common.cancel")) {
-                    stopRecording()
-                    dismiss()
-                }
-            }
-
-            Text(L("settings.shortcuts.custom_hotkey_instruction"))
-                .font(DesignTokens.Typography.body)
-                .foregroundColor(DesignTokens.Colors.textSecondary)
-
-            Divider()
-
-            // Recording area
-            ZStack {
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(isRecording ? DesignTokens.Colors.accentBlue.opacity(0.1) : DesignTokens.Colors.cardBackground)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(isRecording ? DesignTokens.Colors.accentBlue : DesignTokens.Colors.border, lineWidth: 2)
-                    )
-                    .frame(height: 80)
-
-                VStack(spacing: DesignTokens.Spacing.sm) {
-                    if isRecording {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                            Text(L("settings.shortcuts.recording_prompt"))
-                                .font(DesignTokens.Typography.body)
-                                .foregroundColor(DesignTokens.Colors.accentBlue)
-                        }
-                    } else if let hotkey = recordedHotkey {
-                        Text(hotkey.displayString)
-                            .font(.system(size: 24, weight: .bold, design: .monospaced))
-                            .foregroundColor(DesignTokens.Colors.textPrimary)
-                    } else {
-                        Text(L("settings.shortcuts.start_recording_hint"))
-                            .font(DesignTokens.Typography.body)
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
-                    }
-                }
-            }
-
-            // Error message
-            if let error = errorMessage {
-                HStack(spacing: DesignTokens.Spacing.sm) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundColor(DesignTokens.Colors.warning)
-                    Text(error)
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.warning)
-                }
-            }
-
-            Spacer()
-
-            // Action buttons
-            HStack(spacing: DesignTokens.Spacing.md) {
-                if isRecording {
-                    ActionButton(L("settings.shortcuts.stop_recording"), style: .secondary) {
-                        stopRecording()
-                    }
-                } else {
-                    ActionButton(L("settings.shortcuts.start_recording"), icon: "record.circle", style: .primary) {
-                        startRecording()
-                    }
-                }
-
-                Spacer()
-
-                if let hotkey = recordedHotkey, !isRecording {
-                    ActionButton(L("settings.shortcuts.apply_hotkey"), icon: "checkmark.circle", style: .primary) {
-                        onSelect(hotkey)
-                    }
-                }
-            }
-        }
-        .padding(DesignTokens.Spacing.lg)
-        .frame(width: 450, height: 300)
-        .onDisappear {
-            stopRecording()
+    var displayName: String {
+        switch self {
+        case .slash: return "/"
+        case .grave: return "`"
+        case .backslash: return "\\"
+        case .semicolon: return ";"
+        case .comma: return ","
+        case .period: return "."
+        case .space: return "Space"
         }
     }
 
-    private func startRecording() {
-        isRecording = true
-        errorMessage = nil
-        recordedHotkey = nil
-
-        // Monitor for key events
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
-            handleKeyEvent(event)
-            return nil // Consume the event
+    var displayChar: String {
+        switch self {
+        case .space: return "␣"
+        default: return rawValue
         }
     }
 
-    private func stopRecording() {
-        isRecording = false
-        if let monitor = eventMonitor {
-            NSEvent.removeMonitor(monitor)
-            eventMonitor = nil
+    var keyCode: UInt16 {
+        switch self {
+        case .slash: return 44
+        case .grave: return 50
+        case .backslash: return 42
+        case .semicolon: return 41
+        case .comma: return 43
+        case .period: return 47
+        case .space: return 49
         }
     }
+}
 
-    private func handleKeyEvent(_ event: NSEvent) {
-        // Get modifiers
-        let flags = event.modifierFlags
-        var cgFlags: CGEventFlags = []
+// MARK: - Preview
 
-        if flags.contains(.command) { cgFlags.insert(.maskCommand) }
-        if flags.contains(.option) { cgFlags.insert(.maskAlternate) }
-        if flags.contains(.shift) { cgFlags.insert(.maskShift) }
-        if flags.contains(.control) { cgFlags.insert(.maskControl) }
-
-        // Require at least one modifier
-        if cgFlags.isEmpty {
-            errorMessage = L("settings.shortcuts.error_requires_modifier")
-            NSSound.beep()
-            return
-        }
-
-        // Record the hotkey
-        let keyCode = event.keyCode
-        recordedHotkey = .modifierCombo(keyCode: keyCode, modifiers: cgFlags)
-        errorMessage = nil
-
-        stopRecording()
+struct ShortcutsView_Previews: PreviewProvider {
+    static var previews: some View {
+        ShortcutsView(core: nil, saveBarState: SettingsSaveBarState())
     }
 }

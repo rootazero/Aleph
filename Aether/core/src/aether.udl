@@ -185,6 +185,10 @@ interface AetherCore {
   [Throws=AetherException]
   void update_behavior(BehaviorConfig behavior);
 
+  // Update trigger configuration (hotkey-system-refactor)
+  [Throws=AetherException]
+  void update_trigger_config(TriggerConfig trigger);
+
   // Update search configuration
   [Throws=AetherException]
   void update_search_config(SearchConfig search);
@@ -434,8 +438,9 @@ dictionary RoutingRuleConfig {
 
 // Shortcuts configuration (Phase 6 - Task 4.2)
 dictionary ShortcutsConfig {
-  string summon;
+  string summon;           // Legacy - not used in new trigger system
   string? cancel;
+  string command_prompt;   // Command completion hotkey (e.g., "Command+Option+/")
 };
 
 // Behavior configuration (Phase 6 - Task 5.1)
@@ -444,6 +449,13 @@ dictionary BehaviorConfig {
   string output_mode;
   u32 typing_speed;
   boolean pii_scrubbing_enabled;
+};
+
+// Trigger configuration (hotkey-system-refactor)
+// Controls hotkeys for Replace and Append operations
+dictionary TriggerConfig {
+  string replace_hotkey;  // e.g., "DoubleTap+leftShift" - AI replaces original text
+  string append_hotkey;   // e.g., "DoubleTap+rightShift" - AI appends after original text
 };
 
 // Search backend configuration (add-search-capability-integration)
@@ -493,6 +505,7 @@ dictionary FullConfig {
   ShortcutsConfig? shortcuts;
   BehaviorConfig? behavior;
   SearchConfig? search;
+  TriggerConfig? trigger;
 };
 
 // Provider config entry (name + config)

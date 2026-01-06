@@ -47,6 +47,9 @@ pub struct Config {
     /// Video transcript configuration (YouTube transcript extraction)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video: Option<VideoConfig>,
+    /// Trigger configuration (hotkey system refactor)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<TriggerConfig>,
 }
 
 /// General configuration settings
@@ -76,18 +79,32 @@ fn default_log_retention_days() -> u32 {
 /// Shortcuts configuration (Phase 6 - Task 4.2)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShortcutsConfig {
-    /// Global summon hotkey (e.g., "Command+Grave")
+    /// Global summon hotkey (e.g., "Command+Grave") - LEGACY, not used in new trigger system
+    #[serde(default = "default_summon_hotkey")]
     pub summon: String,
     /// Cancel operation hotkey (optional)
     #[serde(default)]
     pub cancel: Option<String>,
+    /// Command completion hotkey (e.g., "Command+Option+/")
+    /// Format: "Modifier1+Modifier2+Key" where modifiers are Command, Option, Control, Shift
+    #[serde(default = "default_command_prompt_hotkey")]
+    pub command_prompt: String,
+}
+
+fn default_summon_hotkey() -> String {
+    "Command+Grave".to_string()
+}
+
+fn default_command_prompt_hotkey() -> String {
+    "Command+Option+/".to_string()
 }
 
 impl Default for ShortcutsConfig {
     fn default() -> Self {
         Self {
-            summon: "Command+Grave".to_string(),
+            summon: default_summon_hotkey(),
             cancel: Some("Escape".to_string()),
+            command_prompt: default_command_prompt_hotkey(),
         }
     }
 }
@@ -132,6 +149,50 @@ impl Default for BehaviorConfig {
     }
 }
 
+/// Trigger configuration for hotkey system
+///
+/// Defines hotkeys for Replace and Append operations:
+/// - Replace: AI response replaces original text (default: double-tap left Shift)
+/// - Append: AI response appends after original text (default: double-tap right Shift)
+///
+/// # Example TOML
+/// ```toml
+/// [trigger]
+/// replace_hotkey = "DoubleTap+leftShift"
+/// append_hotkey = "DoubleTap+rightShift"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriggerConfig {
+    /// Hotkey for Replace action (AI response replaces original text)
+    /// Format: "DoubleTap+{modifierKey}"
+    /// Supported modifiers: leftShift, rightShift, leftControl, rightControl,
+    ///                     leftOption, rightOption, leftCommand, rightCommand
+    #[serde(default = "default_replace_hotkey")]
+    pub replace_hotkey: String,
+
+    /// Hotkey for Append action (AI response appends after original text)
+    /// Format: "DoubleTap+{modifierKey}"
+    #[serde(default = "default_append_hotkey")]
+    pub append_hotkey: String,
+}
+
+fn default_replace_hotkey() -> String {
+    "DoubleTap+leftShift".to_string()
+}
+
+fn default_append_hotkey() -> String {
+    "DoubleTap+rightShift".to_string()
+}
+
+impl Default for TriggerConfig {
+    fn default() -> Self {
+        Self {
+            replace_hotkey: default_replace_hotkey(),
+            append_hotkey: default_append_hotkey(),
+        }
+    }
+}
+
 /// Provider config entry with name (for UniFFI)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfigEntry {
@@ -162,6 +223,8 @@ pub struct FullConfig {
     pub behavior: Option<BehaviorConfig>,
     #[serde(default)]
     pub search: Option<SearchConfig>,
+    #[serde(default)]
+    pub trigger: Option<TriggerConfig>,
 }
 
 impl From<Config> for FullConfig {
@@ -183,6 +246,7 @@ impl From<Config> for FullConfig {
             shortcuts: config.shortcuts,
             behavior: config.behavior,
             search,
+            trigger: config.trigger,
         }
     }
 }
@@ -1026,6 +1090,7 @@ impl Default for Config {
             behavior: Some(BehaviorConfig::default()),
             search: None,
             video: Some(VideoConfig::default()),
+            trigger: Some(TriggerConfig::default()),
         }
     }
 }
@@ -1121,9 +1186,19 @@ impl Config {
         );
 
         // Migrate PII config from behavior to search (integrate-search-registry)
-        if config.migrate_pii_config() {
+        let pii_migrated = config.migrate_pii_config();
+        if pii_migrated {
             info!("Migrated PII config from behavior.pii_scrubbing_enabled to search.pii.enabled");
-            // Auto-save migrated config
+        }
+
+        // Migrate input_mode to trigger config (hotkey-system-refactor)
+        let trigger_migrated = config.migrate_trigger_config();
+        if trigger_migrated {
+            info!("Migrated input_mode config to new trigger config");
+        }
+
+        // Auto-save if any migration was performed
+        if pii_migrated || trigger_migrated {
             if let Err(e) = config.save() {
                 warn!(error = %e, "Failed to auto-save migrated config");
             }
@@ -1966,6 +2041,28 @@ impl Config {
         if let Some(ref mut behavior) = self.behavior {
             behavior.pii_scrubbing_enabled = false;
         }
+
+        true
+    }
+
+    /// Migrate from old config to new trigger config
+    ///
+    /// Sets default replace/append hotkeys if trigger config doesn't exist.
+    ///
+    /// Returns true if migration was performed
+    fn migrate_trigger_config(&mut self) -> bool {
+        // Check if migration is needed
+        if self.trigger.is_some() {
+            return false;
+        }
+
+        debug!("Migrating to new trigger config with default hotkeys");
+
+        // Create trigger config with defaults
+        self.trigger = Some(TriggerConfig {
+            replace_hotkey: default_replace_hotkey(),
+            append_hotkey: default_append_hotkey(),
+        });
 
         true
     }

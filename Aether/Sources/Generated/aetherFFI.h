@@ -606,6 +606,11 @@ void uniffi_aethecore_fn_method_aethercore_update_search_config(void*_Nonnull pt
 void uniffi_aethecore_fn_method_aethercore_update_shortcuts(void*_Nonnull ptr, RustBuffer shortcuts, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_TRIGGER_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_TRIGGER_CONFIG
+void uniffi_aethecore_fn_method_aethercore_update_trigger_config(void*_Nonnull ptr, RustBuffer trigger, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_VALIDATE_REGEX
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_VALIDATE_REGEX
 int8_t uniffi_aethecore_fn_method_aethercore_validate_regex(void*_Nonnull ptr, RustBuffer pattern, RustCallStatus *_Nonnull out_status
@@ -1172,6 +1177,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_update_search_config(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_SHORTCUTS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_SHORTCUTS
 uint16_t uniffi_aethecore_checksum_method_aethercore_update_shortcuts(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_TRIGGER_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_TRIGGER_CONFIG
+uint16_t uniffi_aethecore_checksum_method_aethercore_update_trigger_config(void
     
 );
 #endif

@@ -2163,6 +2163,24 @@ impl AetherCore {
         Ok(())
     }
 
+    /// Update trigger configuration
+    ///
+    /// Updates the trigger configuration for the hotkey system.
+    /// This controls how double-tap modifier keys trigger cut/copy operations.
+    ///
+    /// # Arguments
+    /// * `trigger` - New trigger configuration
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error
+    pub fn update_trigger_config(&self, trigger: crate::config::TriggerConfig) -> Result<()> {
+        let mut config = self.lock_config();
+        config.trigger = Some(trigger);
+        config.save()?;
+        log::info!("Trigger configuration updated");
+        Ok(())
+    }
+
     /// Update search configuration
     ///
     /// Updates the search configuration and reinitializes the SearchRegistry.
