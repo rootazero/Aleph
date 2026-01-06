@@ -81,9 +81,16 @@ class EventHandler: AetherEventHandler {
                 delay = max(0, self.minHaloDisplayTime - elapsed)
                 print("[EventHandler] Halo displayed for \(String(format: "%.2f", elapsed))s, delaying toast by \(String(format: "%.2f", delay))s")
             } else {
-                // Halo not showing, show error immediately
-                delay = 0
-                print("[EventHandler] No Halo show time recorded, showing toast immediately")
+                // Halo not showing - use minimum display time as delay
+                // This ensures user sees the Halo animation before error
+                delay = self.minHaloDisplayTime
+                print("[EventHandler] No Halo show time recorded, using minimum delay: \(self.minHaloDisplayTime)s")
+
+                // CRITICAL: Show Halo animation first if not already visible
+                // This handles the race condition where error fires before Halo shows
+                self.haloWindow?.updateState(.processing(providerColor: .blue, streamingText: nil))
+                self.haloWindow?.showCentered()
+                print("[EventHandler] Showing Halo animation before error toast")
             }
 
             // Show error toast after delay

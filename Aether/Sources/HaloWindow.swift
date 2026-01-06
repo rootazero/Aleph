@@ -19,6 +19,10 @@ class HaloWindow: NSWindow {
     /// Track when Halo started showing (for minimum display time before errors)
     private(set) var showTime: Date?
 
+    /// Hide sequence counter - used to cancel pending hide completion handlers
+    /// when a new show request comes in before hide animation completes
+    private var hideSequence: Int = 0
+
     init(themeEngine: ThemeEngine) {
         self.themeEngine = themeEngine
 
@@ -89,6 +93,9 @@ class HaloWindow: NSWindow {
         // Record show time for minimum display duration before errors
         showTime = Date()
 
+        // CRITICAL: Invalidate any pending hide completion handlers
+        hideSequence += 1
+
         // Find the screen containing the cursor position
         // This properly handles multi-monitor setups
         let targetScreen = NSScreen.screens.first { screen in
@@ -132,17 +139,31 @@ class HaloWindow: NSWindow {
         // Reset show time
         showTime = nil
 
+        // Increment hide sequence to invalidate any pending completions
+        hideSequence += 1
+        let currentSequence = hideSequence
+
         // Fade out animation
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.3
             self.animator().alphaValue = 0
-        }, completionHandler: {
+        }, completionHandler: { [weak self] in
+            // CRITICAL: Only execute orderOut if no new show request came in
+            // This prevents "error only shows once" bug where orderOut was called
+            // after a new toast was already shown
+            guard let self = self, self.hideSequence == currentSequence else {
+                print("[HaloWindow] Hide completion skipped (window was re-shown)")
+                return
+            }
             self.orderOut(nil)
         })
     }
 
     /// Show window at its current position (used after hide to re-show)
     func showAtCurrentPosition() {
+        // CRITICAL: Invalidate any pending hide completion handlers
+        hideSequence += 1
+
         // Show window WITHOUT activating (critical for focus preservation)
         self.orderFrontRegardless()
 
@@ -202,6 +223,9 @@ class HaloWindow: NSWindow {
         // Record show time for minimum display duration before errors
         showTime = Date()
 
+        // CRITICAL: Invalidate any pending hide completion handlers
+        hideSequence += 1
+
         guard let screen = NSScreen.main ?? NSScreen.screens.first else {
             print("[HaloWindow] Warning: No screen found, cannot display")
             return
@@ -231,6 +255,9 @@ class HaloWindow: NSWindow {
 
     /// Show toast at screen center (unlike regular Halo which shows at cursor)
     func showToastCentered() {
+        // CRITICAL: Invalidate any pending hide completion handlers
+        hideSequence += 1
+
         guard let screen = NSScreen.main ?? NSScreen.screens.first else {
             print("[HaloWindow] Warning: No screen found, cannot display toast")
             return
@@ -248,14 +275,22 @@ class HaloWindow: NSWindow {
 
         self.setFrameOrigin(windowOrigin)
 
+        // CRITICAL: Cancel any pending hide animations to prevent conflicts
+        // This fixes the "error only shows once" issue where hide()'s completion
+        // handler would orderOut() the window after toast was already shown
+        self.animator().alphaValue = 1.0  // Stop any ongoing animation
+        NSAnimationContext.current.duration = 0  // Immediate
+
         // Show window WITHOUT activating (critical for focus preservation)
         self.orderFrontRegardless()
 
-        // Fade in animation
+        // Fade in animation (start fresh)
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.2
             self.animator().alphaValue = 1.0
         })
+
+        print("[HaloWindow] Toast shown centered at (\(windowOrigin.x), \(windowOrigin.y))")
     }
 
     // MARK: - Private Helpers

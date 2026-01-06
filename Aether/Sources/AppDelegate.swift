@@ -1046,18 +1046,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         case .cut:
             // Direct cut mode: Show Halo immediately and process with replace
             print("[AppDelegate] Mode: cut - directly executing Cmd+X")
-            DispatchQueue.main.async { [weak self] in
-                self?.haloWindow?.show(at: mouseLocation)
-                self?.haloWindow?.updateState(.listening)
+            // CRITICAL: Show Halo SYNCHRONOUSLY before processing to ensure showTime is set
+            // This fixes the race condition where error callback fires before Halo is shown
+            if Thread.isMainThread {
+                haloWindow?.show(at: mouseLocation)
+                haloWindow?.updateState(.listening)
+            } else {
+                DispatchQueue.main.sync { [weak self] in
+                    self?.haloWindow?.show(at: mouseLocation)
+                    self?.haloWindow?.updateState(.listening)
+                }
             }
             processWithInputMode(.replace)
 
         case .copy:
             // Direct copy mode: Show Halo immediately and process with append
             print("[AppDelegate] Mode: copy - directly executing Cmd+C")
-            DispatchQueue.main.async { [weak self] in
-                self?.haloWindow?.show(at: mouseLocation)
-                self?.haloWindow?.updateState(.listening)
+            // CRITICAL: Show Halo SYNCHRONOUSLY before processing to ensure showTime is set
+            if Thread.isMainThread {
+                haloWindow?.show(at: mouseLocation)
+                haloWindow?.updateState(.listening)
+            } else {
+                DispatchQueue.main.sync { [weak self] in
+                    self?.haloWindow?.show(at: mouseLocation)
+                    self?.haloWindow?.updateState(.listening)
+                }
             }
             processWithInputMode(.append)
 
