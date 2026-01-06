@@ -959,7 +959,7 @@ impl Default for Config {
                     is_builtin: true,
                     regex: r"^/video\s+".to_string(),
                     provider: Some("openai".to_string()), // Default, user can override
-                    system_prompt: Some("You are a video content analyst. Analyze the following video transcript and provide insights, summaries, or answer questions about the video content.".to_string()),
+                    system_prompt: Some("You are a video content analyst. A video transcript will be provided in the context section below if available. Analyze the transcript and provide insights, summaries, or answer questions about the video content. If no transcript is provided, explain that the video may not have captions enabled or transcript extraction failed.".to_string()),
                     strip_prefix: Some(true),
                     capabilities: Some(vec!["video".to_string(), "memory".to_string()]),
                     intent_type: Some("video_analysis".to_string()),
