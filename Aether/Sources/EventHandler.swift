@@ -88,7 +88,9 @@ class EventHandler: AetherEventHandler {
 
                 // CRITICAL: Show Halo animation first if not already visible
                 // This handles the race condition where error fires before Halo shows
-                self.haloWindow?.updateState(.processing(providerColor: .blue, streamingText: nil))
+                // Use .processing state with purple to show the theme's processing animation
+                // (purple + 3 arcs for Zen theme)
+                self.haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
                 self.haloWindow?.showCentered()
                 print("[EventHandler] Showing Halo animation before error toast")
             }

@@ -1048,13 +1048,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             print("[AppDelegate] Mode: cut - directly executing Cmd+X")
             // CRITICAL: Show Halo SYNCHRONOUSLY before processing to ensure showTime is set
             // This fixes the race condition where error callback fires before Halo is shown
+            // Use .processing state to show the theme's processing animation (purple + 3 arcs for Zen theme)
             if Thread.isMainThread {
                 haloWindow?.show(at: mouseLocation)
-                haloWindow?.updateState(.listening)
+                haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
             } else {
                 DispatchQueue.main.sync { [weak self] in
                     self?.haloWindow?.show(at: mouseLocation)
-                    self?.haloWindow?.updateState(.listening)
+                    self?.haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
                 }
             }
             processWithInputMode(.replace)
@@ -1063,13 +1064,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // Direct copy mode: Show Halo immediately and process with append
             print("[AppDelegate] Mode: copy - directly executing Cmd+C")
             // CRITICAL: Show Halo SYNCHRONOUSLY before processing to ensure showTime is set
+            // Use .processing state to show the theme's processing animation (purple + 3 arcs for Zen theme)
             if Thread.isMainThread {
                 haloWindow?.show(at: mouseLocation)
-                haloWindow?.updateState(.listening)
+                haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
             } else {
                 DispatchQueue.main.sync { [weak self] in
                     self?.haloWindow?.show(at: mouseLocation)
-                    self?.haloWindow?.updateState(.listening)
+                    self?.haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
                 }
             }
             processWithInputMode(.append)
@@ -1089,9 +1091,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     // User selected input mode, proceed with processing
                     print("[AppDelegate] 📋 User selected: \(choice)")
 
-                    // CRITICAL: Hide the input mode selection and show listening state
+                    // CRITICAL: Hide the input mode selection and show processing state
                     // This must happen before processing to avoid focus issues
-                    self.haloWindow?.updateState(.listening)
+                    // Use .processing state to show the theme's processing animation (purple + 3 arcs for Zen theme)
+                    self.haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
 
                     // CRITICAL: Add a small delay to let the Halo UI update
                     // and ensure the original app regains focus
@@ -1359,9 +1362,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let windowContext = ContextCapture.captureContext()
         print("[AppDelegate] Context: app=\(windowContext.bundleId ?? "unknown"), window=\(windowContext.windowTitle ?? "nil")")
 
-        // Update Halo to listening state (Halo is already shown from handleHotkeyPressed)
+        // Update Halo to processing state (Halo is already shown from handleHotkeyPressed)
+        // Use .processing state to show the theme's processing animation (purple + 3 arcs for Zen theme)
         DispatchQueue.main.async { [weak self] in
-            self?.haloWindow?.updateState(.listening)
+            self?.haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
         }
 
         // Process input asynchronously to avoid blocking UI
