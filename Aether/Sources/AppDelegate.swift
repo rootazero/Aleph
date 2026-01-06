@@ -724,15 +724,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         } catch {
             print("[Aether] ❌ Error initializing core: \(error)")
 
-            let errorString = String(describing: error)
-
-            // Check if this is a configuration error (no point retrying)
-            let isConfigError = errorString.contains("No enabled providers") ||
-                                errorString.contains("provider") ||
-                                errorString.contains("config")
-
-            // Retry only for non-config errors (e.g., permission issues, library loading)
-            if !isConfigError && coreInitRetryCount < maxRetryAttempts {
+            // Retry with exponential backoff for transient errors (permissions, library loading)
+            // Note: "No providers" case is handled separately after successful init
+            if coreInitRetryCount < maxRetryAttempts {
                 coreInitRetryCount += 1
                 let retryDelay = Double(coreInitRetryCount) * 2.0 // 2s, 4s, 6s
 
@@ -742,19 +736,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     self?.initializeRustCore()
                 }
             } else {
-                // Config error or max retries exceeded - show error immediately
-                if isConfigError {
-                    print("[Aether] Configuration error detected, not retrying")
-                } else {
-                    print("[Aether] Max retry attempts exceeded, giving up")
-                }
+                // Max retries exceeded - show error
+                print("[Aether] Max retry attempts exceeded, giving up")
 
-                let errorMessage: String
-                if isConfigError {
-                    errorMessage = "\(error)\n\n" + L("error.check_provider_config")
-                } else {
-                    errorMessage = "Failed to initialize Aether core.\n\nError: \(error)\n\nPlease check:\n1. Accessibility permissions are granted\n2. Input Monitoring permissions are granted\n3. libaethecore.dylib is properly bundled"
-                }
+                let errorMessage = "Failed to initialize Aether core.\n\nError: \(error)\n\nPlease check:\n1. Accessibility permissions are granted\n2. Input Monitoring permissions are granted\n3. libaethecore.dylib is properly bundled"
 
                 // Halo is already showing (from start of initializeRustCore)
                 // After 0.8s animation, show error toast
