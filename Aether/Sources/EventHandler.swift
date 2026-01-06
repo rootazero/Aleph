@@ -68,10 +68,8 @@ class EventHandler: AetherEventHandler {
         }
 
         DispatchQueue.main.async { [weak self] in
-            // Hide Halo window - errors are shown via system alert only
-            self?.haloWindow?.hide()
-
-            // Show system alert for clear error display
+            // Show error toast notification (do NOT call hide() first - it has a delayed
+            // orderOut that would hide the toast after it appears)
             self?.showErrorNotification(message: message, suggestion: suggestion)
         }
     }
@@ -285,9 +283,7 @@ class EventHandler: AetherEventHandler {
     // MARK: - Typed Error Handling
 
     private func handleTypedError(errorType: ErrorType, message: String) {
-        // Hide Halo and show system alert instead
-        // Halo's transparent background makes error text hard to read
-        haloWindow?.hide()
+        // Show error toast (do NOT call hide() first - it conflicts with toast display)
         showErrorNotification(message: message, suggestion: nil)
     }
 
