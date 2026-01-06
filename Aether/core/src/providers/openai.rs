@@ -209,6 +209,21 @@ impl OpenAiProvider {
         })
     }
 
+    /// Build text content for image/multimodal requests.
+    /// Handles prepend mode for system prompts and provides default description for images.
+    fn build_text_content(input: &str, system_prompt: Option<&str>, use_prepend_mode: bool) -> String {
+        const DEFAULT_IMAGE_DESC: &str = "Describe this image in detail.";
+
+        match (use_prepend_mode, system_prompt, input.is_empty()) {
+            // Prepend mode with system prompt
+            (true, Some(prompt), false) => format!("{}\n\n{}", prompt, input),
+            (true, Some(prompt), true) => format!("{}\n\n{}", prompt, DEFAULT_IMAGE_DESC),
+            // No prepend mode or no system prompt
+            (_, _, false) => input.to_string(),
+            (_, _, true) => DEFAULT_IMAGE_DESC.to_string(),
+        }
+    }
+
     /// Build request body for chat completion
     fn build_request(&self, input: &str, system_prompt: Option<&str>) -> ChatCompletionRequest {
         let mut messages = Vec::new();
@@ -378,23 +393,7 @@ impl OpenAiProvider {
         let mut content_blocks = Vec::new();
 
         // Determine text content (with prepended system prompt if in prepend mode)
-        let text_content = if use_prepend_mode {
-            if let Some(prompt) = system_prompt {
-                if !input.is_empty() {
-                    format!("{}\n\n{}", prompt, input)
-                } else {
-                    format!("{}\n\nDescribe this image in detail.", prompt)
-                }
-            } else if !input.is_empty() {
-                input.to_string()
-            } else {
-                "Describe this image in detail.".to_string()
-            }
-        } else if !input.is_empty() {
-            input.to_string()
-        } else {
-            "Describe this image in detail.".to_string()
-        };
+        let text_content = Self::build_text_content(input, system_prompt, use_prepend_mode);
 
         content_blocks.push(ContentBlock::Text { text: text_content });
 

@@ -99,30 +99,4 @@ class ContextCapture {
         let _ = AXIsProcessTrustedWithOptions(options)
     }
 
-    /// Show alert to guide user to grant Accessibility permission
-    /// DEPRECATED: Use EventHandler.showPermissionPrompt instead for unified UI
-    static func showPermissionAlert() {
-        // Note: This method is deprecated and kept for backward compatibility
-        // New code should use EventHandler.showPermissionPrompt() for unified software popup
-        print("[ContextCapture] showPermissionAlert() called - consider using EventHandler.showPermissionPrompt()")
-
-        // For now, we'll keep the NSAlert implementation as fallback
-        // but this should be migrated to use EventHandler in the next refactor
-        DispatchQueue.main.async {
-            let alert = NSAlert()
-            alert.messageText = L("alert.context.accessibility_title")
-            alert.informativeText = L("alert.context.accessibility_message")
-            alert.alertStyle = .informational
-            alert.addButton(withTitle: L("alert.context.open_settings"))
-            alert.addButton(withTitle: L("common.cancel"))
-
-            let response = alert.runModal()
-            if response == .alertFirstButtonReturn {
-                // Open System Settings to Accessibility pane
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                    NSWorkspace.shared.open(url)
-                }
-            }
-        }
-    }
 }

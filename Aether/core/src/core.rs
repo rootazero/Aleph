@@ -2360,171 +2360,62 @@ impl AetherCore {
         use crate::search::{ProviderTestResult, SearchOptions, SearchProvider};
         use std::time::Instant;
 
+        // Helper: Create config error result
+        fn config_error(msg: &str) -> ProviderTestResult {
+            ProviderTestResult {
+                success: false,
+                latency_ms: 0,
+                error_message: msg.to_string(),
+                error_type: "config".to_string(),
+            }
+        }
+
+        // Helper: Extract non-empty string from Option, or return None
+        fn get_non_empty(opt: &Option<String>) -> Option<String> {
+            opt.as_ref().filter(|s| !s.is_empty()).cloned()
+        }
+
+        // Helper macro to reduce boilerplate for provider creation
+        macro_rules! create_provider {
+            ($provider:ident, $name:expr, $key:expr) => {
+                match get_non_empty($key) {
+                    Some(key) => match $provider::new(key) {
+                        Ok(p) => Box::new(p) as Box<dyn SearchProvider>,
+                        Err(e) => return Ok(config_error(&format!("Failed to create {} provider: {}", $name, e))),
+                    },
+                    None => return Ok(config_error(&format!("{} requires an API key", $name))),
+                }
+            };
+        }
+
         // Create temporary provider based on type
         let provider: Box<dyn SearchProvider> = match config.provider_type.as_str() {
-            "tavily" => {
-                let api_key = match config.api_key {
-                    Some(ref key) if !key.is_empty() => key.clone(),
-                    _ => {
-                        return Ok(ProviderTestResult {
-                            success: false,
-                            latency_ms: 0,
-                            error_message: "Tavily requires an API key".to_string(),
-                            error_type: "config".to_string(),
-                        })
-                    }
-                };
-                match TavilyProvider::new(api_key) {
-                    Ok(p) => Box::new(p),
-                    Err(e) => {
-                        return Ok(ProviderTestResult {
-                            success: false,
-                            latency_ms: 0,
-                            error_message: format!("Failed to create Tavily provider: {}", e),
-                            error_type: "config".to_string(),
-                        })
-                    }
-                }
-            }
-            "brave" => {
-                let api_key = match config.api_key {
-                    Some(ref key) if !key.is_empty() => key.clone(),
-                    _ => {
-                        return Ok(ProviderTestResult {
-                            success: false,
-                            latency_ms: 0,
-                            error_message: "Brave requires an API key".to_string(),
-                            error_type: "config".to_string(),
-                        })
-                    }
-                };
-                match BraveProvider::new(api_key) {
-                    Ok(p) => Box::new(p),
-                    Err(e) => {
-                        return Ok(ProviderTestResult {
-                            success: false,
-                            latency_ms: 0,
-                            error_message: format!("Failed to create Brave provider: {}", e),
-                            error_type: "config".to_string(),
-                        })
-                    }
-                }
-            }
-            "searxng" => {
-                let base_url = match config.base_url {
-                    Some(ref url) if !url.is_empty() => url.clone(),
-                    _ => {
-                        return Ok(ProviderTestResult {
-                            success: false,
-                            latency_ms: 0,
-                            error_message: "SearXNG requires a base URL".to_string(),
-                            error_type: "config".to_string(),
-                        })
-                    }
-                };
-                match SearxngProvider::new(base_url) {
-                    Ok(p) => Box::new(p),
-                    Err(e) => {
-                        return Ok(ProviderTestResult {
-                            success: false,
-                            latency_ms: 0,
-                            error_message: format!("Failed to create SearXNG provider: {}", e),
-                            error_type: "config".to_string(),
-                        })
-                    }
-                }
-            }
+            "tavily" => create_provider!(TavilyProvider, "Tavily", &config.api_key),
+            "brave" => create_provider!(BraveProvider, "Brave", &config.api_key),
+            "bing" => create_provider!(BingProvider, "Bing", &config.api_key),
+            "exa" => create_provider!(ExaProvider, "Exa", &config.api_key),
+            "searxng" => match get_non_empty(&config.base_url) {
+                Some(base_url) => match SearxngProvider::new(base_url) {
+                    Ok(p) => Box::new(p) as Box<dyn SearchProvider>,
+                    Err(e) => return Ok(config_error(&format!("Failed to create SearXNG provider: {}", e))),
+                },
+                None => return Ok(config_error("SearXNG requires a base URL")),
+            },
             "google" => {
-                let api_key = match config.api_key {
-                    Some(ref key) if !key.is_empty() => key.clone(),
-                    _ => {
-                        return Ok(ProviderTestResult {
-                            success: false,
-                            latency_ms: 0,
-                            error_message: "Google CSE requires an API key".to_string(),
-                            error_type: "config".to_string(),
-                        })
-                    }
+                let api_key = match get_non_empty(&config.api_key) {
+                    Some(k) => k,
+                    None => return Ok(config_error("Google CSE requires an API key")),
                 };
-                let engine_id = match config.engine_id {
-                    Some(ref id) if !id.is_empty() => id.clone(),
-                    _ => {
-                        return Ok(ProviderTestResult {
-                            success: false,
-                            latency_ms: 0,
-                            error_message: "Google CSE requires an engine ID".to_string(),
-                            error_type: "config".to_string(),
-                        })
-                    }
+                let engine_id = match get_non_empty(&config.engine_id) {
+                    Some(id) => id,
+                    None => return Ok(config_error("Google CSE requires an engine ID")),
                 };
                 match GoogleProvider::new(api_key, engine_id) {
-                    Ok(p) => Box::new(p),
-                    Err(e) => {
-                        return Ok(ProviderTestResult {
-                            success: false,
-                            latency_ms: 0,
-                            error_message: format!("Failed to create Google provider: {}", e),
-                            error_type: "config".to_string(),
-                        })
-                    }
+                    Ok(p) => Box::new(p) as Box<dyn SearchProvider>,
+                    Err(e) => return Ok(config_error(&format!("Failed to create Google provider: {}", e))),
                 }
             }
-            "bing" => {
-                let api_key = match config.api_key {
-                    Some(ref key) if !key.is_empty() => key.clone(),
-                    _ => {
-                        return Ok(ProviderTestResult {
-                            success: false,
-                            latency_ms: 0,
-                            error_message: "Bing requires an API key".to_string(),
-                            error_type: "config".to_string(),
-                        })
-                    }
-                };
-                match BingProvider::new(api_key) {
-                    Ok(p) => Box::new(p),
-                    Err(e) => {
-                        return Ok(ProviderTestResult {
-                            success: false,
-                            latency_ms: 0,
-                            error_message: format!("Failed to create Bing provider: {}", e),
-                            error_type: "config".to_string(),
-                        })
-                    }
-                }
-            }
-            "exa" => {
-                let api_key = match config.api_key {
-                    Some(ref key) if !key.is_empty() => key.clone(),
-                    _ => {
-                        return Ok(ProviderTestResult {
-                            success: false,
-                            latency_ms: 0,
-                            error_message: "Exa requires an API key".to_string(),
-                            error_type: "config".to_string(),
-                        })
-                    }
-                };
-                match ExaProvider::new(api_key) {
-                    Ok(p) => Box::new(p),
-                    Err(e) => {
-                        return Ok(ProviderTestResult {
-                            success: false,
-                            latency_ms: 0,
-                            error_message: format!("Failed to create Exa provider: {}", e),
-                            error_type: "config".to_string(),
-                        })
-                    }
-                }
-            }
-            unknown => {
-                return Ok(ProviderTestResult {
-                    success: false,
-                    latency_ms: 0,
-                    error_message: format!("Unknown provider type: {}", unknown),
-                    error_type: "config".to_string(),
-                })
-            }
+            unknown => return Ok(config_error(&format!("Unknown provider type: {}", unknown))),
         };
 
         // Execute test search within tokio runtime
@@ -2695,45 +2586,14 @@ mod tests {
     #[test]
     fn test_core_creation() {
         let handler = Box::new(MockEventHandler::new());
-        let core = AetherCore::new(handler).unwrap();
-        assert!(!core.is_listening());
+        let core = AetherCore::new(handler);
+        assert!(core.is_ok(), "AetherCore should be created successfully");
     }
 
-    #[test]
-    fn test_start_stop_listening() {
-        let core = AetherCore::new(Box::new(MockEventHandler::new())).unwrap();
-
-        // Note: is_listening() always returns false since hotkey monitoring is now in Swift layer
-        assert!(!core.is_listening());
-
-        core.start_listening().unwrap();
-        // is_listening() still returns false (hotkey monitoring handled by Swift)
-        assert!(!core.is_listening());
-
-        core.stop_listening().unwrap();
-        assert!(!core.is_listening());
-    }
-
-    // REMOVED: test_clipboard_read
-    // Clipboard operations have been migrated to Swift layer (ClipboardManager.swift)
+    // REMOVED: test_start_stop_listening, test_multiple_start_stop_cycles
+    // Hotkey monitoring has been migrated to Swift layer (GlobalHotkeyMonitor.swift)
+    // The is_listening() method always returns false for backward compatibility.
     // See: refactor-native-api-separation proposal
-
-    #[test]
-    fn test_multiple_start_stop_cycles() {
-        let handler = Box::new(MockEventHandler::new());
-        let core = AetherCore::new(handler).unwrap();
-
-        // Note: start_listening() and stop_listening() are deprecated (now handled by Swift layer)
-        // but kept for API compatibility. They should not crash when called.
-        for _ in 0..3 {
-            core.start_listening().unwrap();
-            // is_listening() always returns false since hotkey monitoring is now in Swift
-            assert!(!core.is_listening());
-
-            core.stop_listening().unwrap();
-            assert!(!core.is_listening());
-        }
-    }
 
     #[test]
     fn test_request_context_storage() {

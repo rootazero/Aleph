@@ -298,12 +298,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     @objc private func showAbout() {
-        let alert = NSAlert()
-        alert.messageText = L("alert.about.title")
-        alert.informativeText = L("alert.about.message", "0.1.0 (Phase 2)")
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: L("common.ok"))
-        alert.runModal()
+        showInfoAlert(title: L("alert.about.title"), message: L("alert.about.message", "0.1.0 (Phase 2)"))
     }
 
     @objc private func showSettings() {
@@ -316,14 +311,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // CRITICAL: Check if core is initialized before opening settings
         guard let core = core else {
             print("[Aether] ERROR: Core not initialized, cannot open settings")
-
-            // Show error alert
-            let alert = NSAlert()
-            alert.messageText = L("error.core_not_initialized")
-            alert.informativeText = L("error.core_not_initialized.suggestion")
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: L("common.ok"))
-            alert.runModal()
+            showWarningAlert(title: L("error.core_not_initialized"), message: L("error.core_not_initialized.suggestion"))
             return
         }
 
@@ -518,14 +506,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // (Could add a toast notification here in the future)
         } catch {
             print("[AppDelegate] ❌ Error setting default provider: \(error)")
-
-            // Show error alert
-            let alert = NSAlert()
-            alert.messageText = "Failed to set default provider"
-            alert.informativeText = "Could not set '\(providerName)' as default provider.\n\nError: \(error.localizedDescription)"
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
+            showWarningAlert(
+                title: "Failed to set default provider",
+                message: "Could not set '\(providerName)' as default provider.\n\nError: \(error.localizedDescription)"
+            )
         }
     }
 
@@ -610,14 +594,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         } catch {
             print("[AppDelegate] ❌ Error setting input mode: \(error)")
-
-            // Show error alert
-            let alert = NSAlert()
-            alert.messageText = "Failed to set input mode"
-            alert.informativeText = "Could not set input mode to '\(inputMode)'.\n\nError: \(error.localizedDescription)"
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
+            showWarningAlert(
+                title: "Failed to set input mode",
+                message: "Could not set input mode to '\(inputMode)'.\n\nError: \(error.localizedDescription)"
+            )
         }
     }
 
@@ -715,7 +695,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             } else {
                 // Max retries exceeded, show error to user
                 print("[Aether] Max retry attempts exceeded, giving up")
-                showErrorAlert(message: "Failed to initialize Aether core after \(maxRetryAttempts) attempts.\n\nError: \(error)\n\nPlease check:\n1. Accessibility permissions are granted\n2. Input Monitoring permissions are granted\n3. libaethecore.dylib is properly bundled\n4. Rust core is built correctly\n\nYou may need to restart your Mac for permissions to take full effect.")
+                showErrorAlert(title: L("error.aether"), message: "Failed to initialize Aether core after \(maxRetryAttempts) attempts.\n\nError: \(error)\n\nPlease check:\n1. Accessibility permissions are granted\n2. Input Monitoring permissions are granted\n3. libaethecore.dylib is properly bundled\n4. Rust core is built correctly\n\nYou may need to restart your Mac for permissions to take full effect.")
             }
         }
     }
@@ -765,14 +745,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
 
-    private func showErrorAlert(message: String) {
-        let alert = NSAlert()
-        alert.messageText = L("error.aether")
-        alert.informativeText = message
-        alert.alertStyle = .critical
-        alert.addButton(withTitle: L("common.ok"))
-        alert.runModal()
-    }
 
     // MARK: - Permission Gate Management
 
@@ -1244,12 +1216,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // Hide Halo and show error alert to user
             DispatchQueue.main.async { [weak self] in
                 self?.haloWindow?.hide()
-                let alert = NSAlert()
-                alert.messageText = L("error.file_size")
-                alert.informativeText = error
-                alert.alertStyle = .warning
-                alert.addButton(withTitle: L("common.ok"))
-                alert.runModal()
+                showWarningAlert(title: L("error.file_size"), message: error)
             }
             return
         }
