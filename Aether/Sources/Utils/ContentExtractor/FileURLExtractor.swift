@@ -102,10 +102,12 @@ final class FileURLExtractor: ContentExtractor {
             logger.debug("Extracted file: \(url.lastPathComponent) (\(sizeBytes) bytes)")
         }
 
+        // Don't mark public.file-url as handled so DocumentExtractor can also process it
+        // Each extractor filters for specific file types internally
         return ExtractionResult(
             text: nil,
             attachments: attachments,
-            handledTypes: [NSPasteboard.PasteboardType("public.file-url")],
+            handledTypes: [],
             metadata: [
                 "extractor": identifier,
                 "file_count": urls.count
