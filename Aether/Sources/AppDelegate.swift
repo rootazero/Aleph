@@ -708,8 +708,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         } catch {
             print("[Aether] ❌ Error initializing core: \(error)")
 
-            // Attempt retry with exponential backoff
-            if coreInitRetryCount < maxRetryAttempts {
+            let errorString = String(describing: error)
+
+            // Check if this is a configuration error (no point retrying)
+            let isConfigError = errorString.contains("No enabled providers") ||
+                                errorString.contains("provider") ||
+                                errorString.contains("config")
+
+            // Retry only for non-config errors (e.g., permission issues, library loading)
+            if !isConfigError && coreInitRetryCount < maxRetryAttempts {
                 coreInitRetryCount += 1
                 let retryDelay = Double(coreInitRetryCount) * 2.0 // 2s, 4s, 6s
 
@@ -719,15 +726,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     self?.initializeRustCore()
                 }
             } else {
-                // Max retries exceeded, show error to user
-                print("[Aether] Max retry attempts exceeded, giving up")
-                let errorMessage = "Failed to initialize Aether core after \(maxRetryAttempts) attempts.\n\nError: \(error)\n\nPlease check:\n1. Accessibility permissions are granted\n2. Input Monitoring permissions are granted\n3. libaethecore.dylib is properly bundled\n4. Rust core is built correctly\n\nYou may need to restart your Mac for permissions to take full effect."
+                // Config error or max retries exceeded - show error immediately
+                if isConfigError {
+                    print("[Aether] Configuration error detected, not retrying")
+                } else {
+                    print("[Aether] Max retry attempts exceeded, giving up")
+                }
 
-                // Better UX: Show Halo processing animation briefly before error toast
-                // This gives visual feedback that app tried to initialize
-                self.haloWindow?.updateState(.processing(providerColor: .blue, streamingText: nil))
-                self.haloWindow?.showCentered()
+                let errorMessage: String
+                if isConfigError {
+                    errorMessage = "\(error)\n\n" + L("error.check_provider_config")
+                } else {
+                    errorMessage = "Failed to initialize Aether core.\n\nError: \(error)\n\nPlease check:\n1. Accessibility permissions are granted\n2. Input Monitoring permissions are granted\n3. libaethecore.dylib is properly bundled"
+                }
 
+                // Halo is already showing (from start of initializeRustCore)
                 // After 0.8s animation, show error toast
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
                     // Try toast first, fallback to NSAlert if eventHandler not available

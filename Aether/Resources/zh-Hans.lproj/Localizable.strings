@@ -411,6 +411,7 @@
 "error.core_not_initialized" = "核心未初始化";
 "error.core_not_initialized.suggestion" = "请重启应用";
 "error.check_connection" = "请检查网络连接和 API 配置";
+"error.check_provider_config" = "请在设置中启用至少一个提供商";
 
 // MARK: - Alerts
 "alert.confirm_delete" = "您确定要删除此项吗？";
