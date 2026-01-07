@@ -169,6 +169,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_store_memory_basic() {
         let db = create_test_db();
         let model = create_test_model();
@@ -192,6 +193,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_store_memory_with_pii_scrubbing() {
         let db = create_test_db();
         let model = create_test_model();
@@ -208,7 +210,7 @@ mod tests {
             .unwrap();
 
         // Retrieve and verify PII was scrubbed
-        let embedding = vec![0.0; 384]; // Dummy query embedding
+        let embedding = vec![0.0; 512]; // Dummy query embedding
         let memories = db
             .search_memories(
                 &context.app_bundle_id,
@@ -264,6 +266,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_store_memory_generates_embedding() {
         let db = create_test_db();
         let model = create_test_model();
@@ -278,7 +281,7 @@ mod tests {
             .unwrap();
 
         // Retrieve memory and verify embedding exists
-        let query_embedding = vec![0.0; 384];
+        let query_embedding = vec![0.0; 512];
         let memories = db
             .search_memories(
                 &context.app_bundle_id,
@@ -292,7 +295,7 @@ mod tests {
         assert_eq!(memories.len(), 1);
         assert_eq!(memories[0].id, memory_id);
         assert!(memories[0].embedding.is_some());
-        assert_eq!(memories[0].embedding.as_ref().unwrap().len(), 384);
+        assert_eq!(memories[0].embedding.as_ref().unwrap().len(), 512);
     }
 
     #[tokio::test]

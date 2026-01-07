@@ -400,7 +400,7 @@ mod tests {
             context: memory_anchor,
             user_input: "Previous question".to_string(),
             ai_output: "Previous answer".to_string(),
-            embedding: Some(vec![0.1; 384]),
+            embedding: Some(vec![0.1; 512]),
             similarity_score: Some(0.9),
         }];
 
@@ -436,7 +436,7 @@ mod tests {
             context: memory_anchor,
             user_input: "Test input".to_string(),
             ai_output: "Test output".to_string(),
-            embedding: Some(vec![0.1; 384]),
+            embedding: Some(vec![0.1; 512]),
             similarity_score: Some(0.85),
         }];
 
@@ -640,7 +640,7 @@ mod tests {
             context: memory_anchor,
             user_input: "Previous question".to_string(),
             ai_output: "Previous answer".to_string(),
-            embedding: Some(vec![0.1; 384]),
+            embedding: Some(vec![0.1; 512]),
             similarity_score: Some(0.9),
         }];
 

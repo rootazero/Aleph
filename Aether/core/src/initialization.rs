@@ -9,8 +9,7 @@
 use crate::config::Config;
 use crate::error::{AetherError, Result};
 use std::fs;
-use std::path::{Path, PathBuf};
-use tokio::io::AsyncWriteExt;
+use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
 /// Initialization progress callback trait
@@ -72,33 +71,39 @@ pub fn is_fresh_install() -> Result<bool> {
     Ok(is_fresh)
 }
 
-/// Check if embedding model files exist and are valid
+/// Check if embedding model is available
+///
+/// Note: fastembed manages model download automatically. This function
+/// checks if fastembed can initialize successfully, which triggers
+/// automatic download if needed.
 pub fn check_embedding_model_exists() -> Result<bool> {
-    let model_dir = get_model_dir()?;
-    let model_file = model_dir.join("model.onnx");
-    let tokenizer_file = model_dir.join("tokenizer.json");
+    // fastembed handles model caching automatically in ~/.cache/huggingface
+    // We just check if the cache directory exists as a hint
+    let home_dir = std::env::var("HOME")
+        .map_err(|_| AetherError::config("Failed to get HOME environment variable"))?;
 
-    // Check if files exist
-    if !model_file.exists() || !tokenizer_file.exists() {
-        debug!("Embedding model files do not exist");
-        return Ok(false);
-    }
+    let cache_dir = PathBuf::from(home_dir)
+        .join(".cache")
+        .join("huggingface")
+        .join("hub");
 
-    // Validate file sizes
-    match validate_model_files(&model_file, &tokenizer_file) {
-        Ok(valid) => {
-            if valid {
-                info!("✅ Embedding model files exist and are valid");
-            } else {
-                warn!("⚠️  Embedding model files exist but are invalid");
+    // Check if HuggingFace cache exists (fastembed will download on first use)
+    if cache_dir.exists() {
+        // Look for bge-small-zh model in cache
+        if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.contains("bge-small-zh") {
+                    info!("✅ Embedding model cache found");
+                    return Ok(true);
+                }
             }
-            Ok(valid)
-        }
-        Err(e) => {
-            warn!("Failed to validate model files: {}", e);
-            Ok(false)
         }
     }
+
+    // Model not in cache - fastembed will download on first use
+    debug!("Embedding model not in cache - will be downloaded on first use");
+    Ok(true) // Return true since fastembed handles download automatically
 }
 
 /// Download embedding model files standalone (for manual triggering)
@@ -153,8 +158,12 @@ pub fn get_config_dir() -> Result<PathBuf> {
 }
 
 /// Get the model directory path
+///
+/// Note: fastembed manages its own model cache in ~/.cache/huggingface.
+/// This path is kept for API compatibility and may be used for future
+/// custom model storage.
 pub fn get_model_dir() -> Result<PathBuf> {
-    Ok(get_config_dir()?.join("models").join("all-MiniLM-L6-v2"))
+    Ok(get_config_dir()?.join("models").join("bge-small-zh-v1.5"))
 }
 
 /// Run first-time initialization
@@ -457,274 +466,34 @@ async fn create_default_config() -> Result<()> {
     Ok(())
 }
 
-/// Expected file sizes for validation (approximate, in bytes)
-const EXPECTED_MODEL_SIZE_MIN: u64 = 80 * 1024 * 1024; // 80 MB
-const EXPECTED_MODEL_SIZE_MAX: u64 = 100 * 1024 * 1024; // 100 MB
-const EXPECTED_TOKENIZER_SIZE_MIN: u64 = 100 * 1024; // 100 KB
-const EXPECTED_TOKENIZER_SIZE_MAX: u64 = 2 * 1024 * 1024; // 2 MB
-
-/// Download embedding model files from HuggingFace
+/// Download/initialize embedding model using fastembed
+///
+/// fastembed handles model download automatically from HuggingFace.
+/// This function triggers the download by initializing the model.
 async fn download_embedding_model(
-    progress_callback: Option<&dyn InitializationProgressHandler>,
+    _progress_callback: Option<&dyn InitializationProgressHandler>,
 ) -> Result<()> {
-    let model_dir = get_model_dir()?;
-    let model_file = model_dir.join("model.onnx");
-    let tokenizer_file = model_dir.join("tokenizer.json");
+    use fastembed::{EmbeddingModel as FastEmbedModel, InitOptions, TextEmbedding};
 
-    // Check if files already exist and are valid
-    if model_file.exists() && tokenizer_file.exists() {
-        if validate_model_files(&model_file, &tokenizer_file)? {
-            warn!("Embedding model files already exist and are valid, skipping download");
-            return Ok(());
-        } else {
-            warn!("Existing model files are invalid, re-downloading...");
-            // Delete invalid files
-            let _ = std::fs::remove_file(&model_file);
-            let _ = std::fs::remove_file(&tokenizer_file);
-        }
-    }
+    info!("Initializing bge-small-zh-v1.5 embedding model (will download if needed)...");
 
-    const BASE_URL: &str =
-        "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main";
-
-    // Download model.onnx
-    if !model_file.exists() {
-        let url = format!("{}/onnx/model.onnx", BASE_URL);
-        info!("Downloading model.onnx from {}", url);
-
-        download_file(&url, &model_file, progress_callback).await?;
-
-        // Validate downloaded file
-        validate_file_size(
-            &model_file,
-            EXPECTED_MODEL_SIZE_MIN,
-            EXPECTED_MODEL_SIZE_MAX,
-        )?;
-    }
-
-    // Download tokenizer.json
-    if !tokenizer_file.exists() {
-        let url = format!("{}/tokenizer.json", BASE_URL);
-        info!("Downloading tokenizer.json from {}", url);
-
-        download_file(&url, &tokenizer_file, progress_callback).await?;
-
-        // Validate downloaded file
-        validate_file_size(
-            &tokenizer_file,
-            EXPECTED_TOKENIZER_SIZE_MIN,
-            EXPECTED_TOKENIZER_SIZE_MAX,
-        )?;
-    }
-
-    info!("✅ Embedding model downloaded and validated successfully");
-    Ok(())
-}
-
-/// Validate model files exist and have reasonable sizes
-fn validate_model_files(model_file: &Path, tokenizer_file: &Path) -> Result<bool> {
-    if !model_file.exists() || !tokenizer_file.exists() {
-        return Ok(false);
-    }
-
-    // Check file sizes
-    match validate_file_size(model_file, EXPECTED_MODEL_SIZE_MIN, EXPECTED_MODEL_SIZE_MAX) {
-        Ok(_) => {}
-        Err(_) => return Ok(false),
-    }
-
-    match validate_file_size(
-        tokenizer_file,
-        EXPECTED_TOKENIZER_SIZE_MIN,
-        EXPECTED_TOKENIZER_SIZE_MAX,
+    // fastembed will automatically download the model on first use
+    // The model is cached in ~/.cache/huggingface/hub/
+    match TextEmbedding::try_new(
+        InitOptions::new(FastEmbedModel::BGESmallZHV15).with_show_download_progress(true),
     ) {
-        Ok(_) => {}
-        Err(_) => return Ok(false),
-    }
-
-    Ok(true)
-}
-
-/// Validate file size is within expected range
-fn validate_file_size(path: &Path, min_size: u64, max_size: u64) -> Result<()> {
-    let metadata = std::fs::metadata(path)
-        .map_err(|e| AetherError::config(format!("Failed to read file metadata: {}", e)))?;
-
-    let size = metadata.len();
-
-    if size < min_size {
-        return Err(AetherError::config(format!(
-            "File {} is too small ({} bytes, expected at least {} bytes). Download may be incomplete.",
-            path.file_name().unwrap().to_string_lossy(),
-            size,
-            min_size
-        )));
-    }
-
-    if size > max_size {
-        return Err(AetherError::config(format!(
-            "File {} is too large ({} bytes, expected at most {} bytes). File may be corrupted.",
-            path.file_name().unwrap().to_string_lossy(),
-            size,
-            max_size
-        )));
-    }
-
-    debug!(
-        "✅ File {} validated: {} bytes",
-        path.file_name().unwrap().to_string_lossy(),
-        size
-    );
-
-    Ok(())
-}
-
-/// Download a file from URL to local path with automatic retry
-async fn download_file(
-    url: &str,
-    dest_path: &Path,
-    progress_callback: Option<&dyn InitializationProgressHandler>,
-) -> Result<()> {
-    const MAX_RETRIES: u32 = 3;
-    const INITIAL_BACKOFF_MS: u64 = 1000; // 1 second
-
-    let mut last_error = None;
-
-    for attempt in 1..=MAX_RETRIES {
-        debug!(
-            "Downloading {} to {:?} (attempt {}/{})",
-            url, dest_path, attempt, MAX_RETRIES
-        );
-
-        match download_file_once(url, dest_path, progress_callback).await {
-            Ok(()) => {
-                info!(
-                    "✅ Successfully downloaded {} on attempt {}",
-                    dest_path.file_name().unwrap().to_string_lossy(),
-                    attempt
-                );
-                return Ok(());
-            }
-            Err(e) => {
-                warn!("Download attempt {}/{} failed: {}", attempt, MAX_RETRIES, e);
-                last_error = Some(e);
-
-                // If not the last attempt, wait with exponential backoff
-                if attempt < MAX_RETRIES {
-                    let backoff_ms = INITIAL_BACKOFF_MS * 2u64.pow(attempt - 1);
-                    info!("Retrying in {} ms...", backoff_ms);
-                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
-                }
-            }
+        Ok(_model) => {
+            info!("✅ Embedding model (bge-small-zh-v1.5) initialized successfully");
+            Ok(())
+        }
+        Err(e) => {
+            warn!("Failed to initialize embedding model: {}", e);
+            Err(AetherError::config(format!(
+                "Failed to initialize embedding model: {}",
+                e
+            )))
         }
     }
-
-    // All retries exhausted
-    Err(last_error.unwrap_or_else(|| AetherError::config("Download failed".to_string())))
-}
-
-/// Download a file from URL to local path (single attempt)
-async fn download_file_once(
-    url: &str,
-    dest_path: &Path,
-    progress_callback: Option<&dyn InitializationProgressHandler>,
-) -> Result<()> {
-    // Create HTTP client
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(300)) // 5 minute timeout
-        .build()
-        .map_err(|e| AetherError::config(format!("Failed to create HTTP client: {}", e)))?;
-
-    // Send GET request
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| AetherError::config(format!("Failed to download file: {}", e)))?;
-
-    // Check response status
-    if !response.status().is_success() {
-        return Err(AetherError::config(format!(
-            "HTTP error {}: {}",
-            response.status(),
-            url
-        )));
-    }
-
-    // Get total size from Content-Length header
-    let total_size = response.content_length().unwrap_or(0);
-
-    debug!(
-        "Download started - total size: {} bytes",
-        if total_size > 0 {
-            format!("{:.2} MB", total_size as f64 / 1024.0 / 1024.0)
-        } else {
-            "unknown".to_string()
-        }
-    );
-
-    // Create temp file
-    let temp_path = dest_path.with_extension("tmp");
-    let mut file = tokio::fs::File::create(&temp_path)
-        .await
-        .map_err(|e| AetherError::config(format!("Failed to create temp file: {}", e)))?;
-
-    // Download with progress updates
-    let mut downloaded: u64 = 0;
-    let mut stream = response.bytes_stream();
-
-    use futures_util::StreamExt;
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk
-            .map_err(|e| AetherError::config(format!("Failed to read download chunk: {}", e)))?;
-
-        file.write_all(&chunk)
-            .await
-            .map_err(|e| AetherError::config(format!("Failed to write to file: {}", e)))?;
-
-        downloaded += chunk.len() as u64;
-
-        // Update progress (every 1MB or at completion)
-        if downloaded.is_multiple_of(1024 * 1024) || downloaded == total_size {
-            if let Some(cb) = progress_callback {
-                cb.on_download_progress(downloaded, total_size);
-            }
-
-            if total_size > 0 {
-                let percentage = (downloaded as f64 / total_size as f64) * 100.0;
-                debug!(
-                    "Download progress: {:.2}% ({}/{} MB)",
-                    percentage,
-                    downloaded / 1024 / 1024,
-                    total_size / 1024 / 1024
-                );
-            }
-        }
-    }
-
-    // Flush and sync
-    file.sync_all()
-        .await
-        .map_err(|e| AetherError::config(format!("Failed to sync file: {}", e)))?;
-
-    drop(file); // Close file before rename
-
-    // Atomic rename
-    tokio::fs::rename(&temp_path, dest_path)
-        .await
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&temp_path); // Cleanup on error
-            AetherError::config(format!("Failed to rename temp file: {}", e))
-        })?;
-
-    info!(
-        "✅ Downloaded {} ({:.2} MB)",
-        dest_path.file_name().unwrap().to_string_lossy(),
-        downloaded as f64 / 1024.0 / 1024.0
-    );
-
-    Ok(())
 }
 
 /// Initialize memory database
@@ -757,7 +526,7 @@ mod tests {
     #[test]
     fn test_get_model_dir() {
         let dir = get_model_dir().unwrap();
-        assert!(dir.to_string_lossy().contains("all-MiniLM-L6-v2"));
+        assert!(dir.to_string_lossy().contains("bge-small-zh-v1.5"));
     }
 
     #[tokio::test]
@@ -778,7 +547,7 @@ mod tests {
         // Verify directories exist
         let config_dir = temp_dir.path().join(".config").join("aether");
         assert!(config_dir.exists());
-        assert!(config_dir.join("models").join("all-MiniLM-L6-v2").exists());
+        assert!(config_dir.join("models").join("bge-small-zh-v1.5").exists());
         assert!(config_dir.join("logs").exists());
 
         // Restore original HOME

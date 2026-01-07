@@ -201,6 +201,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_retrieval_with_no_memories() {
         let db = create_test_db();
         let model = create_test_model();
@@ -244,6 +245,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_pii_scrubbing_persists() {
         let db = create_test_db();
         let model = create_test_model();
@@ -278,6 +280,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_end_to_end_conversation_memory() {
         let db = create_test_db();
         let model = create_test_model();
@@ -323,6 +326,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_full_pipeline_store_retrieve_augment() {
         // This test demonstrates the complete workflow:
         // 1. Store memories (past interactions)
@@ -473,6 +477,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_memory_summary() {
         let db = create_test_db();
         let model = create_test_model();
@@ -504,6 +509,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_concurrent_memory_insertions() {
         use tokio::task::JoinSet;
 
@@ -542,6 +548,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_concurrent_memory_retrievals() {
         use tokio::task::JoinSet;
 
@@ -595,6 +602,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_concurrent_mixed_operations() {
         use tokio::task::JoinSet;
 
@@ -698,6 +706,7 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_concurrent_stats_queries() {
         use tokio::task::JoinSet;
 

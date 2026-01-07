@@ -14,8 +14,14 @@ pub struct VectorDatabase {
     db_path: PathBuf,
 }
 
+/// Current embedding dimension (bge-small-zh-v1.5)
+const CURRENT_EMBEDDING_DIM: u32 = 512;
+
 impl VectorDatabase {
     /// Initialize vector database with schema
+    ///
+    /// Includes migration logic for embedding dimension changes.
+    /// When embedding dimension changes (e.g., 384 -> 512), old data is cleared.
     pub fn new(db_path: PathBuf) -> Result<Self, AetherError> {
         // Ensure parent directory exists
         if let Some(parent) = db_path.parent() {
@@ -27,9 +33,30 @@ impl VectorDatabase {
         let conn = Connection::open(&db_path)
             .map_err(|e| AetherError::config(format!("Failed to open database: {}", e)))?;
 
-        // Create schema
+        // Check if migration is needed (dimension change)
+        let needs_migration = Self::check_needs_migration(&conn)?;
+
+        if needs_migration {
+            // Drop old memories table for dimension migration
+            conn.execute_batch("DROP TABLE IF EXISTS memories;")
+                .map_err(|e| AetherError::config(format!("Failed to drop old table: {}", e)))?;
+
+            tracing::info!(
+                old_dim = 384,
+                new_dim = CURRENT_EMBEDDING_DIM,
+                "Cleared memories table for embedding dimension migration"
+            );
+        }
+
+        // Create schema with version metadata
         conn.execute_batch(
             r#"
+            -- Metadata table for schema versioning
+            CREATE TABLE IF NOT EXISTS schema_info (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
             -- Main memories table
             CREATE TABLE IF NOT EXISTS memories (
                 id TEXT PRIMARY KEY,
@@ -50,10 +77,66 @@ impl VectorDatabase {
         )
         .map_err(|e| AetherError::config(format!("Failed to create schema: {}", e)))?;
 
+        // Update embedding dimension in schema_info
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_info (key, value) VALUES ('embedding_dimension', ?1)",
+            params![CURRENT_EMBEDDING_DIM.to_string()],
+        )
+        .map_err(|e| AetherError::config(format!("Failed to update schema_info: {}", e)))?;
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             db_path,
         })
+    }
+
+    /// Check if database needs migration due to dimension change
+    fn check_needs_migration(conn: &Connection) -> Result<bool, AetherError> {
+        // Check if schema_info table exists
+        let table_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='schema_info'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if !table_exists {
+            // Check if memories table exists (old database without schema_info)
+            let memories_exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='memories'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or(false);
+
+            // If old memories table exists but no schema_info, needs migration
+            return Ok(memories_exists);
+        }
+
+        // Check current dimension in schema_info
+        let current_dimension: Option<String> = conn
+            .query_row(
+                "SELECT value FROM schema_info WHERE key = 'embedding_dimension'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+
+        match current_dimension {
+            Some(dim) if dim == CURRENT_EMBEDDING_DIM.to_string() => Ok(false), // Already at current dimension
+            Some(dim) => {
+                tracing::info!(
+                    stored_dim = %dim,
+                    current_dim = CURRENT_EMBEDDING_DIM,
+                    "Embedding dimension mismatch detected"
+                );
+                Ok(true) // Needs migration (different dimension)
+            }
+            None => Ok(true), // No dimension stored, needs migration
+        }
     }
 
     /// Insert memory entry into database
@@ -767,8 +850,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_embedding_serialization_large_vectors() {
-        // Test with 384-dimensional vector (real embedding size)
-        let embedding: Vec<f32> = (0..384).map(|i| (i as f32) * 0.001).collect();
+        // Test with 512-dimensional vector (real embedding size for bge-small-zh-v1.5)
+        let embedding: Vec<f32> = (0..512).map(|i| (i as f32) * 0.001).collect();
         let bytes = VectorDatabase::serialize_embedding(&embedding);
         let deserialized = VectorDatabase::deserialize_embedding(&bytes);
 

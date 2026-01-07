@@ -49,7 +49,7 @@ pub struct MemoryEntry {
     pub user_input: String,
     /// AI response
     pub ai_output: String,
-    /// Vector embedding (384-dim for all-MiniLM-L6-v2)
+    /// Vector embedding (512-dim for bge-small-zh-v1.5)
     pub embedding: Option<Vec<f32>>,
     /// Similarity score (when retrieved from search)
     pub similarity_score: Option<f32>,

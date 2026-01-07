@@ -758,7 +758,7 @@ fn default_enabled() -> bool {
 }
 
 fn default_embedding_model() -> String {
-    "all-MiniLM-L6-v2".to_string()
+    "bge-small-zh-v1.5".to_string()
 }
 
 fn default_max_context_items() -> u32 {
@@ -2735,14 +2735,14 @@ mod tests {
         let config: Config = serde_json::from_str(json).unwrap();
         assert_eq!(config.default_hotkey, "Grave");
         // memory field should use default
-        assert_eq!(config.memory.embedding_model, "all-MiniLM-L6-v2");
+        assert_eq!(config.memory.embedding_model, "bge-small-zh-v1.5");
     }
 
     #[test]
     fn test_memory_config_defaults() {
         let mem_config = MemoryConfig::default();
         assert!(mem_config.enabled);
-        assert_eq!(mem_config.embedding_model, "all-MiniLM-L6-v2");
+        assert_eq!(mem_config.embedding_model, "bge-small-zh-v1.5");
         assert_eq!(mem_config.max_context_items, 5);
         assert_eq!(mem_config.retention_days, 90);
         assert_eq!(mem_config.vector_db, "sqlite-vec");
@@ -2754,7 +2754,7 @@ mod tests {
     fn test_memory_config_serialization() {
         let mem_config = MemoryConfig::default();
         let json = serde_json::to_string(&mem_config).unwrap();
-        assert!(json.contains("all-MiniLM-L6-v2"));
+        assert!(json.contains("bge-small-zh-v1.5"));
         assert!(json.contains("sqlite-vec"));
     }
 

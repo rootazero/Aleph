@@ -1,51 +1,46 @@
-/// Embedding model inference
+/// Embedding model inference using fastembed
 ///
-/// This module provides local embedding inference for semantic similarity search.
-///
-/// NOTE: This is a simplified implementation for Phase 4A-4B integration.
-/// The full ONNX Runtime implementation requires ort crate v1.15 or stable API.
-/// For production use, integrate with sentence-transformers via Python binding
-/// or wait for stable ort 2.0 release.
+/// This module provides local embedding inference for semantic similarity search
+/// using the bge-small-zh-v1.5 model optimized for Chinese text.
 use crate::error::AetherError;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use fastembed::{EmbeddingModel as FastEmbedModel, InitOptions, TextEmbedding};
+use once_cell::sync::OnceCell;
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 /// Embedding model for generating vector representations of text
 ///
-/// Current implementation uses a deterministic hash-based embedding for testing.
-/// TODO: Replace with actual ONNX Runtime inference when ort 2.0 stabilizes.
+/// Uses fastembed with bge-small-zh-v1.5 model for Chinese-optimized embeddings.
+/// The model is lazily loaded on first use.
 pub struct EmbeddingModel {
+    model: OnceCell<TextEmbedding>,
+    #[allow(dead_code)]
     model_path: PathBuf,
-    // Lazy-loaded flag
-    initialized: OnceLock<bool>,
 }
 
 impl EmbeddingModel {
+    /// Expected embedding dimension (bge-small-zh-v1.5 outputs 512-dim vectors)
+    pub const EMBEDDING_DIM: usize = 512;
+
     /// Create new embedding model with lazy loading
     ///
     /// # Arguments
-    /// * `model_dir` - Directory containing model files
+    /// * `model_dir` - Directory for model files (kept for API compatibility)
     ///
     /// # Returns
     /// * `Result<Self>` - New EmbeddingModel instance
+    ///
+    /// Note: fastembed manages its own model cache in ~/.cache/huggingface
     pub fn new(model_dir: PathBuf) -> Result<Self, AetherError> {
-        // Verify directory exists
-        if !model_dir.exists() {
-            return Err(AetherError::config(format!(
-                "Model directory not found: {:?}",
-                model_dir
-            )));
-        }
-
         Ok(Self {
+            model: OnceCell::new(),
             model_path: model_dir,
-            initialized: OnceLock::new(),
         })
     }
 
     /// Get default model directory path
+    ///
+    /// Note: This path is kept for API compatibility. fastembed uses
+    /// ~/.cache/huggingface for actual model storage.
     pub fn get_default_model_path() -> Result<PathBuf, AetherError> {
         let home_dir = std::env::var("HOME")
             .map_err(|_| AetherError::config("Failed to get HOME environment variable"))?;
@@ -54,40 +49,22 @@ impl EmbeddingModel {
             .join(".config")
             .join("aether")
             .join("models")
-            .join("all-MiniLM-L6-v2"))
+            .join("bge-small-zh-v1.5"))
     }
 
-    /// Initialize model (lazy loading)
-    fn ensure_initialized(&self) -> Result<(), AetherError> {
-        // Use get_or_init with a closure that always succeeds
-        // If initialization fails, we'll catch it when we actually use the model
-        self.initialized.get_or_init(|| {
-            // Verify model files exist
-            let model_file = self.model_path.join("model.onnx");
-            let tokenizer_file = self.model_path.join("tokenizer.json");
+    /// Initialize fastembed model (lazy)
+    fn ensure_initialized(&self) -> Result<&TextEmbedding, AetherError> {
+        self.model.get_or_try_init(|| {
+            tracing::info!("Initializing bge-small-zh-v1.5 embedding model...");
 
-            if !model_file.exists() {
-                eprintln!("Warning: Model file not found: {:?}", model_file);
-                return false;
-            }
-            if !tokenizer_file.exists() {
-                eprintln!("Warning: Tokenizer file not found: {:?}", tokenizer_file);
-                return false;
-            }
-
-            println!("✓ Embedding model files verified at {:?}", self.model_path);
-            true
-        });
-
-        // Check if initialization succeeded
-        if !self.initialized.get().copied().unwrap_or(false) {
-            return Err(AetherError::config(format!(
-                "Model files not found at {:?}",
-                self.model_path
-            )));
-        }
-
-        Ok(())
+            TextEmbedding::try_new(
+                InitOptions::new(FastEmbedModel::BGESmallZHV15)
+                    .with_show_download_progress(true),
+            )
+            .map_err(|e| {
+                AetherError::config(format!("Failed to initialize embedding model: {}", e))
+            })
+        })
     }
 
     /// Generate embedding for text
@@ -96,95 +73,56 @@ impl EmbeddingModel {
     /// * `text` - Input text to embed
     ///
     /// # Returns
-    /// * `Result<Vec<f32>>` - 384-dimensional embedding vector
-    ///
-    /// # Implementation Note
-    /// This is a placeholder implementation using deterministic hashing.
-    /// For production, replace with actual ONNX Runtime inference:
-    ///
-    /// ```ignore
-    /// let session = Session::builder()?.commit_from_file(&model_path)?;
-    /// let outputs = session.run(inputs)?;
-    /// // Extract and process embeddings...
-    /// ```
+    /// * `Result<Vec<f32>>` - 512-dimensional embedding vector (normalized)
     pub async fn embed_text(&self, text: &str) -> Result<Vec<f32>, AetherError> {
-        // Ensure model is initialized
-        self.ensure_initialized()?;
+        use std::time::Instant;
 
-        // Generate deterministic embedding based on text content
-        // This creates consistent embeddings where similar text gets similar vectors
-        let embedding = Self::generate_semantic_embedding(text);
+        let start = Instant::now();
 
-        // Normalize to unit length
-        let normalized = Self::normalize(&embedding);
+        let model = self.ensure_initialized()?;
 
-        Ok(normalized)
+        let embeddings = model
+            .embed(vec![text], None)
+            .map_err(|e| AetherError::config(format!("Embedding failed: {}", e)))?;
+
+        let embedding = embeddings
+            .into_iter()
+            .next()
+            .ok_or_else(|| AetherError::config("No embedding returned"))?;
+
+        let duration = start.elapsed();
+        tracing::debug!(
+            input_len = text.len(),
+            embedding_dim = embedding.len(),
+            duration_ms = duration.as_millis(),
+            "Embedding generated"
+        );
+
+        // Performance check
+        if duration.as_millis() > 100 {
+            tracing::warn!(
+                duration_ms = duration.as_millis(),
+                "Embedding inference exceeded 100ms threshold"
+            );
+        }
+
+        Ok(embedding)
     }
 
     /// Embed multiple texts in batch
     pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AetherError> {
-        let mut embeddings = Vec::with_capacity(texts.len());
-        for text in texts {
-            let embedding = self.embed_text(text).await?;
-            embeddings.push(embedding);
-        }
-        Ok(embeddings)
+        let model = self.ensure_initialized()?;
+
+        let texts_vec: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
+
+        model
+            .embed(texts_vec, None)
+            .map_err(|e| AetherError::config(format!("Batch embedding failed: {}", e)))
     }
 
-    /// Generate a deterministic embedding based on text semantics
-    ///
-    /// This is a placeholder that creates 384-dim vectors with some semantic properties:
-    /// - Preserves some notion of similarity for similar text
-    /// - Deterministic (same text always gets same embedding)
-    /// - Normalized to unit length
-    fn generate_semantic_embedding(text: &str) -> Vec<f32> {
-        const DIM: usize = 384;
-        let mut embedding = vec![0.0f32; DIM];
-
-        // Normalize text
-        let normalized = text.to_lowercase();
-        let words: Vec<&str> = normalized.split_whitespace().collect();
-
-        // Generate embedding based on word hashes
-        for (word_idx, word) in words.iter().enumerate() {
-            let mut hasher = DefaultHasher::new();
-            word.hash(&mut hasher);
-            let word_hash = hasher.finish();
-
-            // Distribute word influence across embedding dimensions
-            for (dim, emb_val) in embedding.iter_mut().enumerate() {
-                let mut hasher = DefaultHasher::new();
-                (word_hash, dim).hash(&mut hasher);
-                let value = hasher.finish();
-
-                // Convert to float in range [-1, 1]
-                let normalized_value = ((value % 10000) as f32 / 10000.0) * 2.0 - 1.0;
-
-                // Weight by word position (earlier words have more influence)
-                let weight = 1.0 / (word_idx as f32 + 1.0).sqrt();
-
-                *emb_val += normalized_value * weight;
-            }
-        }
-
-        // Add length component (longer texts get different embedding profile)
-        let length_factor = (words.len() as f32).ln() / 10.0;
-        for (i, val) in embedding.iter_mut().enumerate() {
-            *val += length_factor * ((i as f32).sin() / DIM as f32);
-        }
-
-        embedding
-    }
-
-    /// Normalize embedding vector to unit length
-    fn normalize(embedding: &[f32]) -> Vec<f32> {
-        let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-
-        if norm > 0.0 {
-            embedding.iter().map(|x| x / norm).collect()
-        } else {
-            embedding.to_vec()
-        }
+    /// Get embedding dimension
+    pub fn dimension(&self) -> usize {
+        Self::EMBEDDING_DIM
     }
 }
 
@@ -193,7 +131,6 @@ mod tests {
     use super::*;
 
     fn get_test_model_path() -> PathBuf {
-        // Use the actual downloaded model path
         EmbeddingModel::get_default_model_path().unwrap()
     }
 
@@ -201,6 +138,7 @@ mod tests {
     fn test_get_default_model_path() {
         let path = EmbeddingModel::get_default_model_path().unwrap();
         assert!(path.to_string_lossy().contains(".config/aether/models"));
+        assert!(path.to_string_lossy().contains("bge-small-zh-v1.5"));
     }
 
     #[test]
@@ -210,7 +148,13 @@ mod tests {
         assert!(model.is_ok());
     }
 
+    #[test]
+    fn test_embedding_dimension() {
+        assert_eq!(EmbeddingModel::EMBEDDING_DIM, 512);
+    }
+
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_embed_text_basic() {
         let model_path = get_test_model_path();
         let model = EmbeddingModel::new(model_path).unwrap();
@@ -218,8 +162,8 @@ mod tests {
         let text = "Hello, world!";
         let embedding = model.embed_text(text).await.unwrap();
 
-        // Check embedding dimension (all-MiniLM-L6-v2 outputs 384-dim vectors)
-        assert_eq!(embedding.len(), 384);
+        // Check embedding dimension (bge-small-zh-v1.5 outputs 512-dim vectors)
+        assert_eq!(embedding.len(), 512);
 
         // Check that embedding is normalized (roughly unit length)
         let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -231,6 +175,19 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
+    async fn test_embed_text_chinese() {
+        let model_path = get_test_model_path();
+        let model = EmbeddingModel::new(model_path).unwrap();
+
+        let text = "你好，世界！";
+        let embedding = model.embed_text(text).await.unwrap();
+
+        assert_eq!(embedding.len(), 512);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_embed_text_deterministic() {
         let model_path = get_test_model_path();
         let model = EmbeddingModel::new(model_path).unwrap();
@@ -244,13 +201,14 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_embed_text_similarity() {
         let model_path = get_test_model_path();
         let model = EmbeddingModel::new(model_path).unwrap();
 
-        let text1 = "The cat sits on the mat";
-        let text2 = "A cat is sitting on a mat";
-        let text3 = "The weather is nice today";
+        let text1 = "猫坐在垫子上";
+        let text2 = "一只猫正坐在垫子上";
+        let text3 = "今天天气很好";
 
         let emb1 = model.embed_text(text1).await.unwrap();
         let emb2 = model.embed_text(text2).await.unwrap();
@@ -260,19 +218,18 @@ mod tests {
         let sim_1_2 = cosine_similarity(&emb1, &emb2);
         let sim_1_3 = cosine_similarity(&emb1, &emb3);
 
-        // Similar sentences should have higher similarity
-        // Note: With hash-based embeddings, this is approximate
-        println!("Similarity (cat/cat): {}", sim_1_2);
-        println!("Similarity (cat/weather): {}", sim_1_3);
+        println!("Similarity (similar sentences): {}", sim_1_2);
+        println!("Similarity (different topics): {}", sim_1_3);
 
-        // At minimum, embeddings should be different
-        assert_ne!(
-            emb1, emb3,
-            "Different texts should have different embeddings"
+        // Similar sentences should have higher similarity than different topics
+        assert!(
+            sim_1_2 > sim_1_3,
+            "Similar sentences should have higher similarity"
         );
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_embed_batch() {
         let model_path = get_test_model_path();
         let model = EmbeddingModel::new(model_path).unwrap();
@@ -282,50 +239,35 @@ mod tests {
 
         assert_eq!(embeddings.len(), 3);
         for emb in embeddings {
-            assert_eq!(emb.len(), 384);
+            assert_eq!(emb.len(), 512);
         }
     }
 
     #[tokio::test]
+    #[ignore = "Requires embedding model download (run with --ignored)"]
     async fn test_embedding_performance() {
         use std::time::Instant;
 
         let model_path = get_test_model_path();
         let model = EmbeddingModel::new(model_path).unwrap();
 
-        // Warm up (first call initializes)
+        // Warm up (first call initializes model)
         let _ = model.embed_text("warmup").await.unwrap();
 
         // Measure inference time
-        let text = "This is a test sentence for performance measurement";
+        let text = "这是一个用于性能测试的句子";
         let start = Instant::now();
         let _ = model.embed_text(text).await.unwrap();
         let duration = start.elapsed();
 
         println!("Embedding inference time: {:?}", duration);
 
-        // Should be very fast for hash-based implementation
+        // Should complete within 100ms for good UX
         assert!(
-            duration.as_millis() < 10,
-            "Hash-based embedding should be instant, took: {:?}",
+            duration.as_millis() < 100,
+            "Embedding should complete within 100ms, took: {:?}",
             duration
         );
-    }
-
-    #[test]
-    fn test_normalize() {
-        let vec = vec![3.0, 4.0];
-        let normalized = EmbeddingModel::normalize(&vec);
-
-        let norm: f32 = normalized.iter().map(|x| x * x).sum::<f32>().sqrt();
-        assert!((norm - 1.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_normalize_zero_vector() {
-        let vec = vec![0.0, 0.0];
-        let normalized = EmbeddingModel::normalize(&vec);
-        assert_eq!(normalized, vec);
     }
 
     // Helper function for tests

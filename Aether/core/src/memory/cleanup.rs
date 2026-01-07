@@ -168,7 +168,7 @@ mod tests {
             window_title: "Old Window".to_string(),
             timestamp: old_timestamp,
         };
-        let embedding = vec![0.1; 384];
+        let embedding = vec![0.1; 512];
         let old_memory = MemoryEntry::with_embedding(
             "old-id".to_string(),
             old_context,

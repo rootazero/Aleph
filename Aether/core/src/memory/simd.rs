@@ -5,7 +5,7 @@
 //! - Intel/AMD (x86_64): SSE/AVX intrinsics
 //! - Fallback: Scalar implementation
 //!
-//! Performance improvement: ~3-5x faster than scalar for 384-dim vectors.
+//! Performance improvement: ~3-5x faster than scalar for 512-dim vectors.
 
 /// Calculate cosine similarity between two vectors using SIMD when available.
 ///
@@ -347,10 +347,10 @@ mod tests {
     }
 
     #[test]
-    fn test_384_dimensions() {
-        // Typical embedding dimension
-        let a: Vec<f32> = (0..384).map(|i| (i as f32) * 0.01).collect();
-        let b: Vec<f32> = (0..384).map(|i| (i as f32) * 0.01 + 0.5).collect();
+    fn test_512_dimensions() {
+        // Typical embedding dimension for bge-small-zh-v1.5
+        let a: Vec<f32> = (0..512).map(|i| (i as f32) * 0.01).collect();
+        let b: Vec<f32> = (0..512).map(|i| (i as f32) * 0.01 + 0.5).collect();
         let result = cosine_similarity(&a, &b);
         // Just verify it's in valid range and doesn't crash
         assert!(result >= -1.0 && result <= 1.0);
@@ -393,8 +393,8 @@ mod tests {
 
     #[test]
     fn test_consistency_with_scalar() {
-        let a: Vec<f32> = (0..384).map(|i| ((i * 17) % 100) as f32 / 100.0).collect();
-        let b: Vec<f32> = (0..384).map(|i| ((i * 31) % 100) as f32 / 100.0).collect();
+        let a: Vec<f32> = (0..512).map(|i| ((i * 17) % 100) as f32 / 100.0).collect();
+        let b: Vec<f32> = (0..512).map(|i| ((i * 31) % 100) as f32 / 100.0).collect();
 
         let simd_result = cosine_similarity(&a, &b);
         let scalar_result = cosine_similarity_scalar(&a, &b);
@@ -421,7 +421,7 @@ mod benchmarks {
     #[test]
     fn benchmark_comparison() {
         let iterations = 100_000;
-        let dim = 384;
+        let dim = 512;
 
         // Generate random-ish vectors
         let a: Vec<f32> = (0..dim).map(|i| ((i * 17) % 100) as f32 / 100.0).collect();
