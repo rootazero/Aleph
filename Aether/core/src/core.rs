@@ -1409,16 +1409,19 @@ impl AetherCore {
         use std::time::Duration;
 
         // Check if memory and AI retrieval are enabled
-        let config = self.lock_config();
-        if !config.memory.enabled || !config.memory.ai_retrieval_enabled {
-            debug!("[Memory] AI retrieval disabled");
-            return Ok(Vec::new());
-        }
-
-        let timeout_ms = config.memory.ai_retrieval_timeout_ms;
-        let max_candidates = config.memory.ai_retrieval_max_candidates;
-        let fallback_count = config.memory.ai_retrieval_fallback_count;
-        drop(config);
+        // Use a block scope to ensure the MutexGuard is dropped before any await
+        let (timeout_ms, max_candidates, fallback_count) = {
+            let config = self.lock_config();
+            if !config.memory.enabled || !config.memory.ai_retrieval_enabled {
+                debug!("[Memory] AI retrieval disabled");
+                return Ok(Vec::new());
+            }
+            (
+                config.memory.ai_retrieval_timeout_ms,
+                config.memory.ai_retrieval_max_candidates,
+                config.memory.ai_retrieval_fallback_count,
+            )
+        };
 
         // Get memory database
         let db = match self.memory_db.as_ref() {

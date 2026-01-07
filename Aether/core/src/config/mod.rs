@@ -298,6 +298,7 @@ pub struct RoutingRuleConfig {
     /// Rule type: "command" or "keyword"
     /// - "command": Starts with /, first-match-stops, requires provider
     /// - "keyword": Non-/ pattern, all-match, prompt only
+    ///
     /// Default: auto-detected based on regex pattern
     #[serde(default)]
     pub rule_type: Option<String>,

@@ -71,25 +71,23 @@ impl PromptAssembler {
 
     /// Format capability instructions for the AI.
     fn format_capability_instructions(&self, capabilities: &[&CapabilityDeclaration]) -> String {
-        let mut lines = Vec::new();
-
-        lines.push("## Available Capabilities".to_string());
-        lines.push(String::new());
-        lines.push(
+        let mut lines = vec![
+            "## Available Capabilities".to_string(),
+            String::new(),
             "You have access to the following capabilities. If the user's request requires real-time information or specific tools, respond with a JSON object to request capability execution.".to_string(),
-        );
-        lines.push(String::new());
-        lines.push("### How to Request a Capability".to_string());
-        lines.push(String::new());
-        lines.push("To invoke a capability, respond ONLY with a JSON object in this exact format:".to_string());
-        lines.push("```json".to_string());
-        lines.push(r#"{"__capability_request__": true, "capability": "<id>", "parameters": {"<param>": "<value>"}, "query": "<user's original question>"}"#.to_string());
-        lines.push("```".to_string());
-        lines.push(String::new());
-        lines.push("If no capability is needed, respond directly to the user without JSON.".to_string());
-        lines.push(String::new());
-        lines.push("### Available Capabilities:".to_string());
-        lines.push(String::new());
+            String::new(),
+            "### How to Request a Capability".to_string(),
+            String::new(),
+            "To invoke a capability, respond ONLY with a JSON object in this exact format:".to_string(),
+            "```json".to_string(),
+            r#"{"__capability_request__": true, "capability": "<id>", "parameters": {"<param>": "<value>"}, "query": "<user's original question>"}"#.to_string(),
+            "```".to_string(),
+            String::new(),
+            "If no capability is needed, respond directly to the user without JSON.".to_string(),
+            String::new(),
+            "### Available Capabilities:".to_string(),
+            String::new(),
+        ];
 
         for cap in capabilities {
             lines.push(format!("#### {} (`{}`)", cap.name, cap.id));

@@ -190,15 +190,13 @@ impl GeminiProvider {
 
     /// Build request body for text-only generation
     fn build_request(&self, input: &str, system_prompt: Option<&str>) -> GenerateContentRequest {
-        let mut contents = Vec::new();
-
         // Add user content
-        contents.push(Content {
+        let contents = vec![Content {
             role: Some("user".to_string()),
             parts: vec![Part::Text {
                 text: input.to_string(),
             }],
-        });
+        }];
 
         // Build system instruction if provided
         let system_instruction = system_prompt.map(|prompt| Content {
