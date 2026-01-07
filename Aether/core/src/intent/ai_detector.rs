@@ -115,9 +115,13 @@ impl AiIntentDetector {
         // Use AI for detection
         // Combine system prompt and user prompt to work with prepend-mode providers
         // This ensures intent detection works regardless of provider's system_prompt_mode setting
+        // Use a clear separator to help the model understand this is a classification task
         let system_prompt = self.get_system_prompt();
         let user_prompt = self.build_detection_prompt(input);
-        let combined_prompt = format!("{}\n\n{}", system_prompt, user_prompt);
+        let combined_prompt = format!(
+            "[TASK: Intent Classification - Return JSON ONLY, do NOT answer the question]\n\n{}\n\n---\n\n{}",
+            system_prompt, user_prompt
+        );
 
         info!(
             input_length = input.len(),
@@ -201,11 +205,12 @@ impl AiIntentDetector {
     /// Build the prompt for AI intent detection.
     fn build_detection_prompt(&self, input: &str) -> String {
         format!(
-            r#"Analyze this user input and classify the intent.
+            r#"[INPUT TO CLASSIFY]
+"{}"
 
-User input: "{}"
-
-Respond with JSON only, no markdown, no explanation:"#,
+[REQUIRED OUTPUT]
+Return ONLY a JSON object. Do NOT answer the question. Do NOT provide any explanation.
+Just output the JSON classification:"#,
             input.replace('"', "\\\"")
         )
     }
