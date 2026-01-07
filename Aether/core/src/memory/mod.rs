@@ -12,6 +12,7 @@ pub mod database;
 pub mod embedding;
 pub mod ingestion;
 pub mod retrieval;
+pub mod simd;
 
 // Integration tests (compiled only in test mode)
 #[cfg(test)]
