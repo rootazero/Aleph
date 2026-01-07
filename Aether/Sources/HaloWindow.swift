@@ -498,7 +498,7 @@ class HaloWindow: NSWindow {
             return NSSize(width: 320, height: 140)  // Height for text input
 
         case .conversationInput:
-            return NSSize(width: 320, height: 130)  // Height for conversation input (header + input + hint + padding)
+            return NSSize(width: 480, height: 115)  // Width 1.5x, height reduced for tighter input field
 
         default:
             return NSSize(width: 120, height: 120)
@@ -818,7 +818,7 @@ extension HaloWindow {
         NSLog("[HaloWindow] Showing conversation input: sessionId=%@, turn=%d", sessionId, turnCount)
 
         // Fixed size for conversation input (header + input + hint + padding)
-        let windowSize = NSSize(width: 320, height: 130)
+        let windowSize = NSSize(width: 480, height: 115)
 
         guard let screen = NSScreen.main ?? NSScreen.screens.first else {
             NSLog("[HaloWindow] Warning: No screen found, cannot display")
