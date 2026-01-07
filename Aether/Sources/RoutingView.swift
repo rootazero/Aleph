@@ -748,6 +748,16 @@ enum PresetRules {
             usage: "/video <YouTube URL>",
             usageKey: "settings.routing.preset.video.usage",
             subcommands: []  // Auto-detects YouTube URLs in input
+        ),
+        PresetRule(
+            command: "/chat",
+            description: "Start a multi-turn conversation session",
+            descriptionKey: "settings.routing.preset.chat.description",
+            isImplemented: true,
+            icon: "bubble.left.and.bubble.right",
+            usage: "/chat <message>",
+            usageKey: "settings.routing.preset.chat.usage",
+            subcommands: []  // Multi-turn mode can also be enabled by default in Behavior settings
         )
     ]
 }

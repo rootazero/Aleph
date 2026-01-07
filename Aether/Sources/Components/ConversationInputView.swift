@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 /// View for multi-turn conversation input
 ///
@@ -29,9 +30,6 @@ struct ConversationInputView: View {
     let turnCount: UInt32
     @ObservedObject private var manager = ConversationManager.shared
 
-    /// Focus state for keyboard input
-    @FocusState private var isTextFieldFocused: Bool
-
     /// Text color - white for dark background
     private let textColor = Color.white
 
@@ -45,7 +43,7 @@ struct ConversationInputView: View {
         VStack(spacing: 8) {
             // Header with turn count and ESC hint
             HStack {
-                Text("Turn \(turnCount + 1)")
+                Text(String(format: L("conversation.turn", default: "Turn %d"), turnCount + 1))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(textColor.opacity(0.7))
 
@@ -56,14 +54,17 @@ struct ConversationInputView: View {
                     .foregroundColor(textColor.opacity(0.5))
             }
 
-            // Text input field
-            TextField(
-                L("conversation.continue_placeholder", default: "Continue the conversation..."),
-                text: $manager.textInput
+            // Text input field (using IMETextField for proper Chinese/Japanese/Korean input)
+            IMETextField(
+                text: $manager.textInput,
+                placeholder: L("conversation.continue_placeholder", default: "Continue the conversation..."),
+                font: .systemFont(ofSize: 14),
+                textColor: .white,
+                backgroundColor: NSColor.white.withAlphaComponent(0.05),
+                onSubmit: { submitInput() },
+                onEscape: { manager.cancelConversation() }
             )
-            .textFieldStyle(.plain)
-            .font(.system(size: 14))
-            .foregroundColor(textColor)
+            .frame(height: 32)
             .padding(10)
             .background(textColor.opacity(0.05))
             .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -71,10 +72,6 @@ struct ConversationInputView: View {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(accentColor.opacity(0.3), lineWidth: 1)
             )
-            .focused($isTextFieldFocused)
-            .onSubmit {
-                submitInput()
-            }
 
             // Hint
             HStack(spacing: 16) {
@@ -90,12 +87,6 @@ struct ConversationInputView: View {
         .background(backgroundColor.opacity(0.95))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
-        .onAppear {
-            // Auto-focus text field
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                isTextFieldFocused = true
-            }
-        }
     }
 
     // MARK: - Actions

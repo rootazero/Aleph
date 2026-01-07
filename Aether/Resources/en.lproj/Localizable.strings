@@ -292,6 +292,9 @@
 "settings.behavior.pii_example_phone" = "e.g., (555) 123-4567";
 "settings.behavior.pii_example_ssn" = "e.g., 123-45-6789";
 "settings.behavior.pii_example_credit_card" = "e.g., 1234-5678-9012-3456";
+"settings.behavior.multi_turn" = "Conversation Mode";
+"settings.behavior.multi_turn_enabled" = "Enable Multi-turn by Default";
+"settings.behavior.multi_turn_description" = "When enabled, every conversation automatically supports follow-up questions. When disabled, use /chat command to start multi-turn mode.";
 
 // MARK: - Settings Window - Trigger Hotkeys
 "settings.trigger.title" = "Trigger Hotkeys";
@@ -558,6 +561,9 @@
 "settings.routing.preset.video.description" = "YouTube Video Analysis - Extract and analyze video content via transcripts";
 "settings.routing.preset.video.usage" = "/video <YouTube URL>";
 
+"settings.routing.preset.chat.description" = "Multi-turn Conversation - Start a conversation session with follow-up questions";
+"settings.routing.preset.chat.usage" = "/chat <message>";
+
 // MARK: - Command Mode (add-command-completion-system)
 "command.mode.title" = "Command Mode";
 "command.mode.navigate" = "Navigate";
@@ -573,3 +579,14 @@
 "smart_trigger.search.query_placeholder" = "Beijing / New York / Tokyo";
 "smart_trigger.video.url_prompt" = "Enter video URL";
 "smart_trigger.video.url_placeholder" = "https://youtube.com/watch?v=...";
+
+// MARK: - Conversation (Multi-turn)
+"conversation.turn" = "Turn %d";
+"conversation.end" = "End";
+"conversation.continue_placeholder" = "Continue the conversation...";
+"conversation.enter_to_send" = "Enter to send";
+"conversation.chat_command" = "Start multi-turn conversation";
+
+// MARK: - Clarification
+"clarification.enter_to_confirm" = "Enter to confirm";
+"clarification.esc_to_cancel" = "Esc to cancel";

@@ -127,6 +127,11 @@ pub struct BehaviorConfig {
     /// Enable PII scrubbing (email, phone, SSN, etc.)
     #[serde(default)]
     pub pii_scrubbing_enabled: bool,
+    /// Enable multi-turn conversation by default
+    /// When true, every conversation supports follow-up questions
+    /// When false, use /chat command to start multi-turn mode
+    #[serde(default)]
+    pub multi_turn_enabled: bool,
 }
 
 fn default_input_mode() -> String {
@@ -148,6 +153,7 @@ impl Default for BehaviorConfig {
             output_mode: default_output_mode(),
             typing_speed: default_typing_speed(),
             pii_scrubbing_enabled: false,
+            multi_turn_enabled: false,
         }
     }
 }

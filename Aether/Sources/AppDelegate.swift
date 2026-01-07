@@ -1546,6 +1546,54 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     print("[AppDelegate] 🤖 Sending to AI: window text only (\(clipboardText.count) chars)")
                 }
 
+                // Check if should use multi-turn conversation mode
+                // - /chat command forces multi-turn mode
+                // - config.behavior.multiTurnEnabled enables it by default for all conversations
+                let trimmedInput = userInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                let hasChatCommand = trimmedInput.hasPrefix("/chat")
+
+                let shouldUseMultiTurn: Bool
+                if hasChatCommand {
+                    shouldUseMultiTurn = true
+                } else {
+                    // Check config for default multi-turn setting
+                    if let core = self.core {
+                        do {
+                            let config = try core.loadConfig()
+                            shouldUseMultiTurn = config.behavior?.multiTurnEnabled ?? false
+                        } catch {
+                            shouldUseMultiTurn = false
+                        }
+                    } else {
+                        shouldUseMultiTurn = false
+                    }
+                }
+
+                if shouldUseMultiTurn {
+                    // Extract the actual message (remove /chat prefix if present)
+                    let conversationInput: String
+                    if hasChatCommand {
+                        let chatMessage = String(trimmedInput.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+                        conversationInput = chatMessage.isEmpty ? "Hello" : chatMessage
+                        print("[AppDelegate] 🎭 /chat command detected - starting multi-turn conversation")
+                    } else {
+                        conversationInput = userInput
+                        print("[AppDelegate] 🎭 Multi-turn enabled by default - starting conversation")
+                    }
+                    print("[AppDelegate] 🎭 Conversation input: \(conversationInput.prefix(50))...")
+
+                    // Store conversation context for output handling
+                    self.conversationTextSource = textSource
+                    self.conversationUseCutMode = useCutMode
+                    self.conversationOriginalClipboard = originalClipboardText
+
+                    // Start conversation (callbacks handle output and continuation UI)
+                    self.startConversation(userInput: conversationInput, context: capturedContext)
+
+                    // Return early - conversation flow is handled via callbacks
+                    return
+                }
+
                 // Call Rust core's process_input() - this replaces the old onHotkeyDetected flow
                 // The method will handle: Memory retrieval → AI routing → Provider call → Memory storage
                 // It returns the AI response text which we need to output using KeyboardSimulator

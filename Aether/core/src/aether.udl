@@ -551,6 +551,7 @@ dictionary BehaviorConfig {
   string output_mode;
   u32 typing_speed;
   boolean pii_scrubbing_enabled;
+  boolean multi_turn_enabled;
 };
 
 // Trigger configuration (hotkey-system-refactor)

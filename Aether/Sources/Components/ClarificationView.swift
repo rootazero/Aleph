@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 /// View for displaying Phantom Flow clarification requests
 ///
@@ -21,9 +22,6 @@ import SwiftUI
 struct ClarificationView: View {
     let request: ClarificationRequest
     @ObservedObject private var manager = ClarificationManager.shared
-
-    /// Focus state for keyboard navigation
-    @FocusState private var isTextFieldFocused: Bool
 
     /// Accent color from system
     private let accentColor = Color.accentColor
@@ -61,14 +59,6 @@ struct ClarificationView: View {
         .background(backgroundColor.opacity(0.95))
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
-        .onAppear {
-            // Auto-focus text field for text-type
-            if request.clarificationType == .text {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    isTextFieldFocused = true
-                }
-            }
-        }
     }
 
     // MARK: - Select Content
@@ -137,29 +127,32 @@ struct ClarificationView: View {
 
     private var textContent: some View {
         VStack(spacing: 8) {
-            TextField(request.placeholder ?? "Enter text...", text: $manager.textInput)
-                .textFieldStyle(.plain)
-                .font(.system(size: 14))
-                .foregroundColor(textColor)
-                .padding(10)
-                .background(textColor.opacity(0.05))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(accentColor.opacity(0.3), lineWidth: 1)
-                )
-                .focused($isTextFieldFocused)
-                .onSubmit {
-                    confirmTextInput()
-                }
+            // Using IMETextField for proper Chinese/Japanese/Korean input
+            IMETextField(
+                text: $manager.textInput,
+                placeholder: request.placeholder ?? "Enter text...",
+                font: .systemFont(ofSize: 14),
+                textColor: .white,
+                backgroundColor: NSColor.white.withAlphaComponent(0.05),
+                onSubmit: { confirmTextInput() },
+                onEscape: { manager.cancel() }
+            )
+            .frame(height: 32)
+            .padding(10)
+            .background(textColor.opacity(0.05))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(accentColor.opacity(0.3), lineWidth: 1)
+            )
 
             // Hint
             HStack(spacing: 16) {
-                Text("Enter to confirm")
+                Text(L("clarification.enter_to_confirm", default: "Enter to confirm"))
                     .font(.system(size: 10))
                     .foregroundColor(textColor.opacity(0.5))
 
-                Text("Esc to cancel")
+                Text(L("clarification.esc_to_cancel", default: "Esc to cancel"))
                     .font(.system(size: 10))
                     .foregroundColor(textColor.opacity(0.5))
             }
@@ -235,6 +228,14 @@ extension ClarificationView {
             return false
         }
     }
+}
+
+// MARK: - Localization Helper
+
+/// Localization helper with fallback
+private func L(_ key: String, default defaultValue: String) -> String {
+    let localized = NSLocalizedString(key, comment: "")
+    return localized == key ? defaultValue : localized
 }
 
 // MARK: - Previews

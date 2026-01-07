@@ -1158,14 +1158,16 @@ public struct BehaviorConfig {
     public var outputMode: String
     public var typingSpeed: UInt32
     public var piiScrubbingEnabled: Bool
+    public var multiTurnEnabled: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(inputMode: String, outputMode: String, typingSpeed: UInt32, piiScrubbingEnabled: Bool) {
+    public init(inputMode: String, outputMode: String, typingSpeed: UInt32, piiScrubbingEnabled: Bool, multiTurnEnabled: Bool) {
         self.inputMode = inputMode
         self.outputMode = outputMode
         self.typingSpeed = typingSpeed
         self.piiScrubbingEnabled = piiScrubbingEnabled
+        self.multiTurnEnabled = multiTurnEnabled
     }
 }
 
@@ -1185,6 +1187,9 @@ extension BehaviorConfig: Equatable, Hashable {
         if lhs.piiScrubbingEnabled != rhs.piiScrubbingEnabled {
             return false
         }
+        if lhs.multiTurnEnabled != rhs.multiTurnEnabled {
+            return false
+        }
         return true
     }
 
@@ -1193,6 +1198,7 @@ extension BehaviorConfig: Equatable, Hashable {
         hasher.combine(outputMode)
         hasher.combine(typingSpeed)
         hasher.combine(piiScrubbingEnabled)
+        hasher.combine(multiTurnEnabled)
     }
 }
 
@@ -1207,7 +1213,8 @@ public struct FfiConverterTypeBehaviorConfig: FfiConverterRustBuffer {
                 inputMode: FfiConverterString.read(from: &buf), 
                 outputMode: FfiConverterString.read(from: &buf), 
                 typingSpeed: FfiConverterUInt32.read(from: &buf), 
-                piiScrubbingEnabled: FfiConverterBool.read(from: &buf)
+                piiScrubbingEnabled: FfiConverterBool.read(from: &buf), 
+                multiTurnEnabled: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -1216,6 +1223,7 @@ public struct FfiConverterTypeBehaviorConfig: FfiConverterRustBuffer {
         FfiConverterString.write(value.outputMode, into: &buf)
         FfiConverterUInt32.write(value.typingSpeed, into: &buf)
         FfiConverterBool.write(value.piiScrubbingEnabled, into: &buf)
+        FfiConverterBool.write(value.multiTurnEnabled, into: &buf)
     }
 }
 

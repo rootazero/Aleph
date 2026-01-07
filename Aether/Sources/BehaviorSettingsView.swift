@@ -24,6 +24,9 @@ struct BehaviorSettingsView: View {
     @State private var piiScrubSSN: Bool = true
     @State private var piiScrubCreditCard: Bool = true
 
+    // Multi-turn conversation settings
+    @State private var multiTurnEnabled: Bool = false
+
     // Saved output settings (for comparison)
     @State private var savedOutputMode: OutputMode = .typewriter
     @State private var savedTypingSpeed: Double = 50.0
@@ -34,6 +37,9 @@ struct BehaviorSettingsView: View {
     @State private var savedPiiScrubPhone: Bool = true
     @State private var savedPiiScrubSSN: Bool = true
     @State private var savedPiiScrubCreditCard: Bool = true
+
+    // Saved multi-turn settings (for comparison)
+    @State private var savedMultiTurnEnabled: Bool = false
 
     // UI state
     @State private var showingPreview = false
@@ -51,6 +57,8 @@ struct BehaviorSettingsView: View {
                 }
 
                 piiScrubbingCard
+
+                multiTurnCard
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .padding(DesignTokens.Spacing.lg)
@@ -71,6 +79,7 @@ struct BehaviorSettingsView: View {
         .onChange(of: piiScrubPhone) { _, _ in updateSaveBarState() }
         .onChange(of: piiScrubSSN) { _, _ in updateSaveBarState() }
         .onChange(of: piiScrubCreditCard) { _, _ in updateSaveBarState() }
+        .onChange(of: multiTurnEnabled) { _, _ in updateSaveBarState() }
         .onChange(of: isSaving) { _, _ in updateSaveBarState() }
     }
 
@@ -231,6 +240,27 @@ struct BehaviorSettingsView: View {
         }
     }
 
+    private var multiTurnCard: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            Label(L("settings.behavior.multi_turn"), systemImage: "bubble.left.and.bubble.right")
+                .font(DesignTokens.Typography.heading)
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                Toggle(L("settings.behavior.multi_turn_enabled"), isOn: $multiTurnEnabled)
+                    .toggleStyle(.switch)
+                    .font(DesignTokens.Typography.body)
+
+                Text(L("settings.behavior.multi_turn_description"))
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+            }
+            .padding(DesignTokens.Spacing.md)
+            .background(DesignTokens.Colors.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
+        }
+    }
+
     @ViewBuilder
     private func piiToggle(
         title: String,
@@ -266,7 +296,8 @@ struct BehaviorSettingsView: View {
                piiScrubEmail != savedPiiScrubEmail ||
                piiScrubPhone != savedPiiScrubPhone ||
                piiScrubSSN != savedPiiScrubSSN ||
-               piiScrubCreditCard != savedPiiScrubCreditCard
+               piiScrubCreditCard != savedPiiScrubCreditCard ||
+               multiTurnEnabled != savedMultiTurnEnabled
     }
 
     /// Status message for UnifiedSaveBar
@@ -320,6 +351,10 @@ struct BehaviorSettingsView: View {
                         piiEnabled = behavior.piiScrubbingEnabled
                         savedPiiEnabled = piiEnabled
                         // Note: Individual PII type settings will be loaded when backend support is added
+
+                        // Load multi-turn settings
+                        multiTurnEnabled = behavior.multiTurnEnabled
+                        savedMultiTurnEnabled = multiTurnEnabled
                     }
                 }
             } catch {
@@ -347,7 +382,8 @@ struct BehaviorSettingsView: View {
                 inputMode: "cut",  // Legacy field, not used in new system
                 outputMode: outputMode.rawValue,
                 typingSpeed: UInt32(typingSpeed),
-                piiScrubbingEnabled: piiEnabled
+                piiScrubbingEnabled: piiEnabled,
+                multiTurnEnabled: multiTurnEnabled
             )
             try core.updateBehavior(behavior: behaviorConfig)
 
@@ -355,6 +391,7 @@ struct BehaviorSettingsView: View {
             print("  Output Mode: \(outputMode.rawValue)")
             print("  Typing Speed: \(Int(typingSpeed))")
             print("  PII Scrubbing Enabled: \(piiEnabled)")
+            print("  Multi-turn Enabled: \(multiTurnEnabled)")
 
             await MainActor.run {
                 // Update saved state to match current state
@@ -365,6 +402,7 @@ struct BehaviorSettingsView: View {
                 savedPiiScrubPhone = piiScrubPhone
                 savedPiiScrubSSN = piiScrubSSN
                 savedPiiScrubCreditCard = piiScrubCreditCard
+                savedMultiTurnEnabled = multiTurnEnabled
 
                 isSaving = false
                 errorMessage = nil
@@ -393,6 +431,7 @@ struct BehaviorSettingsView: View {
         piiScrubPhone = savedPiiScrubPhone
         piiScrubSSN = savedPiiScrubSSN
         piiScrubCreditCard = savedPiiScrubCreditCard
+        multiTurnEnabled = savedMultiTurnEnabled
         errorMessage = nil
     }
 
