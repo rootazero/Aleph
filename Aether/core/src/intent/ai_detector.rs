@@ -113,8 +113,11 @@ impl AiIntentDetector {
         }
 
         // Use AI for detection
-        let prompt = self.build_detection_prompt(input);
+        // Combine system prompt and user prompt to work with prepend-mode providers
+        // This ensures intent detection works regardless of provider's system_prompt_mode setting
         let system_prompt = self.get_system_prompt();
+        let user_prompt = self.build_detection_prompt(input);
+        let combined_prompt = format!("{}\n\n{}", system_prompt, user_prompt);
 
         debug!(
             input_length = input.len(),
@@ -122,9 +125,10 @@ impl AiIntentDetector {
         );
 
         // Call AI provider with timeout
+        // Pass None for system_prompt since we've combined it into the user prompt
         let response = tokio::time::timeout(
             self.timeout,
-            self.provider.process(&prompt, Some(&system_prompt)),
+            self.provider.process(&combined_prompt, None),
         )
         .await
         .map_err(|_| AetherError::Timeout {
