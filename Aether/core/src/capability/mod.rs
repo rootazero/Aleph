@@ -50,6 +50,20 @@ pub struct CapabilityExecutor {
     pii_scrubbing_enabled: bool,
     /// Video transcript configuration
     video_config: Option<Arc<VideoConfig>>,
+
+    // AI Memory Retrieval Configuration
+    /// AI provider for memory selection (required for AI retrieval)
+    ai_provider: Option<Arc<dyn crate::providers::AiProvider>>,
+    /// Exclusion set for current conversation (to avoid duplicate context)
+    memory_exclusion_set: Vec<String>,
+    /// Enable AI-based memory retrieval (vs embedding-based)
+    use_ai_retrieval: bool,
+    /// AI retrieval timeout in milliseconds
+    ai_retrieval_timeout_ms: u64,
+    /// Maximum candidates to send to AI for selection
+    ai_retrieval_max_candidates: u32,
+    /// Fallback count when AI fails
+    ai_retrieval_fallback_count: u32,
 }
 
 impl CapabilityExecutor {
@@ -77,12 +91,54 @@ impl CapabilityExecutor {
             search_options: search_options.unwrap_or_default(),
             pii_scrubbing_enabled,
             video_config: None,
+            // AI Memory Retrieval defaults
+            ai_provider: None,
+            memory_exclusion_set: Vec::new(),
+            use_ai_retrieval: false,
+            ai_retrieval_timeout_ms: 3000,
+            ai_retrieval_max_candidates: 20,
+            ai_retrieval_fallback_count: 3,
         }
     }
 
     /// Create a new capability executor with video config
     pub fn with_video_config(mut self, video_config: Option<Arc<VideoConfig>>) -> Self {
         self.video_config = video_config;
+        self
+    }
+
+    /// Configure AI-based memory retrieval
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - AI provider for memory selection
+    /// * `enabled` - Whether to use AI retrieval (vs embedding-based)
+    /// * `timeout_ms` - Timeout for AI retrieval in milliseconds
+    /// * `max_candidates` - Maximum candidates to send to AI
+    /// * `fallback_count` - Number of memories to return on fallback
+    pub fn with_ai_retrieval(
+        mut self,
+        provider: Option<Arc<dyn crate::providers::AiProvider>>,
+        enabled: bool,
+        timeout_ms: u64,
+        max_candidates: u32,
+        fallback_count: u32,
+    ) -> Self {
+        self.ai_provider = provider;
+        self.use_ai_retrieval = enabled;
+        self.ai_retrieval_timeout_ms = timeout_ms;
+        self.ai_retrieval_max_candidates = max_candidates;
+        self.ai_retrieval_fallback_count = fallback_count;
+        self
+    }
+
+    /// Set exclusion set for memory retrieval (to avoid duplicate context)
+    ///
+    /// # Arguments
+    ///
+    /// * `exclusion_set` - Strings to exclude from memory retrieval
+    pub fn with_memory_exclusion_set(mut self, exclusion_set: Vec<String>) -> Self {
+        self.memory_exclusion_set = exclusion_set;
         self
     }
 
@@ -153,11 +209,11 @@ impl CapabilityExecutor {
         Ok(payload)
     }
 
-    /// Execute Memory capability (MVP implementation)
+    /// Execute Memory capability
     ///
-    /// Retrieves relevant memory snippets from the vector database based on:
-    /// - User input (query)
-    /// - Context anchor (app + window)
+    /// Retrieves relevant memory snippets using either:
+    /// - AI-based selection (when `use_ai_retrieval` is true and provider available)
+    /// - Embedding-based vector similarity (fallback)
     ///
     /// # Arguments
     ///
@@ -167,6 +223,7 @@ impl CapabilityExecutor {
     ///
     /// The payload with memory_snippets populated (if any found)
     async fn execute_memory(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
+        use crate::memory::ai_retrieval::AiMemoryRetriever;
         use crate::memory::ContextAnchor as MemoryContextAnchor;
 
         // Check if memory database and config are available
@@ -187,6 +244,7 @@ impl CapabilityExecutor {
             query_length = query.len(),
             app = %anchor.app_bundle_id,
             window = ?anchor.window_title,
+            use_ai_retrieval = self.use_ai_retrieval,
             "Retrieving memory snippets"
         );
 
@@ -197,21 +255,72 @@ impl CapabilityExecutor {
             payload.meta.timestamp,
         );
 
-        // Initialize embedding model
+        // Initialize embedding model (needed for both paths)
         let model_dir = Self::get_embedding_model_dir()?;
         let embedding_model = Arc::new(EmbeddingModel::new(model_dir).map_err(|e| {
             AetherError::config(format!("Failed to initialize embedding model: {}", e))
         })?);
 
-        // Create retrieval service
-        let retrieval = MemoryRetrieval::new(
-            Arc::clone(db),
-            Arc::clone(&embedding_model),
-            Arc::clone(config),
-        );
+        // Choose retrieval strategy
+        let memories = if self.use_ai_retrieval {
+            // AI-based memory selection
+            if let Some(ai_provider) = &self.ai_provider {
+                info!("Using AI-based memory retrieval");
 
-        // Retrieve memory entries
-        let memories = retrieval.retrieve_memories(&memory_anchor, query).await?;
+                // First, fetch candidate memories using embedding search
+                let retrieval = MemoryRetrieval::new(
+                    Arc::clone(db),
+                    Arc::clone(&embedding_model),
+                    Arc::clone(config),
+                );
+
+                // Get more candidates than needed for AI to select from
+                let candidates = retrieval
+                    .retrieve_memories_with_limit(&memory_anchor, query, self.ai_retrieval_max_candidates as usize)
+                    .await
+                    .unwrap_or_else(|e| {
+                        warn!(error = %e, "Failed to fetch memory candidates, returning empty");
+                        Vec::new()
+                    });
+
+                if candidates.is_empty() {
+                    debug!("No memory candidates found for AI selection");
+                    Vec::new()
+                } else {
+                    // Use AI to select relevant memories
+                    let retriever = AiMemoryRetriever::new(Arc::clone(ai_provider))
+                        .with_timeout(std::time::Duration::from_millis(self.ai_retrieval_timeout_ms))
+                        .with_max_candidates(self.ai_retrieval_max_candidates)
+                        .with_fallback_count(self.ai_retrieval_fallback_count);
+
+                    retriever
+                        .retrieve(query, candidates, &self.memory_exclusion_set)
+                        .await
+                        .unwrap_or_else(|e| {
+                            warn!(error = %e, "AI memory selection failed, returning empty");
+                            Vec::new()
+                        })
+                }
+            } else {
+                warn!("AI retrieval enabled but no provider configured, falling back to embedding");
+                // Fallback to embedding-based retrieval
+                let retrieval = MemoryRetrieval::new(
+                    Arc::clone(db),
+                    Arc::clone(&embedding_model),
+                    Arc::clone(config),
+                );
+                retrieval.retrieve_memories(&memory_anchor, query).await?
+            }
+        } else {
+            // Traditional embedding-based vector similarity
+            debug!("Using embedding-based memory retrieval");
+            let retrieval = MemoryRetrieval::new(
+                Arc::clone(db),
+                Arc::clone(&embedding_model),
+                Arc::clone(config),
+            );
+            retrieval.retrieve_memories(&memory_anchor, query).await?
+        };
 
         if memories.is_empty() {
             info!("No relevant memories found");

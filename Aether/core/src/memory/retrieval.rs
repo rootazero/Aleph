@@ -116,6 +116,90 @@ impl MemoryRetrieval {
         // 5. Results are already sorted by similarity (descending) from database
         Ok(memories)
     }
+
+    /// Retrieve memories with custom limit
+    ///
+    /// Same as `retrieve_memories` but with a custom limit instead of config.max_context_items.
+    /// This is useful for AI-based retrieval where we need more candidates.
+    ///
+    /// # Arguments
+    /// * `context` - Context anchor (app + window)
+    /// * `query` - User query text
+    /// * `limit` - Maximum number of memories to return
+    ///
+    /// # Returns
+    /// * `Result<Vec<MemoryEntry>>` - List of relevant memories with similarity scores
+    pub async fn retrieve_memories_with_limit(
+        &self,
+        context: &ContextAnchor,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>, AetherError> {
+        debug!(
+            app = %context.app_bundle_id,
+            window = %context.window_title,
+            query_len = query.len(),
+            limit = limit,
+            "Starting memory retrieval with custom limit"
+        );
+
+        // 1. Check if memory is enabled
+        if !self.config.enabled {
+            debug!("Memory retrieval skipped: memory disabled");
+            return Ok(Vec::new());
+        }
+
+        // 2. Generate query embedding
+        debug!("Generating query embedding");
+        let query_embedding = self.embedding_model.embed_text(query).await.map_err(|e| {
+            warn!(error = %e, "Failed to generate query embedding");
+            AetherError::config(format!("Failed to generate query embedding: {}", e))
+        })?;
+
+        debug!(
+            embedding_dim = query_embedding.len(),
+            "Query embedding generated"
+        );
+
+        // 3. Search database with context filter and custom limit
+        let mut memories = self
+            .database
+            .search_memories(
+                &context.app_bundle_id,
+                &context.window_title,
+                &query_embedding,
+                limit as u32,
+            )
+            .await?;
+
+        debug!(memories_found = memories.len(), "Database search completed");
+
+        // 4. Filter by similarity threshold
+        let original_count = memories.len();
+        memories.retain(|m| m.similarity_score.unwrap_or(0.0) >= self.config.similarity_threshold);
+
+        let filtered_count = memories.len();
+        if filtered_count < original_count {
+            debug!(
+                original_count = original_count,
+                filtered_count = filtered_count,
+                threshold = self.config.similarity_threshold,
+                "Filtered memories by similarity threshold"
+            );
+        }
+
+        info!(
+            app = %context.app_bundle_id,
+            window = %context.window_title,
+            memories_count = filtered_count,
+            limit = limit,
+            threshold = self.config.similarity_threshold,
+            "Memory retrieval with custom limit completed"
+        );
+
+        // 5. Results are already sorted by similarity (descending) from database
+        Ok(memories)
+    }
 }
 
 #[cfg(test)]

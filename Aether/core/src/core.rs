@@ -564,6 +564,27 @@ impl AetherCore {
             .build()
             .map_err(|e| AetherError::config(format!("Failed to build payload: {}", e)))?;
 
+        // Get AI memory retrieval configuration
+        let (use_ai_retrieval, ai_timeout_ms, ai_max_candidates, ai_fallback_count) = {
+            let cfg = self.lock_config();
+            (
+                cfg.memory.enabled && cfg.memory.ai_retrieval_enabled,
+                cfg.memory.ai_retrieval_timeout_ms,
+                cfg.memory.ai_retrieval_max_candidates,
+                cfg.memory.ai_retrieval_fallback_count,
+            )
+        };
+
+        // Build memory exclusion set from current conversation
+        let memory_exclusion_set = self.build_memory_exclusion_set();
+
+        // Get AI provider for memory selection (if AI retrieval enabled)
+        let ai_provider = if use_ai_retrieval {
+            self.get_default_provider_instance()
+        } else {
+            None
+        };
+
         // Execute capabilities to enrich payload
         let executor = CapabilityExecutor::new(
             self.memory_db.as_ref().map(Arc::clone),
@@ -601,7 +622,16 @@ impl AetherCore {
             // Pass VideoConfig from config
             let cfg = self.lock_config();
             cfg.video.as_ref().map(|v| Arc::new(v.clone()))
-        });
+        })
+        // Configure AI-based memory retrieval
+        .with_ai_retrieval(
+            ai_provider,
+            use_ai_retrieval,
+            ai_timeout_ms,
+            ai_max_candidates,
+            ai_fallback_count,
+        )
+        .with_memory_exclusion_set(memory_exclusion_set);
 
         executor.execute_all(payload).await
     }
@@ -1220,15 +1250,25 @@ impl AetherCore {
 
     /// Retrieve memories and augment ONLY the user input (no system prompt)
     ///
-    /// This is the NEW method for the refactored architecture where:
-    /// - System prompt is passed separately to the AI provider
-    /// - User input should not contain "User:" prefix
+    /// # DEPRECATED
+    /// This method is deprecated in favor of the CapabilityExecutor system.
+    /// Memory retrieval is now handled by `CapabilityExecutor::execute_memory()` which:
+    /// - Supports AI-based retrieval via `AiMemoryRetriever`
+    /// - Uses exclusion sets to avoid duplicate context
+    /// - Is properly integrated into the build_enriched_payload pipeline
+    ///
+    /// Use `build_enriched_payload()` with Memory capability instead.
     ///
     /// # Arguments
     /// * `user_input` - Current user input/query
     ///
     /// # Returns
     /// * `Result<String>` - User input with optional memory context
+    #[allow(dead_code)]
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use CapabilityExecutor with Memory capability via build_enriched_payload()"
+    )]
     pub fn retrieve_and_augment_user_input(&self, user_input: String) -> Result<String> {
         use crate::memory::augmentation::PromptAugmenter;
         use crate::memory::context::ContextAnchor;
@@ -1434,6 +1474,11 @@ impl AetherCore {
     ///
     /// This reduces latency by running both AI calls concurrently.
     /// If either fails, the other's result is still used.
+    ///
+    /// # Note
+    /// Currently not used but preserved for future parallel execution optimization.
+    /// Memory retrieval is now handled by CapabilityExecutor.
+    #[allow(dead_code)]
     fn parallel_detect_and_retrieve(
         &self,
         user_input: &str,
