@@ -2274,7 +2274,7 @@ impl AetherCore {
         let ai_result = match self.runtime.block_on(ai_detector.detect(user_input)) {
             Ok(Some(result)) => result,
             Ok(None) => {
-                debug!("AI detected no specific intent");
+                info!("AI detected no specific intent (general or low confidence)");
                 return Ok(None);
             }
             Err(e) => {
@@ -2296,8 +2296,10 @@ impl AetherCore {
             "search" if search_enabled => (Capability::Search, "/search"),
             "video" if video_enabled => (Capability::Video, "/video"),
             _ => {
-                debug!(
+                info!(
                     intent = %ai_result.intent,
+                    search_enabled = search_enabled,
+                    video_enabled = video_enabled,
                     "AI detected intent not enabled or is general"
                 );
                 return Ok(None);
@@ -3692,7 +3694,9 @@ impl AetherCore {
         }
 
         // Notify UI that continuation is available
+        info!("Notifying UI: conversation continuation ready");
         self.event_handler.on_conversation_continuation_ready();
+        info!("UI notified: conversation continuation ready callback completed");
 
         Ok(response)
     }

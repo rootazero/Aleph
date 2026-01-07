@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 /// Result of AI intent detection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,8 +119,9 @@ impl AiIntentDetector {
         let user_prompt = self.build_detection_prompt(input);
         let combined_prompt = format!("{}\n\n{}", system_prompt, user_prompt);
 
-        debug!(
+        info!(
             input_length = input.len(),
+            input_preview = %input.chars().take(50).collect::<String>(),
             "Starting AI intent detection"
         );
 
@@ -131,12 +132,20 @@ impl AiIntentDetector {
             self.provider.process(&combined_prompt, None),
         )
         .await
-        .map_err(|_| AetherError::Timeout {
-            suggestion: Some(format!(
-                "AI intent detection timed out after {}ms",
-                self.timeout.as_millis()
-            )),
+        .map_err(|_| {
+            warn!("AI intent detection timed out after {}ms", self.timeout.as_millis());
+            AetherError::Timeout {
+                suggestion: Some(format!(
+                    "AI intent detection timed out after {}ms",
+                    self.timeout.as_millis()
+                )),
+            }
         })??;
+
+        info!(
+            response_preview = %response.chars().take(200).collect::<String>(),
+            "AI intent detection raw response"
+        );
 
         // Parse response
         let result = self.parse_response(&response)?;
