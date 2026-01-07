@@ -58,18 +58,19 @@ struct ConversationInputView: View {
             IMETextField(
                 text: $manager.textInput,
                 placeholder: L("conversation.continue_placeholder", default: "Continue the conversation..."),
-                font: .systemFont(ofSize: 14),
+                font: .systemFont(ofSize: 15),
                 textColor: .white,
                 backgroundColor: NSColor.white.withAlphaComponent(0.05),
                 onSubmit: { submitInput() },
                 onEscape: { manager.cancelConversation() }
             )
-            .frame(height: 32)
-            .padding(10)
+            .frame(height: 24)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
             .background(textColor.opacity(0.05))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: 6)
                     .stroke(accentColor.opacity(0.3), lineWidth: 1)
             )
 
@@ -83,7 +84,7 @@ struct ConversationInputView: View {
             }
         }
         .padding(12)
-        .frame(width: 320)
+        .frame(width: 480)
         .background(backgroundColor.opacity(0.95))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
