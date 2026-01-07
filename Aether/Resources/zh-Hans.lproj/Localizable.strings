@@ -569,3 +569,9 @@
 "command.type.action" = "动作";
 "command.type.prompt" = "提示";
 "command.type.namespace" = "命名空间";
+
+// MARK: - Smart Trigger (Intent Detection)
+"smart_trigger.search.query_prompt" = "请输入查询内容（如城市名称）";
+"smart_trigger.search.query_placeholder" = "北京 / 上海 / 东京";
+"smart_trigger.video.url_prompt" = "请输入视频链接";
+"smart_trigger.video.url_placeholder" = "https://youtube.com/watch?v=...";

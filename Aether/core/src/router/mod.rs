@@ -930,6 +930,16 @@ impl Router {
         self.providers.get(name).map(|p| p.as_ref())
     }
 
+    /// Get a provider by name (Arc version for shared ownership).
+    ///
+    /// # Returns
+    ///
+    /// * `Some(Arc<dyn AiProvider>)` - Provider Arc if found
+    /// * `None` - Provider not found
+    pub fn get_provider_arc(&self, name: &str) -> Option<Arc<dyn AiProvider>> {
+        self.providers.get(name).cloned()
+    }
+
     /// Route with extended decision information (new API)
     ///
     /// This is the enhanced routing method that returns a `RoutingDecision` with

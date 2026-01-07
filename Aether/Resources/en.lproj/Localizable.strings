@@ -567,3 +567,9 @@
 "command.type.action" = "Action";
 "command.type.prompt" = "Prompt";
 "command.type.namespace" = "Namespace";
+
+// MARK: - Smart Trigger (Intent Detection)
+"smart_trigger.search.query_prompt" = "Enter your query (e.g., city name)";
+"smart_trigger.search.query_placeholder" = "Beijing / New York / Tokyo";
+"smart_trigger.video.url_prompt" = "Enter video URL";
+"smart_trigger.video.url_placeholder" = "https://youtube.com/watch?v=...";

@@ -1,3 +1,24 @@
+//! Capability module for AI-first intent detection and capability execution.
+//!
+//! This module provides:
+//! - **CapabilityExecutor**: Executes capabilities in priority order (Memory → Search → MCP → Video)
+//! - **CapabilityDeclaration**: Describes capabilities for AI understanding
+//! - **CapabilityRequest/AiResponse**: Types for AI capability invocation requests
+//! - **ResponseParser**: Parses AI responses to detect capability requests
+
+pub mod declaration;
+pub mod request;
+pub mod response_parser;
+
+// Re-exports for convenience
+pub use declaration::{CapabilityDeclaration, CapabilityParameter, CapabilityRegistry};
+pub use request::{AiResponse, CapabilityRequest};
+pub use response_parser::ResponseParser;
+
+// ============================================================================
+// Capability Executor
+// ============================================================================
+
 /// Capability Executor - Execute capabilities in priority order
 ///
 /// This module orchestrates the execution of different capabilities (Memory, Search, MCP, Video)

@@ -50,6 +50,9 @@ pub struct Config {
     /// Trigger configuration (hotkey system refactor)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger: Option<TriggerConfig>,
+    /// Smart conversation flow configuration
+    #[serde(default)]
+    pub smart_flow: SmartFlowConfig,
 }
 
 /// General configuration settings
@@ -868,6 +871,147 @@ impl Default for PIIConfig {
     }
 }
 
+/// Smart conversation flow configuration
+///
+/// Controls intelligent intent detection and AI suggestion parsing
+/// for a more natural conversation experience.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SmartFlowConfig {
+    /// Enable/disable smart conversation flow
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Intent detection settings
+    #[serde(default)]
+    pub intent_detection: IntentDetectionConfig,
+    /// AI suggestion parsing settings
+    #[serde(default)]
+    pub suggestion_parsing: SuggestionParsingConfig,
+}
+
+impl Default for SmartFlowConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            intent_detection: IntentDetectionConfig::default(),
+            suggestion_parsing: SuggestionParsingConfig::default(),
+        }
+    }
+}
+
+/// Intent detection configuration
+///
+/// Controls which smart triggers are enabled for automatic capability invocation.
+/// Each trigger detects specific patterns and can invoke builtin commands.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntentDetectionConfig {
+    /// Enable intent detection globally
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    // AI-first intent detection (single-call architecture)
+    /// Enable AI-first detection where AI decides if capability is needed
+    /// When enabled, AI receives capability list and either responds directly
+    /// or requests capability invocation via JSON
+    #[serde(default = "default_false")]
+    pub ai_first: bool,
+
+    // AI-powered intent detection (legacy, language-agnostic)
+    /// Use AI for intent detection (supports all languages)
+    /// Note: When ai_first=true, this is ignored
+    #[serde(default = "default_true")]
+    pub use_ai: bool,
+    /// Confidence threshold for AI detection (0.0 - 1.0)
+    #[serde(default = "default_confidence_threshold")]
+    pub confidence_threshold: f64,
+    /// Timeout for AI detection in milliseconds
+    #[serde(default = "default_ai_timeout_ms")]
+    pub ai_timeout_ms: u64,
+
+    // Trigger enables
+    /// Enable /search trigger (weather, news, general queries)
+    #[serde(default = "default_true")]
+    pub search: bool,
+    /// Enable /video trigger (YouTube, Bilibili analysis)
+    #[serde(default = "default_true")]
+    pub video: bool,
+    /// Enable /skill trigger (future)
+    #[serde(default = "default_false")]
+    pub skill: bool,
+    /// Enable /mcp trigger (future)
+    #[serde(default = "default_false")]
+    pub mcp: bool,
+
+    // Legacy fields for backward compatibility
+    /// Legacy: weather intent (now part of search trigger)
+    #[serde(default = "default_true")]
+    pub weather: bool,
+    /// Legacy: translation intent
+    #[serde(default = "default_true")]
+    pub translation: bool,
+    /// Legacy: code help intent
+    #[serde(default = "default_true")]
+    pub code_help: bool,
+}
+
+fn default_confidence_threshold() -> f64 {
+    0.7
+}
+
+fn default_ai_timeout_ms() -> u64 {
+    3000
+}
+
+fn default_false() -> bool {
+    false
+}
+
+impl Default for IntentDetectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            // AI-first detection (new architecture)
+            ai_first: false, // Disabled by default, opt-in
+            // AI detection (legacy)
+            use_ai: true,
+            confidence_threshold: default_confidence_threshold(),
+            ai_timeout_ms: default_ai_timeout_ms(),
+            // Triggers
+            search: true,
+            video: true,
+            skill: false,
+            mcp: false,
+            // Legacy
+            weather: true,
+            translation: true,
+            code_help: true,
+        }
+    }
+}
+
+/// AI suggestion parsing configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuggestionParsingConfig {
+    /// Enable suggestion parsing from AI responses
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Maximum suggestions to extract
+    #[serde(default = "default_max_suggestions")]
+    pub max_suggestions: usize,
+}
+
+fn default_max_suggestions() -> usize {
+    5
+}
+
+impl Default for SuggestionParsingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_suggestions: 5,
+        }
+    }
+}
+
 /// Search backend configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchBackendConfig {
@@ -1091,6 +1235,7 @@ impl Default for Config {
             search: None,
             video: Some(VideoConfig::default()),
             trigger: Some(TriggerConfig::default()),
+            smart_flow: SmartFlowConfig::default(),
         }
     }
 }

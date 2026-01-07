@@ -3,6 +3,7 @@
 /// This module formats context data (memory, search, MCP) into LLM prompts
 /// using different formats (Markdown, XML, JSON).
 use super::{AgentContext, AgentPayload, ContextFormat};
+use crate::capability::CapabilityDeclaration;
 use crate::memory::MemoryEntry;
 use crate::search::SearchResult;
 
@@ -23,6 +24,105 @@ impl PromptAssembler {
         Self {
             context_format: format,
         }
+    }
+
+    /// Build a capability-aware system prompt for AI-first intent detection.
+    ///
+    /// This method creates a system prompt that:
+    /// 1. Includes the base prompt
+    /// 2. Describes available capabilities to the AI
+    /// 3. Instructs AI how to request capability invocation via JSON
+    /// 4. Optionally includes existing context (memory)
+    ///
+    /// # Arguments
+    ///
+    /// * `base_prompt` - Base system prompt from routing rule or provider
+    /// * `capabilities` - List of available capabilities
+    /// * `context` - Optional existing context (memory snippets, etc.)
+    ///
+    /// # Returns
+    ///
+    /// Complete system prompt with capability instructions
+    pub fn build_capability_aware_prompt(
+        &self,
+        base_prompt: &str,
+        capabilities: &[CapabilityDeclaration],
+        context: Option<&AgentContext>,
+    ) -> String {
+        let mut prompt = base_prompt.to_string();
+
+        // Add capability instructions if any capabilities are available
+        let available_caps: Vec<_> = capabilities.iter().filter(|c| c.available).collect();
+        if !available_caps.is_empty() {
+            prompt.push_str("\n\n");
+            prompt.push_str(&self.format_capability_instructions(&available_caps));
+        }
+
+        // Add existing context if provided
+        if let Some(ctx) = context {
+            if let Some(formatted_ctx) = self.format_context(ctx) {
+                prompt.push_str("\n\n");
+                prompt.push_str(&formatted_ctx);
+            }
+        }
+
+        prompt
+    }
+
+    /// Format capability instructions for the AI.
+    fn format_capability_instructions(&self, capabilities: &[&CapabilityDeclaration]) -> String {
+        let mut lines = Vec::new();
+
+        lines.push("## Available Capabilities".to_string());
+        lines.push(String::new());
+        lines.push(
+            "You have access to the following capabilities. If the user's request requires real-time information or specific tools, respond with a JSON object to request capability execution.".to_string(),
+        );
+        lines.push(String::new());
+        lines.push("### How to Request a Capability".to_string());
+        lines.push(String::new());
+        lines.push("To invoke a capability, respond ONLY with a JSON object in this exact format:".to_string());
+        lines.push("```json".to_string());
+        lines.push(r#"{"__capability_request__": true, "capability": "<id>", "parameters": {"<param>": "<value>"}, "query": "<user's original question>"}"#.to_string());
+        lines.push("```".to_string());
+        lines.push(String::new());
+        lines.push("If no capability is needed, respond directly to the user without JSON.".to_string());
+        lines.push(String::new());
+        lines.push("### Available Capabilities:".to_string());
+        lines.push(String::new());
+
+        for cap in capabilities {
+            lines.push(format!("#### {} (`{}`)", cap.name, cap.id));
+            lines.push(format!("- **Description**: {}", cap.description));
+
+            if !cap.parameters.is_empty() {
+                lines.push("- **Parameters**:".to_string());
+                for param in &cap.parameters {
+                    let required_str = if param.required { "required" } else { "optional" };
+                    lines.push(format!(
+                        "  - `{}` ({}): {} [{}]",
+                        param.name, param.param_type, param.description, required_str
+                    ));
+                }
+            }
+
+            if !cap.examples.is_empty() {
+                lines.push("- **Use when user asks**:".to_string());
+                for example in &cap.examples {
+                    lines.push(format!("  - \"{}\"", example));
+                }
+            }
+
+            lines.push(String::new());
+        }
+
+        lines.push("### Decision Guidelines:".to_string());
+        lines.push(String::new());
+        lines.push("1. **Use `search`** when user asks about: weather, news, prices, current events, facts that may have changed, or any real-time information.".to_string());
+        lines.push("2. **Use `video`** when user provides a YouTube URL and wants to analyze, summarize, or ask questions about the video.".to_string());
+        lines.push("3. **Respond directly** for: general conversation, knowledge questions within your training, creative tasks, code help, translations, etc.".to_string());
+
+        lines.join("\n")
     }
 
     /// Assemble complete system prompt
@@ -549,5 +649,110 @@ mod tests {
         assert!(prompt.contains("**Web Search Results**"));
         assert!(prompt.contains("Search Result"));
         assert!(prompt.contains("Relevant information"));
+    }
+
+    #[test]
+    fn test_build_capability_aware_prompt_no_capabilities() {
+        let assembler = PromptAssembler::new(ContextFormat::Markdown);
+
+        let prompt = assembler.build_capability_aware_prompt("You are helpful.", &[], None);
+
+        // Should only contain base prompt when no capabilities
+        assert_eq!(prompt, "You are helpful.");
+    }
+
+    #[test]
+    fn test_build_capability_aware_prompt_with_search() {
+        let assembler = PromptAssembler::new(ContextFormat::Markdown);
+
+        let capabilities = vec![CapabilityDeclaration::search()];
+
+        let prompt = assembler.build_capability_aware_prompt("You are helpful.", &capabilities, None);
+
+        // Should contain base prompt
+        assert!(prompt.starts_with("You are helpful."));
+
+        // Should contain capability instructions
+        assert!(prompt.contains("## Available Capabilities"));
+        assert!(prompt.contains("__capability_request__"));
+        assert!(prompt.contains("Web Search"));
+        assert!(prompt.contains("search"));
+
+        // Should contain examples
+        assert!(prompt.contains("weather"));
+
+        // Should contain decision guidelines
+        assert!(prompt.contains("Decision Guidelines"));
+    }
+
+    #[test]
+    fn test_build_capability_aware_prompt_with_multiple_capabilities() {
+        let assembler = PromptAssembler::new(ContextFormat::Markdown);
+
+        let capabilities = vec![
+            CapabilityDeclaration::search(),
+            CapabilityDeclaration::video(),
+        ];
+
+        let prompt = assembler.build_capability_aware_prompt("Base prompt.", &capabilities, None);
+
+        // Should contain both capabilities
+        assert!(prompt.contains("Web Search"));
+        assert!(prompt.contains("Video Transcript"));
+        assert!(prompt.contains("YouTube"));
+    }
+
+    #[test]
+    fn test_build_capability_aware_prompt_filters_unavailable() {
+        let assembler = PromptAssembler::new(ContextFormat::Markdown);
+
+        let mut mcp = CapabilityDeclaration::mcp();
+        mcp.available = false; // MCP is not available
+
+        let capabilities = vec![CapabilityDeclaration::search(), mcp];
+
+        let prompt = assembler.build_capability_aware_prompt("Base prompt.", &capabilities, None);
+
+        // Should contain search but not MCP
+        assert!(prompt.contains("Web Search"));
+        assert!(!prompt.contains("MCP Tools"));
+    }
+
+    #[test]
+    fn test_build_capability_aware_prompt_with_context() {
+        let assembler = PromptAssembler::new(ContextFormat::Markdown);
+
+        let capabilities = vec![CapabilityDeclaration::search()];
+
+        // Create a context with memory
+        let memory_anchor =
+            MemoryContextAnchor::with_timestamp("com.app".to_string(), "Window".to_string(), 1000);
+
+        let memories = vec![MemoryEntry {
+            id: "test-id".to_string(),
+            context: memory_anchor,
+            user_input: "Previous question".to_string(),
+            ai_output: "Previous answer".to_string(),
+            embedding: None,
+            similarity_score: Some(0.9),
+        }];
+
+        let context = AgentContext {
+            memory_snippets: Some(memories),
+            search_results: None,
+            mcp_resources: None,
+            video_transcript: None,
+            workflow_state: None,
+            attachments: None,
+        };
+
+        let prompt = assembler.build_capability_aware_prompt("Base prompt.", &capabilities, Some(&context));
+
+        // Should contain base prompt, capabilities, AND memory context
+        assert!(prompt.contains("Base prompt."));
+        assert!(prompt.contains("## Available Capabilities"));
+        assert!(prompt.contains("### Context Information"));
+        assert!(prompt.contains("**Relevant History**"));
+        assert!(prompt.contains("Previous question"));
     }
 }

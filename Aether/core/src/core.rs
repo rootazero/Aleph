@@ -1396,11 +1396,705 @@ impl AetherCore {
         // Store context for memory operations
         self.set_current_context(context.clone());
 
+        // Check if AI-first detection is enabled
+        let use_ai_first = {
+            let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+            config.smart_flow.enabled
+                && config.smart_flow.intent_detection.enabled
+                && config.smart_flow.intent_detection.ai_first
+        };
+
+        // AI-First Mode: AI decides if capability is needed in a single call
+        if use_ai_first {
+            return match self.process_with_ai_first(user_input.clone(), context.clone(), start_time) {
+                Ok(response) => Ok(response),
+                Err(e) => Err(self.handle_processing_error(&e)),
+            };
+        }
+
+        // Legacy Mode: Intent detection then processing
+        // Smart Flow: Intent Detection
+        // Check if user input matches a known intent pattern and needs parameter completion
+        let (final_input, detected_intent) =
+            self.detect_intent_and_complete_params(&user_input, &context)?;
+
+        // Extract capability from detected intent (if any)
+        let intent_capability = detected_intent
+            .as_ref()
+            .and_then(|d| d.capability.clone());
+
         // Call internal implementation and handle errors
-        match self.process_with_ai_internal(user_input, context, start_time) {
-            Ok(response) => Ok(response),
+        match self.process_with_ai_internal(final_input, context.clone(), start_time, intent_capability) {
+            Ok(response) => {
+                // Smart Flow: Suggestion Parsing
+                // Parse AI response for follow-up suggestions
+                self.parse_and_handle_suggestions(&response, &context, detected_intent)
+            }
             Err(e) => Err(self.handle_processing_error(&e)),
         }
+    }
+
+    /// Detect intent from user input and complete missing parameters via clarification.
+    ///
+    /// Uses a two-layer detection approach:
+    /// 1. AI-powered detection (language-agnostic, if enabled)
+    /// 2. Regex-based SmartTriggerDetector (fallback)
+    ///
+    /// Returns the (possibly augmented) input and the detected intent (if any).
+    fn detect_intent_and_complete_params(
+        &self,
+        user_input: &str,
+        _context: &CapturedContext,
+    ) -> std::result::Result<(String, Option<crate::intent::DetectedIntent>), AetherException> {
+        use crate::intent::{augment_with_param, SmartTriggerDetector, SmartTriggerResult};
+
+        // Check if smart flow is enabled
+        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        if !config.smart_flow.enabled || !config.smart_flow.intent_detection.enabled {
+            return Ok((user_input.to_string(), None));
+        }
+
+        // Get configuration settings
+        let locale = config
+            .general
+            .language
+            .clone()
+            .unwrap_or_else(|| "en".to_string());
+        let use_ai = config.smart_flow.intent_detection.use_ai;
+        let confidence_threshold = config.smart_flow.intent_detection.confidence_threshold;
+        let ai_timeout_ms = config.smart_flow.intent_detection.ai_timeout_ms;
+        let search_enabled = config.smart_flow.intent_detection.search;
+        let video_enabled = config.smart_flow.intent_detection.video;
+        drop(config);
+
+        // === Layer 1: AI-powered intent detection (language-agnostic) ===
+        if use_ai {
+            if let Some(result) = self.try_ai_intent_detection(
+                user_input,
+                confidence_threshold,
+                ai_timeout_ms,
+                search_enabled,
+                video_enabled,
+                &locale,
+            )? {
+                return Ok(result);
+            }
+        }
+
+        // === Layer 2: Regex-based detection (fallback) ===
+        let mut detector = SmartTriggerDetector::new();
+        detector.set_locale(&locale);
+        detector.set_trigger_enabled("/search", search_enabled);
+        detector.set_trigger_enabled("/video", video_enabled);
+
+        match detector.detect(user_input) {
+            SmartTriggerResult::Ready {
+                command,
+                capability,
+                params,
+                original_input,
+            } => {
+                info!(
+                    command = %command,
+                    capability = ?capability,
+                    params = ?params,
+                    "Regex trigger ready - all params present"
+                );
+
+                let detected = crate::intent::DetectedIntent {
+                    intent_type: crate::intent::IntentType::General,
+                    capability: Some(capability),
+                    extracted_params: params,
+                    missing_params: vec![],
+                    confidence: 1.0,
+                };
+
+                Ok((original_input, Some(detected)))
+            }
+
+            SmartTriggerResult::NeedsParam {
+                command,
+                capability,
+                param,
+                extracted,
+                original_input,
+            } => {
+                info!(
+                    command = %command,
+                    capability = ?capability,
+                    param_name = %param.name,
+                    "Regex trigger needs parameter - triggering clarification"
+                );
+
+                let clarification_request = detector.get_clarification(&param);
+                let result = self.event_handler.on_clarification_needed(clarification_request);
+
+                match result.result_type {
+                    crate::clarification::ClarificationResultType::Selected
+                    | crate::clarification::ClarificationResultType::TextInput => {
+                        if let Some(value) = result.value {
+                            let augmented =
+                                augment_with_param(&original_input, &command, &param.name, &value);
+
+                            info!(
+                                original = %original_input,
+                                augmented = %augmented,
+                                param_name = %param.name,
+                                param_value = %value,
+                                "Input augmented with clarified parameter"
+                            );
+
+                            let mut all_params = extracted;
+                            all_params.insert(param.name.clone(), value);
+
+                            let detected = crate::intent::DetectedIntent {
+                                intent_type: crate::intent::IntentType::General,
+                                capability: Some(capability),
+                                extracted_params: all_params,
+                                missing_params: vec![],
+                                confidence: 1.0,
+                            };
+
+                            return Ok((augmented, Some(detected)));
+                        }
+                    }
+                    crate::clarification::ClarificationResultType::Cancelled => {
+                        info!("User cancelled clarification");
+                        return Err(AetherException::Error);
+                    }
+                    crate::clarification::ClarificationResultType::Timeout => {
+                        info!("Clarification timed out");
+                        return Err(AetherException::Error);
+                    }
+                }
+
+                Ok((original_input, None))
+            }
+
+            SmartTriggerResult::NoMatch => {
+                Ok((user_input.to_string(), None))
+            }
+        }
+    }
+
+    /// AI-First processing mode.
+    ///
+    /// In this mode, the AI receives information about available capabilities and decides
+    /// whether to respond directly or request capability invocation via a structured JSON response.
+    ///
+    /// Flow:
+    /// 1. Build capability declarations based on enabled features
+    /// 2. Create capability-aware system prompt
+    /// 3. Make single AI call
+    /// 4. Parse response for capability requests
+    /// 5. If capability requested, execute it and make second AI call with results
+    /// 6. Return final response
+    fn process_with_ai_first(
+        &self,
+        input: String,
+        context: CapturedContext,
+        start_time: std::time::Instant,
+    ) -> Result<String> {
+        use crate::capability::{AiResponse, CapabilityDeclaration, CapabilityRegistry, ResponseParser};
+        use crate::payload::ContextFormat;
+
+        info!("Using AI-first detection mode");
+
+        // Step 1: Get router and configuration
+        let router = {
+            let router_guard = self.router.read().unwrap_or_else(|e| e.into_inner());
+            router_guard
+                .as_ref()
+                .map(Arc::clone)
+                .ok_or(AetherError::NoProviderAvailable {
+                    suggestion: Some(
+                        "Configure at least one AI provider in Settings → Providers".to_string(),
+                    ),
+                })?
+        };
+
+        let config = self.lock_config();
+        let search_enabled = config.smart_flow.intent_detection.search
+            && self
+                .search_registry
+                .read()
+                .ok()
+                .and_then(|r| r.as_ref().map(|_| ()))
+                .is_some();
+        let video_enabled = config.smart_flow.intent_detection.video
+            && config.video.as_ref().map(|v| v.enabled).unwrap_or(false);
+        let memory_enabled = config.memory.enabled;
+        drop(config);
+
+        // Step 2: Build capability declarations
+        let registry = CapabilityRegistry::with_defaults(search_enabled, video_enabled);
+        let capabilities: Vec<CapabilityDeclaration> = registry.all().to_vec();
+
+        info!(
+            search_enabled = search_enabled,
+            video_enabled = video_enabled,
+            capability_count = capabilities.len(),
+            "Built capability registry for AI-first mode"
+        );
+
+        // Step 3: Route to get provider (use existing routing for provider selection)
+        let routing_context = Self::build_routing_context(&context, &input);
+        let routing_match = router.match_rules(&routing_context);
+
+        let provider_name = routing_match
+            .provider_name()
+            .map(|s| s.to_string())
+            .or_else(|| router.default_provider_name().map(|s| s.to_string()))
+            .ok_or(AetherError::NoProviderAvailable {
+                suggestion: Some("No default provider configured".to_string()),
+            })?;
+
+        let provider = router
+            .get_provider_arc(&provider_name)
+            .ok_or(AetherError::NoProviderAvailable {
+                suggestion: Some(format!("Provider '{}' not found", provider_name)),
+            })?;
+
+        // Step 4: Build capability-aware system prompt
+        let base_prompt = routing_match
+            .assemble_prompt()
+            .unwrap_or_else(|| "You are a helpful AI assistant.".to_string());
+
+        // Get memory context if enabled
+        let memory_context = if memory_enabled {
+            self.get_memory_context_for_ai_first(&input, &context)?
+        } else {
+            None
+        };
+
+        let assembler = crate::payload::PromptAssembler::new(ContextFormat::Markdown);
+        let system_prompt = assembler.build_capability_aware_prompt(
+            &base_prompt,
+            &capabilities,
+            memory_context.as_ref(),
+        );
+
+        info!(
+            provider = %provider_name,
+            system_prompt_length = system_prompt.len(),
+            "Making AI-first call with capability-aware prompt"
+        );
+
+        // Step 5: Notify UI and make AI call
+        self.event_handler
+            .on_state_changed(ProcessingState::Processing);
+
+        let response = self.runtime.block_on(provider.process(&input, Some(&system_prompt)))?;
+
+        // Step 6: Parse response for capability requests
+        let parsed = ResponseParser::parse(&response)?;
+
+        match parsed {
+            AiResponse::Direct(text) => {
+                // No capability needed - return directly
+                info!(
+                    response_length = text.len(),
+                    elapsed_ms = start_time.elapsed().as_millis(),
+                    "AI-first: Direct response (no capability invocation)"
+                );
+
+                // Notify UI about AI response
+                let response_preview = if text.chars().count() > 100 {
+                    let truncated: String = text.chars().take(100).collect();
+                    format!("{}...", truncated)
+                } else {
+                    text.clone()
+                };
+                self.event_handler.on_ai_response_received(response_preview);
+
+                // Store in memory asynchronously if enabled
+                if self.memory_db.is_some() {
+                    let user_input = input.clone();
+                    let ai_output = text.clone();
+                    let core_clone = self.clone_for_storage();
+
+                    self.runtime.spawn(async move {
+                        match core_clone.store_interaction_memory(user_input, ai_output).await {
+                            Ok(memory_id) => {
+                                log::debug!("[AI-first] Memory stored: {}", memory_id);
+                            }
+                            Err(e) => {
+                                log::error!("[AI-first] Failed to store memory: {}", e);
+                            }
+                        }
+                    });
+                }
+
+                Ok(text)
+            }
+            AiResponse::CapabilityRequest(request) => {
+                // Capability requested - execute and continue
+                info!(
+                    capability = %request.capability,
+                    query = %request.query,
+                    reasoning = ?request.reasoning,
+                    "AI-first: Capability invocation requested"
+                );
+
+                self.execute_capability_and_continue(
+                    request,
+                    &input,
+                    context,
+                    provider,
+                    &base_prompt,
+                    start_time,
+                )
+            }
+        }
+    }
+
+    /// Get memory context for AI-first mode.
+    fn get_memory_context_for_ai_first(
+        &self,
+        _input: &str,
+        _context: &CapturedContext,
+    ) -> Result<Option<crate::payload::AgentContext>> {
+        // For MVP, we don't pre-fetch memory context
+        // Memory will be included if the AI requests a capability that needs it
+        // This keeps the first call lightweight
+        Ok(None)
+    }
+
+    /// Execute the requested capability and continue with a second AI call.
+    fn execute_capability_and_continue(
+        &self,
+        request: crate::capability::CapabilityRequest,
+        original_input: &str,
+        context: CapturedContext,
+        provider: Arc<dyn crate::providers::AiProvider>,
+        base_prompt: &str,
+        start_time: std::time::Instant,
+    ) -> Result<String> {
+        use crate::payload::{Capability, ContextFormat};
+
+        // Map capability ID to Capability enum
+        let capability = match request.capability.as_str() {
+            "search" => Capability::Search,
+            "video" => Capability::Video,
+            "mcp" => Capability::Mcp,
+            _ => {
+                return Err(AetherError::config(format!(
+                    "Unknown capability: {}",
+                    request.capability
+                )))
+            }
+        };
+
+        info!(
+            capability = ?capability,
+            "Executing capability from AI-first request"
+        );
+
+        // Update UI state
+        if capability == Capability::Search {
+            self.event_handler
+                .on_state_changed(ProcessingState::RetrievingMemory); // Reusing state
+        }
+
+        // Build capabilities list - always include memory if available
+        let mut capabilities = vec![capability];
+        if self.memory_db.is_some() && !capabilities.contains(&Capability::Memory) {
+            capabilities.push(Capability::Memory);
+        }
+
+        // Build enriched payload using existing infrastructure
+        let enriched_payload = self.runtime.block_on(self.build_enriched_payload(
+            request.query.clone(),
+            context.clone(),
+            provider.name().to_string(),
+            capabilities,
+        ))?;
+
+        // Assemble enriched prompt with capability results
+        let assembler = crate::payload::PromptAssembler::new(ContextFormat::Markdown);
+        let enriched_prompt = assembler.assemble_system_prompt(base_prompt, &enriched_payload);
+
+        info!(
+            enriched_prompt_length = enriched_prompt.len(),
+            has_search_results = enriched_payload.context.search_results.is_some(),
+            has_video_transcript = enriched_payload.context.video_transcript.is_some(),
+            has_memory = enriched_payload.context.memory_snippets.is_some(),
+            "Making second AI call with enriched context"
+        );
+
+        // Make second AI call with enriched context
+        let response = self
+            .runtime
+            .block_on(provider.process(&request.query, Some(&enriched_prompt)))?;
+
+        info!(
+            response_length = response.len(),
+            elapsed_ms = start_time.elapsed().as_millis(),
+            "AI-first: Response with capability results"
+        );
+
+        // Store in memory asynchronously if enabled
+        if self.memory_db.is_some() {
+            let user_input = original_input.to_string();
+            let ai_output = response.clone();
+            let core_clone = self.clone_for_storage();
+
+            self.runtime.spawn(async move {
+                match core_clone.store_interaction_memory(user_input, ai_output).await {
+                    Ok(memory_id) => {
+                        log::debug!("[AI-first] Capability response memory stored: {}", memory_id);
+                    }
+                    Err(e) => {
+                        log::error!("[AI-first] Failed to store capability response memory: {}", e);
+                    }
+                }
+            });
+        }
+
+        self.event_handler
+            .on_state_changed(ProcessingState::Success);
+
+        Ok(response)
+    }
+
+    /// Try AI-powered intent detection.
+    ///
+    /// Returns Some((augmented_input, detected_intent)) if AI detected an intent,
+    /// None if no intent was detected or AI detection failed.
+    fn try_ai_intent_detection(
+        &self,
+        user_input: &str,
+        confidence_threshold: f64,
+        timeout_ms: u64,
+        search_enabled: bool,
+        video_enabled: bool,
+        _locale: &str,
+    ) -> std::result::Result<Option<(String, Option<crate::intent::DetectedIntent>)>, AetherException> {
+        use crate::intent::AiIntentDetector;
+        use crate::payload::Capability;
+        use std::time::Duration;
+
+        // Get the default provider for AI intent detection
+        let router_guard = self.router.read().unwrap_or_else(|e| e.into_inner());
+        let router = match router_guard.as_ref() {
+            Some(r) => r,
+            None => {
+                debug!("No router available for AI intent detection");
+                return Ok(None);
+            }
+        };
+
+        let default_provider_name = match router.default_provider_name() {
+            Some(name) => name.to_string(),
+            None => {
+                debug!("No default provider for AI intent detection");
+                return Ok(None);
+            }
+        };
+
+        let provider = match router.get_provider_arc(&default_provider_name) {
+            Some(p) => p,
+            None => {
+                debug!(provider = %default_provider_name, "Default provider not found");
+                return Ok(None);
+            }
+        };
+        drop(router_guard);
+
+        // Create AI intent detector
+        let ai_detector = AiIntentDetector::new(provider)
+            .with_confidence_threshold(confidence_threshold)
+            .with_timeout(Duration::from_millis(timeout_ms));
+
+        // Run AI detection
+        info!(
+            input_preview = %user_input.chars().take(50).collect::<String>(),
+            "Starting AI intent detection"
+        );
+
+        let ai_result = match self.runtime.block_on(ai_detector.detect(user_input)) {
+            Ok(Some(result)) => result,
+            Ok(None) => {
+                debug!("AI detected no specific intent");
+                return Ok(None);
+            }
+            Err(e) => {
+                warn!(error = %e, "AI intent detection failed, falling back to regex");
+                return Ok(None);
+            }
+        };
+
+        info!(
+            intent = %ai_result.intent,
+            confidence = ai_result.confidence,
+            params = ?ai_result.params,
+            missing = ?ai_result.missing,
+            "AI intent detection completed"
+        );
+
+        // Check if the detected intent is enabled
+        let (capability, command) = match ai_result.intent.as_str() {
+            "search" if search_enabled => (Capability::Search, "/search"),
+            "video" if video_enabled => (Capability::Video, "/video"),
+            _ => {
+                debug!(
+                    intent = %ai_result.intent,
+                    "AI detected intent not enabled or is general"
+                );
+                return Ok(None);
+            }
+        };
+
+        // Handle missing parameters
+        if !ai_result.missing.is_empty() {
+            let missing_param = &ai_result.missing[0];
+            info!(
+                command = %command,
+                missing_param = %missing_param,
+                "AI detected intent needs parameter - triggering clarification"
+            );
+
+            // Build clarification request
+            let (prompt_key, placeholder) = match (command, missing_param.as_str()) {
+                ("/search", "location") | ("/search", "query") => (
+                    format!("smart_trigger.search.query_prompt:Enter your query (e.g., city name)"),
+                    Some("Beijing / New York / Tokyo".to_string()),
+                ),
+                ("/video", "url") => (
+                    format!("smart_trigger.video.url_prompt:Enter video URL"),
+                    Some("https://youtube.com/watch?v=...".to_string()),
+                ),
+                _ => (
+                    format!("smart_trigger.{}.{}_prompt:Enter {}", ai_result.intent, missing_param, missing_param),
+                    None,
+                ),
+            };
+
+            let clarification_request = crate::clarification::ClarificationRequest {
+                id: format!("ai-param-{}", missing_param),
+                prompt: prompt_key,
+                clarification_type: crate::clarification::ClarificationType::Text,
+                options: None,
+                default_value: None,
+                placeholder,
+                source: Some("ai:intent".to_string()),
+            };
+
+            let result = self.event_handler.on_clarification_needed(clarification_request);
+
+            match result.result_type {
+                crate::clarification::ClarificationResultType::Selected
+                | crate::clarification::ClarificationResultType::TextInput => {
+                    if let Some(value) = result.value {
+                        let augmented = crate::intent::augment_with_param(
+                            user_input, command, missing_param, &value
+                        );
+
+                        info!(
+                            original = %user_input,
+                            augmented = %augmented,
+                            param_name = %missing_param,
+                            param_value = %value,
+                            "Input augmented with AI-detected parameter"
+                        );
+
+                        let mut all_params = ai_result.params.clone();
+                        all_params.insert(missing_param.clone(), value);
+
+                        let detected = crate::intent::DetectedIntent {
+                            intent_type: crate::intent::IntentType::General,
+                            capability: Some(capability),
+                            extracted_params: all_params,
+                            missing_params: vec![],
+                            confidence: ai_result.confidence as f32,
+                        };
+
+                        return Ok(Some((augmented, Some(detected))));
+                    }
+                }
+                crate::clarification::ClarificationResultType::Cancelled => {
+                    info!("User cancelled AI clarification");
+                    return Err(AetherException::Error);
+                }
+                crate::clarification::ClarificationResultType::Timeout => {
+                    info!("AI clarification timed out");
+                    return Err(AetherException::Error);
+                }
+            }
+
+            return Ok(None);
+        }
+
+        // All params present - return detected intent
+        let detected = crate::intent::DetectedIntent {
+            intent_type: crate::intent::IntentType::General,
+            capability: Some(capability),
+            extracted_params: ai_result.params,
+            missing_params: vec![],
+            confidence: ai_result.confidence as f32,
+        };
+
+        Ok(Some((user_input.to_string(), Some(detected))))
+    }
+
+    /// Parse AI response for follow-up suggestions and handle them.
+    fn parse_and_handle_suggestions(
+        &self,
+        response: &str,
+        context: &CapturedContext,
+        _detected_intent: Option<crate::intent::DetectedIntent>,
+    ) -> std::result::Result<String, AetherException> {
+        use crate::suggestion::SuggestionParser;
+
+        // Check if suggestion parsing is enabled
+        let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        if !config.smart_flow.enabled || !config.smart_flow.suggestion_parsing.enabled {
+            return Ok(response.to_string());
+        }
+
+        let max_suggestions = config.smart_flow.suggestion_parsing.max_suggestions;
+        drop(config);
+
+        // Parse response for suggestions
+        let mut parser = SuggestionParser::new();
+        parser.set_max_suggestions(max_suggestions);
+        let suggestions = parser.parse(response);
+
+        if !suggestions.has_suggestions || suggestions.options.is_empty() {
+            return Ok(response.to_string());
+        }
+
+        info!(
+            suggestion_count = suggestions.options.len(),
+            "AI response contains follow-up suggestions"
+        );
+
+        // Create clarification request for suggestions
+        if let Some(clarification_request) = suggestions.to_clarification_request() {
+            let result = self.event_handler.on_clarification_needed(clarification_request);
+
+            match result.result_type {
+                crate::clarification::ClarificationResultType::Selected
+                | crate::clarification::ClarificationResultType::TextInput => {
+                    if let Some(follow_up) = result.value {
+                        info!(
+                            follow_up = %follow_up,
+                            "User selected follow-up suggestion, continuing conversation"
+                        );
+
+                        // Recursively process the follow-up
+                        return self.process_input(follow_up, context.clone());
+                    }
+                }
+                _ => {
+                    // User cancelled or timed out - return the cleaned response
+                    info!("User did not select a follow-up suggestion");
+                }
+            }
+        }
+
+        // Return the cleaned response (without suggestion markers)
+        Ok(suggestions.cleaned_response)
     }
 
     /// Build routing context string from window context and clipboard content
@@ -1458,6 +2152,7 @@ impl AetherCore {
         input: String,
         context: CapturedContext,
         start_time: std::time::Instant,
+        intent_capability: Option<crate::payload::Capability>,
     ) -> Result<String> {
         // Overall pipeline timer
         let _pipeline_timer = StageTimer::start("total_pipeline");
@@ -1560,8 +2255,21 @@ impl AetherCore {
 
         // Determine capabilities to execute:
         // 1. Start with capabilities from routing rule (e.g., /search has Search capability)
-        // 2. Add Memory capability if memory is enabled in config (unless already present)
+        // 2. Add capability from intent detection (e.g., AI detected search intent)
+        // 3. Add Memory capability if memory is enabled in config (unless already present)
         let mut capabilities = rule_capabilities;
+
+        // Add capability from intent detection if not already present
+        if let Some(ref cap) = intent_capability {
+            if !capabilities.contains(cap) {
+                info!(
+                    capability = ?cap,
+                    "Adding capability from intent detection"
+                );
+                capabilities.push(cap.clone());
+            }
+        }
+
         if memory_enabled && !capabilities.contains(&crate::payload::Capability::Memory) {
             capabilities.push(crate::payload::Capability::Memory);
         }

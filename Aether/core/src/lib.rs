@@ -80,6 +80,7 @@ mod core;
 mod error;
 mod event_handler;
 pub mod initialization;
+pub mod intent; // NEW: Smart intent detection for conversation flow
 pub mod logging;
 pub mod memory;
 pub mod metrics;
@@ -87,6 +88,7 @@ pub mod payload; // Structured context protocol with capability support
 pub mod providers;
 pub mod router;
 pub mod search; // NEW: Search capability with multiple provider support
+pub mod suggestion; // NEW: AI response suggestion parsing
 pub mod utils; // NEW: Capability executor for enriching payloads
 pub mod video; // NEW: Video transcript extraction (YouTube)
 
@@ -95,9 +97,10 @@ pub mod video; // NEW: Video transcript extraction (YouTube)
 pub use crate::clipboard::{ImageData, ImageFormat};
 pub use crate::command::{CommandExecutionResult, CommandNode, CommandRegistry, CommandType};
 pub use crate::config::{
-    BehaviorConfig, Config, FullConfig, GeneralConfig, MemoryConfig, PIIConfig, ProviderConfig,
-    ProviderConfigEntry, RoutingRuleConfig, SearchBackendConfig, SearchBackendEntry, SearchConfig,
-    SearchConfigInternal, ShortcutsConfig, TestConnectionResult, TriggerConfig, VideoConfig,
+    BehaviorConfig, Config, FullConfig, GeneralConfig, IntentDetectionConfig, MemoryConfig,
+    PIIConfig, ProviderConfig, ProviderConfigEntry, RoutingRuleConfig, SearchBackendConfig,
+    SearchBackendEntry, SearchConfig, SearchConfigInternal, ShortcutsConfig, SmartFlowConfig,
+    SuggestionParsingConfig, TestConnectionResult, TriggerConfig, VideoConfig,
 };
 pub use crate::core::{
     AetherCore, AppMemoryInfo, CapturedContext, MediaAttachment, MemoryEntryFFI as MemoryEntry,
@@ -118,6 +121,12 @@ pub use crate::clarification::{
     ClarificationOption, ClarificationRequest, ClarificationResult, ClarificationResultType,
     ClarificationType,
 };
+pub use crate::intent::{
+    augment_input, augment_with_param, enhance_query, enhance_search_query, AiIntentDetector,
+    AiIntentResult, DetectedIntent, IntentDetector, IntentType, LocalizedString, SmartParam,
+    SmartTrigger, SmartTriggerDetector, SmartTriggerResult,
+};
+pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
 pub use crate::utils::pii;
 
 // Test-only exports
