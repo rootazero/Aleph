@@ -94,9 +94,13 @@ class HaloWindow: NSWindow {
 
     // MARK: - Focus Prevention
 
-    /// CRITICAL: Prevent Halo from becoming key window
-    /// This ensures keyboard events always go to the original app
+    /// CRITICAL: Prevent Halo from becoming key window in most cases
+    /// Exception: Text-type clarification needs key window for TextField input
     override var canBecomeKey: Bool {
+        // Allow key window only for text-type clarification (TextField needs focus)
+        if case .clarification(let request) = haloViewModel.state {
+            return request.clarificationType == .text
+        }
         return false
     }
 
@@ -548,8 +552,16 @@ extension HaloWindow {
         showTime = Date()
         hideSequence += 1
 
-        // Show window WITHOUT activating (critical for focus preservation)
-        self.orderFrontRegardless()
+        // For text-type clarification, we need to activate window for TextField focus
+        // For select-type, use orderFrontRegardless to preserve focus
+        if request.clarificationType == .text {
+            // Activate window to allow TextField to receive keyboard input
+            self.makeKeyAndOrderFront(nil)
+            NSLog("[HaloWindow] Text clarification - activating window for TextField focus")
+        } else {
+            // Show window WITHOUT activating (preserve focus for select-type)
+            self.orderFrontRegardless()
+        }
 
         // Fade in animation
         NSAnimationContext.runAnimationGroup({ context in
@@ -609,21 +621,39 @@ extension HaloWindow {
             clarificationKeyMonitor = nil
         }
 
-        // Add GLOBAL event monitor for keyboard events
-        // This is necessary because Halo window cannot become key (to prevent focus theft)
-        // Global monitor captures events regardless of which app is frontmost
-        // Note: Requires Accessibility permission
-        clarificationKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self = self else { return }
+        // For text-type: window is key, use LOCAL monitor
+        // For select-type: window is NOT key, use GLOBAL monitor
+        if request.clarificationType == .text {
+            // Local monitor for key window (text input mode)
+            clarificationKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self = self else { return event }
 
-            // Only handle events when in clarification state
-            guard case .clarification = self.haloViewModel.state else {
-                return
+                // Only handle events when in clarification state
+                guard case .clarification = self.haloViewModel.state else {
+                    return event
+                }
+
+                // Handle keyboard navigation
+                if self.handleClarificationKeyEvent(event, request: request) {
+                    return nil  // Consume the event
+                }
+                return event
             }
+        } else {
+            // Global monitor for non-key window (select mode)
+            // This is necessary because Halo window cannot become key (to prevent focus theft)
+            clarificationKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self = self else { return }
 
-            // Handle keyboard navigation on main thread
-            DispatchQueue.main.async {
-                _ = self.handleClarificationKeyEvent(event, request: request)
+                // Only handle events when in clarification state
+                guard case .clarification = self.haloViewModel.state else {
+                    return
+                }
+
+                // Handle keyboard navigation on main thread
+                DispatchQueue.main.async {
+                    _ = self.handleClarificationKeyEvent(event, request: request)
+                }
             }
         }
     }
@@ -632,9 +662,18 @@ extension HaloWindow {
     private func handleClarificationKeyEvent(_ event: NSEvent, request: ClarificationRequest) -> Bool {
         let manager = ClarificationManager.shared
 
-        // For text mode, only handle Escape
+        // For text mode, handle Enter and Escape
         if request.clarificationType == .text {
-            if event.keyCode == 53 { // Escape
+            if event.keyCode == 36 { // Return/Enter - submit text
+                let text = manager.textInput
+                if !text.isEmpty {
+                    removeClarificationKeyMonitor()
+                    manager.completeWithText(text)
+                    hide()
+                    NSLog("[HaloWindow] Text clarification submitted: %@", text)
+                }
+                return true
+            } else if event.keyCode == 53 { // Escape - cancel
                 removeClarificationKeyMonitor()
                 manager.cancel()
                 hide()
