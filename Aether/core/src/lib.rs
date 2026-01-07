@@ -99,10 +99,11 @@ pub mod video; // NEW: Video transcript extraction (YouTube)
 pub use crate::clipboard::{ImageData, ImageFormat};
 pub use crate::command::{CommandExecutionResult, CommandNode, CommandRegistry, CommandType};
 pub use crate::config::{
-    BehaviorConfig, Config, FullConfig, GeneralConfig, IntentDetectionConfig, MemoryConfig,
-    PIIConfig, ProviderConfig, ProviderConfigEntry, RoutingRuleConfig, SearchBackendConfig,
-    SearchBackendEntry, SearchConfig, SearchConfigInternal, ShortcutsConfig, SmartFlowConfig,
-    SuggestionParsingConfig, TestConnectionResult, TriggerConfig, VideoConfig,
+    BehaviorConfig, Config, ContextRuleConfig, FullConfig, GeneralConfig, IntentDetectionConfig,
+    KeywordRuleConfig, MemoryConfig, PIIConfig, ProviderConfig, ProviderConfigEntry,
+    RoutingRuleConfig, SearchBackendConfig, SearchBackendEntry, SearchConfig, SearchConfigInternal,
+    ShortcutsConfig, SmartFlowConfig, SmartMatchingConfig, SuggestionParsingConfig,
+    TestConnectionResult, TriggerConfig, VideoConfig,
 };
 pub use crate::core::{
     AetherCore, AppMemoryInfo, CapturedContext, MediaAttachment, MemoryEntryFFI as MemoryEntry,

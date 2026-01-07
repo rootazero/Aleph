@@ -598,6 +598,47 @@ dictionary SearchConfig {
   PIIConfig? pii;
 };
 
+// Smart matching configuration (semantic detection system)
+// Controls multi-layer semantic matching with configurable thresholds
+dictionary SmartMatchingConfig {
+  boolean enabled;
+  f64 command_confidence;
+  f64 regex_threshold;
+  f64 keyword_threshold;
+  f64 ai_threshold;
+  boolean enable_context_inference;
+  sequence<ContextRuleConfig> context_rules;
+  sequence<KeywordRuleConfig> keyword_rules;
+};
+
+// Context rule configuration for special matching behavior
+dictionary ContextRuleConfig {
+  string id;
+  string condition_type;
+  string? param_name;
+  string? intent;
+  sequence<string> bundle_ids;
+  sequence<u8> hours;
+  sequence<u8> days_of_week;
+  string action_type;
+  boolean use_input_as_value;
+  string? capability;
+  string? provider;
+  string? system_prompt;
+};
+
+// Keyword rule configuration for weighted keyword matching
+dictionary KeywordRuleConfig {
+  string id;
+  string? name;
+  sequence<string> keywords;
+  string match_mode;
+  string intent_type;
+  string? system_prompt;
+  sequence<string> capabilities;
+  f32? min_score;
+};
+
 // Full configuration (all settings combined)
 dictionary FullConfig {
   string default_hotkey;
@@ -609,6 +650,7 @@ dictionary FullConfig {
   BehaviorConfig? behavior;
   SearchConfig? search;
   TriggerConfig? trigger;
+  SmartMatchingConfig smart_matching;
 };
 
 // Provider config entry (name + config)

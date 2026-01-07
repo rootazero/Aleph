@@ -54,6 +54,9 @@ pub struct Config {
     /// Smart conversation flow configuration
     #[serde(default)]
     pub smart_flow: SmartFlowConfig,
+    /// Smart matching configuration (semantic detection system)
+    #[serde(default)]
+    pub smart_matching: SmartMatchingConfig,
 }
 
 /// General configuration settings
@@ -239,6 +242,8 @@ pub struct FullConfig {
     pub search: Option<SearchConfig>,
     #[serde(default)]
     pub trigger: Option<TriggerConfig>,
+    #[serde(default)]
+    pub smart_matching: SmartMatchingConfig,
 }
 
 impl From<Config> for FullConfig {
@@ -261,6 +266,7 @@ impl From<Config> for FullConfig {
             behavior: config.behavior,
             search,
             trigger: config.trigger,
+            smart_matching: config.smart_matching,
         }
     }
 }
@@ -1014,6 +1020,257 @@ impl Default for SuggestionParsingConfig {
     }
 }
 
+// ============================================================================
+// Smart Matching Configuration (Semantic Detection System)
+// ============================================================================
+
+/// Smart matching configuration for the semantic detection system
+///
+/// Controls multi-layer semantic matching with configurable thresholds:
+/// - Layer 1: Fast path (command/regex) - highest confidence
+/// - Layer 2: Keyword matching - weighted scoring
+/// - Layer 3: Context-aware inference - multi-turn, app, time
+/// - Layer 4: AI detection fallback - AI-first approach
+///
+/// # Example TOML
+///
+/// ```toml
+/// [smart_matching]
+/// enabled = true
+/// command_confidence = 1.0
+/// regex_threshold = 0.9
+/// keyword_threshold = 0.7
+/// ai_threshold = 0.6
+/// enable_context_inference = true
+///
+/// [[smart_matching.context_rules]]
+/// id = "weather_followup"
+/// condition_type = "pending_param"
+/// param_name = "location"
+/// intent = "search"
+/// action_type = "complete_param"
+/// use_input_as_value = true
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SmartMatchingConfig {
+    /// Enable/disable smart matching system
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Confidence threshold for command rules (exact match = 1.0)
+    #[serde(default = "default_command_confidence")]
+    pub command_confidence: f64,
+
+    /// Confidence threshold for regex pattern matching (0.0 - 1.0)
+    #[serde(default = "default_regex_threshold")]
+    pub regex_threshold: f64,
+
+    /// Confidence threshold for keyword matching (0.0 - 1.0)
+    #[serde(default = "default_keyword_threshold")]
+    pub keyword_threshold: f64,
+
+    /// Confidence threshold below which AI detection is triggered (0.0 - 1.0)
+    #[serde(default = "default_ai_threshold")]
+    pub ai_threshold: f64,
+
+    /// Enable context-aware inference (multi-turn, app context, time context)
+    #[serde(default = "default_true")]
+    pub enable_context_inference: bool,
+
+    /// Context rules for special matching behavior
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_rules: Vec<ContextRuleConfig>,
+
+    /// Keyword rules for weighted matching (alternative to regex-based rules)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keyword_rules: Vec<KeywordRuleConfig>,
+}
+
+fn default_command_confidence() -> f64 {
+    1.0
+}
+
+fn default_regex_threshold() -> f64 {
+    0.9
+}
+
+fn default_keyword_threshold() -> f64 {
+    0.7
+}
+
+fn default_ai_threshold() -> f64 {
+    0.6
+}
+
+impl Default for SmartMatchingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            command_confidence: default_command_confidence(),
+            regex_threshold: default_regex_threshold(),
+            keyword_threshold: default_keyword_threshold(),
+            ai_threshold: default_ai_threshold(),
+            enable_context_inference: true,
+            context_rules: Vec::new(),
+            keyword_rules: Vec::new(),
+        }
+    }
+}
+
+/// Context rule configuration for special matching behavior
+///
+/// Defines conditions and actions for context-aware matching.
+/// Used for multi-turn conversation, app-specific behavior, and time-based rules.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextRuleConfig {
+    /// Unique rule identifier
+    pub id: String,
+
+    /// Condition type: "pending_param", "app_context", "time_context", "conversation"
+    #[serde(default = "default_condition_type")]
+    pub condition_type: String,
+
+    /// Parameter name (for pending_param condition)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub param_name: Option<String>,
+
+    /// Intent type to match (for pending_param condition)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<String>,
+
+    /// Bundle IDs to match (for app_context condition)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bundle_ids: Vec<String>,
+
+    /// Hours of day to match (for time_context condition, 0-23)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hours: Vec<u8>,
+
+    /// Days of week to match (for time_context condition, 0=Sunday)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub days_of_week: Vec<u8>,
+
+    /// Action type: "complete_param", "add_capability", "set_provider", "add_prompt"
+    #[serde(default = "default_action_type")]
+    pub action_type: String,
+
+    /// Use input as parameter value (for complete_param action)
+    #[serde(default)]
+    pub use_input_as_value: bool,
+
+    /// Capability to add (for add_capability action)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability: Option<String>,
+
+    /// Provider name (for set_provider action)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+
+    /// System prompt to add (for add_prompt action)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+}
+
+fn default_condition_type() -> String {
+    "pending_param".to_string()
+}
+
+fn default_action_type() -> String {
+    "complete_param".to_string()
+}
+
+impl Default for ContextRuleConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            condition_type: default_condition_type(),
+            param_name: None,
+            intent: None,
+            bundle_ids: Vec::new(),
+            hours: Vec::new(),
+            days_of_week: Vec::new(),
+            action_type: default_action_type(),
+            use_input_as_value: false,
+            capability: None,
+            provider: None,
+            system_prompt: None,
+        }
+    }
+}
+
+/// Keyword rule configuration for weighted keyword matching
+///
+/// Alternative to regex-based rules, uses weighted scoring for intent detection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeywordRuleConfig {
+    /// Unique rule identifier
+    pub id: String,
+
+    /// Rule name (for display)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Keywords with optional weights: "keyword" or "keyword:1.5"
+    pub keywords: Vec<String>,
+
+    /// Match mode: "any" (OR), "all" (AND), "weighted" (sum/total)
+    #[serde(default = "default_match_mode")]
+    pub match_mode: String,
+
+    /// Intent type for matched rules
+    pub intent_type: String,
+
+    /// System prompt when this rule matches
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+
+    /// Capabilities to enable
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
+
+    /// Minimum score threshold (0.0 - 1.0)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_score: Option<f32>,
+}
+
+fn default_match_mode() -> String {
+    "any".to_string()
+}
+
+impl Default for KeywordRuleConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: None,
+            keywords: Vec::new(),
+            match_mode: default_match_mode(),
+            intent_type: "general".to_string(),
+            system_prompt: None,
+            capabilities: Vec::new(),
+            min_score: None,
+        }
+    }
+}
+
+impl KeywordRuleConfig {
+    /// Parse keywords with optional weights
+    ///
+    /// Format: "keyword" (weight=1.0) or "keyword:1.5"
+    pub fn parse_keywords(&self) -> Vec<(String, f32)> {
+        self.keywords
+            .iter()
+            .map(|s| {
+                if let Some((keyword, weight_str)) = s.rsplit_once(':') {
+                    let weight = weight_str.parse::<f32>().unwrap_or(1.0);
+                    (keyword.to_string(), weight)
+                } else {
+                    (s.clone(), 1.0)
+                }
+            })
+            .collect()
+    }
+}
+
 /// Search backend configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchBackendConfig {
@@ -1238,6 +1495,7 @@ impl Default for Config {
             video: Some(VideoConfig::default()),
             trigger: Some(TriggerConfig::default()),
             smart_flow: SmartFlowConfig::default(),
+            smart_matching: SmartMatchingConfig::default(),
         }
     }
 }

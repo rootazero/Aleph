@@ -1709,7 +1709,13 @@ impl AetherCore {
         self.event_handler
             .on_state_changed(ProcessingState::Processing);
 
-        let response = self.runtime.block_on(provider.process(&input, Some(&system_prompt)))?;
+        // Note: We do NOT force standard mode here because some APIs (like T8Star)
+        // completely ignore system role messages. Instead, we let the provider's
+        // configured system_prompt_mode handle it (prepend or standard).
+        // The capability instructions are designed to work in both modes.
+        let response = self.runtime.block_on(
+            provider.process(&input, Some(&system_prompt))
+        )?;
 
         // Step 6: Parse response for capability requests
         let parsed = ResponseParser::parse(&response)?;
@@ -1997,6 +2003,87 @@ impl AetherCore {
             app_name,
             context.window_title.as_deref().unwrap_or("")
         )
+    }
+
+    /// Build a MatchingContext for semantic detection
+    ///
+    /// Creates a comprehensive context object for the semantic detection system,
+    /// including conversation history, app context, and time context.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - Raw user input text
+    /// * `context` - Captured application context
+    ///
+    /// # Returns
+    ///
+    /// A MatchingContext suitable for use with SemanticMatcher
+    #[allow(dead_code)]
+    fn build_matching_context(
+        &self,
+        input: &str,
+        context: &CapturedContext,
+    ) -> crate::semantic::MatchingContext {
+        use crate::semantic::{AppContext, ConversationContext, MatchingContext, TimeContext};
+
+        // Extract app name from bundle ID
+        let app_name = context
+            .app_bundle_id
+            .split('.')
+            .next_back()
+            .unwrap_or("Unknown")
+            .to_string();
+
+        // Build app context
+        let app_ctx = AppContext {
+            bundle_id: context.app_bundle_id.clone(),
+            app_name,
+            window_title: context.window_title.clone(),
+            attachments: Vec::new(), // TODO: Convert MediaAttachment to AttachmentType
+        };
+
+        // Build conversation context from ConversationManager
+        let conversation_ctx = {
+            if let Ok(manager) = self.conversation_manager.lock() {
+                let session_id = manager
+                    .active_session()
+                    .map(|s| s.session_id.clone());
+                let turn_count = manager.turn_count();
+
+                ConversationContext {
+                    session_id,
+                    turn_count,
+                    previous_intents: Vec::new(), // TODO: Track intents
+                    pending_params: std::collections::HashMap::new(),
+                    last_response_summary: None,
+                    history: Vec::new(), // TODO: Convert history
+                }
+            } else {
+                ConversationContext::default()
+            }
+        };
+
+        // Build time context
+        let time_ctx = TimeContext::now();
+
+        // Build full matching context
+        MatchingContext::builder()
+            .raw_input(input)
+            .conversation(conversation_ctx)
+            .app(app_ctx)
+            .time(time_ctx)
+            .build()
+    }
+
+    /// Check if semantic matching is enabled
+    #[allow(dead_code)]
+    fn is_semantic_matching_enabled(&self) -> bool {
+        let router_guard = self.router.read().ok();
+        router_guard
+            .as_ref()
+            .and_then(|r| r.as_ref())
+            .map(|router| router.is_semantic_matching_enabled())
+            .unwrap_or(false)
     }
 
     /// Internal implementation of AI processing pipeline (NEW ARCHITECTURE)

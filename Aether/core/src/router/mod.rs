@@ -36,10 +36,14 @@
 /// ```
 pub mod decision;
 
-use crate::config::Config;
+use crate::config::{Config, KeywordRuleConfig, SmartMatchingConfig};
 use crate::error::{AetherError, Result};
 use crate::payload::Capability;
 use crate::providers::{create_provider, AiProvider};
+use crate::semantic::{
+    KeywordIndex, KeywordMatch, MatchResult, MatcherConfig, MatchingContext, SemanticMatcher,
+};
+use crate::semantic::keyword::{KeywordMatchMode, KeywordRule};
 use crate::video::extract_youtube_url;
 use regex::Regex;
 use std::collections::HashMap;
@@ -388,6 +392,10 @@ pub struct Router {
     providers: HashMap<String, Arc<dyn AiProvider>>,
     /// Optional default provider name (fallback when no rule matches)
     default_provider: Option<String>,
+    /// Semantic matcher for enhanced multi-layer matching (optional)
+    semantic_matcher: Option<SemanticMatcher>,
+    /// Smart matching configuration
+    smart_matching_config: SmartMatchingConfig,
 }
 
 impl Router {
@@ -567,6 +575,28 @@ impl Router {
             "Split rules into command and keyword categories"
         );
 
+        // Build semantic matcher if smart matching is enabled
+        let semantic_matcher = if config.smart_matching.enabled {
+            let matcher_config = MatcherConfig {
+                enabled: config.smart_matching.enabled,
+                regex_threshold: config.smart_matching.regex_threshold,
+                keyword_threshold: config.smart_matching.keyword_threshold as f32,
+                ai_threshold: config.smart_matching.ai_threshold,
+                enable_context_inference: config.smart_matching.enable_context_inference,
+            };
+
+            // Build keyword index from config's keyword rules
+            let mut keyword_index = KeywordIndex::new();
+            for keyword_rule_config in &config.smart_matching.keyword_rules {
+                let rule = Self::convert_keyword_rule_config(keyword_rule_config);
+                keyword_index.add_rule(rule);
+            }
+
+            Some(SemanticMatcher::with_keyword_index(&matcher_config, keyword_index))
+        } else {
+            None
+        };
+
         Ok(Self {
             rules,
             rule_configs,
@@ -574,7 +604,37 @@ impl Router {
             keyword_rules,
             providers,
             default_provider: config.general.default_provider.clone(),
+            semantic_matcher,
+            smart_matching_config: config.smart_matching.clone(),
         })
+    }
+
+    /// Convert a KeywordRuleConfig from config to a KeywordRule for semantic matching
+    fn convert_keyword_rule_config(config: &KeywordRuleConfig) -> KeywordRule {
+        let keywords = config.parse_keywords();
+        let match_mode = match config.match_mode.as_str() {
+            "all" => KeywordMatchMode::All,
+            "weighted" => KeywordMatchMode::Weighted,
+            _ => KeywordMatchMode::Any,
+        };
+
+        let mut rule = KeywordRule::with_weights(&config.id, &config.intent_type, keywords)
+            .with_mode(match_mode);
+
+        if let Some(ref name) = config.name {
+            rule = rule.with_name(name);
+        }
+        if let Some(ref prompt) = config.system_prompt {
+            rule = rule.with_prompt(prompt);
+        }
+        if let Some(score) = config.min_score {
+            rule = rule.with_min_score(score);
+        }
+        if !config.capabilities.is_empty() {
+            rule = rule.with_capabilities(config.capabilities.clone());
+        }
+
+        rule
     }
 
     /// Route context to the appropriate AI provider
@@ -1117,6 +1177,74 @@ impl Router {
         }
         // No rule matched, return original
         input.to_string()
+    }
+
+    // ============================================================================
+    // Semantic Matching Methods (New Semantic Detection System)
+    // ============================================================================
+
+    /// Check if semantic matching is enabled
+    pub fn is_semantic_matching_enabled(&self) -> bool {
+        self.smart_matching_config.enabled && self.semantic_matcher.is_some()
+    }
+
+    /// Get the semantic matcher (if enabled)
+    pub fn semantic_matcher(&self) -> Option<&SemanticMatcher> {
+        self.semantic_matcher.as_ref()
+    }
+
+    /// Get the smart matching configuration
+    pub fn smart_matching_config(&self) -> &SmartMatchingConfig {
+        &self.smart_matching_config
+    }
+
+    /// Route using semantic matching with full context
+    ///
+    /// This method uses the new multi-layer semantic detection system:
+    /// - Layer 1: Fast path (command/regex matching)
+    /// - Layer 2: Keyword index matching
+    /// - Layer 3: Context-aware inference
+    /// - Layer 4: AI detection fallback
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - Full matching context with conversation, app, and time info
+    ///
+    /// # Returns
+    ///
+    /// * `Some(MatchResult)` - Semantic match result with intent and confidence
+    /// * `None` - Semantic matching is disabled
+    pub async fn route_semantic(&self, context: &MatchingContext) -> Option<MatchResult> {
+        let matcher = self.semantic_matcher.as_ref()?;
+        Some(matcher.match_input(context).await)
+    }
+
+    /// Perform keyword matching only (synchronous)
+    ///
+    /// This is useful when you only want to check keyword matches without
+    /// going through the full semantic detection pipeline.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - Raw user input text
+    ///
+    /// # Returns
+    ///
+    /// * `Vec<KeywordMatch>` - List of keyword matches sorted by score
+    pub fn match_keywords(&self, input: &str) -> Vec<KeywordMatch> {
+        if let Some(ref matcher) = self.semantic_matcher {
+            matcher.match_keywords_only(input)
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Get keyword matches above a confidence threshold
+    pub fn match_keywords_with_threshold(&self, input: &str, min_score: f32) -> Vec<KeywordMatch> {
+        self.match_keywords(input)
+            .into_iter()
+            .filter(|m| m.score >= min_score)
+            .collect()
     }
 }
 

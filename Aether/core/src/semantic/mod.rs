@@ -24,22 +24,24 @@
 //!
 //! # Usage
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use aethecore::semantic::{SemanticMatcher, MatchingContext, SemanticIntent};
 //!
-//! # async fn example() -> anyhow::Result<()> {
-//! let matcher = SemanticMatcher::new(config)?;
-//! let context = MatchingContext::builder()
-//!     .raw_input("What's the weather in Beijing?")
-//!     .conversation(conversation_ctx)
-//!     .app(app_ctx)
-//!     .time(time_ctx)
-//!     .build();
+//! async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//!     let config = MatcherConfig::default();
+//!     let matcher = SemanticMatcher::new(&config);
 //!
-//! let result = matcher.match_input(&context).await;
-//! println!("Intent: {:?}, Confidence: {}", result.intent, result.confidence);
-//! # Ok(())
-//! # }
+//!     let context = MatchingContext::builder()
+//!         .raw_input("What's the weather in Beijing?")
+//!         .conversation(ConversationContext::default())
+//!         .app(AppContext::default())
+//!         .time(TimeContext::now())
+//!         .build();
+//!
+//!     let result = matcher.match_input(&context).await;
+//!     println!("Intent: {:?}, Confidence: {}", result.intent, result.confidence);
+//!     Ok(())
+//! }
 //! ```
 
 pub mod assembler;

@@ -10,7 +10,7 @@ use super::context::{MatchingContext, PendingParam};
 use super::intent::{
     BuiltinCapability, DetectionMethod, IntentCategory, ParamValue, SemanticIntent,
 };
-use super::keyword::{KeywordIndex, KeywordRule};
+use super::keyword::{KeywordIndex, KeywordMatch, KeywordRule};
 use crate::config::RoutingRuleConfig;
 use crate::error::Result;
 use crate::payload::Capability;
@@ -81,6 +81,25 @@ impl SemanticMatcher {
     /// Add a context rule
     pub fn add_context_rule(&mut self, rule: ContextRule) {
         self.context_rules.push(rule);
+    }
+
+    /// Create a SemanticMatcher with a pre-built keyword index
+    pub fn with_keyword_index(config: &MatcherConfig, keyword_index: KeywordIndex) -> Self {
+        Self {
+            command_rules: Vec::new(),
+            regex_rules: Vec::new(),
+            keyword_index,
+            context_rules: Vec::new(),
+            config: config.clone(),
+        }
+    }
+
+    /// Match keywords only (synchronous, for quick lookups)
+    ///
+    /// Returns all keyword matches sorted by score, without going through
+    /// the full async semantic detection pipeline.
+    pub fn match_keywords_only(&self, input: &str) -> Vec<KeywordMatch> {
+        self.keyword_index.match_keywords(input)
     }
 
     /// Match input against all layers
