@@ -89,6 +89,7 @@ pub mod payload; // Structured context protocol with capability support
 pub mod providers;
 pub mod router;
 pub mod search; // NEW: Search capability with multiple provider support
+pub mod semantic; // NEW: Unified semantic detection system
 pub mod suggestion; // NEW: AI response suggestion parsing
 pub mod utils; // NEW: Capability executor for enriching payloads
 pub mod video; // NEW: Video transcript extraction (YouTube)
