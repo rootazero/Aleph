@@ -1698,9 +1698,18 @@ impl AetherCore {
         // Check if AI-first detection is enabled
         let use_ai_first = {
             let config = self.config.lock().unwrap_or_else(|e| e.into_inner());
-            config.smart_flow.enabled
+            let ai_first = config.smart_flow.intent_detection.ai_first;
+            let result = config.smart_flow.enabled
                 && config.smart_flow.intent_detection.enabled
-                && config.smart_flow.intent_detection.ai_first
+                && ai_first;
+            info!(
+                smart_flow_enabled = config.smart_flow.enabled,
+                intent_detection_enabled = config.smart_flow.intent_detection.enabled,
+                ai_first = ai_first,
+                use_ai_first = result,
+                "Checking AI-first mode config"
+            );
+            result
         };
 
         // AI-First Mode: AI decides if capability is needed in a single call
