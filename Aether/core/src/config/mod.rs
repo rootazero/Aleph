@@ -21,6 +21,7 @@ pub use watcher::ConfigWatcher;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Default hotkey (hardcoded to "Command+Grave" in Phase 1)
+    #[serde(default = "default_hotkey")]
     pub default_hotkey: String,
     /// General settings
     #[serde(default)]
@@ -92,6 +93,10 @@ pub struct ShortcutsConfig {
     /// Format: "Modifier1+Modifier2+Key" where modifiers are Command, Option, Control, Shift
     #[serde(default = "default_command_prompt_hotkey")]
     pub command_prompt: String,
+}
+
+fn default_hotkey() -> String {
+    "Grave".to_string()
 }
 
 fn default_summon_hotkey() -> String {
@@ -2961,5 +2966,45 @@ max_context_items = 5
             .iter()
             .any(|r| r.regex.contains("code")));
         assert!(deserialized.validate().is_ok());
+    }
+
+    #[test]
+    fn test_config_new_install_defaults() {
+        // Test that a fresh config with minimal settings works
+        let toml_str = r##"
+[providers.openai]
+api_key = "sk-test"
+model = "gpt-4o"
+
+[general]
+default_provider = "openai"
+"##;
+
+        let config: Config = toml::from_str(toml_str).expect("Minimal config should parse");
+
+        // Check all defaults are applied
+        assert_eq!(config.default_hotkey, "Grave");
+
+        // BehaviorConfig defaults
+        assert!(config.behavior.is_none()); // Not set in TOML
+        let behavior = BehaviorConfig::default();
+        assert_eq!(behavior.input_mode, "cut");
+        assert_eq!(behavior.output_mode, "typewriter");
+        assert_eq!(behavior.typing_speed, 50);
+        assert!(!behavior.pii_scrubbing_enabled);
+        assert!(!behavior.multi_turn_enabled);
+
+        // SmartFlowConfig defaults
+        assert!(config.smart_flow.enabled);
+        assert!(config.smart_flow.intent_detection.enabled);
+        assert!(config.smart_flow.intent_detection.use_ai);
+        assert!(config.smart_flow.intent_detection.search);
+        assert!(config.smart_flow.intent_detection.video);
+
+        // MemoryConfig defaults
+        assert!(config.memory.enabled);
+
+        // Validation should pass
+        assert!(config.validate().is_ok());
     }
 }
