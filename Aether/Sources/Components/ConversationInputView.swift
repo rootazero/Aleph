@@ -58,7 +58,7 @@ struct ConversationInputView: View {
             IMETextField(
                 text: $manager.textInput,
                 placeholder: L("conversation.continue_placeholder", default: "Continue the conversation..."),
-                font: .systemFont(ofSize: 15),
+                font: .systemFont(ofSize: 16),
                 textColor: .white,
                 backgroundColor: NSColor.white.withAlphaComponent(0.05),
                 onSubmit: { submitInput() },
