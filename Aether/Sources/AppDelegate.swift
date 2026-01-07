@@ -975,7 +975,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     ///   - response: The AI response text to output
     ///   - turnId: The conversation turn ID (0 = first turn)
     private func outputConversationResponse(_ response: String, turnId: UInt32 = 0) {
-        guard core != nil else {
+        guard let core = core else {
             print("[AppDelegate] ⚠️ Core not available for conversation output")
             return
         }
@@ -991,7 +991,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             truncatedResponse = response
         }
 
-        // For conversation mode, always use instant output (paste) for reliability
+        // Load output mode from config (typewriter or instant)
+        var outputMode = "instant"  // Default to instant if config fails
+        var typingSpeed: Int = 50   // Default typing speed (chars/sec)
+        do {
+            let config = try core.loadConfig()
+            if let behavior = config.behavior {
+                outputMode = behavior.outputMode
+                typingSpeed = Int(behavior.typingSpeed)
+            }
+            print("[AppDelegate] 📋 Conversation output mode from config: \(outputMode), typing speed: \(typingSpeed) chars/sec")
+        } catch {
+            print("[AppDelegate] ⚠️ Failed to load config, using default output_mode=instant: \(error)")
+        }
+
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
@@ -1026,26 +1039,59 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 print("[AppDelegate] ✂️ No newline - replacing original text")
             }
 
-            // Set clipboard and paste
-            ClipboardManager.shared.setText(truncatedResponse)
-            Thread.sleep(forTimeInterval: 0.05)
+            // Output based on configured mode
+            if outputMode == "typewriter" {
+                // Typewriter mode: Type character by character
+                print("[AppDelegate] ⌨️ Conversation using typewriter mode at \(typingSpeed) chars/sec")
 
-            let pasteSuccess = KeyboardSimulator.shared.simulatePaste()
-            print("[AppDelegate] 📋 Conversation paste (turn=\(turnId), append=\(useAppendMode)): \(pasteSuccess ? "success" : "failed")")
+                // Create cancellation token for ESC key to cancel typewriter
+                self.typewriterCancellation = CancellationToken()
 
-            // Wait for paste to complete, then show conversation input
-            // This delay is critical to ensure the paste operation has finished
-            // and the target app has processed the pasted text
-            Thread.sleep(forTimeInterval: 0.3)
+                // Hide Halo during typewriting
+                self.haloWindow?.hide()
 
-            // Now show the conversation input window
-            // Post notification to trigger HaloWindow to show conversation input
-            if let sessionId = ConversationManager.shared.sessionId {
-                print("[AppDelegate] 🎯 Triggering conversation input display after paste")
-                NotificationCenter.default.post(
-                    name: .conversationContinuationReady,
-                    object: sessionId
-                )
+                Task {
+                    let typedCount = await KeyboardSimulator.shared.typeText(
+                        truncatedResponse,
+                        speed: typingSpeed,
+                        cancellationToken: self.typewriterCancellation
+                    )
+                    print("[AppDelegate] ⌨️ Conversation typed \(typedCount)/\(truncatedResponse.count) characters")
+
+                    // Clear cancellation token after completion
+                    self.typewriterCancellation = nil
+
+                    // Show conversation input after typewriter completes
+                    await MainActor.run {
+                        if let sessionId = ConversationManager.shared.sessionId {
+                            print("[AppDelegate] 🎯 Triggering conversation input display after typewriter")
+                            NotificationCenter.default.post(
+                                name: .conversationContinuationReady,
+                                object: sessionId
+                            )
+                        }
+                    }
+                }
+            } else {
+                // Instant mode: Use paste for reliable output
+                print("[AppDelegate] 📋 Conversation using instant mode (paste)")
+                ClipboardManager.shared.setText(truncatedResponse)
+                Thread.sleep(forTimeInterval: 0.05)
+
+                let pasteSuccess = KeyboardSimulator.shared.simulatePaste()
+                print("[AppDelegate] 📋 Conversation paste (turn=\(turnId), append=\(useAppendMode)): \(pasteSuccess ? "success" : "failed")")
+
+                // Wait for paste to complete, then show conversation input
+                Thread.sleep(forTimeInterval: 0.3)
+
+                // Now show the conversation input window
+                if let sessionId = ConversationManager.shared.sessionId {
+                    print("[AppDelegate] 🎯 Triggering conversation input display after paste")
+                    NotificationCenter.default.post(
+                        name: .conversationContinuationReady,
+                        object: sessionId
+                    )
+                }
             }
         }
     }
