@@ -167,6 +167,82 @@ impl VectorDatabase {
         Ok(scored_memories)
     }
 
+    /// Get recent memories without embedding similarity search
+    ///
+    /// Used for AI-based memory retrieval where the AI selects relevant memories
+    /// instead of using vector similarity. Optionally filters out specified user inputs
+    /// (for deduplication with current conversation session).
+    pub async fn get_recent_memories(
+        &self,
+        app_bundle_id: &str,
+        window_title: &str,
+        limit: u32,
+        exclude_user_inputs: &[String],
+    ) -> Result<Vec<MemoryEntry>, AetherError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Query recent memories matching context
+        let mut stmt = conn
+            .prepare(
+                r#"
+            SELECT id, app_bundle_id, window_title, user_input, ai_output, embedding, timestamp
+            FROM memories
+            WHERE (?1 = '' OR app_bundle_id = ?1)
+              AND (?2 = '' OR window_title = ?2)
+            ORDER BY timestamp DESC
+            LIMIT ?3
+            "#,
+            )
+            .map_err(|e| AetherError::config(format!("Failed to prepare query: {}", e)))?;
+
+        let memories = stmt
+            .query_map(params![app_bundle_id, window_title, limit * 2], |row| {
+                // Fetch more than limit to account for filtering
+                let id: String = row.get(0)?;
+                let app_id: String = row.get(1)?;
+                let window: String = row.get(2)?;
+                let user_input: String = row.get(3)?;
+                let ai_output: String = row.get(4)?;
+                let embedding_bytes: Vec<u8> = row.get(5)?;
+                let timestamp: i64 = row.get(6)?;
+
+                let embedding = Self::deserialize_embedding(&embedding_bytes);
+
+                Ok(MemoryEntry {
+                    id,
+                    context: ContextAnchor {
+                        app_bundle_id: app_id,
+                        window_title: window,
+                        timestamp,
+                    },
+                    user_input,
+                    ai_output,
+                    embedding: Some(embedding),
+                    similarity_score: None,
+                })
+            })
+            .map_err(|e| AetherError::config(format!("Failed to query memories: {}", e)))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AetherError::config(format!("Failed to parse memory rows: {}", e)))?;
+
+        // Filter out excluded user inputs (deduplication)
+        let filtered: Vec<MemoryEntry> = if exclude_user_inputs.is_empty() {
+            memories
+        } else {
+            memories
+                .into_iter()
+                .filter(|m| {
+                    !exclude_user_inputs
+                        .iter()
+                        .any(|ex| m.user_input.contains(ex))
+                })
+                .collect()
+        };
+
+        // Take only up to limit after filtering
+        Ok(filtered.into_iter().take(limit as usize).collect())
+    }
+
     /// Delete memory by ID
     pub async fn delete_memory(&self, id: &str) -> Result<(), AetherError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());

@@ -440,6 +440,11 @@ dictionary MemoryConfig {
   string vector_db;
   f32 similarity_threshold;
   sequence<string> excluded_apps;
+  // AI-based memory retrieval settings
+  boolean ai_retrieval_enabled;
+  u64 ai_retrieval_timeout_ms;
+  u32 ai_retrieval_max_candidates;
+  u32 ai_retrieval_fallback_count;
 };
 
 // Provider configuration (Phase 6 - Task 1.5, Extended in refactor-provider-edit-panel)

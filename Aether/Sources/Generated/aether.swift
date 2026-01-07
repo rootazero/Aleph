@@ -2061,10 +2061,14 @@ public struct MemoryConfig {
     public var vectorDb: String
     public var similarityThreshold: Float
     public var excludedApps: [String]
+    public var aiRetrievalEnabled: Bool
+    public var aiRetrievalTimeoutMs: UInt64
+    public var aiRetrievalMaxCandidates: UInt32
+    public var aiRetrievalFallbackCount: UInt32
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(enabled: Bool, embeddingModel: String, maxContextItems: UInt32, retentionDays: UInt32, vectorDb: String, similarityThreshold: Float, excludedApps: [String]) {
+    public init(enabled: Bool, embeddingModel: String, maxContextItems: UInt32, retentionDays: UInt32, vectorDb: String, similarityThreshold: Float, excludedApps: [String], aiRetrievalEnabled: Bool, aiRetrievalTimeoutMs: UInt64, aiRetrievalMaxCandidates: UInt32, aiRetrievalFallbackCount: UInt32) {
         self.enabled = enabled
         self.embeddingModel = embeddingModel
         self.maxContextItems = maxContextItems
@@ -2072,6 +2076,10 @@ public struct MemoryConfig {
         self.vectorDb = vectorDb
         self.similarityThreshold = similarityThreshold
         self.excludedApps = excludedApps
+        self.aiRetrievalEnabled = aiRetrievalEnabled
+        self.aiRetrievalTimeoutMs = aiRetrievalTimeoutMs
+        self.aiRetrievalMaxCandidates = aiRetrievalMaxCandidates
+        self.aiRetrievalFallbackCount = aiRetrievalFallbackCount
     }
 }
 
@@ -2100,6 +2108,18 @@ extension MemoryConfig: Equatable, Hashable {
         if lhs.excludedApps != rhs.excludedApps {
             return false
         }
+        if lhs.aiRetrievalEnabled != rhs.aiRetrievalEnabled {
+            return false
+        }
+        if lhs.aiRetrievalTimeoutMs != rhs.aiRetrievalTimeoutMs {
+            return false
+        }
+        if lhs.aiRetrievalMaxCandidates != rhs.aiRetrievalMaxCandidates {
+            return false
+        }
+        if lhs.aiRetrievalFallbackCount != rhs.aiRetrievalFallbackCount {
+            return false
+        }
         return true
     }
 
@@ -2111,6 +2131,10 @@ extension MemoryConfig: Equatable, Hashable {
         hasher.combine(vectorDb)
         hasher.combine(similarityThreshold)
         hasher.combine(excludedApps)
+        hasher.combine(aiRetrievalEnabled)
+        hasher.combine(aiRetrievalTimeoutMs)
+        hasher.combine(aiRetrievalMaxCandidates)
+        hasher.combine(aiRetrievalFallbackCount)
     }
 }
 
@@ -2128,7 +2152,11 @@ public struct FfiConverterTypeMemoryConfig: FfiConverterRustBuffer {
                 retentionDays: FfiConverterUInt32.read(from: &buf), 
                 vectorDb: FfiConverterString.read(from: &buf), 
                 similarityThreshold: FfiConverterFloat.read(from: &buf), 
-                excludedApps: FfiConverterSequenceString.read(from: &buf)
+                excludedApps: FfiConverterSequenceString.read(from: &buf), 
+                aiRetrievalEnabled: FfiConverterBool.read(from: &buf), 
+                aiRetrievalTimeoutMs: FfiConverterUInt64.read(from: &buf), 
+                aiRetrievalMaxCandidates: FfiConverterUInt32.read(from: &buf), 
+                aiRetrievalFallbackCount: FfiConverterUInt32.read(from: &buf)
         )
     }
 
@@ -2140,6 +2168,10 @@ public struct FfiConverterTypeMemoryConfig: FfiConverterRustBuffer {
         FfiConverterString.write(value.vectorDb, into: &buf)
         FfiConverterFloat.write(value.similarityThreshold, into: &buf)
         FfiConverterSequenceString.write(value.excludedApps, into: &buf)
+        FfiConverterBool.write(value.aiRetrievalEnabled, into: &buf)
+        FfiConverterUInt64.write(value.aiRetrievalTimeoutMs, into: &buf)
+        FfiConverterUInt32.write(value.aiRetrievalMaxCandidates, into: &buf)
+        FfiConverterUInt32.write(value.aiRetrievalFallbackCount, into: &buf)
     }
 }
 

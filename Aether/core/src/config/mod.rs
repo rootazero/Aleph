@@ -740,6 +740,20 @@ pub struct MemoryConfig {
     /// List of app bundle IDs to exclude from memory storage
     #[serde(default)]
     pub excluded_apps: Vec<String>,
+
+    // AI-based memory retrieval settings
+    /// Enable AI-based memory retrieval (replaces embedding similarity)
+    #[serde(default = "default_ai_retrieval_enabled")]
+    pub ai_retrieval_enabled: bool,
+    /// Timeout for AI memory retrieval in milliseconds
+    #[serde(default = "default_ai_retrieval_timeout_ms")]
+    pub ai_retrieval_timeout_ms: u64,
+    /// Maximum candidates to send to AI for selection
+    #[serde(default = "default_ai_retrieval_max_candidates")]
+    pub ai_retrieval_max_candidates: u32,
+    /// Fallback count if AI selection fails
+    #[serde(default = "default_ai_retrieval_fallback_count")]
+    pub ai_retrieval_fallback_count: u32,
 }
 
 // Default value functions for MemoryConfig
@@ -767,6 +781,22 @@ fn default_similarity_threshold() -> f32 {
     0.7 // Minimum similarity score for real embedding models
 }
 
+fn default_ai_retrieval_enabled() -> bool {
+    true // Use AI-based memory retrieval by default
+}
+
+fn default_ai_retrieval_timeout_ms() -> u64 {
+    3000 // 3 seconds timeout for AI memory selection
+}
+
+fn default_ai_retrieval_max_candidates() -> u32 {
+    20 // Send up to 20 recent memories to AI for selection
+}
+
+fn default_ai_retrieval_fallback_count() -> u32 {
+    3 // Return 3 most recent memories if AI fails
+}
+
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
@@ -782,6 +812,10 @@ impl Default for MemoryConfig {
                 "com.lastpass.LastPass".to_string(),
                 "com.bitwarden.desktop".to_string(),
             ],
+            ai_retrieval_enabled: default_ai_retrieval_enabled(),
+            ai_retrieval_timeout_ms: default_ai_retrieval_timeout_ms(),
+            ai_retrieval_max_candidates: default_ai_retrieval_max_candidates(),
+            ai_retrieval_fallback_count: default_ai_retrieval_fallback_count(),
         }
     }
 }

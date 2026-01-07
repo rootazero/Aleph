@@ -34,6 +34,10 @@ impl AetherEventHandler for TestEventHandler {
     ) -> aethecore::ClarificationResult {
         aethecore::ClarificationResult::cancelled()
     }
+    fn on_conversation_started(&self, _session_id: String) {}
+    fn on_conversation_turn_completed(&self, _turn: aethecore::ConversationTurn) {}
+    fn on_conversation_continuation_ready(&self) {}
+    fn on_conversation_ended(&self, _session_id: String, _total_turns: u32) {}
 }
 
 /// Test helper: Create a test config with mock provider
@@ -49,6 +53,10 @@ fn create_test_config_with_providers() -> Config {
         vector_db: "sqlite-vec".to_string(),
         similarity_threshold: 0.7,
         excluded_apps: vec![],
+        ai_retrieval_enabled: true,
+        ai_retrieval_timeout_ms: 3000,
+        ai_retrieval_max_candidates: 20,
+        ai_retrieval_fallback_count: 3,
     };
 
     // Add mock provider (uses openai type for testing)
@@ -322,6 +330,10 @@ fn test_memory_config_validation() {
         vector_db: "sqlite-vec".to_string(),
         similarity_threshold: 0.8,
         excluded_apps: vec!["com.apple.keychainaccess".to_string()],
+        ai_retrieval_enabled: true,
+        ai_retrieval_timeout_ms: 3000,
+        ai_retrieval_max_candidates: 20,
+        ai_retrieval_fallback_count: 3,
     };
 
     let result = core.update_memory_config(valid_config);

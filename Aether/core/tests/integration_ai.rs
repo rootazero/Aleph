@@ -80,6 +80,11 @@ impl AetherEventHandler for TestEventHandler {
         // Default to cancelled for tests
         aethecore::ClarificationResult::cancelled()
     }
+
+    fn on_conversation_started(&self, _session_id: String) {}
+    fn on_conversation_turn_completed(&self, _turn: aethecore::ConversationTurn) {}
+    fn on_conversation_continuation_ready(&self) {}
+    fn on_conversation_ended(&self, _session_id: String, _total_turns: u32) {}
 }
 
 /// Create a test config with mock providers

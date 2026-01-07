@@ -1245,6 +1245,9 @@ impl AetherCore {
             return Ok(user_input);
         }
 
+        // Check if AI retrieval is enabled
+        let use_ai_retrieval = config.memory.ai_retrieval_enabled;
+
         // Get current context
         let current_context = self.current_context.lock().unwrap_or_else(|e| {
             warn!(
@@ -1253,19 +1256,13 @@ impl AetherCore {
             e.into_inner()
         });
         let captured_context = match current_context.as_ref() {
-            Some(ctx) => ctx,
+            Some(ctx) => ctx.clone(),
             None => {
                 debug!("[Memory] No context captured, returning original user input");
                 return Ok(user_input);
             }
         };
-
-        // Create context anchor
-        let context_anchor = ContextAnchor {
-            app_bundle_id: captured_context.app_bundle_id.clone(),
-            window_title: captured_context.window_title.clone().unwrap_or_default(),
-            timestamp: chrono::Utc::now().timestamp(),
-        };
+        drop(current_context); // Release lock before async operations
 
         // Get memory database
         let db = match self.memory_db.as_ref() {
@@ -1276,23 +1273,44 @@ impl AetherCore {
             }
         };
 
-        // Get embedding model
-        let model_dir = Self::get_embedding_model_dir()?;
-        let embedding_model = Arc::new(EmbeddingModel::new(model_dir).map_err(|e| {
-            AetherError::config(format!("Failed to initialize embedding model: {}", e))
-        })?);
+        // Retrieve memories based on configured method
+        let memories = if use_ai_retrieval {
+            // AI-based retrieval: use AI to select relevant memories
+            debug!("[Memory] Using AI-based retrieval");
+            let exclusion_set = self.build_memory_exclusion_set();
+            self.runtime.block_on(self.retrieve_memories_with_ai(
+                &user_input,
+                &captured_context,
+                &exclusion_set,
+            ))?
+        } else {
+            // Embedding-based retrieval: use vector similarity search
+            debug!("[Memory] Using embedding-based retrieval");
 
-        // Create retrieval service
-        let retrieval = MemoryRetrieval::new(
-            Arc::clone(db),
-            Arc::clone(&embedding_model),
-            Arc::new(config.memory.clone()),
-        );
+            // Create context anchor
+            let context_anchor = ContextAnchor {
+                app_bundle_id: captured_context.app_bundle_id.clone(),
+                window_title: captured_context.window_title.clone().unwrap_or_default(),
+                timestamp: chrono::Utc::now().timestamp(),
+            };
 
-        // Retrieve memories
-        let memories = self
-            .runtime
-            .block_on(retrieval.retrieve_memories(&context_anchor, &user_input))?;
+            // Get embedding model
+            let model_dir = Self::get_embedding_model_dir()?;
+            let embedding_model = Arc::new(EmbeddingModel::new(model_dir).map_err(|e| {
+                AetherError::config(format!("Failed to initialize embedding model: {}", e))
+            })?);
+
+            // Create retrieval service
+            let retrieval = MemoryRetrieval::new(
+                Arc::clone(db),
+                Arc::clone(&embedding_model),
+                Arc::new(config.memory.clone()),
+            );
+
+            // Retrieve memories using embedding search
+            self.runtime
+                .block_on(retrieval.retrieve_memories(&context_anchor, &user_input))?
+        };
 
         debug!(
             "[Memory] Retrieved {} memories for user input augmentation",
@@ -1311,6 +1329,238 @@ impl AetherCore {
         );
 
         Ok(augmented_input)
+    }
+
+    // ============================================================================
+    // AI-based Memory Retrieval + Parallel Execution
+    // ============================================================================
+
+    /// Build exclusion set from current conversation session.
+    ///
+    /// Returns user inputs from all turns in the active session to prevent
+    /// memory retrieval from returning content that's already in conversation cache.
+    fn build_memory_exclusion_set(&self) -> Vec<String> {
+        let manager = self
+            .conversation_manager
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        if let Some(session) = manager.active_session() {
+            session
+                .turns
+                .iter()
+                .map(|t| t.user_input.clone())
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Retrieve memories using AI-based selection.
+    ///
+    /// This replaces embedding-based vector similarity with AI evaluation.
+    /// The AI is given recent memories and selects which are relevant.
+    async fn retrieve_memories_with_ai(
+        &self,
+        user_input: &str,
+        context: &CapturedContext,
+        exclusion_set: &[String],
+    ) -> Result<Vec<crate::memory::MemoryEntry>> {
+        use crate::memory::{AiMemoryRetriever, MemoryEntry};
+        use std::time::Duration;
+
+        // Check if memory and AI retrieval are enabled
+        let config = self.lock_config();
+        if !config.memory.enabled || !config.memory.ai_retrieval_enabled {
+            debug!("[Memory] AI retrieval disabled");
+            return Ok(Vec::new());
+        }
+
+        let timeout_ms = config.memory.ai_retrieval_timeout_ms;
+        let max_candidates = config.memory.ai_retrieval_max_candidates;
+        let fallback_count = config.memory.ai_retrieval_fallback_count;
+        drop(config);
+
+        // Get memory database
+        let db = match self.memory_db.as_ref() {
+            Some(db) => db,
+            None => {
+                debug!("[Memory] Database not initialized");
+                return Ok(Vec::new());
+            }
+        };
+
+        // Get recent memories from database (without embedding search)
+        let candidates: Vec<MemoryEntry> = db
+            .get_recent_memories(
+                &context.app_bundle_id,
+                context.window_title.as_deref().unwrap_or(""),
+                max_candidates,
+                exclusion_set,
+            )
+            .await?;
+
+        if candidates.is_empty() {
+            debug!("[Memory] No candidate memories found");
+            return Ok(Vec::new());
+        }
+
+        debug!(
+            "[Memory] Found {} candidate memories for AI selection",
+            candidates.len()
+        );
+
+        // Get default provider for AI memory selection
+        let provider = match self.get_default_provider_instance() {
+            Some(p) => p,
+            None => {
+                warn!("[Memory] No AI provider available for memory selection");
+                // Fallback to most recent memories
+                return Ok(candidates.into_iter().take(fallback_count as usize).collect());
+            }
+        };
+
+        // Create AI memory retriever
+        let retriever = AiMemoryRetriever::new(provider)
+            .with_timeout(Duration::from_millis(timeout_ms))
+            .with_max_candidates(max_candidates)
+            .with_fallback_count(fallback_count);
+
+        // Retrieve using AI selection
+        retriever.retrieve(user_input, candidates, exclusion_set).await
+    }
+
+    /// Perform intent detection and memory retrieval in parallel.
+    ///
+    /// This reduces latency by running both AI calls concurrently.
+    /// If either fails, the other's result is still used.
+    fn parallel_detect_and_retrieve(
+        &self,
+        user_input: &str,
+        context: &CapturedContext,
+    ) -> (
+        Option<(String, Option<crate::intent::DetectedIntent>)>,
+        Vec<crate::memory::MemoryEntry>,
+    ) {
+        // Build exclusion set from current conversation
+        let exclusion_set = self.build_memory_exclusion_set();
+
+        // Get config values
+        let config = self.lock_config();
+        let use_ai_intent = config.smart_flow.enabled
+            && config.smart_flow.intent_detection.enabled
+            && config.smart_flow.intent_detection.use_ai;
+        let confidence_threshold = config.smart_flow.intent_detection.confidence_threshold;
+        let ai_timeout_ms = config.smart_flow.intent_detection.ai_timeout_ms;
+        let search_enabled = config.smart_flow.intent_detection.search;
+        let video_enabled = config.smart_flow.intent_detection.video;
+        let locale = config
+            .general
+            .language
+            .clone()
+            .unwrap_or_else(|| "en".to_string());
+        let ai_memory_enabled = config.memory.enabled && config.memory.ai_retrieval_enabled;
+        drop(config);
+
+        // Clone values for async tasks
+        let user_input_owned = user_input.to_string();
+        let context_owned = context.clone();
+        let exclusion_set_owned = exclusion_set.clone();
+
+        // Run both tasks in parallel using tokio runtime
+        let result = self.runtime.block_on(async {
+            use tokio::join;
+
+            // Task 1: Intent detection (if enabled)
+            let intent_future = async {
+                if use_ai_intent {
+                    self.try_ai_intent_detection(
+                        &user_input_owned,
+                        confidence_threshold,
+                        ai_timeout_ms,
+                        search_enabled,
+                        video_enabled,
+                        &locale,
+                    )
+                } else {
+                    Ok(None)
+                }
+            };
+
+            // Task 2: AI memory retrieval (if enabled)
+            let memory_future = async {
+                if ai_memory_enabled {
+                    self.retrieve_memories_with_ai(
+                        &user_input_owned,
+                        &context_owned,
+                        &exclusion_set_owned,
+                    )
+                    .await
+                } else {
+                    Ok(Vec::new())
+                }
+            };
+
+            // Execute both in parallel
+            let (intent_result, memory_result) = join!(intent_future, memory_future);
+
+            // Handle results, logging but not failing on individual errors
+            let intent = match intent_result {
+                Ok(i) => i,
+                Err(e) => {
+                    warn!(error = ?e, "Intent detection failed, continuing without intent");
+                    None
+                }
+            };
+
+            let memories = match memory_result {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!(error = ?e, "Memory retrieval failed, continuing without memories");
+                    Vec::new()
+                }
+            };
+
+            (intent, memories)
+        });
+
+        info!(
+            intent_detected = result.0.is_some(),
+            memory_count = result.1.len(),
+            "Parallel detect and retrieve completed"
+        );
+
+        result
+    }
+
+    /// Get the default AI provider instance for memory selection and other AI tasks.
+    fn get_default_provider_instance(
+        &self,
+    ) -> Option<std::sync::Arc<dyn crate::providers::AiProvider>> {
+        let config = self.lock_config();
+        let default_provider_name = config.general.default_provider.clone();
+        drop(config);
+
+        // default_provider is Option<String>, extract the name if present
+        if let Some(name) = default_provider_name {
+            self.get_provider_by_name(&name)
+        } else {
+            None
+        }
+    }
+
+    /// Get a provider by name from the internal provider registry.
+    fn get_provider_by_name(
+        &self,
+        name: &str,
+    ) -> Option<std::sync::Arc<dyn crate::providers::AiProvider>> {
+        // Access the router to get providers (router uses RwLock)
+        let router_guard = self.router.read().unwrap_or_else(|e| e.into_inner());
+        if let Some(router) = router_guard.as_ref() {
+            router.get_provider_arc(name)
+        } else {
+            None
+        }
     }
 
     /// Process input with AI using the complete pipeline: Memory → Router → Provider → Storage
