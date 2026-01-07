@@ -207,7 +207,7 @@ mod tests {
         // This is a false positive (matches SSN pattern), but that's acceptable
         // for conservative privacy protection
         // We'll just verify the scrubbing function works
-        assert!(scrubbed.len() > 0);
+        assert!(!scrubbed.is_empty());
     }
 
     #[test]

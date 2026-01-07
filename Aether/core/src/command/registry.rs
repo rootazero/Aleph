@@ -329,10 +329,10 @@ impl CommandRegistry {
         // Re-apply hints with new language
         for node in &mut self.builtin_commands {
             if let Some(source_id) = &node.source_id {
-                if source_id.starts_with("rule:") || source_id.starts_with("builtin:") {
-                    if self.show_hints {
-                        node.hint = get_builtin_hint(&node.key, language);
-                    }
+                let is_rule_or_builtin =
+                    source_id.starts_with("rule:") || source_id.starts_with("builtin:");
+                if is_rule_or_builtin && self.show_hints {
+                    node.hint = get_builtin_hint(&node.key, language);
                 }
             }
         }

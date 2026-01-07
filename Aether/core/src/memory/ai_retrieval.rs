@@ -63,7 +63,7 @@ pub struct AiMemoryRequest {
 }
 
 /// Result of AI memory selection.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct AiMemoryResult {
     /// IDs of memories selected as relevant
     pub selected_memory_ids: Vec<String>,
@@ -72,14 +72,6 @@ pub struct AiMemoryResult {
     pub reasoning: Option<String>,
 }
 
-impl Default for AiMemoryResult {
-    fn default() -> Self {
-        Self {
-            selected_memory_ids: Vec::new(),
-            reasoning: None,
-        }
-    }
-}
 
 /// AI-powered memory retriever.
 pub struct AiMemoryRetriever {

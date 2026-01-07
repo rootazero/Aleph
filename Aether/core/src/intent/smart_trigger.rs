@@ -350,7 +350,7 @@ impl SmartTriggerDetector {
                 if !missing.is_empty() {
                     return SmartTriggerResult::NeedsParam {
                         command: trigger.command.clone(),
-                        capability: trigger.capability.clone(),
+                        capability: trigger.capability,
                         param: missing[0].clone(),
                         extracted,
                         original_input: input.to_string(),
@@ -359,7 +359,7 @@ impl SmartTriggerDetector {
 
                 return SmartTriggerResult::Ready {
                     command: trigger.command.clone(),
-                    capability: trigger.capability.clone(),
+                    capability: trigger.capability,
                     params: extracted,
                     original_input: input.to_string(),
                 };
@@ -595,7 +595,7 @@ mod tests {
         match result {
             SmartTriggerResult::Ready { command, params, .. } => {
                 assert_eq!(command, "/video");
-                assert!(params.get("url").is_some());
+                assert!(params.contains_key("url"));
             }
             _ => panic!("Expected Ready for video with URL"),
         }

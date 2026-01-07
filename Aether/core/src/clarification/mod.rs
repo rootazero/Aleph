@@ -33,18 +33,13 @@
 use serde::{Deserialize, Serialize};
 
 /// Type of clarification request
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum ClarificationType {
     /// Option list (menu-driven selection)
+    #[default]
     Select,
     /// Free-form text input
     Text,
-}
-
-impl Default for ClarificationType {
-    fn default() -> Self {
-        Self::Select
-    }
 }
 
 /// A single option in a select-type clarification

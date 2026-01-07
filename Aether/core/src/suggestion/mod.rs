@@ -99,8 +99,6 @@ enum ExtractionMethod {
     NumberedList,
     /// Extract bullet points (- xxx)
     BulletList,
-    /// Extract from inline options (xxx | yyy | zzz)
-    InlineOptions,
 }
 
 /// Parser for extracting suggestions from AI responses.
@@ -175,9 +173,6 @@ impl SuggestionParser {
                         self.extract_numbered_list(suggestion_text)
                     }
                     ExtractionMethod::BulletList => self.extract_bullet_list(suggestion_text),
-                    ExtractionMethod::InlineOptions => {
-                        self.extract_inline_options(suggestion_text)
-                    }
                 };
 
                 if !options.is_empty() {
@@ -235,32 +230,6 @@ impl SuggestionParser {
                 Some(SuggestionOption::new(&cleaned, &cleaned))
             })
             .collect()
-    }
-
-    /// Extract inline options (xxx | yyy | zzz).
-    fn extract_inline_options(&self, text: &str) -> Vec<SuggestionOption> {
-        // Look for pattern like "A | B | C" or "A / B / C"
-        let delimiter_regex = Regex::new(r"\s*[\|/]\s*").unwrap();
-
-        // Find a line with multiple delimiters
-        for line in text.lines() {
-            let parts: Vec<&str> = delimiter_regex.split(line).collect();
-            if parts.len() >= 2 {
-                return parts
-                    .iter()
-                    .take(self.max_suggestions)
-                    .filter_map(|p| {
-                        let cleaned = self.clean_option_text(p.trim());
-                        if cleaned.is_empty() || cleaned.len() > 50 {
-                            return None;
-                        }
-                        Some(SuggestionOption::new(&cleaned, &cleaned))
-                    })
-                    .collect();
-            }
-        }
-
-        Vec::new()
     }
 
     /// Clean up option text by removing common suffixes and formatting.

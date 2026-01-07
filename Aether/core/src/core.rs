@@ -1720,7 +1720,7 @@ impl AetherCore {
         // Extract capability from detected intent (if any)
         let intent_capability = detected_intent
             .as_ref()
-            .and_then(|d| d.capability.clone());
+            .and_then(|d| d.capability);
 
         // Call internal implementation and handle errors
         match self.process_with_ai_internal(final_input, context.clone(), start_time, intent_capability) {
@@ -2316,11 +2316,11 @@ impl AetherCore {
             // Build clarification request
             let (prompt_key, placeholder) = match (command, missing_param.as_str()) {
                 ("/search", "location") | ("/search", "query") => (
-                    format!("smart_trigger.search.query_prompt:Enter your query (e.g., city name)"),
+                    "smart_trigger.search.query_prompt:Enter your query (e.g., city name)".to_string(),
                     Some("Beijing / New York / Tokyo".to_string()),
                 ),
                 ("/video", "url") => (
-                    format!("smart_trigger.video.url_prompt:Enter video URL"),
+                    "smart_trigger.video.url_prompt:Enter video URL".to_string(),
                     Some("https://youtube.com/watch?v=...".to_string()),
                 ),
                 _ => (
@@ -2625,7 +2625,7 @@ impl AetherCore {
                     capability = ?cap,
                     "Adding capability from intent detection"
                 );
-                capabilities.push(cap.clone());
+                capabilities.push(*cap);
             }
         }
 
@@ -4143,8 +4143,8 @@ mod tests {
         );
 
         // May fail if memory DB not initialized properly in test environment
-        if result1.is_ok() {
-            println!("✓ First memory stored: {:?}", result1.unwrap());
+        if let Ok(id1) = result1 {
+            println!("✓ First memory stored: {:?}", id1);
 
             // Store second interaction
             let result2 = core.store_interaction_memory(
@@ -4152,8 +4152,8 @@ mod tests {
                 "Yes, Rust guarantees memory safety through its ownership system.".to_string(),
             );
 
-            if result2.is_ok() {
-                println!("✓ Second memory stored: {:?}", result2.unwrap());
+            if let Ok(id2) = result2 {
+                println!("✓ Second memory stored: {:?}", id2);
 
                 // Now retrieve and augment a new query
                 let augmented = core.retrieve_and_augment_prompt(

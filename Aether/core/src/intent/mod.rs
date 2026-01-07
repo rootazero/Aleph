@@ -157,7 +157,7 @@ impl IntentDetector {
 
                 return Some(DetectedIntent {
                     intent_type: intent_config.intent_type.clone(),
-                    capability: intent_config.capability.clone(),
+                    capability: intent_config.capability,
                     extracted_params: extracted,
                     missing_params: missing.into_iter().cloned().collect(),
                     confidence: 0.8, // TODO: Calculate based on pattern match quality
@@ -183,7 +183,7 @@ impl IntentDetector {
 
                 DetectedIntent {
                     intent_type: config.intent_type.clone(),
-                    capability: config.capability.clone(),
+                    capability: config.capability,
                     extracted_params: extracted,
                     missing_params: missing.into_iter().cloned().collect(),
                     confidence: 0.8,

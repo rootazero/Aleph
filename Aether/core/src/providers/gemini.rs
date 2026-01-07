@@ -362,8 +362,8 @@ impl GeminiProvider {
         // Fallback if we can't parse the error response
         match status.as_u16() {
             401 | 403 => AetherError::authentication(
-                &self.name,
-                &format!("Invalid Gemini API key"),
+                self.name.clone(),
+                "Invalid Gemini API key".to_string(),
             ),
             429 => AetherError::rate_limit("Gemini rate limit exceeded".to_string()),
             500..=599 => AetherError::provider(format!("Gemini server error: {}", status)),

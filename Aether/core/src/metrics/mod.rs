@@ -269,7 +269,7 @@ mod tests {
 
         // Allow ±10% tolerance
         assert!(
-            elapsed >= 90 && elapsed <= 110,
+            (90..=110).contains(&elapsed),
             "Timer accuracy: {}ms",
             elapsed
         );

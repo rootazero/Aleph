@@ -621,7 +621,7 @@ mod tests {
 
         // Verify executor doesn't crash with PII scrubbing enabled
         assert!(result.context.search_results.is_none());
-        assert_eq!(executor.pii_scrubbing_enabled, true);
+        assert!(executor.pii_scrubbing_enabled);
     }
 
     #[tokio::test]
@@ -643,7 +643,7 @@ mod tests {
 
         // Verify executor works correctly with PII scrubbing disabled
         assert!(result.context.search_results.is_none());
-        assert_eq!(executor.pii_scrubbing_enabled, false);
+        assert!(!executor.pii_scrubbing_enabled);
     }
 
     // ===== End-to-End Integration Tests =====
@@ -807,7 +807,7 @@ mod tests {
 
         // Search should still succeed (PII is scrubbed before searching)
         assert!(result.context.search_results.is_some());
-        assert_eq!(executor.pii_scrubbing_enabled, true);
+        assert!(executor.pii_scrubbing_enabled);
     }
 
     #[tokio::test]

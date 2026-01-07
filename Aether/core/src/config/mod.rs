@@ -286,7 +286,7 @@ impl From<Config> for FullConfig {
 /// regex = "翻译成英文"
 /// system_prompt = "翻译目标语言为英文"
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RoutingRuleConfig {
     // ===== Rule Type (refactor-routing-rule-logic) =====
     /// Rule type: "command" or "keyword"
@@ -375,28 +375,6 @@ pub struct RoutingRuleConfig {
     pub knowledge_base: Option<String>,
 }
 
-impl Default for RoutingRuleConfig {
-    fn default() -> Self {
-        Self {
-            rule_type: None,
-            is_builtin: false,
-            regex: String::new(),
-            provider: None,
-            system_prompt: None,
-            strip_prefix: None,
-            capabilities: None,
-            intent_type: None,
-            context_format: None,
-            icon: None,
-            hint: None,
-            skill_id: None,
-            skill_version: None,
-            workflow: None,
-            tools: None,
-            knowledge_base: None,
-        }
-    }
-}
 
 impl RoutingRuleConfig {
     /// Create a test config (for tests only)
