@@ -30,6 +30,7 @@ struct IMETextField: NSViewRepresentable {
     var placeholder: String
     var font: NSFont = .systemFont(ofSize: 14)
     var textColor: NSColor = .white
+    var placeholderColor: NSColor = NSColor.white.withAlphaComponent(0.3)
     var backgroundColor: NSColor = .clear
     var autoFocus: Bool = true
     var onSubmit: (() -> Void)?
@@ -39,7 +40,6 @@ struct IMETextField: NSViewRepresentable {
         let textField = IMETextFieldView()
         textField.delegate = context.coordinator
         textField.stringValue = text
-        textField.placeholderString = placeholder
         textField.font = font
         textField.textColor = textColor
         textField.backgroundColor = backgroundColor
@@ -52,6 +52,16 @@ struct IMETextField: NSViewRepresentable {
         textField.cell?.wraps = false
         textField.cell?.isScrollable = true
 
+        // Set placeholder with custom color
+        let placeholderAttributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: placeholderColor,
+            .font: font
+        ]
+        textField.placeholderAttributedString = NSAttributedString(
+            string: placeholder,
+            attributes: placeholderAttributes
+        )
+
         // Store callbacks in coordinator
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onEscape = onEscape
@@ -59,9 +69,21 @@ struct IMETextField: NSViewRepresentable {
 
         // Auto-focus after a short delay to ensure window is ready
         if autoFocus {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                if let window = textField.window {
-                    window.makeFirstResponder(textField)
+            // Try multiple times with increasing delays to ensure focus is set
+            let delays: [Double] = [0.1, 0.25, 0.5]
+            for delay in delays {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak textField] in
+                    guard let textField = textField else { return }
+                    if let window = textField.window {
+                        let success = window.makeFirstResponder(textField)
+                        NSLog("[IMETextField] makeFirstResponder after %.2fs: %@", delay, success ? "success" : "failed")
+                        if success {
+                            // Also ensure the field is editable and cursor is visible
+                            textField.selectText(nil)
+                        }
+                    } else {
+                        NSLog("[IMETextField] No window after %.2fs delay", delay)
+                    }
                 }
             }
         }
@@ -74,10 +96,19 @@ struct IMETextField: NSViewRepresentable {
         if nsView.stringValue != text {
             nsView.stringValue = text
         }
-        nsView.placeholderString = placeholder
         nsView.font = font
         nsView.textColor = textColor
         nsView.backgroundColor = backgroundColor
+
+        // Update placeholder with custom color
+        let placeholderAttributes: [NSAttributedString.Key: Any] = [
+            .foregroundColor: placeholderColor,
+            .font: font
+        ]
+        nsView.placeholderAttributedString = NSAttributedString(
+            string: placeholder,
+            attributes: placeholderAttributes
+        )
 
         // Update callbacks
         context.coordinator.onSubmit = onSubmit

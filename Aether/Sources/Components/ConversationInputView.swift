@@ -58,20 +58,19 @@ struct ConversationInputView: View {
             IMETextField(
                 text: $manager.textInput,
                 placeholder: L("conversation.continue_placeholder", default: "Continue the conversation..."),
-                font: .systemFont(ofSize: 16),
+                font: .systemFont(ofSize: 18),
                 textColor: .white,
-                backgroundColor: NSColor.white.withAlphaComponent(0.05),
+                placeholderColor: NSColor.white.withAlphaComponent(0.5),
+                backgroundColor: .clear,
                 onSubmit: { submitInput() },
                 onEscape: { manager.cancelConversation() }
             )
-            .frame(height: 24)
+            .frame(height: 26)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(textColor.opacity(0.05))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .stroke(accentColor.opacity(0.3), lineWidth: 1)
+                    .stroke(accentColor.opacity(0.4), lineWidth: 1)
             )
 
             // Hint
