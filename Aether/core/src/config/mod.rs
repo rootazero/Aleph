@@ -2809,8 +2809,8 @@ max_context_items = 5
         );
         assert_eq!(deserialized.behavior.as_ref().unwrap().input_mode, "copy");
         assert_eq!(deserialized.providers.len(), 1);
-        // 3 builtin rules + 1 custom rule = 4 total
-        assert_eq!(deserialized.rules.len(), 4);
+        // 4 builtin rules + 1 custom rule = 5 total
+        assert_eq!(deserialized.rules.len(), 5);
         // Verify custom rule is present
         assert!(deserialized
             .rules

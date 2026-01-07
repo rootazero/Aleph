@@ -76,7 +76,7 @@ fn create_test_config_with_providers() -> Config {
 }
 
 #[test]
-fn test_process_with_ai_pipeline_structure() {
+fn test_process_input_pipeline_structure() {
     // This test verifies the AI pipeline structure
     // NOTE: This test may use the user's configured provider if available,
     // which is acceptable for integration testing
@@ -92,7 +92,7 @@ fn test_process_with_ai_pipeline_structure() {
     core.set_current_context(context.clone());
 
     // Try to process - may succeed if provider is configured, or fail if not
-    let result = core.process_with_ai("Hello world".to_string(), context.clone());
+    let result = core.process_input("Hello world".to_string(), context.clone());
 
     // Either outcome is valid - we're just testing the pipeline doesn't crash
     match result {
@@ -221,7 +221,7 @@ fn test_ai_pipeline_error_handling() {
 
     // Test 1: Try processing - may succeed or fail depending on config
     // This tests that the pipeline doesn't crash
-    let _result = core.process_with_ai("Test input".to_string(), context.clone());
+    let _result = core.process_input("Test input".to_string(), context.clone());
     // Don't assert on error - user may have providers configured
 
     // Test 2: Memory augmentation with missing context
@@ -267,7 +267,7 @@ fn test_full_pipeline_flow() {
     }
 
     // Step 4: Try AI processing - may succeed if providers configured
-    let _result = core.process_with_ai("Test input".to_string(), context.clone());
+    let _result = core.process_input("Test input".to_string(), context.clone());
     // Don't assert - user may have providers configured
 
     println!("✓ Full pipeline flow test passed");

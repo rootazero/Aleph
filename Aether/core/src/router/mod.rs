@@ -1263,8 +1263,8 @@ mod tests {
         let router = Router::new(&config).unwrap();
 
         assert_eq!(router.provider_count(), 1);
-        // Config::default() includes 3 preset rules (/search, /mcp, /skill)
-        assert_eq!(router.rule_count(), 3);
+        // Config::default() includes 4 preset rules (/search, /mcp, /skill, /video)
+        assert_eq!(router.rule_count(), 4);
         assert!(router.has_provider("openai"));
         assert!(!router.has_provider("claude"));
         assert_eq!(router.default_provider_name(), Some("openai"));
@@ -1315,8 +1315,8 @@ mod tests {
 
         let router = Router::new(&config).unwrap();
 
-        // 3 preset rules + 2 custom rules = 5 total
-        assert_eq!(router.rule_count(), 5);
+        // 4 preset rules + 2 custom rules = 6 total
+        assert_eq!(router.rule_count(), 6);
     }
 
     #[test]

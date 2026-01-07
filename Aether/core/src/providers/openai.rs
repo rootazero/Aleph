@@ -980,7 +980,9 @@ mod tests {
 
     #[test]
     fn test_build_request_with_system_prompt() {
-        let config = create_test_config();
+        // Use standard mode to get separate system + user messages
+        let mut config = create_test_config();
+        config.system_prompt_mode = Some("standard".to_string());
         let provider = OpenAiProvider::new("openai".to_string(), config).unwrap();
 
         let request = provider.build_request("Hello", Some("You are a helpful assistant"));
