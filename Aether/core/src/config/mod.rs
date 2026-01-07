@@ -918,57 +918,43 @@ impl Default for SmartFlowConfig {
 
 /// Intent detection configuration
 ///
-/// Controls which smart triggers are enabled for automatic capability invocation.
-/// Each trigger detects specific patterns and can invoke builtin commands.
+/// Controls AI-powered intent detection and capability invocation.
+/// AI analyzes user input and decides whether to invoke capabilities (search, video, etc.)
+/// or respond directly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntentDetectionConfig {
     /// Enable intent detection globally
     #[serde(default = "default_true")]
     pub enabled: bool,
 
-    // AI-first intent detection (single-call architecture)
-    /// Enable AI-first detection where AI decides if capability is needed
-    /// When enabled, AI receives capability list and either responds directly
-    /// or requests capability invocation via JSON
-    #[serde(default = "default_false")]
-    pub ai_first: bool,
-
-    // AI-powered intent detection (legacy, language-agnostic)
     /// Use AI for intent detection (supports all languages)
-    /// Note: When ai_first=true, this is ignored
     #[serde(default = "default_true")]
     pub use_ai: bool,
+
     /// Confidence threshold for AI detection (0.0 - 1.0)
     #[serde(default = "default_confidence_threshold")]
     pub confidence_threshold: f64,
+
     /// Timeout for AI detection in milliseconds
     #[serde(default = "default_ai_timeout_ms")]
     pub ai_timeout_ms: u64,
 
-    // Trigger enables
-    /// Enable /search trigger (weather, news, general queries)
+    // Capability enables
+    /// Enable search capability (weather, news, general queries)
     #[serde(default = "default_true")]
     pub search: bool,
-    /// Enable /video trigger (YouTube, Bilibili analysis)
+
+    /// Enable video capability (YouTube, Bilibili analysis)
     #[serde(default = "default_true")]
     pub video: bool,
-    /// Enable /skill trigger (future)
+
+    /// Enable skill capability (future)
     #[serde(default = "default_false")]
     pub skill: bool,
-    /// Enable /mcp trigger (future)
+
+    /// Enable MCP capability (future)
     #[serde(default = "default_false")]
     pub mcp: bool,
-
-    // Legacy fields for backward compatibility
-    /// Legacy: weather intent (now part of search trigger)
-    #[serde(default = "default_true")]
-    pub weather: bool,
-    /// Legacy: translation intent
-    #[serde(default = "default_true")]
-    pub translation: bool,
-    /// Legacy: code help intent
-    #[serde(default = "default_true")]
-    pub code_help: bool,
 }
 
 fn default_confidence_threshold() -> f64 {
@@ -987,21 +973,13 @@ impl Default for IntentDetectionConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            // AI-first detection (new architecture)
-            ai_first: false, // Disabled by default, opt-in
-            // AI detection (legacy)
             use_ai: true,
             confidence_threshold: default_confidence_threshold(),
             ai_timeout_ms: default_ai_timeout_ms(),
-            // Triggers
             search: true,
             video: true,
             skill: false,
             mcp: false,
-            // Legacy
-            weather: true,
-            translation: true,
-            code_help: true,
         }
     }
 }
@@ -2798,6 +2776,7 @@ max_context_items = 5
             output_mode: "instant".to_string(),
             typing_speed: 100,
             pii_scrubbing_enabled: true,
+            multi_turn_enabled: false,
         };
         let json = serde_json::to_string(&behavior).unwrap();
         assert!(json.contains("copy"));
@@ -2946,6 +2925,7 @@ max_context_items = 5
             output_mode: "instant".to_string(),
             typing_speed: 100,
             pii_scrubbing_enabled: true,
+            multi_turn_enabled: false,
         });
 
         let provider = ProviderConfig::test_config("gpt-4o");

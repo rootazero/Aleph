@@ -123,11 +123,7 @@ pub use crate::clarification::{
     ClarificationType,
 };
 pub use crate::conversation::{ConversationManager, ConversationSession, ConversationTurn};
-pub use crate::intent::{
-    augment_input, augment_with_param, enhance_query, enhance_search_query, AiIntentDetector,
-    AiIntentResult, DetectedIntent, IntentDetector, IntentType, LocalizedString, SmartParam,
-    SmartTrigger, SmartTriggerDetector, SmartTriggerResult,
-};
+pub use crate::intent::{AiIntentDetector, AiIntentResult};
 pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
 pub use crate::utils::pii;
 
