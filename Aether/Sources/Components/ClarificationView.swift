@@ -28,10 +28,10 @@ struct ClarificationView: View {
     /// Accent color from system
     private let accentColor = Color.accentColor
 
-    /// Text color
-    private let textColor = Color.primary
+    /// Text color - white for dark background
+    private let textColor = Color.white
 
-    /// Background color (dark translucent)
+    /// Background color (dark gray)
     private let backgroundColor = Color(white: 0.1)
 
     var body: some View {
