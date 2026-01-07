@@ -1592,9 +1592,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     print("[AppDelegate] 📍 Text source: \(textSource), Replace mode: \(useCutMode)")
                     print("[AppDelegate] 📍 Output mode: \(outputMode)")
 
-                    // CRITICAL: Add small delay to ensure UI is stable before keyboard simulation
-                    // This helps when focus might have shifted during AI processing
-                    Thread.sleep(forTimeInterval: 0.1)
+                    // CRITICAL: Reactivate target app before output
+                    // This ensures cursor is in the correct application
+                    if let previousApp = self.previousFrontmostApp,
+                       previousApp.bundleIdentifier != Bundle.main.bundleIdentifier {
+                        print("[AppDelegate] 🔄 Reactivating target app: \(previousApp.localizedName ?? "Unknown")")
+                        previousApp.activate(options: [])
+                        Thread.sleep(forTimeInterval: 0.15)
+                    }
 
                     // CRITICAL: Prepare cursor position based on text source and input mode
                     // This ensures AI response is placed correctly (replace vs append)
