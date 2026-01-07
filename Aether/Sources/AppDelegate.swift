@@ -1322,6 +1322,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func processWithInputMode(useCutMode: Bool) {
         print("[AppDelegate] Processing with cut mode: \(useCutMode)")
 
+        // CRITICAL: Set conversation mode IMMEDIATELY on main thread
+        // This ensures the value is visible when onConversationTurnCompleted reads it
+        // Must happen BEFORE any async block starts
+        self.conversationUseCutMode = useCutMode
+        print("[AppDelegate] 🎯 Set conversationUseCutMode=\(useCutMode) on main thread")
+
         guard core != nil else {
             print("[AppDelegate] ⚠️ Core not initialized")
             // Show error in Halo
@@ -1643,10 +1649,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     print("[AppDelegate] 🎭 Conversation input: \(conversationInput.prefix(50))...")
 
                     // Store conversation context for output handling
+                    // NOTE: conversationUseCutMode was already set at start of processWithInputMode()
                     self.conversationTextSource = textSource
-                    self.conversationUseCutMode = useCutMode
                     self.conversationOriginalClipboard = originalClipboardText
-                    print("[AppDelegate] 🎭 Stored context: useCutMode=\(useCutMode), conversationUseCutMode=\(self.conversationUseCutMode)")
+                    print("[AppDelegate] 🎭 Stored context: textSource=\(textSource), originalClipboard=\(originalClipboardText?.prefix(20) ?? "nil")")
 
                     // Start conversation (callbacks handle output and continuation UI)
                     self.startConversation(userInput: conversationInput, context: capturedContext)
@@ -2391,8 +2397,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
-        // Set conversation mode for first turn output
-        conversationUseCutMode = true  // First turn uses replace mode
+        // NOTE: conversationUseCutMode is now set in processWithInputMode()
+        // to ensure it's set on main thread BEFORE async processing starts
 
         // Store frontmost app
         previousFrontmostApp = NSWorkspace.shared.frontmostApplication
@@ -2429,8 +2435,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
-        // Set conversation mode for first turn output
-        conversationUseCutMode = false  // First turn uses append mode
+        // NOTE: conversationUseCutMode is now set in processWithInputMode()
+        // to ensure it's set on main thread BEFORE async processing starts
 
         // Store frontmost app
         previousFrontmostApp = NSWorkspace.shared.frontmostApplication
