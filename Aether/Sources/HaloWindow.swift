@@ -507,16 +507,98 @@ extension HaloWindow {
 
     /// Show clarification UI at screen center
     private func showClarification(_ request: ClarificationRequest) {
-        print("[HaloWindow] Showing clarification: \(request.id)")
+        NSLog("[HaloWindow] Showing clarification: %@", request.id)
 
-        // Update state to clarification
-        updateState(.clarification(request: request))
+        // Calculate size based on request type
+        let width: CGFloat = 320
+        let height: CGFloat
+        if let options = request.options {
+            // Dynamic height based on options count
+            height = CGFloat(80 + options.count * 48)
+        } else {
+            // Fixed height for text input
+            height = 140
+        }
 
-        // Show at screen center (like toast)
-        showCentered()
+        // IMPORTANT: Set the window frame BEFORE updating state
+        // This prevents updateState() from animating from wrong position
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+            NSLog("[HaloWindow] Warning: No screen found, cannot display")
+            return
+        }
+
+        let windowSize = NSSize(width: width, height: height)
+        let screenFrame = screen.visibleFrame
+        let windowOrigin = NSPoint(
+            x: screenFrame.midX - windowSize.width / 2,
+            y: screenFrame.midY - windowSize.height / 2
+        )
+
+        // Set frame without animation first
+        self.setFrame(NSRect(origin: windowOrigin, size: windowSize), display: false)
+
+        // Update state to clarification (this will trigger SwiftUI view update)
+        // Skip dynamic resize since we already set the correct frame
+        haloViewModel.state = .clarification(request: request)
+
+        // IMPORTANT: Enable mouse events for clarification interaction
+        self.ignoresMouseEvents = false
+
+        // Record show time
+        showTime = Date()
+        hideSequence += 1
+
+        // Show window WITHOUT activating (critical for focus preservation)
+        self.orderFrontRegardless()
+
+        // Fade in animation
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            self.animator().alphaValue = 1.0
+        })
+
+        NSLog("[HaloWindow] Clarification window frame: %@", NSStringFromRect(self.frame))
 
         // Setup keyboard monitor for navigation
         setupClarificationKeyMonitor(for: request)
+    }
+
+    /// Show Halo at screen center with specific size
+    private func showCenteredWithSize(_ windowSize: NSSize) {
+        // Record show time for minimum display duration before errors
+        showTime = Date()
+
+        // CRITICAL: Invalidate any pending hide completion handlers
+        hideSequence += 1
+
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+            NSLog("[HaloWindow] Warning: No screen found, cannot display")
+            return
+        }
+
+        let screenFrame = screen.visibleFrame
+        NSLog("[HaloWindow] Screen frame: %@, windowSize: %@", NSStringFromRect(screenFrame), NSStringFromSize(windowSize))
+
+        self.setContentSize(windowSize)
+
+        // Center on screen
+        let windowOrigin = NSPoint(
+            x: screenFrame.midX - windowSize.width / 2,
+            y: screenFrame.midY - windowSize.height / 2
+        )
+        NSLog("[HaloWindow] Calculated origin: %@", NSStringFromPoint(windowOrigin))
+
+        self.setFrameOrigin(windowOrigin)
+        NSLog("[HaloWindow] Window frame after setFrameOrigin: %@", NSStringFromRect(self.frame))
+
+        // Show window WITHOUT activating (critical for focus preservation)
+        self.orderFrontRegardless()
+
+        // Fade in animation
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            self.animator().alphaValue = 1.0
+        })
     }
 
     /// Setup keyboard event monitor for clarification navigation
@@ -527,20 +609,22 @@ extension HaloWindow {
             clarificationKeyMonitor = nil
         }
 
-        // Add local event monitor for keyboard events
-        clarificationKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self = self else { return event }
+        // Add GLOBAL event monitor for keyboard events
+        // This is necessary because Halo window cannot become key (to prevent focus theft)
+        // Global monitor captures events regardless of which app is frontmost
+        // Note: Requires Accessibility permission
+        clarificationKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return }
 
             // Only handle events when in clarification state
             guard case .clarification = self.haloViewModel.state else {
-                return event
+                return
             }
 
-            // Handle keyboard navigation
-            if self.handleClarificationKeyEvent(event, request: request) {
-                return nil  // Consume the event
+            // Handle keyboard navigation on main thread
+            DispatchQueue.main.async {
+                _ = self.handleClarificationKeyEvent(event, request: request)
             }
-            return event
         }
     }
 
@@ -603,11 +687,14 @@ extension HaloWindow {
         }
     }
 
-    /// Remove keyboard event monitor
+    /// Remove keyboard event monitor and restore click-through behavior
     private func removeClarificationKeyMonitor() {
         if let monitor = clarificationKeyMonitor {
             NSEvent.removeMonitor(monitor)
             clarificationKeyMonitor = nil
         }
+
+        // Restore click-through behavior for normal Halo operation
+        self.ignoresMouseEvents = true
     }
 }

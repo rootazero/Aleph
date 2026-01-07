@@ -284,6 +284,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         )
         menu.addItem(settingsMenuItem!)
 
+        // Debug menu items (only in DEBUG builds)
+        #if DEBUG
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(
+            title: "Test Clarification (Select)",
+            action: #selector(testClarificationSelect),
+            keyEquivalent: "d"
+        ))
+        menu.addItem(NSMenuItem(
+            title: "Test Clarification (Text)",
+            action: #selector(testClarificationText),
+            keyEquivalent: "t"
+        ))
+        #endif
+
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(
             title: L("menu.quit"),
@@ -2079,6 +2094,55 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
     }
+
+    // MARK: - Debug: Clarification Testing
+
+    #if DEBUG
+    /// Test select-type clarification UI
+    @objc private func testClarificationSelect() {
+        print("[Debug] Testing select-type clarification...")
+
+        let request = ClarificationRequest(
+            id: "test-style",
+            prompt: "What style would you like?",
+            clarificationType: .select,
+            options: [
+                ClarificationOption(label: "Professional", value: "professional", description: "Formal business tone"),
+                ClarificationOption(label: "Casual", value: "casual", description: "Friendly and relaxed"),
+                ClarificationOption(label: "Humorous", value: "humorous", description: "Light and playful"),
+            ],
+            defaultValue: "0",
+            placeholder: nil,
+            source: "skill:refine-text"
+        )
+
+        // Trigger via notification (same as Rust core would do)
+        NotificationCenter.default.post(
+            name: .clarificationRequested,
+            object: request
+        )
+    }
+
+    /// Test text-type clarification UI
+    @objc private func testClarificationText() {
+        print("[Debug] Testing text-type clarification...")
+
+        let request = ClarificationRequest(
+            id: "test-language",
+            prompt: "Enter target language:",
+            clarificationType: .text,
+            options: nil,
+            defaultValue: nil,
+            placeholder: "e.g., Spanish, French...",
+            source: "skill:translate"
+        )
+
+        NotificationCenter.default.post(
+            name: .clarificationRequested,
+            object: request
+        )
+    }
+    #endif
 }
 
 // MARK: - NSWindowDelegate Extension

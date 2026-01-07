@@ -27,6 +27,12 @@ settings:
     # Limit to arm64 only to match Rust library architecture
     ARCHS: arm64
     ONLY_ACTIVE_ARCH: NO
+  configs:
+    Debug:
+      # Enable DEBUG flag for #if DEBUG conditional compilation
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+    Release:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
 
 targets:
   Aether:
