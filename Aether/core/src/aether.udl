@@ -97,6 +97,18 @@ dictionary ClarificationResult {
 
 // ===== END PHANTOM FLOW INTERACTION =====
 
+// ===== MULTI-TURN CONVERSATION (add-multi-turn-conversation) =====
+
+// A single turn in a conversation
+dictionary ConversationTurn {
+  u32 turn_id;           // Turn number within the session (0-indexed)
+  string user_input;     // User's message
+  string ai_response;    // AI's response
+  i64 timestamp;         // Unix timestamp when turn was added
+};
+
+// ===== END MULTI-TURN CONVERSATION =====
+
 // REMOVED: ImageFormat enum - image handling now in Swift layer (ClipboardManager)
 
 // Error types for typed error handling
@@ -301,6 +313,27 @@ interface AetherCore {
   // Filter commands by key prefix (case-insensitive)
   // Used for autocomplete as user types (e.g., "se" matches "search", "settings")
   sequence<CommandNode> filter_commands(string prefix);
+
+  // MULTI-TURN CONVERSATION METHODS (add-multi-turn-conversation)
+
+  // Start a new conversation session
+  // Returns the AI's response to the initial input
+  [Throws=AetherException]
+  string start_conversation(string initial_input, CapturedContext context);
+
+  // Continue an existing conversation with follow-up input
+  // Returns the AI's response to the follow-up input
+  [Throws=AetherException]
+  string continue_conversation(string follow_up_input);
+
+  // End the current conversation session
+  void end_conversation();
+
+  // Check if there's an active conversation session
+  boolean has_active_conversation();
+
+  // Get the current turn count for the active conversation
+  u32 conversation_turn_count();
 };
 
 // Callback interface for events from Rust to client
@@ -349,6 +382,21 @@ callback interface AetherEventHandler {
   // This is a blocking call - implementation must return result
   // Swift layer should show Halo clarification UI and wait for user response
   ClarificationResult on_clarification_needed(ClarificationRequest request);
+
+  // MULTI-TURN CONVERSATION CALLBACKS (add-multi-turn-conversation)
+
+  // Called when a new conversation session starts
+  void on_conversation_started(string session_id);
+
+  // Called when a conversation turn is completed
+  void on_conversation_turn_completed(ConversationTurn turn);
+
+  // Called when the AI response is ready and continuation input can be shown
+  // The UI should display the Halo input box for user to continue the conversation
+  void on_conversation_continuation_ready();
+
+  // Called when a conversation session ends
+  void on_conversation_ended(string session_id, u32 total_turns);
 };
 
 // Callback interface for first-time initialization progress

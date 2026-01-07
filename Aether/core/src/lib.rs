@@ -74,6 +74,7 @@
 pub mod capability;
 pub mod clarification; // NEW: Phantom Flow interaction types
 mod clipboard;
+pub mod conversation; // NEW: Multi-turn conversation support
 pub mod command; // NEW: Command completion system
 mod config;
 mod core;
@@ -121,6 +122,7 @@ pub use crate::clarification::{
     ClarificationOption, ClarificationRequest, ClarificationResult, ClarificationResultType,
     ClarificationType,
 };
+pub use crate::conversation::{ConversationManager, ConversationSession, ConversationTurn};
 pub use crate::intent::{
     augment_input, augment_with_param, enhance_query, enhance_search_query, AiIntentDetector,
     AiIntentResult, DetectedIntent, IntentDetector, IntentType, LocalizedString, SmartParam,

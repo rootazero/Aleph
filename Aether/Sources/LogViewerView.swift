@@ -435,7 +435,6 @@ struct LogViewerView_Previews: PreviewProvider {
 
 class PreviewEventHandler: AetherEventHandler {
     func onStateChanged(state: ProcessingState) {}
-    func onHotkeyDetected(clipboardContent: String) {}
     func onError(message: String, suggestion: String?) {}
     func onResponseChunk(text: String) {}
     func onErrorTyped(errorType: ErrorType, message: String) {}
@@ -449,4 +448,8 @@ class PreviewEventHandler: AetherEventHandler {
     func onClarificationNeeded(request: ClarificationRequest) -> ClarificationResult {
         return ClarificationResult(resultType: .cancelled, selectedIndex: nil, value: nil)
     }
+    func onConversationStarted(sessionId: String) {}
+    func onConversationTurnCompleted(turn: ConversationTurn) {}
+    func onConversationContinuationReady() {}
+    func onConversationEnded(sessionId: String, totalTurns: UInt32) {}
 }

@@ -63,6 +63,7 @@ enum HaloState: Equatable {
     case permissionRequired(type: PermissionType)  // Permission prompt
     case toast(type: ToastType, title: String, message: String, autoDismiss: Bool, onDismiss: (() -> Void)?)  // Toast notification
     case clarification(request: ClarificationRequest)  // Phantom Flow clarification (add-phantom-flow-interaction)
+    case conversationInput(sessionId: String, turnCount: UInt32)  // Multi-turn conversation input (add-multi-turn-conversation)
 
     // Equatable conformance
     static func == (lhs: HaloState, rhs: HaloState) -> Bool {
@@ -92,6 +93,8 @@ enum HaloState: Equatable {
             return type1 == type2 && title1 == title2 && msg1 == msg2 && auto1 == auto2
         case (.clarification(let req1), .clarification(let req2)):
             return req1 == req2
+        case (.conversationInput(let sid1, let tc1), .conversationInput(let sid2, let tc2)):
+            return sid1 == sid2 && tc1 == tc2
         default:
             return false
         }

@@ -34,6 +34,12 @@ class HaloWindow: NSWindow {
     /// Observer for clarification notifications
     private var clarificationObserver: NSObjectProtocol?
 
+    /// Keyboard event monitor for conversation mode
+    private var conversationKeyMonitor: Any?
+
+    /// Observer for conversation continuation notifications
+    private var conversationObserver: NSObjectProtocol?
+
     init(themeEngine: ThemeEngine) {
         self.themeEngine = themeEngine
 
@@ -80,6 +86,9 @@ class HaloWindow: NSWindow {
 
         // Subscribe to clarification notifications (Phantom Flow)
         setupClarificationObserver()
+
+        // Subscribe to conversation continuation notifications (Multi-turn)
+        setupConversationObserver()
     }
 
     deinit {
@@ -90,16 +99,27 @@ class HaloWindow: NSWindow {
         if let monitor = clarificationKeyMonitor {
             NSEvent.removeMonitor(monitor)
         }
+        // Cleanup conversation observers
+        if let observer = conversationObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let monitor = conversationKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
     }
 
     // MARK: - Focus Prevention
 
     /// CRITICAL: Prevent Halo from becoming key window in most cases
-    /// Exception: Text-type clarification needs key window for TextField input
+    /// Exception: Text-type clarification and conversation input need key window for TextField input
     override var canBecomeKey: Bool {
         // Allow key window only for text-type clarification (TextField needs focus)
         if case .clarification(let request) = haloViewModel.state {
             return request.clarificationType == .text
+        }
+        // Allow key window for conversation input (TextField needs focus)
+        if case .conversationInput = haloViewModel.state {
+            return true
         }
         return false
     }
@@ -284,9 +304,9 @@ class HaloWindow: NSWindow {
         haloViewModel.state = state
 
         // Enable/disable mouse events based on state
-        // commandMode, error, permissionRequired, toast, and clarification states need mouse interaction
+        // commandMode, error, permissionRequired, toast, clarification, and conversationInput states need mouse interaction
         switch state {
-        case .commandMode, .error, .permissionRequired, .toast, .clarification:
+        case .commandMode, .error, .permissionRequired, .toast, .clarification, .conversationInput:
             self.ignoresMouseEvents = false
         default:
             self.ignoresMouseEvents = true
@@ -442,6 +462,9 @@ class HaloWindow: NSWindow {
                 return NSSize(width: 320, height: height)
             }
             return NSSize(width: 320, height: 140)  // Height for text input
+
+        case .conversationInput:
+            return NSSize(width: 320, height: 100)  // Fixed height for conversation input
 
         default:
             return NSSize(width: 120, height: 120)
@@ -731,6 +754,131 @@ extension HaloWindow {
         if let monitor = clarificationKeyMonitor {
             NSEvent.removeMonitor(monitor)
             clarificationKeyMonitor = nil
+        }
+
+        // Restore click-through behavior for normal Halo operation
+        self.ignoresMouseEvents = true
+    }
+}
+
+// MARK: - Conversation (Multi-turn) Support
+
+extension HaloWindow {
+    /// Setup observer for conversation continuation requests
+    private func setupConversationObserver() {
+        conversationObserver = NotificationCenter.default.addObserver(
+            forName: .conversationContinuationReady,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let sessionId = notification.object as? String else { return }
+            self?.showConversationInput(sessionId: sessionId)
+        }
+    }
+
+    /// Show conversation input UI at screen center
+    ///
+    /// - Parameter sessionId: The current conversation session ID
+    func showConversationInput(sessionId: String) {
+        let turnCount = ConversationManager.shared.turnCount
+        NSLog("[HaloWindow] Showing conversation input: sessionId=%@, turn=%d", sessionId, turnCount)
+
+        // Fixed size for conversation input
+        let windowSize = NSSize(width: 320, height: 100)
+
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+            NSLog("[HaloWindow] Warning: No screen found, cannot display")
+            return
+        }
+
+        let screenFrame = screen.visibleFrame
+        let windowOrigin = NSPoint(
+            x: screenFrame.midX - windowSize.width / 2,
+            y: screenFrame.midY - windowSize.height / 2
+        )
+
+        // Set frame without animation first
+        self.setFrame(NSRect(origin: windowOrigin, size: windowSize), display: false)
+
+        // Update state to conversation input
+        haloViewModel.state = .conversationInput(sessionId: sessionId, turnCount: turnCount)
+
+        // Enable mouse events for input interaction
+        self.ignoresMouseEvents = false
+
+        // Record show time
+        showTime = Date()
+        hideSequence += 1
+
+        // Activate window to allow TextField to receive keyboard input
+        self.makeKeyAndOrderFront(nil)
+
+        // Fade in animation
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            self.animator().alphaValue = 1.0
+        })
+
+        NSLog("[HaloWindow] Conversation input window frame: %@", NSStringFromRect(self.frame))
+
+        // Setup keyboard monitor for ESC/Enter handling
+        setupConversationKeyMonitor()
+    }
+
+    /// Setup keyboard event monitor for conversation input
+    private func setupConversationKeyMonitor() {
+        // Remove any existing monitor
+        removeConversationKeyMonitor()
+
+        // Use local monitor since window is key
+        conversationKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return event }
+
+            // Only handle events when in conversation input state
+            guard case .conversationInput = self.haloViewModel.state else {
+                return event
+            }
+
+            // Handle keyboard navigation
+            if self.handleConversationKeyEvent(event) {
+                return nil  // Consume the event
+            }
+            return event
+        }
+    }
+
+    /// Handle keyboard events for conversation input
+    private func handleConversationKeyEvent(_ event: NSEvent) -> Bool {
+        let manager = ConversationManager.shared
+
+        switch event.keyCode {
+        case 36:  // Return/Enter - submit input
+            let text = manager.textInput.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty {
+                removeConversationKeyMonitor()
+                manager.submitContinuationInput(text)
+                hide()
+                NSLog("[HaloWindow] Conversation input submitted: %@", text.prefix(50) as CVarArg)
+            }
+            return true
+
+        case 53:  // Escape - cancel conversation
+            removeConversationKeyMonitor()
+            manager.cancelConversation()
+            hide()
+            NSLog("[HaloWindow] Conversation cancelled by user")
+            return true
+
+        default:
+            return false
+        }
+    }
+
+    /// Remove conversation keyboard event monitor and restore click-through behavior
+    private func removeConversationKeyMonitor() {
+        if let monitor = conversationKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            conversationKeyMonitor = nil
         }
 
         // Restore click-through behavior for normal Halo operation

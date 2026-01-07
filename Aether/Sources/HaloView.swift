@@ -100,6 +100,10 @@ struct HaloView: View {
             case .clarification(let request):
                 ClarificationView(request: request)
                     .transition(.scale.combined(with: .opacity))
+
+            case .conversationInput(let sessionId, let turnCount):
+                ConversationInputView(sessionId: sessionId, turnCount: turnCount)
+                    .transition(.scale.combined(with: .opacity))
             }
         }
         .frame(width: dynamicWidth, height: dynamicHeight)
@@ -155,6 +159,8 @@ struct HaloView: View {
             return "\(type.displayName): \(title)"
         case .clarification(let request):
             return "Clarification: \(request.prompt)"
+        case .conversationInput(_, let turnCount):
+            return "Conversation input, turn \(turnCount + 1)"
         }
     }
 
@@ -174,6 +180,8 @@ struct HaloView: View {
                 return "\(options.count) options available"
             }
             return "Text input required"
+        case .conversationInput(_, let turnCount):
+            return "Turn \(turnCount + 1), text input required"
         default:
             return nil
         }
@@ -189,6 +197,8 @@ struct HaloView: View {
         case .error, .permissionRequired, .toast:
             return [.isStaticText]
         case .clarification:
+            return [.allowsDirectInteraction]
+        case .conversationInput:
             return [.allowsDirectInteraction]
         default:
             return []
@@ -216,6 +226,8 @@ struct HaloView: View {
             return 400  // Max width for toast
         case .clarification:
             return 320  // Width for clarification options
+        case .conversationInput:
+            return 320  // Width for conversation input
         default:
             return 120
         }
@@ -250,6 +262,8 @@ struct HaloView: View {
                 return CGFloat(80 + optionCount * 48)
             }
             return 140  // Height for text input
+        case .conversationInput:
+            return 100  // Fixed height for conversation input
         default:
             return 120
         }

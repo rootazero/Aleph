@@ -335,6 +335,34 @@ typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod11)(uint64_t, Rust
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD12
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD12
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod12)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD13
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD13
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod13)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD14
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD14
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod14)(uint64_t, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD15
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD15
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod15)(uint64_t, RustBuffer, uint32_t, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_INITIALIZATION_PROGRESS_HANDLER_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_INITIALIZATION_PROGRESS_HANDLER_METHOD0
 typedef void (*UniffiCallbackInterfaceInitializationProgressHandlerMethod0)(uint64_t, void* _Nonnull, 
@@ -392,6 +420,10 @@ typedef struct UniffiVTableCallbackInterfaceAetherEventHandler {
     UniffiCallbackInterfaceAetherEventHandlerMethod9 _Nonnull onTypewriterProgress;
     UniffiCallbackInterfaceAetherEventHandlerMethod10 _Nonnull onTypewriterCancelled;
     UniffiCallbackInterfaceAetherEventHandlerMethod11 _Nonnull onClarificationNeeded;
+    UniffiCallbackInterfaceAetherEventHandlerMethod12 _Nonnull onConversationStarted;
+    UniffiCallbackInterfaceAetherEventHandlerMethod13 _Nonnull onConversationTurnCompleted;
+    UniffiCallbackInterfaceAetherEventHandlerMethod14 _Nonnull onConversationContinuationReady;
+    UniffiCallbackInterfaceAetherEventHandlerMethod15 _Nonnull onConversationEnded;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceAetherEventHandler;
 
@@ -439,6 +471,16 @@ uint64_t uniffi_aethecore_fn_method_aethercore_clear_memories(void*_Nonnull ptr,
 void uniffi_aethecore_fn_method_aethercore_clear_request_context(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CONTINUE_CONVERSATION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CONTINUE_CONVERSATION
+RustBuffer uniffi_aethecore_fn_method_aethercore_continue_conversation(void*_Nonnull ptr, RustBuffer follow_up_input, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CONVERSATION_TURN_COUNT
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CONVERSATION_TURN_COUNT
+uint32_t uniffi_aethecore_fn_method_aethercore_conversation_turn_count(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_MEMORY
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_MEMORY
 void uniffi_aethecore_fn_method_aethercore_delete_memory(void*_Nonnull ptr, RustBuffer id, RustCallStatus *_Nonnull out_status
@@ -447,6 +489,11 @@ void uniffi_aethecore_fn_method_aethercore_delete_memory(void*_Nonnull ptr, Rust
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_PROVIDER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_PROVIDER
 void uniffi_aethecore_fn_method_aethercore_delete_provider(void*_Nonnull ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_END_CONVERSATION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_END_CONVERSATION
+void uniffi_aethecore_fn_method_aethercore_end_conversation(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_FILTER_COMMANDS
@@ -499,6 +546,11 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_stats(void*_Nonnull 
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_root_commands(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_HAS_ACTIVE_CONVERSATION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_HAS_ACTIVE_CONVERSATION
+int8_t uniffi_aethecore_fn_method_aethercore_has_active_conversation(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LOAD_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LOAD_CONFIG
 RustBuffer uniffi_aethecore_fn_method_aethercore_load_config(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -537,6 +589,11 @@ void uniffi_aethecore_fn_method_aethercore_set_default_provider(void*_Nonnull pt
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SET_LOG_LEVEL
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SET_LOG_LEVEL
 void uniffi_aethecore_fn_method_aethercore_set_log_level(void*_Nonnull ptr, RustBuffer level, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_START_CONVERSATION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_START_CONVERSATION
+RustBuffer uniffi_aethecore_fn_method_aethercore_start_conversation(void*_Nonnull ptr, RustBuffer initial_input, RustBuffer context, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_STORE_INTERACTION_MEMORY
@@ -978,6 +1035,18 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_clear_request_context(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CONTINUE_CONVERSATION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CONTINUE_CONVERSATION
+uint16_t uniffi_aethecore_checksum_method_aethercore_continue_conversation(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CONVERSATION_TURN_COUNT
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CONVERSATION_TURN_COUNT
+uint16_t uniffi_aethecore_checksum_method_aethercore_conversation_turn_count(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_MEMORY
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_MEMORY
 uint16_t uniffi_aethecore_checksum_method_aethercore_delete_memory(void
@@ -987,6 +1056,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_delete_memory(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_PROVIDER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_PROVIDER
 uint16_t uniffi_aethecore_checksum_method_aethercore_delete_provider(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_END_CONVERSATION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_END_CONVERSATION
+uint16_t uniffi_aethecore_checksum_method_aethercore_end_conversation(void
     
 );
 #endif
@@ -1050,6 +1125,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_get_root_commands(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_HAS_ACTIVE_CONVERSATION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_HAS_ACTIVE_CONVERSATION
+uint16_t uniffi_aethecore_checksum_method_aethercore_has_active_conversation(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LOAD_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LOAD_CONFIG
 uint16_t uniffi_aethecore_checksum_method_aethercore_load_config(void
@@ -1095,6 +1176,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_set_default_provider(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_SET_LOG_LEVEL
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_SET_LOG_LEVEL
 uint16_t uniffi_aethecore_checksum_method_aethercore_set_log_level(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_START_CONVERSATION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_START_CONVERSATION
+uint16_t uniffi_aethecore_checksum_method_aethercore_start_conversation(void
     
 );
 #endif
@@ -1275,6 +1362,30 @@ uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_typewriter_cance
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CLARIFICATION_NEEDED
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CLARIFICATION_NEEDED
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_clarification_needed(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CONVERSATION_STARTED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CONVERSATION_STARTED
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_started(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CONVERSATION_TURN_COMPLETED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CONVERSATION_TURN_COMPLETED
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_turn_completed(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CONVERSATION_CONTINUATION_READY
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CONVERSATION_CONTINUATION_READY
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_continuation_ready(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CONVERSATION_ENDED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CONVERSATION_ENDED
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_ended(void
     
 );
 #endif

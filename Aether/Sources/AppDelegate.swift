@@ -910,12 +910,266 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             name: NSNotification.Name("AetherConfigSavedInternally"),
             object: nil
         )
+
+        // Observe conversation turn completion for continuation flow
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(onConversationTurnCompleted(_:)),
+            name: .conversationTurnCompleted,
+            object: nil
+        )
+
+        // Observe conversation ended to clean up
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(onConversationEnded(_:)),
+            name: .conversationEnded,
+            object: nil
+        )
+
+        // Observe user continuation input submission
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(onConversationContinuationSubmitted(_:)),
+            name: .conversationContinuationSubmitted,
+            object: nil
+        )
+
+        // Observe user conversation cancellation
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(onConversationCancelled(_:)),
+            name: .conversationCancelled,
+            object: nil
+        )
     }
 
     /// Handle config change notification (rebuild providers menu)
     @objc private func onConfigChanged() {
         print("[AppDelegate] Config changed, rebuilding providers menu")
         rebuildProvidersMenu()
+    }
+
+    // MARK: - Multi-turn Conversation Support
+
+    /// Stored conversation context for multi-turn sessions
+    private var conversationTextSource: TextSource = .selectedText
+    private var conversationUseCutMode: Bool = true
+    private var conversationOriginalClipboard: String?
+
+    /// Handle conversation turn completion - output AI response
+    @objc private func onConversationTurnCompleted(_ notification: Notification) {
+        guard let turn = notification.object as? ConversationTurn else {
+            print("[AppDelegate] ⚠️ Invalid conversation turn notification")
+            return
+        }
+
+        print("[AppDelegate] Conversation turn \(turn.turnId) completed, outputting response...")
+
+        // Output the AI response to target window (pass turnId for mode decision)
+        outputConversationResponse(turn.aiResponse, turnId: turn.turnId)
+    }
+
+    /// Output conversation response to the target window
+    /// - Parameters:
+    ///   - response: The AI response text to output
+    ///   - turnId: The conversation turn ID (0 = first turn)
+    private func outputConversationResponse(_ response: String, turnId: UInt32 = 0) {
+        guard core != nil else {
+            print("[AppDelegate] ⚠️ Core not available for conversation output")
+            return
+        }
+
+        print("[AppDelegate] Outputting conversation response (turn=\(turnId), \(response.count) chars)")
+
+        // Limit response length
+        let maxResponseLength = 5000
+        let truncatedResponse: String
+        if response.count > maxResponseLength {
+            truncatedResponse = String(response.prefix(maxResponseLength)) + "\n\n[... response truncated ...]"
+        } else {
+            truncatedResponse = response
+        }
+
+        // For conversation mode, always use instant output (paste) for reliability
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            // Reactivate target app if needed
+            if let previousApp = self.previousFrontmostApp,
+               previousApp.bundleIdentifier != Bundle.main.bundleIdentifier {
+                print("[AppDelegate] 🔄 Reactivating target app: \(previousApp.localizedName ?? "Unknown")")
+                previousApp.activate(options: [])
+                Thread.sleep(forTimeInterval: 0.15)
+            }
+
+            // Determine output mode:
+            // - First turn (turnId == 0): use mode based on trigger hotkey
+            // - Subsequent turns (turnId > 0): always append
+            let useAppendMode: Bool
+            if turnId == 0 {
+                // First turn: check trigger hotkey mode
+                useAppendMode = !self.conversationUseCutMode
+            } else {
+                // Subsequent turns: always append
+                useAppendMode = true
+            }
+
+            // For append mode, add a newline before the response
+            if useAppendMode {
+                KeyboardSimulator.shared.simulateKeyPress(.returnKey)
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+
+            // Set clipboard and paste
+            ClipboardManager.shared.setText(truncatedResponse)
+            Thread.sleep(forTimeInterval: 0.05)
+
+            let pasteSuccess = KeyboardSimulator.shared.simulatePaste()
+            print("[AppDelegate] 📋 Conversation paste (turn=\(turnId), append=\(useAppendMode)): \(pasteSuccess ? "success" : "failed")")
+
+            // Update Halo to processing state briefly
+            self.haloWindow?.updateState(.success(finalText: String(truncatedResponse.prefix(50))))
+
+            // The Halo will automatically show conversation input when
+            // on_conversation_continuation_ready() callback fires
+        }
+    }
+
+    /// Handle conversation ended - clean up and restore clipboard
+    @objc private func onConversationEnded(_ notification: Notification) {
+        guard let info = notification.object as? [String: Any],
+              let sessionId = info["sessionId"] as? String,
+              let totalTurns = info["totalTurns"] as? UInt32 else {
+            print("[AppDelegate] ⚠️ Invalid conversation ended notification")
+            return
+        }
+
+        print("[AppDelegate] Conversation \(sessionId) ended after \(totalTurns) turns")
+
+        // Restore original clipboard if we saved it
+        if let original = conversationOriginalClipboard {
+            ClipboardManager.shared.setText(original)
+            print("[AppDelegate] ♻️ Restored original clipboard after conversation")
+        }
+
+        // Clear conversation state
+        conversationOriginalClipboard = nil
+
+        // Hide Halo
+        DispatchQueue.main.async { [weak self] in
+            self?.haloWindow?.hide()
+        }
+    }
+
+    /// Start a new conversation with the given input
+    private func startConversation(userInput: String, context: CapturedContext) {
+        guard let core = core else {
+            print("[AppDelegate] ⚠️ Core not available for conversation")
+            return
+        }
+
+        print("[AppDelegate] 🎭 Starting new conversation...")
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                let response = try core.startConversation(
+                    initialInput: userInput,
+                    context: context
+                )
+
+                print("[AppDelegate] Conversation started, initial response: \(response.prefix(50))...")
+
+                // Note: Response output is handled by onConversationTurnCompleted callback
+                // The callback is triggered by Rust BEFORE startConversation returns
+
+            } catch {
+                print("[AppDelegate] ❌ Error starting conversation: \(error)")
+
+                // End the conversation on error
+                core.endConversation()
+
+                // Show error via EventHandler
+                DispatchQueue.main.async { [weak self] in
+                    self?.eventHandler?.onError(
+                        message: error.localizedDescription,
+                        suggestion: nil
+                    )
+                }
+            }
+        }
+    }
+
+    /// Continue an existing conversation with follow-up input
+    private func continueConversation(followUpInput: String) {
+        guard let core = core else {
+            print("[AppDelegate] ⚠️ Core not available for conversation continuation")
+            return
+        }
+
+        print("[AppDelegate] 🎭 Continuing conversation with: \(followUpInput.prefix(50))...")
+
+        // Update Halo to processing state
+        DispatchQueue.main.async { [weak self] in
+            self?.haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
+            self?.haloWindow?.showCentered()
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                let response = try core.continueConversation(followUpInput: followUpInput)
+
+                print("[AppDelegate] Conversation continued, response: \(response.prefix(50))...")
+
+                // Note: Response output is handled by onConversationTurnCompleted callback
+
+            } catch {
+                print("[AppDelegate] ❌ Error continuing conversation: \(error)")
+
+                // End the conversation on error
+                core.endConversation()
+
+                // Show error via EventHandler
+                DispatchQueue.main.async { [weak self] in
+                    self?.eventHandler?.onError(
+                        message: error.localizedDescription,
+                        suggestion: nil
+                    )
+                }
+            }
+        }
+    }
+
+    /// Handle user submitting continuation input (from Halo UI)
+    @objc private func onConversationContinuationSubmitted(_ notification: Notification) {
+        guard let text = notification.object as? String else {
+            print("[AppDelegate] ⚠️ Invalid continuation submission notification")
+            return
+        }
+
+        print("[AppDelegate] Received continuation submission: \(text.prefix(50))...")
+
+        // Call continueConversation in background
+        continueConversation(followUpInput: text)
+    }
+
+    /// Handle user cancelling the conversation (from Halo UI)
+    @objc private func onConversationCancelled(_ notification: Notification) {
+        print("[AppDelegate] User cancelled conversation")
+
+        // End the conversation in Rust
+        core?.endConversation()
+
+        // Restore clipboard and hide Halo
+        if let original = conversationOriginalClipboard {
+            ClipboardManager.shared.setText(original)
+            print("[AppDelegate] ♻️ Restored original clipboard after conversation cancel")
+        }
+        conversationOriginalClipboard = nil
+
+        DispatchQueue.main.async { [weak self] in
+            self?.haloWindow?.hide()
+        }
     }
 
     // MARK: - Hotkey Handling
@@ -2015,6 +2269,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
+        // Set conversation mode for first turn output
+        conversationUseCutMode = true  // First turn uses replace mode
+
         // Store frontmost app
         previousFrontmostApp = NSWorkspace.shared.frontmostApplication
         print("[AppDelegate] 📱 Stored frontmost app: \(previousFrontmostApp?.localizedName ?? "Unknown")")
@@ -2049,6 +2306,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             NSSound.beep()
             return
         }
+
+        // Set conversation mode for first turn output
+        conversationUseCutMode = false  // First turn uses append mode
 
         // Store frontmost app
         previousFrontmostApp = NSWorkspace.shared.frontmostApplication

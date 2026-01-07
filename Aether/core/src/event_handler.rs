@@ -89,6 +89,34 @@ pub trait AetherEventHandler: Send + Sync {
     /// The callback returns when the user selects an option, enters text,
     /// cancels, or the request times out.
     fn on_clarification_needed(&self, request: ClarificationRequest) -> ClarificationResult;
+
+    // ========================================================================
+    // Multi-Turn Conversation Callbacks (add-multi-turn-conversation)
+    // ========================================================================
+
+    /// Called when a new conversation session starts.
+    ///
+    /// # Arguments
+    /// * `session_id` - Unique identifier for the conversation session
+    fn on_conversation_started(&self, session_id: String);
+
+    /// Called when a conversation turn is completed.
+    ///
+    /// # Arguments
+    /// * `turn` - The completed turn with user input and AI response
+    fn on_conversation_turn_completed(&self, turn: crate::conversation::ConversationTurn);
+
+    /// Called when the AI response is ready and continuation input can be shown.
+    ///
+    /// The UI should display the Halo input box for user to continue the conversation.
+    fn on_conversation_continuation_ready(&self);
+
+    /// Called when a conversation session ends.
+    ///
+    /// # Arguments
+    /// * `session_id` - The ID of the ended session
+    /// * `total_turns` - Total number of turns in the conversation
+    fn on_conversation_ended(&self, session_id: String, total_turns: u32);
 }
 
 /// Mock event handler for testing
@@ -110,6 +138,11 @@ pub struct MockEventHandler {
     pub typewriter_cancelled: std::sync::Arc<std::sync::Mutex<u32>>,     // Count of cancellations
     pub clarification_requests: std::sync::Arc<std::sync::Mutex<Vec<ClarificationRequest>>>, // Phantom Flow requests
     pub clarification_response: std::sync::Arc<std::sync::Mutex<Option<ClarificationResult>>>, // Mock response to return
+    // Multi-turn conversation tracking
+    pub conversation_started: std::sync::Arc<std::sync::Mutex<Vec<String>>>, // Session IDs
+    pub conversation_turns: std::sync::Arc<std::sync::Mutex<Vec<crate::conversation::ConversationTurn>>>,
+    pub conversation_continuation_ready_count: std::sync::Arc<std::sync::Mutex<u32>>,
+    pub conversation_ended: std::sync::Arc<std::sync::Mutex<Vec<(String, u32)>>>, // (session_id, total_turns)
 }
 
 #[cfg(test)]
@@ -130,6 +163,10 @@ impl MockEventHandler {
             typewriter_cancelled: std::sync::Arc::new(std::sync::Mutex::new(0)),
             clarification_requests: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             clarification_response: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            conversation_started: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            conversation_turns: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            conversation_continuation_ready_count: std::sync::Arc::new(std::sync::Mutex::new(0)),
+            conversation_ended: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -225,6 +262,34 @@ impl MockEventHandler {
             .clarification_response
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(response);
+    }
+
+    pub fn get_conversation_started(&self) -> Vec<String> {
+        self.conversation_started
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn get_conversation_turns(&self) -> Vec<crate::conversation::ConversationTurn> {
+        self.conversation_turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn get_conversation_continuation_ready_count(&self) -> u32 {
+        *self
+            .conversation_continuation_ready_count
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn get_conversation_ended(&self) -> Vec<(String, u32)> {
+        self.conversation_ended
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
@@ -324,6 +389,35 @@ impl AetherEventHandler for MockEventHandler {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
             .unwrap_or_else(ClarificationResult::cancelled)
+    }
+
+    fn on_conversation_started(&self, session_id: String) {
+        self.conversation_started
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(session_id);
+    }
+
+    fn on_conversation_turn_completed(&self, turn: crate::conversation::ConversationTurn) {
+        self.conversation_turns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(turn);
+    }
+
+    fn on_conversation_continuation_ready(&self) {
+        let mut count = self
+            .conversation_continuation_ready_count
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *count += 1;
+    }
+
+    fn on_conversation_ended(&self, session_id: String, total_turns: u32) {
+        self.conversation_ended
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((session_id, total_turns));
     }
 }
 

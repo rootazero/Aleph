@@ -241,6 +241,48 @@ class EventHandler: AetherEventHandler {
         return ClarificationManager.shared.handleRequest(request)
     }
 
+    // MARK: - Conversation (Multi-turn)
+
+    /// Called when a new conversation session starts
+    ///
+    /// NOTE: This method is called from a background thread by Rust/UniFFI.
+    func onConversationStarted(sessionId: String) {
+        print("[EventHandler] Conversation started: \(sessionId)")
+
+        // Delegate to ConversationManager
+        ConversationManager.shared.onConversationStarted(sessionId: sessionId)
+    }
+
+    /// Called when a conversation turn is completed
+    ///
+    /// NOTE: This method is called from a background thread by Rust/UniFFI.
+    func onConversationTurnCompleted(turn: ConversationTurn) {
+        print("[EventHandler] Conversation turn completed: \(turn.turnId)")
+
+        // Delegate to ConversationManager
+        ConversationManager.shared.onConversationTurnCompleted(turn: turn)
+    }
+
+    /// Called when the AI response is ready and continuation input can be shown
+    ///
+    /// NOTE: This method is called from a background thread by Rust/UniFFI.
+    func onConversationContinuationReady() {
+        print("[EventHandler] Conversation continuation ready")
+
+        // Delegate to ConversationManager which posts notification to HaloWindow
+        ConversationManager.shared.onConversationContinuationReady()
+    }
+
+    /// Called when a conversation session ends
+    ///
+    /// NOTE: This method is called from a background thread by Rust/UniFFI.
+    func onConversationEnded(sessionId: String, totalTurns: UInt32) {
+        print("[EventHandler] Conversation ended: \(sessionId), total turns: \(totalTurns)")
+
+        // Delegate to ConversationManager
+        ConversationManager.shared.onConversationEnded(sessionId: sessionId, totalTurns: totalTurns)
+    }
+
     // MARK: - State Change Handling
 
     private func handleStateChange(_ state: ProcessingState) {

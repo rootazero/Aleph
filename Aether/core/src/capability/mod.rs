@@ -12,7 +12,7 @@ pub mod response_parser;
 
 // Re-exports for convenience
 pub use declaration::{CapabilityDeclaration, CapabilityParameter, CapabilityRegistry};
-pub use request::{AiResponse, CapabilityRequest};
+pub use request::{AiResponse, CapabilityRequest, ClarificationInfo, ClarificationReason};
 pub use response_parser::ResponseParser;
 
 // ============================================================================

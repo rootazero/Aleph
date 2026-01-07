@@ -552,9 +552,15 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func clearRequestContext() 
     
+    func continueConversation(followUpInput: String) throws  -> String
+    
+    func conversationTurnCount()  -> UInt32
+    
     func deleteMemory(id: String) throws 
     
     func deleteProvider(name: String) throws 
+    
+    func endConversation() 
     
     func filterCommands(prefix: String)  -> [CommandNode]
     
@@ -576,6 +582,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func getRootCommands()  -> [CommandNode]
     
+    func hasActiveConversation()  -> Bool
+    
     func loadConfig() throws  -> FullConfig
     
     func processInput(userInput: String, context: CapturedContext) throws  -> String
@@ -591,6 +599,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func setDefaultProvider(providerName: String) throws 
     
     func setLogLevel(level: LogLevel) throws 
+    
+    func startConversation(initialInput: String, context: CapturedContext) throws  -> String
     
     func storeInteractionMemory(userInput: String, aiOutput: String) throws  -> String
     
@@ -708,6 +718,21 @@ open func clearRequestContext() {try! rustCall() {
 }
 }
     
+open func continueConversation(followUpInput: String)throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_continue_conversation(self.uniffiClonePointer(),
+        FfiConverterString.lower(followUpInput),$0
+    )
+})
+}
+    
+open func conversationTurnCount() -> UInt32 {
+    return try!  FfiConverterUInt32.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_conversation_turn_count(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func deleteMemory(id: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_delete_memory(self.uniffiClonePointer(),
         FfiConverterString.lower(id),$0
@@ -718,6 +743,12 @@ open func deleteMemory(id: String)throws  {try rustCallWithError(FfiConverterTyp
 open func deleteProvider(name: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_delete_provider(self.uniffiClonePointer(),
         FfiConverterString.lower(name),$0
+    )
+}
+}
+    
+open func endConversation() {try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_end_conversation(self.uniffiClonePointer(),$0
     )
 }
 }
@@ -794,6 +825,13 @@ open func getRootCommands() -> [CommandNode] {
 })
 }
     
+open func hasActiveConversation() -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_has_active_conversation(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func loadConfig()throws  -> FullConfig {
     return try  FfiConverterTypeFullConfig.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_load_config(self.uniffiClonePointer(),$0
@@ -854,6 +892,15 @@ open func setLogLevel(level: LogLevel)throws  {try rustCallWithError(FfiConverte
         FfiConverterTypeLogLevel.lower(level),$0
     )
 }
+}
+    
+open func startConversation(initialInput: String, context: CapturedContext)throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_start_conversation(self.uniffiClonePointer(),
+        FfiConverterString.lower(initialInput),
+        FfiConverterTypeCapturedContext.lower(context),$0
+    )
+})
 }
     
 open func storeInteractionMemory(userInput: String, aiOutput: String)throws  -> String {
@@ -1619,6 +1666,88 @@ public func FfiConverterTypeCommandNode_lift(_ buf: RustBuffer) throws -> Comman
 #endif
 public func FfiConverterTypeCommandNode_lower(_ value: CommandNode) -> RustBuffer {
     return FfiConverterTypeCommandNode.lower(value)
+}
+
+
+public struct ConversationTurn {
+    public var turnId: UInt32
+    public var userInput: String
+    public var aiResponse: String
+    public var timestamp: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(turnId: UInt32, userInput: String, aiResponse: String, timestamp: Int64) {
+        self.turnId = turnId
+        self.userInput = userInput
+        self.aiResponse = aiResponse
+        self.timestamp = timestamp
+    }
+}
+
+
+
+extension ConversationTurn: Equatable, Hashable {
+    public static func ==(lhs: ConversationTurn, rhs: ConversationTurn) -> Bool {
+        if lhs.turnId != rhs.turnId {
+            return false
+        }
+        if lhs.userInput != rhs.userInput {
+            return false
+        }
+        if lhs.aiResponse != rhs.aiResponse {
+            return false
+        }
+        if lhs.timestamp != rhs.timestamp {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(turnId)
+        hasher.combine(userInput)
+        hasher.combine(aiResponse)
+        hasher.combine(timestamp)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeConversationTurn: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ConversationTurn {
+        return
+            try ConversationTurn(
+                turnId: FfiConverterUInt32.read(from: &buf), 
+                userInput: FfiConverterString.read(from: &buf), 
+                aiResponse: FfiConverterString.read(from: &buf), 
+                timestamp: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ConversationTurn, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.turnId, into: &buf)
+        FfiConverterString.write(value.userInput, into: &buf)
+        FfiConverterString.write(value.aiResponse, into: &buf)
+        FfiConverterInt64.write(value.timestamp, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeConversationTurn_lift(_ buf: RustBuffer) throws -> ConversationTurn {
+    return try FfiConverterTypeConversationTurn.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeConversationTurn_lower(_ value: ConversationTurn) -> RustBuffer {
+    return FfiConverterTypeConversationTurn.lower(value)
 }
 
 
@@ -3950,6 +4079,14 @@ public protocol AetherEventHandler : AnyObject {
     
     func onClarificationNeeded(request: ClarificationRequest)  -> ClarificationResult
     
+    func onConversationStarted(sessionId: String) 
+    
+    func onConversationTurnCompleted(turn: ConversationTurn) 
+    
+    func onConversationContinuationReady() 
+    
+    func onConversationEnded(sessionId: String, totalTurns: UInt32) 
+    
 }
 
 // Magic number for the Rust proxy to call using the same mechanism as every other method,
@@ -4252,6 +4389,102 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
 
             
             let writeReturn = { uniffiOutReturn.pointee = FfiConverterTypeClarificationResult.lower($0) }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onConversationStarted: { (
+            uniffiHandle: UInt64,
+            sessionId: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onConversationStarted(
+                     sessionId: try FfiConverterString.lift(sessionId)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onConversationTurnCompleted: { (
+            uniffiHandle: UInt64,
+            turn: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onConversationTurnCompleted(
+                     turn: try FfiConverterTypeConversationTurn.lift(turn)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onConversationContinuationReady: { (
+            uniffiHandle: UInt64,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onConversationContinuationReady(
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onConversationEnded: { (
+            uniffiHandle: UInt64,
+            sessionId: RustBuffer,
+            totalTurns: UInt32,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onConversationEnded(
+                     sessionId: try FfiConverterString.lift(sessionId),
+                     totalTurns: try FfiConverterUInt32.lift(totalTurns)
+                )
+            }
+
+            
+            let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
                 makeCall: makeCall,
@@ -5145,10 +5378,19 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_clear_request_context() != 2809) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_continue_conversation() != 43013) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_conversation_turn_count() != 12630) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_delete_memory() != 18981) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_delete_provider() != 56010) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_end_conversation() != 48231) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_filter_commands() != 53560) {
@@ -5181,6 +5423,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_get_root_commands() != 47120) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_has_active_conversation() != 19478) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_load_config() != 33928) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -5203,6 +5448,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_set_log_level() != 21569) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_start_conversation() != 5020) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_store_interaction_memory() != 17143) {
@@ -5293,6 +5541,18 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_clarification_needed() != 36496) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_started() != 36209) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_turn_completed() != 13839) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_continuation_ready() != 61816) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_ended() != 15108) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_init_started() != 45699) {
