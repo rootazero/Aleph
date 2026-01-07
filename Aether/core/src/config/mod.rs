@@ -2612,6 +2612,7 @@ max_context_items = 5
         let shortcuts = ShortcutsConfig {
             summon: "Command+Shift+A".to_string(),
             cancel: Some("Escape".to_string()),
+            command_prompt: "Command+Option+/".to_string(),
         };
         let json = serde_json::to_string(&shortcuts).unwrap();
         assert!(json.contains("Command+Shift+A"));
@@ -2774,6 +2775,7 @@ max_context_items = 5
         config.shortcuts = Some(ShortcutsConfig {
             summon: "Command+Shift+A".to_string(),
             cancel: Some("Escape".to_string()),
+            command_prompt: "Command+Option+/".to_string(),
         });
 
         config.behavior = Some(BehaviorConfig {

@@ -72,6 +72,14 @@ impl AetherEventHandler for TestEventHandler {
     fn on_typewriter_progress(&self, _percent: f32) {}
 
     fn on_typewriter_cancelled(&self) {}
+
+    fn on_clarification_needed(
+        &self,
+        _request: aethecore::ClarificationRequest,
+    ) -> aethecore::ClarificationResult {
+        // Default to cancelled for tests
+        aethecore::ClarificationResult::cancelled()
+    }
 }
 
 /// Create a test config with mock providers

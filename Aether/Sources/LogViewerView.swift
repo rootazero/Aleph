@@ -446,4 +446,7 @@ class PreviewEventHandler: AetherEventHandler {
     func onConfigChanged() {}
     func onTypewriterProgress(percent: Float) {}
     func onTypewriterCancelled() {}
+    func onClarificationNeeded(request: ClarificationRequest) -> ClarificationResult {
+        return ClarificationResult(resultType: .cancelled, selectedIndex: nil, value: nil)
+    }
 }

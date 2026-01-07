@@ -28,6 +28,12 @@ class HaloWindow: NSWindow {
     /// when a new show request comes in before hide animation completes
     private var hideSequence: Int = 0
 
+    /// Keyboard event monitor for clarification mode
+    private var clarificationKeyMonitor: Any?
+
+    /// Observer for clarification notifications
+    private var clarificationObserver: NSObjectProtocol?
+
     init(themeEngine: ThemeEngine) {
         self.themeEngine = themeEngine
 
@@ -71,6 +77,19 @@ class HaloWindow: NSWindow {
         // Start hidden
         self.alphaValue = 0
         self.orderOut(nil)
+
+        // Subscribe to clarification notifications (Phantom Flow)
+        setupClarificationObserver()
+    }
+
+    deinit {
+        // Cleanup clarification observers
+        if let observer = clarificationObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let monitor = clarificationKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
     }
 
     // MARK: - Focus Prevention
@@ -261,9 +280,9 @@ class HaloWindow: NSWindow {
         haloViewModel.state = state
 
         // Enable/disable mouse events based on state
-        // commandMode, error, permissionRequired, and toast states need mouse interaction
+        // commandMode, error, permissionRequired, toast, and clarification states need mouse interaction
         switch state {
-        case .commandMode, .error, .permissionRequired, .toast:
+        case .commandMode, .error, .permissionRequired, .toast, .clarification:
             self.ignoresMouseEvents = false
         default:
             self.ignoresMouseEvents = true
@@ -411,6 +430,15 @@ class HaloWindow: NSWindow {
             let height = CGFloat(80 + lineCount * 16)
             return NSSize(width: 400, height: height)
 
+        case .clarification(let request):
+            // Dynamic height based on options count or text input
+            if let options = request.options {
+                let optionCount = options.count
+                let height = CGFloat(80 + optionCount * 48)
+                return NSSize(width: 320, height: height)
+            }
+            return NSSize(width: 320, height: 140)  // Height for text input
+
         default:
             return NSSize(width: 120, height: 120)
         }
@@ -459,5 +487,127 @@ class HaloViewModel: ObservableObject {
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
+    }
+}
+
+// MARK: - Clarification (Phantom Flow) Support
+
+extension HaloWindow {
+    /// Setup observer for clarification requests
+    private func setupClarificationObserver() {
+        clarificationObserver = NotificationCenter.default.addObserver(
+            forName: .clarificationRequested,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let request = notification.object as? ClarificationRequest else { return }
+            self?.showClarification(request)
+        }
+    }
+
+    /// Show clarification UI at screen center
+    private func showClarification(_ request: ClarificationRequest) {
+        print("[HaloWindow] Showing clarification: \(request.id)")
+
+        // Update state to clarification
+        updateState(.clarification(request: request))
+
+        // Show at screen center (like toast)
+        showCentered()
+
+        // Setup keyboard monitor for navigation
+        setupClarificationKeyMonitor(for: request)
+    }
+
+    /// Setup keyboard event monitor for clarification navigation
+    private func setupClarificationKeyMonitor(for request: ClarificationRequest) {
+        // Remove any existing monitor
+        if let monitor = clarificationKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            clarificationKeyMonitor = nil
+        }
+
+        // Add local event monitor for keyboard events
+        clarificationKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return event }
+
+            // Only handle events when in clarification state
+            guard case .clarification = self.haloViewModel.state else {
+                return event
+            }
+
+            // Handle keyboard navigation
+            if self.handleClarificationKeyEvent(event, request: request) {
+                return nil  // Consume the event
+            }
+            return event
+        }
+    }
+
+    /// Handle keyboard events for clarification navigation
+    private func handleClarificationKeyEvent(_ event: NSEvent, request: ClarificationRequest) -> Bool {
+        let manager = ClarificationManager.shared
+
+        // For text mode, only handle Escape
+        if request.clarificationType == .text {
+            if event.keyCode == 53 { // Escape
+                removeClarificationKeyMonitor()
+                manager.cancel()
+                hide()
+                return true
+            }
+            return false
+        }
+
+        // For select mode
+        guard let options = request.options, !options.isEmpty else { return false }
+
+        switch event.keyCode {
+        case 125: // Down arrow
+            let newIndex = min(manager.selectedIndex + 1, options.count - 1)
+            manager.selectedIndex = newIndex
+            return true
+
+        case 126: // Up arrow
+            let newIndex = max(manager.selectedIndex - 1, 0)
+            manager.selectedIndex = newIndex
+            return true
+
+        case 36: // Return/Enter
+            let index = manager.selectedIndex
+            if index < options.count {
+                removeClarificationKeyMonitor()
+                manager.completeWithSelection(index: index, value: options[index].value)
+                hide()
+            }
+            return true
+
+        case 53: // Escape
+            removeClarificationKeyMonitor()
+            manager.cancel()
+            hide()
+            return true
+
+        case 18...26: // Number keys 1-9
+            let numberIndex = Int(event.keyCode) - 18
+            if numberIndex < options.count {
+                manager.selectedIndex = numberIndex
+                removeClarificationKeyMonitor()
+                manager.completeWithSelection(index: numberIndex, value: options[numberIndex].value)
+                hide()
+            }
+            return true
+
+        default:
+            return false
+        }
+    }
+
+    /// Remove keyboard event monitor
+    private func removeClarificationKeyMonitor() {
+        if let monitor = clarificationKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            clarificationKeyMonitor = nil
+        }
     }
 }

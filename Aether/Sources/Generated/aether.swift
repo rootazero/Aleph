@@ -1262,6 +1262,260 @@ public func FfiConverterTypeCapturedContext_lower(_ value: CapturedContext) -> R
 }
 
 
+public struct ClarificationOption {
+    public var label: String
+    public var value: String
+    public var description: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(label: String, value: String, description: String?) {
+        self.label = label
+        self.value = value
+        self.description = description
+    }
+}
+
+
+
+extension ClarificationOption: Equatable, Hashable {
+    public static func ==(lhs: ClarificationOption, rhs: ClarificationOption) -> Bool {
+        if lhs.label != rhs.label {
+            return false
+        }
+        if lhs.value != rhs.value {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(label)
+        hasher.combine(value)
+        hasher.combine(description)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeClarificationOption: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ClarificationOption {
+        return
+            try ClarificationOption(
+                label: FfiConverterString.read(from: &buf), 
+                value: FfiConverterString.read(from: &buf), 
+                description: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ClarificationOption, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.label, into: &buf)
+        FfiConverterString.write(value.value, into: &buf)
+        FfiConverterOptionString.write(value.description, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeClarificationOption_lift(_ buf: RustBuffer) throws -> ClarificationOption {
+    return try FfiConverterTypeClarificationOption.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeClarificationOption_lower(_ value: ClarificationOption) -> RustBuffer {
+    return FfiConverterTypeClarificationOption.lower(value)
+}
+
+
+public struct ClarificationRequest {
+    public var id: String
+    public var prompt: String
+    public var clarificationType: ClarificationType
+    public var options: [ClarificationOption]?
+    public var defaultValue: String?
+    public var placeholder: String?
+    public var source: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, prompt: String, clarificationType: ClarificationType, options: [ClarificationOption]?, defaultValue: String?, placeholder: String?, source: String?) {
+        self.id = id
+        self.prompt = prompt
+        self.clarificationType = clarificationType
+        self.options = options
+        self.defaultValue = defaultValue
+        self.placeholder = placeholder
+        self.source = source
+    }
+}
+
+
+
+extension ClarificationRequest: Equatable, Hashable {
+    public static func ==(lhs: ClarificationRequest, rhs: ClarificationRequest) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.prompt != rhs.prompt {
+            return false
+        }
+        if lhs.clarificationType != rhs.clarificationType {
+            return false
+        }
+        if lhs.options != rhs.options {
+            return false
+        }
+        if lhs.defaultValue != rhs.defaultValue {
+            return false
+        }
+        if lhs.placeholder != rhs.placeholder {
+            return false
+        }
+        if lhs.source != rhs.source {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(prompt)
+        hasher.combine(clarificationType)
+        hasher.combine(options)
+        hasher.combine(defaultValue)
+        hasher.combine(placeholder)
+        hasher.combine(source)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeClarificationRequest: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ClarificationRequest {
+        return
+            try ClarificationRequest(
+                id: FfiConverterString.read(from: &buf), 
+                prompt: FfiConverterString.read(from: &buf), 
+                clarificationType: FfiConverterTypeClarificationType.read(from: &buf), 
+                options: FfiConverterOptionSequenceTypeClarificationOption.read(from: &buf), 
+                defaultValue: FfiConverterOptionString.read(from: &buf), 
+                placeholder: FfiConverterOptionString.read(from: &buf), 
+                source: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ClarificationRequest, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.prompt, into: &buf)
+        FfiConverterTypeClarificationType.write(value.clarificationType, into: &buf)
+        FfiConverterOptionSequenceTypeClarificationOption.write(value.options, into: &buf)
+        FfiConverterOptionString.write(value.defaultValue, into: &buf)
+        FfiConverterOptionString.write(value.placeholder, into: &buf)
+        FfiConverterOptionString.write(value.source, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeClarificationRequest_lift(_ buf: RustBuffer) throws -> ClarificationRequest {
+    return try FfiConverterTypeClarificationRequest.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeClarificationRequest_lower(_ value: ClarificationRequest) -> RustBuffer {
+    return FfiConverterTypeClarificationRequest.lower(value)
+}
+
+
+public struct ClarificationResult {
+    public var resultType: ClarificationResultType
+    public var selectedIndex: UInt32?
+    public var value: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(resultType: ClarificationResultType, selectedIndex: UInt32?, value: String?) {
+        self.resultType = resultType
+        self.selectedIndex = selectedIndex
+        self.value = value
+    }
+}
+
+
+
+extension ClarificationResult: Equatable, Hashable {
+    public static func ==(lhs: ClarificationResult, rhs: ClarificationResult) -> Bool {
+        if lhs.resultType != rhs.resultType {
+            return false
+        }
+        if lhs.selectedIndex != rhs.selectedIndex {
+            return false
+        }
+        if lhs.value != rhs.value {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(resultType)
+        hasher.combine(selectedIndex)
+        hasher.combine(value)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeClarificationResult: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ClarificationResult {
+        return
+            try ClarificationResult(
+                resultType: FfiConverterTypeClarificationResultType.read(from: &buf), 
+                selectedIndex: FfiConverterOptionUInt32.read(from: &buf), 
+                value: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ClarificationResult, into buf: inout [UInt8]) {
+        FfiConverterTypeClarificationResultType.write(value.resultType, into: &buf)
+        FfiConverterOptionUInt32.write(value.selectedIndex, into: &buf)
+        FfiConverterOptionString.write(value.value, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeClarificationResult_lift(_ buf: RustBuffer) throws -> ClarificationResult {
+    return try FfiConverterTypeClarificationResult.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeClarificationResult_lower(_ value: ClarificationResult) -> RustBuffer {
+    return FfiConverterTypeClarificationResult.lower(value)
+}
+
+
 public struct CommandNode {
     public var key: String
     public var description: String
@@ -3181,6 +3435,148 @@ extension AetherException: Foundation.LocalizedError {
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum ClarificationResultType {
+    
+    case selected
+    case textInput
+    case cancelled
+    case timeout
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeClarificationResultType: FfiConverterRustBuffer {
+    typealias SwiftType = ClarificationResultType
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ClarificationResultType {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .selected
+        
+        case 2: return .textInput
+        
+        case 3: return .cancelled
+        
+        case 4: return .timeout
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ClarificationResultType, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .selected:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .textInput:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .cancelled:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .timeout:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeClarificationResultType_lift(_ buf: RustBuffer) throws -> ClarificationResultType {
+    return try FfiConverterTypeClarificationResultType.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeClarificationResultType_lower(_ value: ClarificationResultType) -> RustBuffer {
+    return FfiConverterTypeClarificationResultType.lower(value)
+}
+
+
+
+extension ClarificationResultType: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum ClarificationType {
+    
+    case select
+    case text
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeClarificationType: FfiConverterRustBuffer {
+    typealias SwiftType = ClarificationType
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ClarificationType {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .select
+        
+        case 2: return .text
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ClarificationType, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .select:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .text:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeClarificationType_lift(_ buf: RustBuffer) throws -> ClarificationType {
+    return try FfiConverterTypeClarificationType.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeClarificationType_lower(_ value: ClarificationType) -> RustBuffer {
+    return FfiConverterTypeClarificationType.lower(value)
+}
+
+
+
+extension ClarificationType: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum CommandType {
     
     case action
@@ -3552,6 +3948,8 @@ public protocol AetherEventHandler : AnyObject {
     
     func onTypewriterCancelled() 
     
+    func onClarificationNeeded(request: ClarificationRequest)  -> ClarificationResult
+    
 }
 
 // Magic number for the Rust proxy to call using the same mechanism as every other method,
@@ -3830,6 +4228,30 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
 
             
             let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onClarificationNeeded: { (
+            uniffiHandle: UInt64,
+            request: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> ClarificationResult in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onClarificationNeeded(
+                     request: try FfiConverterTypeClarificationRequest.lift(request)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterTypeClarificationResult.lower($0) }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
                 makeCall: makeCall,
@@ -4392,6 +4814,30 @@ fileprivate struct FfiConverterOptionSequenceString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionSequenceTypeClarificationOption: FfiConverterRustBuffer {
+    typealias SwiftType = [ClarificationOption]?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterSequenceTypeClarificationOption.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterSequenceTypeClarificationOption.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionSequenceTypeMediaAttachment: FfiConverterRustBuffer {
     typealias SwiftType = [MediaAttachment]?
 
@@ -4458,6 +4904,31 @@ fileprivate struct FfiConverterSequenceTypeAppMemoryInfo: FfiConverterRustBuffer
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeAppMemoryInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeClarificationOption: FfiConverterRustBuffer {
+    typealias SwiftType = [ClarificationOption]
+
+    public static func write(_ value: [ClarificationOption], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeClarificationOption.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ClarificationOption] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ClarificationOption]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeClarificationOption.read(from: &buf))
         }
         return seq
     }
@@ -4819,6 +5290,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_typewriter_cancelled() != 28606) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_clarification_needed() != 36496) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_init_started() != 45699) {

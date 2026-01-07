@@ -328,6 +328,13 @@ typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod10)(uint64_t, void
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD11
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD11
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod11)(uint64_t, RustBuffer, RustBuffer* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_INITIALIZATION_PROGRESS_HANDLER_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_INITIALIZATION_PROGRESS_HANDLER_METHOD0
 typedef void (*UniffiCallbackInterfaceInitializationProgressHandlerMethod0)(uint64_t, void* _Nonnull, 
@@ -384,6 +391,7 @@ typedef struct UniffiVTableCallbackInterfaceAetherEventHandler {
     UniffiCallbackInterfaceAetherEventHandlerMethod8 _Nonnull onConfigChanged;
     UniffiCallbackInterfaceAetherEventHandlerMethod9 _Nonnull onTypewriterProgress;
     UniffiCallbackInterfaceAetherEventHandlerMethod10 _Nonnull onTypewriterCancelled;
+    UniffiCallbackInterfaceAetherEventHandlerMethod11 _Nonnull onClarificationNeeded;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceAetherEventHandler;
 
@@ -1261,6 +1269,12 @@ uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_typewriter_progr
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TYPEWRITER_CANCELLED
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TYPEWRITER_CANCELLED
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_typewriter_cancelled(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CLARIFICATION_NEEDED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CLARIFICATION_NEEDED
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_clarification_needed(void
     
 );
 #endif

@@ -224,6 +224,23 @@ class EventHandler: AetherEventHandler {
         }
     }
 
+    // MARK: - Clarification (Phantom Flow)
+
+    /// Called when Rust core needs clarification from user
+    ///
+    /// This is a BLOCKING callback - the Rust core will wait for this to return.
+    /// The callback delegates to ClarificationManager which coordinates with the Halo UI.
+    ///
+    /// NOTE: This method is called from a background thread by Rust/UniFFI.
+    /// ClarificationManager handles the thread synchronization internally.
+    func onClarificationNeeded(request: ClarificationRequest) -> ClarificationResult {
+        print("[EventHandler] Clarification needed: \(request.id) - \(request.prompt)")
+
+        // Delegate to ClarificationManager which handles UI coordination
+        // This blocks the Rust thread until user responds
+        return ClarificationManager.shared.handleRequest(request)
+    }
+
     // MARK: - State Change Handling
 
     private func handleStateChange(_ state: ProcessingState) {

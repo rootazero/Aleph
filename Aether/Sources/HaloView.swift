@@ -96,6 +96,10 @@ struct HaloView: View {
                     onDismiss: onDismiss
                 )
                 .transition(.scale.combined(with: .opacity))
+
+            case .clarification(let request):
+                ClarificationView(request: request)
+                    .transition(.scale.combined(with: .opacity))
             }
         }
         .frame(width: dynamicWidth, height: dynamicHeight)
@@ -149,6 +153,8 @@ struct HaloView: View {
             return permissionType.title
         case .toast(let type, let title, _, _, _):
             return "\(type.displayName): \(title)"
+        case .clarification(let request):
+            return "Clarification: \(request.prompt)"
         }
     }
 
@@ -163,6 +169,11 @@ struct HaloView: View {
             return text
         case .toast(_, _, let message, _, _):
             return message
+        case .clarification(let request):
+            if let options = request.options {
+                return "\(options.count) options available"
+            }
+            return "Text input required"
         default:
             return nil
         }
@@ -177,6 +188,8 @@ struct HaloView: View {
             return [.updatesFrequently]
         case .error, .permissionRequired, .toast:
             return [.isStaticText]
+        case .clarification:
+            return [.allowsDirectInteraction]
         default:
             return []
         }
@@ -201,6 +214,8 @@ struct HaloView: View {
             return 480  // Wider for permission prompt
         case .toast:
             return 400  // Max width for toast
+        case .clarification:
+            return 320  // Width for clarification options
         default:
             return 120
         }
@@ -228,6 +243,13 @@ struct HaloView: View {
             // Dynamic height based on message length
             let lineCount = min(5, max(1, message.count / 50 + 1))
             return CGFloat(80 + lineCount * 16)
+        case .clarification(let request):
+            // Dynamic height based on options count or text input
+            if let options = request.options {
+                let optionCount = options.count
+                return CGFloat(80 + optionCount * 48)
+            }
+            return 140  // Height for text input
         default:
             return 120
         }

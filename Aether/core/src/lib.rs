@@ -72,6 +72,7 @@
 // NOTE: clipboard module retained for ImageData/ImageFormat types (used by AI providers)
 // Clipboard operations are handled by Swift ClipboardManager
 pub mod capability;
+pub mod clarification; // NEW: Phantom Flow interaction types
 mod clipboard;
 pub mod command; // NEW: Command completion system
 mod config;
@@ -113,6 +114,10 @@ pub use crate::metrics::StageTimer;
 pub use crate::providers::AiProvider;
 pub use crate::router::{Router, RoutingRule};
 pub use crate::search::{ProviderTestResult, SearchProviderTestConfig};
+pub use crate::clarification::{
+    ClarificationOption, ClarificationRequest, ClarificationResult, ClarificationResultType,
+    ClarificationType,
+};
 pub use crate::utils::pii;
 
 // Test-only exports

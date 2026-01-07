@@ -62,6 +62,7 @@ enum HaloState: Equatable {
     case error(type: ErrorType, message: String, suggestion: String? = nil)  // Error with optional suggestion
     case permissionRequired(type: PermissionType)  // Permission prompt
     case toast(type: ToastType, title: String, message: String, autoDismiss: Bool, onDismiss: (() -> Void)?)  // Toast notification
+    case clarification(request: ClarificationRequest)  // Phantom Flow clarification (add-phantom-flow-interaction)
 
     // Equatable conformance
     static func == (lhs: HaloState, rhs: HaloState) -> Bool {
@@ -89,6 +90,8 @@ enum HaloState: Equatable {
         case (.toast(let type1, let title1, let msg1, let auto1, _), .toast(let type2, let title2, let msg2, let auto2, _)):
             // Closures can't be compared, so we compare other fields
             return type1 == type2 && title1 == title2 && msg1 == msg2 && auto1 == auto2
+        case (.clarification(let req1), .clarification(let req2)):
+            return req1 == req2
         default:
             return false
         }

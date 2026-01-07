@@ -54,6 +54,49 @@ enum CommandType {
   "Namespace"   // Container with child commands (e.g., /mcp)
 };
 
+// ===== PHANTOM FLOW INTERACTION (add-phantom-flow-interaction) =====
+
+// Clarification request type
+enum ClarificationType {
+  "Select",   // Option list (menu-driven selection)
+  "Text"      // Free-form text input
+};
+
+// A single option in a select-type clarification
+dictionary ClarificationOption {
+  string label;          // Display label for the option
+  string value;          // Value to return when selected
+  string? description;   // Optional description for additional context
+};
+
+// Request for user clarification through Halo overlay
+dictionary ClarificationRequest {
+  string id;                              // Unique request ID (for tracking/logging)
+  string prompt;                          // Prompt text to display
+  ClarificationType clarification_type;   // Type of clarification
+  sequence<ClarificationOption>? options; // Options for select-type (None for text-type)
+  string? default_value;                  // Default value (index as string for select, text for text-type)
+  string? placeholder;                    // Placeholder text for text-type input
+  string? source;                         // Source identifier (e.g., "skill:refine-text", "mcp:git")
+};
+
+// Result type for clarification response
+enum ClarificationResultType {
+  "Selected",   // User selected an option
+  "TextInput",  // User entered text
+  "Cancelled",  // User cancelled the request
+  "Timeout"     // Request timed out
+};
+
+// Result of a clarification request
+dictionary ClarificationResult {
+  ClarificationResultType result_type;  // Type of result
+  u32? selected_index;                   // Selected option index (for Select type)
+  string? value;                         // Value (selected option value or text input)
+};
+
+// ===== END PHANTOM FLOW INTERACTION =====
+
 // REMOVED: ImageFormat enum - image handling now in Swift layer (ClipboardManager)
 
 // Error types for typed error handling
@@ -300,6 +343,12 @@ callback interface AetherEventHandler {
 
   // Called when typewriter animation is cancelled (Escape key or new hotkey)
   void on_typewriter_cancelled();
+
+  // PHANTOM FLOW CALLBACKS (add-phantom-flow-interaction)
+  // Called when clarification is needed from user
+  // This is a blocking call - implementation must return result
+  // Swift layer should show Halo clarification UI and wait for user response
+  ClarificationResult on_clarification_needed(ClarificationRequest request);
 };
 
 // Callback interface for first-time initialization progress

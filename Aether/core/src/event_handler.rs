@@ -4,6 +4,8 @@
 //! must implement to receive events from the Aether core. UniFFI will
 //! generate a protocol/interface for each target language.
 
+use crate::clarification::{ClarificationRequest, ClarificationResult};
+
 /// Processing states for the Aether system
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessingState {
@@ -79,6 +81,14 @@ pub trait AetherEventHandler: Send + Sync {
 
     /// Called when typewriter animation is cancelled (Escape key or new hotkey) (Phase 7.2)
     fn on_typewriter_cancelled(&self);
+
+    /// Called when clarification is needed from the user (Phantom Flow interaction)
+    ///
+    /// This is a BLOCKING callback - the Rust core will wait for the Swift UI
+    /// to display the clarification request and return the user's response.
+    /// The callback returns when the user selects an option, enters text,
+    /// cancels, or the request times out.
+    fn on_clarification_needed(&self, request: ClarificationRequest) -> ClarificationResult;
 }
 
 /// Mock event handler for testing
@@ -98,6 +108,8 @@ pub struct MockEventHandler {
     pub config_changes: std::sync::Arc<std::sync::Mutex<u32>>, // Count of config change events
     pub typewriter_progress: std::sync::Arc<std::sync::Mutex<Vec<f32>>>, // Typewriter progress updates
     pub typewriter_cancelled: std::sync::Arc<std::sync::Mutex<u32>>,     // Count of cancellations
+    pub clarification_requests: std::sync::Arc<std::sync::Mutex<Vec<ClarificationRequest>>>, // Phantom Flow requests
+    pub clarification_response: std::sync::Arc<std::sync::Mutex<Option<ClarificationResult>>>, // Mock response to return
 }
 
 #[cfg(test)]
@@ -116,6 +128,8 @@ impl MockEventHandler {
             config_changes: std::sync::Arc::new(std::sync::Mutex::new(0)),
             typewriter_progress: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             typewriter_cancelled: std::sync::Arc::new(std::sync::Mutex::new(0)),
+            clarification_requests: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            clarification_response: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -196,6 +210,21 @@ impl MockEventHandler {
             .typewriter_cancelled
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn get_clarification_requests(&self) -> Vec<ClarificationRequest> {
+        self.clarification_requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Set the mock response to return when on_clarification_needed is called
+    pub fn set_clarification_response(&self, response: ClarificationResult) {
+        *self
+            .clarification_response
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(response);
     }
 }
 
@@ -281,6 +310,21 @@ impl AetherEventHandler for MockEventHandler {
             .unwrap_or_else(|e| e.into_inner());
         *count += 1;
     }
+
+    fn on_clarification_needed(&self, request: ClarificationRequest) -> ClarificationResult {
+        // Record the request
+        self.clarification_requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(request);
+
+        // Return the pre-configured mock response, or default to cancelled
+        self.clarification_response
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_else(ClarificationResult::cancelled)
+    }
 }
 
 #[cfg(test)]
@@ -317,5 +361,53 @@ mod tests {
     fn test_processing_state_equality() {
         assert_eq!(ProcessingState::Idle, ProcessingState::Idle);
         assert_ne!(ProcessingState::Idle, ProcessingState::Listening);
+    }
+
+    #[test]
+    fn test_mock_handler_clarification() {
+        use crate::clarification::{ClarificationOption, ClarificationRequest, ClarificationResult};
+
+        let handler = MockEventHandler::new();
+
+        // Set up a mock response
+        let mock_response = ClarificationResult::selected(1, "casual".to_string());
+        handler.set_clarification_response(mock_response);
+
+        // Create a clarification request
+        let request = ClarificationRequest::select(
+            "style-choice",
+            "What style would you like?",
+            vec![
+                ClarificationOption::new("professional", "Professional"),
+                ClarificationOption::new("casual", "Casual"),
+            ],
+        );
+
+        // Call the handler
+        let result = handler.on_clarification_needed(request);
+
+        // Verify the request was recorded
+        let requests = handler.get_clarification_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].id, "style-choice");
+
+        // Verify the response
+        assert!(result.is_success());
+        assert_eq!(result.selected_index, Some(1));
+        assert_eq!(result.value, Some("casual".to_string()));
+    }
+
+    #[test]
+    fn test_mock_handler_clarification_default_cancelled() {
+        use crate::clarification::{ClarificationRequest, ClarificationResultType};
+
+        let handler = MockEventHandler::new();
+        // Don't set a response - should default to cancelled
+
+        let request = ClarificationRequest::text("test", "Enter name:", None);
+        let result = handler.on_clarification_needed(request);
+
+        assert_eq!(result.result_type, ClarificationResultType::Cancelled);
+        assert!(!result.is_success());
     }
 }

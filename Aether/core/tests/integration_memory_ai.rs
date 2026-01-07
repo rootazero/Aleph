@@ -28,6 +28,12 @@ impl AetherEventHandler for TestEventHandler {
     fn on_config_changed(&self) {}
     fn on_typewriter_progress(&self, _percent: f32) {}
     fn on_typewriter_cancelled(&self) {}
+    fn on_clarification_needed(
+        &self,
+        _request: aethecore::ClarificationRequest,
+    ) -> aethecore::ClarificationResult {
+        aethecore::ClarificationResult::cancelled()
+    }
 }
 
 /// Test helper: Create a test config with mock provider
