@@ -624,8 +624,8 @@ pub struct ProviderConfig {
 
     // System prompt handling mode
     /// How to send system prompts to the API:
-    /// - "system" (default): Use a separate system message
-    /// - "prepend": Prepend system prompt to user message (for APIs that ignore system role)
+    /// - "prepend" (default): Prepend system prompt to user message (for APIs that ignore system role)
+    /// - "standard": Use a separate system message (for standard OpenAI-compatible APIs)
     #[serde(default)]
     pub system_prompt_mode: Option<String>,
 }
