@@ -2673,7 +2673,16 @@ impl AetherCore {
 
         // Process the initial input using AI-first mode
         let start_time = std::time::Instant::now();
-        let response = self.process_with_ai_first(initial_input.clone(), context.clone(), start_time)?;
+        let response = match self.process_with_ai_first(initial_input.clone(), context.clone(), start_time) {
+            Ok(r) => r,
+            Err(e) => {
+                // End the session on error
+                let mut manager = self.conversation_manager.lock().unwrap_or_else(|e| e.into_inner());
+                manager.end_session();
+                drop(manager);
+                return Err(self.handle_processing_error(&e));
+            }
+        };
 
         // Add the turn to conversation history
         {
@@ -2764,7 +2773,16 @@ impl AetherCore {
 
         // Process with AI using AI-first mode
         let start_time = std::time::Instant::now();
-        let response = self.process_with_ai_first(augmented_input.clone(), context.clone(), start_time)?;
+        let response = match self.process_with_ai_first(augmented_input.clone(), context.clone(), start_time) {
+            Ok(r) => r,
+            Err(e) => {
+                // End the session on error
+                let mut manager = self.conversation_manager.lock().unwrap_or_else(|e| e.into_inner());
+                manager.end_session();
+                drop(manager);
+                return Err(self.handle_processing_error(&e));
+            }
+        };
 
         // Add the turn to conversation history
         {
