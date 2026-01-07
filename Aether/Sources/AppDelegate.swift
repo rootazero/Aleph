@@ -1010,15 +1010,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             if turnId == 0 {
                 // First turn: check trigger hotkey mode
                 useAppendMode = !self.conversationUseCutMode
+                print("[AppDelegate] 🎯 First turn mode: conversationUseCutMode=\(self.conversationUseCutMode), useAppendMode=\(useAppendMode)")
             } else {
                 // Subsequent turns: always append
                 useAppendMode = true
+                print("[AppDelegate] 🎯 Subsequent turn: always append mode")
             }
 
             // For append mode, add a newline before the response
             if useAppendMode {
+                print("[AppDelegate] ⏎ Adding newline before response (append mode)")
                 KeyboardSimulator.shared.simulateKeyPress(.returnKey)
                 Thread.sleep(forTimeInterval: 0.05)
+            } else {
+                print("[AppDelegate] ✂️ No newline - replacing original text")
             }
 
             // Set clipboard and paste
@@ -1028,11 +1033,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             let pasteSuccess = KeyboardSimulator.shared.simulatePaste()
             print("[AppDelegate] 📋 Conversation paste (turn=\(turnId), append=\(useAppendMode)): \(pasteSuccess ? "success" : "failed")")
 
-            // Update Halo to processing state briefly
-            self.haloWindow?.updateState(.success(finalText: String(truncatedResponse.prefix(50))))
+            // Wait for paste to complete, then show conversation input
+            // This delay is critical to ensure the paste operation has finished
+            // and the target app has processed the pasted text
+            Thread.sleep(forTimeInterval: 0.3)
 
-            // The Halo will automatically show conversation input when
-            // on_conversation_continuation_ready() callback fires
+            // Now show the conversation input window
+            // Post notification to trigger HaloWindow to show conversation input
+            if let sessionId = ConversationManager.shared.sessionId {
+                print("[AppDelegate] 🎯 Triggering conversation input display after paste")
+                NotificationCenter.default.post(
+                    name: .conversationContinuationReady,
+                    object: sessionId
+                )
+            }
         }
     }
 
@@ -1056,9 +1070,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Clear conversation state
         conversationOriginalClipboard = nil
 
-        // Hide Halo
+        // Force hide Halo (bypasses conversation mode protection)
         DispatchQueue.main.async { [weak self] in
-            self?.haloWindow?.hide()
+            self?.haloWindow?.forceHide()
         }
     }
 
@@ -1586,6 +1600,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     self.conversationTextSource = textSource
                     self.conversationUseCutMode = useCutMode
                     self.conversationOriginalClipboard = originalClipboardText
+                    print("[AppDelegate] 🎭 Stored context: useCutMode=\(useCutMode), conversationUseCutMode=\(self.conversationUseCutMode)")
 
                     // Start conversation (callbacks handle output and continuation UI)
                     self.startConversation(userInput: conversationInput, context: capturedContext)
@@ -1655,6 +1670,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
                     // Small delay after cursor positioning
                     Thread.sleep(forTimeInterval: 0.05)
+
+                    // For append mode, add a newline before the response
+                    // This ensures the AI output starts on a new line
+                    if !useCutMode {
+                        print("[AppDelegate] ⏎ Adding newline before response (append mode)")
+                        KeyboardSimulator.shared.simulateKeyPress(.returnKey)
+                        Thread.sleep(forTimeInterval: 0.05)
+                    }
 
                     if outputMode == "typewriter" {
                         // Typewriter mode: Type character by character
