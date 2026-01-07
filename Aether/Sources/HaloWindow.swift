@@ -34,8 +34,11 @@ class HaloWindow: NSWindow {
     /// Observer for clarification notifications
     private var clarificationObserver: NSObjectProtocol?
 
-    /// Keyboard event monitor for conversation mode
+    /// Keyboard event monitor for conversation mode (local)
     private var conversationKeyMonitor: Any?
+
+    /// Keyboard event monitor for conversation mode (global fallback for ESC)
+    private var conversationGlobalKeyMonitor: Any?
 
     /// Observer for conversation continuation notifications
     private var conversationObserver: NSObjectProtocol?
@@ -256,6 +259,13 @@ class HaloWindow: NSWindow {
     }
 
     func hide() {
+        // CRITICAL: Do NOT hide when in conversation input mode
+        // The conversation input UI should remain visible until user explicitly ends the conversation
+        if case .conversationInput = haloViewModel.state {
+            NSLog("[HaloWindow] Hide blocked - conversation input mode active")
+            return
+        }
+
         // Reset show time
         showTime = nil
 
@@ -273,6 +283,30 @@ class HaloWindow: NSWindow {
             // after a new toast was already shown
             guard let self = self, self.hideSequence == currentSequence else {
                 print("[HaloWindow] Hide completion skipped (window was re-shown)")
+                return
+            }
+            self.orderOut(nil)
+        })
+    }
+
+    /// Force hide window, bypassing conversation mode protection
+    /// Use this when explicitly ending a conversation session
+    func forceHide() {
+        NSLog("[HaloWindow] Force hide called")
+
+        // Reset show time
+        showTime = nil
+
+        // Increment hide sequence to invalidate any pending completions
+        hideSequence += 1
+        let currentSequence = hideSequence
+
+        // Fade out animation
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.3
+            self.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self = self, self.hideSequence == currentSequence else {
                 return
             }
             self.orderOut(nil)
@@ -464,7 +498,7 @@ class HaloWindow: NSWindow {
             return NSSize(width: 320, height: 140)  // Height for text input
 
         case .conversationInput:
-            return NSSize(width: 320, height: 100)  // Fixed height for conversation input
+            return NSSize(width: 320, height: 130)  // Height for conversation input (header + input + hint + padding)
 
         default:
             return NSSize(width: 120, height: 120)
@@ -783,8 +817,8 @@ extension HaloWindow {
         let turnCount = ConversationManager.shared.turnCount
         NSLog("[HaloWindow] Showing conversation input: sessionId=%@, turn=%d", sessionId, turnCount)
 
-        // Fixed size for conversation input
-        let windowSize = NSSize(width: 320, height: 100)
+        // Fixed size for conversation input (header + input + hint + padding)
+        let windowSize = NSSize(width: 320, height: 130)
 
         guard let screen = NSScreen.main ?? NSScreen.screens.first else {
             NSLog("[HaloWindow] Warning: No screen found, cannot display")
@@ -810,19 +844,37 @@ extension HaloWindow {
         showTime = Date()
         hideSequence += 1
 
-        // Activate window to allow TextField to receive keyboard input
-        self.makeKeyAndOrderFront(nil)
-
-        // Fade in animation
+        // Fade in animation first (so window is visible)
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.2
             self.animator().alphaValue = 1.0
         })
 
-        NSLog("[HaloWindow] Conversation input window frame: %@", NSStringFromRect(self.frame))
+        // Activate app and window to allow TextField to receive keyboard input
+        // Use a short delay to ensure the window is fully visible before activation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self = self else { return }
 
-        // Setup keyboard monitor for ESC/Enter handling
-        setupConversationKeyMonitor()
+            // NSApp.activate is crucial for floating windows to receive key events
+            NSApp.activate(ignoringOtherApps: true)
+            self.makeKeyAndOrderFront(nil)
+
+            NSLog("[HaloWindow] Conversation input - window frame: %@, isKey: %@, canBecomeKey: %@",
+                  NSStringFromRect(self.frame),
+                  self.isKeyWindow ? "YES" : "NO",
+                  self.canBecomeKey ? "YES" : "NO")
+
+            // Setup keyboard monitor for ESC/Enter handling
+            self.setupConversationKeyMonitor()
+
+            // Retry activation if window is not key after short delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                guard let self = self, !self.isKeyWindow else { return }
+                NSLog("[HaloWindow] Retrying window activation...")
+                NSApp.activate(ignoringOtherApps: true)
+                self.makeKeyAndOrderFront(nil)
+            }
+        }
     }
 
     /// Setup keyboard event monitor for conversation input
@@ -830,7 +882,7 @@ extension HaloWindow {
         // Remove any existing monitor
         removeConversationKeyMonitor()
 
-        // Use local monitor since window is key
+        // Use local monitor when window is key
         conversationKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self else { return event }
 
@@ -845,6 +897,25 @@ extension HaloWindow {
             }
             return event
         }
+
+        // Also add global monitor as fallback (for when window fails to become key)
+        conversationGlobalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return }
+
+            // Only handle ESC when in conversation input state
+            guard case .conversationInput = self.haloViewModel.state else { return }
+
+            // Only handle ESC key globally (other keys need TextField focus)
+            if event.keyCode == 53 {  // Escape
+                DispatchQueue.main.async {
+                    self.removeConversationKeyMonitor()
+                    self.haloViewModel.state = .idle
+                    ConversationManager.shared.cancelConversation()
+                    self.forceHide()
+                    NSLog("[HaloWindow] Conversation cancelled by user (global monitor)")
+                }
+            }
+        }
     }
 
     /// Handle keyboard events for conversation input
@@ -856,16 +927,20 @@ extension HaloWindow {
             let text = manager.textInput.trimmingCharacters(in: .whitespacesAndNewlines)
             if !text.isEmpty {
                 removeConversationKeyMonitor()
+                // Reset state before hiding to allow forceHide() to complete
+                haloViewModel.state = .idle
                 manager.submitContinuationInput(text)
-                hide()
+                forceHide()
                 NSLog("[HaloWindow] Conversation input submitted: %@", text.prefix(50) as CVarArg)
             }
             return true
 
         case 53:  // Escape - cancel conversation
             removeConversationKeyMonitor()
+            // Reset state before hiding to allow forceHide() to complete
+            haloViewModel.state = .idle
             manager.cancelConversation()
-            hide()
+            forceHide()
             NSLog("[HaloWindow] Conversation cancelled by user")
             return true
 
@@ -879,6 +954,11 @@ extension HaloWindow {
         if let monitor = conversationKeyMonitor {
             NSEvent.removeMonitor(monitor)
             conversationKeyMonitor = nil
+        }
+
+        if let monitor = conversationGlobalKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            conversationGlobalKeyMonitor = nil
         }
 
         // Restore click-through behavior for normal Halo operation

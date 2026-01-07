@@ -114,21 +114,21 @@ class ConversationManager: ObservableObject {
 
     /// Called when the AI response is ready and continuation input can be shown
     ///
-    /// This triggers the Halo to show the conversation input UI
+    /// NOTE: This no longer posts the notification directly.
+    /// Instead, AppDelegate posts the notification AFTER the paste operation completes.
+    /// This ensures the conversation input window doesn't compete for focus with the paste.
     func onConversationContinuationReady() {
-        print("[ConversationManager] Continuation ready")
+        print("[ConversationManager] Continuation ready (notification deferred to after paste)")
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
-            // Reset input state
+            // Reset input state - prepare for continuation
             self.textInput = ""
 
-            // Post notification to show Halo conversation input
-            NotificationCenter.default.post(
-                name: .conversationContinuationReady,
-                object: self.sessionId
-            )
+            // NOTE: Do NOT post notification here!
+            // AppDelegate.outputConversationResponse will post the notification
+            // after the paste operation completes.
         }
     }
 
@@ -159,11 +159,17 @@ class ConversationManager: ObservableObject {
 
     /// Submit continuation input from user
     ///
-    /// Must be called from main thread.
+    /// Can be called from any thread - will dispatch to main thread if needed.
     ///
     /// - Parameter text: The user's continuation input
-    @MainActor
     func submitContinuationInput(_ text: String) {
+        // Ensure we're on main thread
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.submitContinuationInput(text)
+            }
+            return
+        }
         print("[ConversationManager] User submitted continuation: \(text.prefix(50))...")
 
         lock.lock()
@@ -184,9 +190,15 @@ class ConversationManager: ObservableObject {
 
     /// Cancel the current conversation
     ///
-    /// Must be called from main thread.
-    @MainActor
+    /// Can be called from any thread - will dispatch to main thread if needed.
     func cancelConversation() {
+        // Ensure we're on main thread
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.cancelConversation()
+            }
+            return
+        }
         print("[ConversationManager] Conversation cancelled by user")
 
         let currentSessionId = sessionId
