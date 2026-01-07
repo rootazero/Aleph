@@ -399,6 +399,22 @@ fileprivate class UniffiHandleMap<T> {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
+    typealias FfiType = UInt8
+    typealias SwiftType = UInt8
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt8 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: UInt8, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
@@ -1677,6 +1693,152 @@ public func FfiConverterTypeCommandNode_lower(_ value: CommandNode) -> RustBuffe
 }
 
 
+public struct ContextRuleConfig {
+    public var id: String
+    public var conditionType: String
+    public var paramName: String?
+    public var intent: String?
+    public var bundleIds: [String]
+    public var hours: [UInt8]
+    public var daysOfWeek: [UInt8]
+    public var actionType: String
+    public var useInputAsValue: Bool
+    public var capability: String?
+    public var provider: String?
+    public var systemPrompt: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, conditionType: String, paramName: String?, intent: String?, bundleIds: [String], hours: [UInt8], daysOfWeek: [UInt8], actionType: String, useInputAsValue: Bool, capability: String?, provider: String?, systemPrompt: String?) {
+        self.id = id
+        self.conditionType = conditionType
+        self.paramName = paramName
+        self.intent = intent
+        self.bundleIds = bundleIds
+        self.hours = hours
+        self.daysOfWeek = daysOfWeek
+        self.actionType = actionType
+        self.useInputAsValue = useInputAsValue
+        self.capability = capability
+        self.provider = provider
+        self.systemPrompt = systemPrompt
+    }
+}
+
+
+
+extension ContextRuleConfig: Equatable, Hashable {
+    public static func ==(lhs: ContextRuleConfig, rhs: ContextRuleConfig) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.conditionType != rhs.conditionType {
+            return false
+        }
+        if lhs.paramName != rhs.paramName {
+            return false
+        }
+        if lhs.intent != rhs.intent {
+            return false
+        }
+        if lhs.bundleIds != rhs.bundleIds {
+            return false
+        }
+        if lhs.hours != rhs.hours {
+            return false
+        }
+        if lhs.daysOfWeek != rhs.daysOfWeek {
+            return false
+        }
+        if lhs.actionType != rhs.actionType {
+            return false
+        }
+        if lhs.useInputAsValue != rhs.useInputAsValue {
+            return false
+        }
+        if lhs.capability != rhs.capability {
+            return false
+        }
+        if lhs.provider != rhs.provider {
+            return false
+        }
+        if lhs.systemPrompt != rhs.systemPrompt {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(conditionType)
+        hasher.combine(paramName)
+        hasher.combine(intent)
+        hasher.combine(bundleIds)
+        hasher.combine(hours)
+        hasher.combine(daysOfWeek)
+        hasher.combine(actionType)
+        hasher.combine(useInputAsValue)
+        hasher.combine(capability)
+        hasher.combine(provider)
+        hasher.combine(systemPrompt)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeContextRuleConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ContextRuleConfig {
+        return
+            try ContextRuleConfig(
+                id: FfiConverterString.read(from: &buf), 
+                conditionType: FfiConverterString.read(from: &buf), 
+                paramName: FfiConverterOptionString.read(from: &buf), 
+                intent: FfiConverterOptionString.read(from: &buf), 
+                bundleIds: FfiConverterSequenceString.read(from: &buf), 
+                hours: FfiConverterSequenceUInt8.read(from: &buf), 
+                daysOfWeek: FfiConverterSequenceUInt8.read(from: &buf), 
+                actionType: FfiConverterString.read(from: &buf), 
+                useInputAsValue: FfiConverterBool.read(from: &buf), 
+                capability: FfiConverterOptionString.read(from: &buf), 
+                provider: FfiConverterOptionString.read(from: &buf), 
+                systemPrompt: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ContextRuleConfig, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.conditionType, into: &buf)
+        FfiConverterOptionString.write(value.paramName, into: &buf)
+        FfiConverterOptionString.write(value.intent, into: &buf)
+        FfiConverterSequenceString.write(value.bundleIds, into: &buf)
+        FfiConverterSequenceUInt8.write(value.hours, into: &buf)
+        FfiConverterSequenceUInt8.write(value.daysOfWeek, into: &buf)
+        FfiConverterString.write(value.actionType, into: &buf)
+        FfiConverterBool.write(value.useInputAsValue, into: &buf)
+        FfiConverterOptionString.write(value.capability, into: &buf)
+        FfiConverterOptionString.write(value.provider, into: &buf)
+        FfiConverterOptionString.write(value.systemPrompt, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContextRuleConfig_lift(_ buf: RustBuffer) throws -> ContextRuleConfig {
+    return try FfiConverterTypeContextRuleConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContextRuleConfig_lower(_ value: ContextRuleConfig) -> RustBuffer {
+    return FfiConverterTypeContextRuleConfig.lower(value)
+}
+
+
 public struct ConversationTurn {
     public var turnId: UInt32
     public var userInput: String
@@ -1769,10 +1931,11 @@ public struct FullConfig {
     public var behavior: BehaviorConfig?
     public var search: SearchConfig?
     public var trigger: TriggerConfig?
+    public var smartMatching: SmartMatchingConfig
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultHotkey: String, general: GeneralConfig, memory: MemoryConfig, providers: [ProviderConfigEntry], rules: [RoutingRuleConfig], shortcuts: ShortcutsConfig?, behavior: BehaviorConfig?, search: SearchConfig?, trigger: TriggerConfig?) {
+    public init(defaultHotkey: String, general: GeneralConfig, memory: MemoryConfig, providers: [ProviderConfigEntry], rules: [RoutingRuleConfig], shortcuts: ShortcutsConfig?, behavior: BehaviorConfig?, search: SearchConfig?, trigger: TriggerConfig?, smartMatching: SmartMatchingConfig) {
         self.defaultHotkey = defaultHotkey
         self.general = general
         self.memory = memory
@@ -1782,6 +1945,7 @@ public struct FullConfig {
         self.behavior = behavior
         self.search = search
         self.trigger = trigger
+        self.smartMatching = smartMatching
     }
 }
 
@@ -1816,6 +1980,9 @@ extension FullConfig: Equatable, Hashable {
         if lhs.trigger != rhs.trigger {
             return false
         }
+        if lhs.smartMatching != rhs.smartMatching {
+            return false
+        }
         return true
     }
 
@@ -1829,6 +1996,7 @@ extension FullConfig: Equatable, Hashable {
         hasher.combine(behavior)
         hasher.combine(search)
         hasher.combine(trigger)
+        hasher.combine(smartMatching)
     }
 }
 
@@ -1848,7 +2016,8 @@ public struct FfiConverterTypeFullConfig: FfiConverterRustBuffer {
                 shortcuts: FfiConverterOptionTypeShortcutsConfig.read(from: &buf), 
                 behavior: FfiConverterOptionTypeBehaviorConfig.read(from: &buf), 
                 search: FfiConverterOptionTypeSearchConfig.read(from: &buf), 
-                trigger: FfiConverterOptionTypeTriggerConfig.read(from: &buf)
+                trigger: FfiConverterOptionTypeTriggerConfig.read(from: &buf), 
+                smartMatching: FfiConverterTypeSmartMatchingConfig.read(from: &buf)
         )
     }
 
@@ -1862,6 +2031,7 @@ public struct FfiConverterTypeFullConfig: FfiConverterRustBuffer {
         FfiConverterOptionTypeBehaviorConfig.write(value.behavior, into: &buf)
         FfiConverterOptionTypeSearchConfig.write(value.search, into: &buf)
         FfiConverterOptionTypeTriggerConfig.write(value.trigger, into: &buf)
+        FfiConverterTypeSmartMatchingConfig.write(value.smartMatching, into: &buf)
     }
 }
 
@@ -1968,6 +2138,120 @@ public func FfiConverterTypeGeneralConfig_lift(_ buf: RustBuffer) throws -> Gene
 #endif
 public func FfiConverterTypeGeneralConfig_lower(_ value: GeneralConfig) -> RustBuffer {
     return FfiConverterTypeGeneralConfig.lower(value)
+}
+
+
+public struct KeywordRuleConfig {
+    public var id: String
+    public var name: String?
+    public var keywords: [String]
+    public var matchMode: String
+    public var intentType: String
+    public var systemPrompt: String?
+    public var capabilities: [String]
+    public var minScore: Float?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, name: String?, keywords: [String], matchMode: String, intentType: String, systemPrompt: String?, capabilities: [String], minScore: Float?) {
+        self.id = id
+        self.name = name
+        self.keywords = keywords
+        self.matchMode = matchMode
+        self.intentType = intentType
+        self.systemPrompt = systemPrompt
+        self.capabilities = capabilities
+        self.minScore = minScore
+    }
+}
+
+
+
+extension KeywordRuleConfig: Equatable, Hashable {
+    public static func ==(lhs: KeywordRuleConfig, rhs: KeywordRuleConfig) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.keywords != rhs.keywords {
+            return false
+        }
+        if lhs.matchMode != rhs.matchMode {
+            return false
+        }
+        if lhs.intentType != rhs.intentType {
+            return false
+        }
+        if lhs.systemPrompt != rhs.systemPrompt {
+            return false
+        }
+        if lhs.capabilities != rhs.capabilities {
+            return false
+        }
+        if lhs.minScore != rhs.minScore {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(name)
+        hasher.combine(keywords)
+        hasher.combine(matchMode)
+        hasher.combine(intentType)
+        hasher.combine(systemPrompt)
+        hasher.combine(capabilities)
+        hasher.combine(minScore)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeKeywordRuleConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> KeywordRuleConfig {
+        return
+            try KeywordRuleConfig(
+                id: FfiConverterString.read(from: &buf), 
+                name: FfiConverterOptionString.read(from: &buf), 
+                keywords: FfiConverterSequenceString.read(from: &buf), 
+                matchMode: FfiConverterString.read(from: &buf), 
+                intentType: FfiConverterString.read(from: &buf), 
+                systemPrompt: FfiConverterOptionString.read(from: &buf), 
+                capabilities: FfiConverterSequenceString.read(from: &buf), 
+                minScore: FfiConverterOptionFloat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: KeywordRuleConfig, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterOptionString.write(value.name, into: &buf)
+        FfiConverterSequenceString.write(value.keywords, into: &buf)
+        FfiConverterString.write(value.matchMode, into: &buf)
+        FfiConverterString.write(value.intentType, into: &buf)
+        FfiConverterOptionString.write(value.systemPrompt, into: &buf)
+        FfiConverterSequenceString.write(value.capabilities, into: &buf)
+        FfiConverterOptionFloat.write(value.minScore, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKeywordRuleConfig_lift(_ buf: RustBuffer) throws -> KeywordRuleConfig {
+    return try FfiConverterTypeKeywordRuleConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKeywordRuleConfig_lower(_ value: KeywordRuleConfig) -> RustBuffer {
+    return FfiConverterTypeKeywordRuleConfig.lower(value)
 }
 
 
@@ -3412,6 +3696,120 @@ public func FfiConverterTypeShortcutsConfig_lift(_ buf: RustBuffer) throws -> Sh
 #endif
 public func FfiConverterTypeShortcutsConfig_lower(_ value: ShortcutsConfig) -> RustBuffer {
     return FfiConverterTypeShortcutsConfig.lower(value)
+}
+
+
+public struct SmartMatchingConfig {
+    public var enabled: Bool
+    public var commandConfidence: Double
+    public var regexThreshold: Double
+    public var keywordThreshold: Double
+    public var aiThreshold: Double
+    public var enableContextInference: Bool
+    public var contextRules: [ContextRuleConfig]
+    public var keywordRules: [KeywordRuleConfig]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(enabled: Bool, commandConfidence: Double, regexThreshold: Double, keywordThreshold: Double, aiThreshold: Double, enableContextInference: Bool, contextRules: [ContextRuleConfig], keywordRules: [KeywordRuleConfig]) {
+        self.enabled = enabled
+        self.commandConfidence = commandConfidence
+        self.regexThreshold = regexThreshold
+        self.keywordThreshold = keywordThreshold
+        self.aiThreshold = aiThreshold
+        self.enableContextInference = enableContextInference
+        self.contextRules = contextRules
+        self.keywordRules = keywordRules
+    }
+}
+
+
+
+extension SmartMatchingConfig: Equatable, Hashable {
+    public static func ==(lhs: SmartMatchingConfig, rhs: SmartMatchingConfig) -> Bool {
+        if lhs.enabled != rhs.enabled {
+            return false
+        }
+        if lhs.commandConfidence != rhs.commandConfidence {
+            return false
+        }
+        if lhs.regexThreshold != rhs.regexThreshold {
+            return false
+        }
+        if lhs.keywordThreshold != rhs.keywordThreshold {
+            return false
+        }
+        if lhs.aiThreshold != rhs.aiThreshold {
+            return false
+        }
+        if lhs.enableContextInference != rhs.enableContextInference {
+            return false
+        }
+        if lhs.contextRules != rhs.contextRules {
+            return false
+        }
+        if lhs.keywordRules != rhs.keywordRules {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(enabled)
+        hasher.combine(commandConfidence)
+        hasher.combine(regexThreshold)
+        hasher.combine(keywordThreshold)
+        hasher.combine(aiThreshold)
+        hasher.combine(enableContextInference)
+        hasher.combine(contextRules)
+        hasher.combine(keywordRules)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSmartMatchingConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SmartMatchingConfig {
+        return
+            try SmartMatchingConfig(
+                enabled: FfiConverterBool.read(from: &buf), 
+                commandConfidence: FfiConverterDouble.read(from: &buf), 
+                regexThreshold: FfiConverterDouble.read(from: &buf), 
+                keywordThreshold: FfiConverterDouble.read(from: &buf), 
+                aiThreshold: FfiConverterDouble.read(from: &buf), 
+                enableContextInference: FfiConverterBool.read(from: &buf), 
+                contextRules: FfiConverterSequenceTypeContextRuleConfig.read(from: &buf), 
+                keywordRules: FfiConverterSequenceTypeKeywordRuleConfig.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SmartMatchingConfig, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterDouble.write(value.commandConfidence, into: &buf)
+        FfiConverterDouble.write(value.regexThreshold, into: &buf)
+        FfiConverterDouble.write(value.keywordThreshold, into: &buf)
+        FfiConverterDouble.write(value.aiThreshold, into: &buf)
+        FfiConverterBool.write(value.enableContextInference, into: &buf)
+        FfiConverterSequenceTypeContextRuleConfig.write(value.contextRules, into: &buf)
+        FfiConverterSequenceTypeKeywordRuleConfig.write(value.keywordRules, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSmartMatchingConfig_lift(_ buf: RustBuffer) throws -> SmartMatchingConfig {
+    return try FfiConverterTypeSmartMatchingConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSmartMatchingConfig_lower(_ value: SmartMatchingConfig) -> RustBuffer {
+    return FfiConverterTypeSmartMatchingConfig.lower(value)
 }
 
 
@@ -5135,6 +5533,31 @@ fileprivate struct FfiConverterOptionSequenceTypeMediaAttachment: FfiConverterRu
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceUInt8: FfiConverterRustBuffer {
+    typealias SwiftType = [UInt8]
+
+    public static func write(_ value: [UInt8], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterUInt8.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UInt8] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [UInt8]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterUInt8.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -5227,6 +5650,56 @@ fileprivate struct FfiConverterSequenceTypeCommandNode: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeCommandNode.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeContextRuleConfig: FfiConverterRustBuffer {
+    typealias SwiftType = [ContextRuleConfig]
+
+    public static func write(_ value: [ContextRuleConfig], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeContextRuleConfig.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ContextRuleConfig] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ContextRuleConfig]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeContextRuleConfig.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeKeywordRuleConfig: FfiConverterRustBuffer {
+    typealias SwiftType = [KeywordRuleConfig]
+
+    public static func write(_ value: [KeywordRuleConfig], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeKeywordRuleConfig.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [KeywordRuleConfig] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [KeywordRuleConfig]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeKeywordRuleConfig.read(from: &buf))
         }
         return seq
     }

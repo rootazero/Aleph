@@ -263,7 +263,7 @@ struct HaloView: View {
             }
             return 140  // Height for text input
         case .conversationInput:
-            return 100  // Fixed height for conversation input
+            return 130  // Height for conversation input (header + input + hint + padding)
         default:
             return 120
         }

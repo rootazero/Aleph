@@ -250,25 +250,38 @@ impl OpenAiProvider {
 
     /// Build request body for chat completion
     fn build_request(&self, input: &str, system_prompt: Option<&str>) -> ChatCompletionRequest {
+        self.build_request_with_mode(input, system_prompt, false)
+    }
+
+    /// Build request body with explicit mode control.
+    fn build_request_with_mode(
+        &self,
+        input: &str,
+        system_prompt: Option<&str>,
+        force_standard_mode: bool,
+    ) -> ChatCompletionRequest {
         let mut messages = Vec::new();
 
         // Check system_prompt_mode: default to prepend for better compatibility
-        // Only use standard mode if explicitly set to "standard"
-        let use_prepend_mode = self
-            .config
-            .system_prompt_mode
-            .as_ref()
-            .map(|m| m.to_lowercase() != "standard")
-            .unwrap_or(true);
+        // Only use standard mode if explicitly set to "standard" OR if force_standard_mode is true
+        let use_prepend_mode = if force_standard_mode {
+            false
+        } else {
+            self.config
+                .system_prompt_mode
+                .as_ref()
+                .map(|m| m.to_lowercase() != "standard")
+                .unwrap_or(true)
+        };
 
         if use_prepend_mode {
             // Prepend system prompt to user message (for APIs that ignore system role)
             // Use a clearer format that separates instruction from user input
             let user_content = if let Some(prompt) = system_prompt {
-                // Format: [instruction]\n\n---\n\n[user input]
-                // This makes it clear what's instruction vs. content to process
+                // Format with strong emphasis on following instructions
+                // The <<< >>> markers and CRITICAL language help model understand importance
                 format!(
-                    "[指令]\n{}\n\n---\n\n[用户输入]\n{}",
+                    "<<< SYSTEM INSTRUCTIONS - YOU MUST FOLLOW EXACTLY >>>\n\n{}\n\n<<< END INSTRUCTIONS >>>\n\n<<< USER INPUT >>>\n{}",
                     prompt, input
                 )
             } else {
@@ -909,6 +922,62 @@ impl AiProvider for OpenAiProvider {
 
     fn color(&self) -> &str {
         &self.config.color
+    }
+
+    fn process_with_mode(
+        &self,
+        input: &str,
+        system_prompt: Option<&str>,
+        force_standard_mode: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        let input = input.to_string();
+        let system_prompt = system_prompt.map(|s| s.to_string());
+
+        Box::pin(async move {
+            let request_body = self.build_request_with_mode(
+                &input,
+                system_prompt.as_deref(),
+                force_standard_mode,
+            );
+
+            let response = self
+                .client
+                .post(&self.endpoint)
+                .header(
+                    "Authorization",
+                    format!(
+                        "Bearer {}",
+                        self.config.api_key.as_ref().unwrap_or(&String::new())
+                    ),
+                )
+                .header("Content-Type", "application/json")
+                .json(&request_body)
+                .send()
+                .await
+                .map_err(|e| {
+                    if e.is_timeout() {
+                        AetherError::Timeout {
+                            suggestion: Some("The OpenAI service is taking too long.".to_string()),
+                        }
+                    } else {
+                        AetherError::network(format!("Network error: {}", e))
+                    }
+                })?;
+
+            if !response.status().is_success() {
+                return Err(self.handle_error(response).await);
+            }
+
+            let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
+                AetherError::provider(format!("Failed to parse response: {}", e))
+            })?;
+
+            completion
+                .choices
+                .first()
+                .map(|c| c.message.content.clone())
+                .ok_or_else(|| AetherError::provider("No response from OpenAI"))
+        })
     }
 }
 

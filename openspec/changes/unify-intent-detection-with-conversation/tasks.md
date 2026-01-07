@@ -33,10 +33,10 @@
 ## Phase 5: Cleanup and Validation
 
 - [x] **5.1** Run `cargo build` - ensure no compile errors
-- [x] **5.2** Run `cargo test --lib` - 529 tests pass
-- [ ] **5.3** Run `cargo clippy` - fix any warnings
-- [ ] **5.4** Manual test: "今天天气怎么样" triggers clarification
-- [ ] **5.5** Manual test: Provide city → search executes → response returned
+- [x] **5.2** Run `cargo test --lib` - 530 tests pass
+- [x] **5.3** Run `cargo clippy` - fix all warnings
+- [x] **5.4** Fix search query: Use AI's `parameters.query` for more precise searches
+- [ ] **5.5** Manual test: "今天天气怎么样" triggers search with AI-refined query
 - [ ] **5.6** Manual test: Multi-turn conversation works with intent detection
 
 ## Dependencies

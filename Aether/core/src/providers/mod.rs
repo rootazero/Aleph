@@ -304,6 +304,31 @@ pub trait AiProvider: Send + Sync {
     /// # }
     /// ```
     fn color(&self) -> &str;
+
+    /// Process input with explicit mode control for system prompt handling.
+    ///
+    /// This method allows forcing "standard" mode for system prompts.
+    /// When `force_standard_mode` is true, the system prompt is sent as a
+    /// separate system role message, regardless of the provider's configured
+    /// `system_prompt_mode` setting.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The user input text to process
+    /// * `system_prompt` - Optional system prompt to guide AI behavior
+    /// * `force_standard_mode` - If true, always use system role message
+    ///
+    /// # Default Implementation
+    ///
+    /// Default implementation ignores `force_standard_mode` and calls `process()`.
+    fn process_with_mode(
+        &self,
+        input: &str,
+        system_prompt: Option<&str>,
+        _force_standard_mode: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+        self.process(input, system_prompt)
+    }
 }
 
 #[cfg(test)]

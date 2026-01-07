@@ -17,6 +17,33 @@ enum TextSource {
     case selectAll         // Accessibility failed, used Cmd+A then Cmd+X/C
 }
 
+/// Output session type - determines post-output behavior
+enum OutputSessionType {
+    case singleTurn   // Single-turn: restore clipboard after output, show success state
+    case multiTurn    // Multi-turn: don't restore clipboard, post continuation notification
+}
+
+/// Unified output context for both single-turn and multi-turn modes
+struct OutputContext {
+    /// Whether to use replace mode (true) or append mode (false)
+    let useReplaceMode: Bool
+
+    /// Text source for cursor positioning (only used in single-turn)
+    let textSource: TextSource?
+
+    /// Session type determines post-output behavior
+    let sessionType: OutputSessionType
+
+    /// Original clipboard content for restoration (single-turn only)
+    let originalClipboard: String?
+
+    /// Turn ID for multi-turn conversations (nil for single-turn)
+    let turnId: UInt32?
+
+    /// Session ID for multi-turn conversations (nil for single-turn)
+    let conversationSessionId: String?
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Menu bar status item
     private var statusItem: NSStatusItem?
@@ -975,125 +1002,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     ///   - response: The AI response text to output
     ///   - turnId: The conversation turn ID (0 = first turn)
     private func outputConversationResponse(_ response: String, turnId: UInt32 = 0) {
-        guard let core = core else {
-            print("[AppDelegate] ⚠️ Core not available for conversation output")
-            return
-        }
-
         print("[AppDelegate] Outputting conversation response (turn=\(turnId), \(response.count) chars)")
 
-        // Limit response length
-        let maxResponseLength = 5000
-        let truncatedResponse: String
-        if response.count > maxResponseLength {
-            truncatedResponse = String(response.prefix(maxResponseLength)) + "\n\n[... response truncated ...]"
-        } else {
-            truncatedResponse = response
-        }
-
-        // Load output mode from config (typewriter or instant)
-        var outputMode = "instant"  // Default to instant if config fails
-        var typingSpeed: Int = 50   // Default typing speed (chars/sec)
-        do {
-            let config = try core.loadConfig()
-            if let behavior = config.behavior {
-                outputMode = behavior.outputMode
-                typingSpeed = Int(behavior.typingSpeed)
-            }
-            print("[AppDelegate] 📋 Conversation output mode from config: \(outputMode), typing speed: \(typingSpeed) chars/sec")
-        } catch {
-            print("[AppDelegate] ⚠️ Failed to load config, using default output_mode=instant: \(error)")
-        }
-
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-
-            // Reactivate target app if needed
-            if let previousApp = self.previousFrontmostApp,
-               previousApp.bundleIdentifier != Bundle.main.bundleIdentifier {
-                print("[AppDelegate] 🔄 Reactivating target app: \(previousApp.localizedName ?? "Unknown")")
-                previousApp.activate(options: [])
-                Thread.sleep(forTimeInterval: 0.15)
-            }
-
-            // Determine output mode:
-            // - First turn (turnId == 0): use mode based on trigger hotkey
-            // - Subsequent turns (turnId > 0): always append
-            let useAppendMode: Bool
-            if turnId == 0 {
-                // First turn: check trigger hotkey mode
-                useAppendMode = !self.conversationUseCutMode
-                print("[AppDelegate] 🎯 First turn mode: conversationUseCutMode=\(self.conversationUseCutMode), useAppendMode=\(useAppendMode)")
-            } else {
-                // Subsequent turns: always append
-                useAppendMode = true
-                print("[AppDelegate] 🎯 Subsequent turn: always append mode")
-            }
-
-            // For append mode, add a newline before the response
-            if useAppendMode {
-                print("[AppDelegate] ⏎ Adding newline before response (append mode)")
-                KeyboardSimulator.shared.simulateKeyPress(.returnKey)
-                Thread.sleep(forTimeInterval: 0.05)
-            } else {
-                print("[AppDelegate] ✂️ No newline - replacing original text")
-            }
-
-            // Output based on configured mode
-            if outputMode == "typewriter" {
-                // Typewriter mode: Type character by character
-                print("[AppDelegate] ⌨️ Conversation using typewriter mode at \(typingSpeed) chars/sec")
-
-                // Create cancellation token for ESC key to cancel typewriter
-                self.typewriterCancellation = CancellationToken()
-
-                // Hide Halo during typewriting
-                self.haloWindow?.hide()
-
-                Task {
-                    let typedCount = await KeyboardSimulator.shared.typeText(
-                        truncatedResponse,
-                        speed: typingSpeed,
-                        cancellationToken: self.typewriterCancellation
-                    )
-                    print("[AppDelegate] ⌨️ Conversation typed \(typedCount)/\(truncatedResponse.count) characters")
-
-                    // Clear cancellation token after completion
-                    self.typewriterCancellation = nil
-
-                    // Show conversation input after typewriter completes
-                    await MainActor.run {
-                        if let sessionId = ConversationManager.shared.sessionId {
-                            print("[AppDelegate] 🎯 Triggering conversation input display after typewriter")
-                            NotificationCenter.default.post(
-                                name: .conversationContinuationReady,
-                                object: sessionId
-                            )
-                        }
-                    }
-                }
-            } else {
-                // Instant mode: Use paste for reliable output
-                print("[AppDelegate] 📋 Conversation using instant mode (paste)")
-                ClipboardManager.shared.setText(truncatedResponse)
-                Thread.sleep(forTimeInterval: 0.05)
-
-                let pasteSuccess = KeyboardSimulator.shared.simulatePaste()
-                print("[AppDelegate] 📋 Conversation paste (turn=\(turnId), append=\(useAppendMode)): \(pasteSuccess ? "success" : "failed")")
-
-                // Wait for paste to complete, then show conversation input
-                Thread.sleep(forTimeInterval: 0.3)
-
-                // Now show the conversation input window
-                if let sessionId = ConversationManager.shared.sessionId {
-                    print("[AppDelegate] 🎯 Triggering conversation input display after paste")
-                    NotificationCenter.default.post(
-                        name: .conversationContinuationReady,
-                        object: sessionId
-                    )
-                }
-            }
-        }
+        // Use unified output pipeline with multi-turn session type
+        let outputContext = OutputContext(
+            useReplaceMode: conversationUseCutMode,  // Use stored trigger mode
+            textSource: nil,  // Multi-turn doesn't use cursor positioning
+            sessionType: .multiTurn,
+            originalClipboard: nil,  // Multi-turn restores at conversation end
+            turnId: turnId,
+            conversationSessionId: ConversationManager.shared.sessionId
+        )
+        performOutput(response: response, context: outputContext)
     }
 
     /// Handle conversation ended - clean up and restore clipboard
@@ -1675,130 +1595,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
                 print("[AppDelegate] Received AI response (\(response.count) chars)")
 
-                // CRITICAL: Limit response length to prevent infinite output
-                let maxResponseLength = 5000  // Max 5000 characters
-                let truncatedResponse: String
-                if response.count > maxResponseLength {
-                    print("[AppDelegate] ⚠ Response too long (\(response.count) chars), truncating to \(maxResponseLength)")
-                    truncatedResponse = String(response.prefix(maxResponseLength)) + "\n\n[... response truncated due to length limit ...]"
-                } else {
-                    truncatedResponse = response
-                }
-
-                // Load output mode from config (typewriter or instant)
-                var outputMode = "instant"  // Default to instant if config fails
-                var typingSpeed: Int = 50   // Default typing speed (chars/sec)
-                do {
-                    let config = try core.loadConfig()
-                    if let behavior = config.behavior {
-                        outputMode = behavior.outputMode
-                        typingSpeed = Int(behavior.typingSpeed)
-                    }
-                    print("[AppDelegate] 📋 Output mode from config: \(outputMode), typing speed: \(typingSpeed) chars/sec")
-                } catch {
-                    print("[AppDelegate] ⚠️ Failed to load config, using default output_mode=instant: \(error)")
-                }
-
-                // Output AI response based on configured mode
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self else { return }
-
-                    print("[AppDelegate] 🎯 Starting output phase...")
-                    print("[AppDelegate] 📍 Text source: \(textSource), Replace mode: \(useCutMode)")
-                    print("[AppDelegate] 📍 Output mode: \(outputMode)")
-
-                    // CRITICAL: Reactivate target app before output
-                    // This ensures cursor is in the correct application
-                    if let previousApp = self.previousFrontmostApp,
-                       previousApp.bundleIdentifier != Bundle.main.bundleIdentifier {
-                        print("[AppDelegate] 🔄 Reactivating target app: \(previousApp.localizedName ?? "Unknown")")
-                        previousApp.activate(options: [])
-                        Thread.sleep(forTimeInterval: 0.15)
-                    }
-
-                    // CRITICAL: Prepare cursor position based on text source and input mode
-                    // This ensures AI response is placed correctly (replace vs append)
-                    self.prepareOutputPosition(textSource: textSource, useCutMode: useCutMode)
-
-                    // Small delay after cursor positioning
-                    Thread.sleep(forTimeInterval: 0.05)
-
-                    // For append mode, add a newline before the response
-                    // This ensures the AI output starts on a new line
-                    if !useCutMode {
-                        print("[AppDelegate] ⏎ Adding newline before response (append mode)")
-                        KeyboardSimulator.shared.simulateKeyPress(.returnKey)
-                        Thread.sleep(forTimeInterval: 0.05)
-                    }
-
-                    if outputMode == "typewriter" {
-                        // Typewriter mode: Type character by character
-                        print("[AppDelegate] ⌨️ Using typewriter mode at \(typingSpeed) chars/sec")
-
-                        // Create cancellation token for ESC key to cancel typewriter
-                        self.typewriterCancellation = CancellationToken()
-
-                        // Hide Halo during typewriting (keyboard icon distracted users)
-                        self.haloWindow?.hide()
-
-                        Task {
-                            let typedCount = await KeyboardSimulator.shared.typeText(
-                                truncatedResponse,
-                                speed: typingSpeed,
-                                cancellationToken: self.typewriterCancellation
-                            )
-                            print("[AppDelegate] ⌨️ Typed \(typedCount)/\(truncatedResponse.count) characters")
-
-                            // Clear cancellation token after completion
-                            self.typewriterCancellation = nil
-
-                            await MainActor.run {
-                                // Show Halo again and update to success state
-                                print("[AppDelegate] ✅ Output complete, showing success state")
-                                self.haloWindow?.showAtCurrentPosition()
-                                self.haloWindow?.updateState(.success(finalText: String(truncatedResponse.prefix(100))))
-
-                                // Auto-hide Halo after 1.5 seconds
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                                    self?.haloWindow?.hide()
-                                }
-                            }
-                        }
-                    } else {
-                        // Instant mode: Use paste for reliable output
-                        print("[AppDelegate] 📋 Using instant mode (paste)")
-                        ClipboardManager.shared.setText(truncatedResponse)
-
-                        // Small delay to ensure clipboard is updated
-                        Thread.sleep(forTimeInterval: 0.05)
-
-                        // Simulate paste
-                        print("[AppDelegate] 📋 Simulating Cmd+V to paste response")
-                        let pasteSuccess = KeyboardSimulator.shared.simulatePaste()
-                        print("[AppDelegate] 📋 Paste result: \(pasteSuccess ? "success" : "failed")")
-
-                        // CRITICAL: Restore original clipboard after a delay
-                        // This ensures user's pre-existing clipboard data is not lost
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            if let original = originalClipboardText {
-                                ClipboardManager.shared.setText(original)
-                                print("[AppDelegate] ♻️ Restored original clipboard content")
-                            } else {
-                                ClipboardManager.shared.clear()
-                                print("[AppDelegate] ♻️ Cleared clipboard (original was empty)")
-                            }
-                        }
-
-                        // Update Halo to success state and hide
-                        print("[AppDelegate] ✅ Output complete, updating Halo to success state")
-                        self.haloWindow?.updateState(.success(finalText: String(truncatedResponse.prefix(100))))
-
-                        // Auto-hide Halo after 1.5 seconds
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                            self?.haloWindow?.hide()
-                        }
-                    }
-                }
+                // Use unified output pipeline
+                let outputContext = OutputContext(
+                    useReplaceMode: useCutMode,
+                    textSource: textSource,
+                    sessionType: .singleTurn,
+                    originalClipboard: originalClipboardText,
+                    turnId: nil,
+                    conversationSessionId: nil
+                )
+                self.performOutput(response: response, context: outputContext)
             } catch {
                 print("[AppDelegate] ❌ Error processing input: \(error)")
 
@@ -1833,6 +1639,188 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                         )
                     }
                 }
+            }
+        }
+    }
+
+    // MARK: - Unified Output Pipeline
+
+    /// Unified output function for both single-turn and multi-turn modes
+    ///
+    /// This function consolidates all output logic:
+    /// 1. Load output config (outputMode, typingSpeed)
+    /// 2. Reactivate target app
+    /// 3. Prepare cursor position (single-turn only, based on textSource)
+    /// 4. Add newline for append mode
+    /// 5. Execute output (typewriter or instant)
+    /// 6. Post-output actions (based on sessionType)
+    ///
+    /// - Parameters:
+    ///   - response: The AI response text to output
+    ///   - context: Output context containing mode and session configuration
+    private func performOutput(response: String, context: OutputContext) {
+        guard let core = core else {
+            print("[AppDelegate] ⚠️ Core not available for output")
+            return
+        }
+
+        // Truncate response if needed
+        let maxResponseLength = 5000
+        let truncatedResponse: String
+        if response.count > maxResponseLength {
+            print("[AppDelegate] ⚠️ Response too long (\(response.count) chars), truncating to \(maxResponseLength)")
+            truncatedResponse = String(response.prefix(maxResponseLength)) + "\n\n[... response truncated due to length limit ...]"
+        } else {
+            truncatedResponse = response
+        }
+
+        // Load output config
+        var outputMode = "instant"
+        var typingSpeed: Int = 50
+        do {
+            let config = try core.loadConfig()
+            if let behavior = config.behavior {
+                outputMode = behavior.outputMode
+                typingSpeed = Int(behavior.typingSpeed)
+            }
+            print("[AppDelegate] 📋 Output config: mode=\(outputMode), speed=\(typingSpeed) chars/sec")
+        } catch {
+            print("[AppDelegate] ⚠️ Failed to load config, using defaults: \(error)")
+        }
+
+        // Determine append mode based on context
+        let useAppendMode: Bool
+        if let turnId = context.turnId {
+            // Multi-turn: first turn uses trigger mode, subsequent turns always append
+            if turnId == 0 {
+                useAppendMode = !context.useReplaceMode
+                print("[AppDelegate] 🎯 Multi-turn first turn: useReplaceMode=\(context.useReplaceMode), useAppendMode=\(useAppendMode)")
+            } else {
+                useAppendMode = true
+                print("[AppDelegate] 🎯 Multi-turn subsequent turn: always append mode")
+            }
+        } else {
+            // Single-turn: directly use the mode from context
+            useAppendMode = !context.useReplaceMode
+            print("[AppDelegate] 🎯 Single-turn: useReplaceMode=\(context.useReplaceMode), useAppendMode=\(useAppendMode)")
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            print("[AppDelegate] 🎯 Starting unified output phase...")
+
+            // Reactivate target app
+            if let previousApp = self.previousFrontmostApp,
+               previousApp.bundleIdentifier != Bundle.main.bundleIdentifier {
+                print("[AppDelegate] 🔄 Reactivating target app: \(previousApp.localizedName ?? "Unknown")")
+                previousApp.activate(options: [])
+                Thread.sleep(forTimeInterval: 0.15)
+            }
+
+            // Prepare cursor position (single-turn only)
+            if context.sessionType == .singleTurn, let textSource = context.textSource {
+                self.prepareOutputPosition(textSource: textSource, useCutMode: context.useReplaceMode)
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+
+            // Add newline for append mode
+            if useAppendMode {
+                print("[AppDelegate] ⏎ Adding newline before response (append mode)")
+                KeyboardSimulator.shared.simulateKeyPress(.returnKey)
+                Thread.sleep(forTimeInterval: 0.05)
+            } else {
+                print("[AppDelegate] ✂️ No newline - replacing original text")
+            }
+
+            // Execute output
+            if outputMode == "typewriter" {
+                self.executeTypewriterOutput(
+                    text: truncatedResponse,
+                    speed: typingSpeed,
+                    context: context
+                )
+            } else {
+                self.executeInstantOutput(
+                    text: truncatedResponse,
+                    context: context
+                )
+            }
+        }
+    }
+
+    /// Execute typewriter output with proper post-output handling
+    private func executeTypewriterOutput(text: String, speed: Int, context: OutputContext) {
+        print("[AppDelegate] ⌨️ Using typewriter mode at \(speed) chars/sec")
+
+        typewriterCancellation = CancellationToken()
+        haloWindow?.hide()
+
+        Task {
+            let typedCount = await KeyboardSimulator.shared.typeText(
+                text,
+                speed: speed,
+                cancellationToken: typewriterCancellation
+            )
+            print("[AppDelegate] ⌨️ Typed \(typedCount)/\(text.count) characters")
+
+            typewriterCancellation = nil
+
+            await MainActor.run {
+                self.handlePostOutput(context: context, responsePreview: String(text.prefix(100)))
+            }
+        }
+    }
+
+    /// Execute instant (paste) output with proper post-output handling
+    private func executeInstantOutput(text: String, context: OutputContext) {
+        print("[AppDelegate] 📋 Using instant mode (paste)")
+
+        ClipboardManager.shared.setText(text)
+        Thread.sleep(forTimeInterval: 0.05)
+
+        print("[AppDelegate] 📋 Simulating Cmd+V to paste response")
+        let pasteSuccess = KeyboardSimulator.shared.simulatePaste()
+        print("[AppDelegate] 📋 Paste result: \(pasteSuccess ? "success" : "failed")")
+
+        // Small delay for paste completion
+        Thread.sleep(forTimeInterval: 0.3)
+
+        handlePostOutput(context: context, responsePreview: String(text.prefix(100)))
+    }
+
+    /// Handle post-output actions based on session type
+    private func handlePostOutput(context: OutputContext, responsePreview: String) {
+        switch context.sessionType {
+        case .singleTurn:
+            // Restore clipboard after delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                if let original = context.originalClipboard {
+                    ClipboardManager.shared.setText(original)
+                    print("[AppDelegate] ♻️ Restored original clipboard content")
+                } else {
+                    ClipboardManager.shared.clear()
+                    print("[AppDelegate] ♻️ Cleared clipboard (original was empty)")
+                }
+            }
+
+            // Show success state and auto-hide
+            print("[AppDelegate] ✅ Output complete, showing success state")
+            haloWindow?.showAtCurrentPosition()
+            haloWindow?.updateState(.success(finalText: responsePreview))
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.haloWindow?.hide()
+            }
+
+        case .multiTurn:
+            // Post continuation notification
+            let sessionId = context.conversationSessionId ?? ConversationManager.shared.sessionId
+            if let sessionId = sessionId {
+                print("[AppDelegate] 🎯 Triggering conversation input display")
+                NotificationCenter.default.post(
+                    name: .conversationContinuationReady,
+                    object: sessionId
+                )
             }
         }
     }

@@ -72,18 +72,25 @@ impl PromptAssembler {
     /// Format capability instructions for the AI.
     fn format_capability_instructions(&self, capabilities: &[&CapabilityDeclaration]) -> String {
         let mut lines = vec![
-            "## Available Capabilities".to_string(),
+            "## CRITICAL: Capability System Instructions".to_string(),
             String::new(),
-            "You have access to the following capabilities. If the user's request requires real-time information or specific tools, respond with a JSON object to request capability execution.".to_string(),
+            "**YOU MUST FOLLOW THESE INSTRUCTIONS EXACTLY.**".to_string(),
             String::new(),
-            "### How to Request a Capability".to_string(),
+            "You have access to capabilities that can fetch real-time data. When the user asks about weather, news, prices, current events, or any time-sensitive information, you MUST use the appropriate capability.".to_string(),
             String::new(),
-            "To invoke a capability, respond ONLY with a JSON object in this exact format:".to_string(),
+            "### MANDATORY: How to Request a Capability".to_string(),
+            String::new(),
+            "When real-time data is needed, respond with ONLY this JSON (no other text):".to_string(),
             "```json".to_string(),
-            r#"{"__capability_request__": true, "capability": "<id>", "parameters": {"<param>": "<value>"}, "query": "<user's original question>"}"#.to_string(),
+            r#"{"__capability_request__": true, "capability": "search", "parameters": {"query": "search terms"}, "query": "original user question"}"#.to_string(),
             "```".to_string(),
             String::new(),
-            "If no capability is needed, respond directly to the user without JSON.".to_string(),
+            "**IMPORTANT RULES:**".to_string(),
+            "- For weather queries (even without location): USE search capability with location inferred or generic".to_string(),
+            "- For news/prices/current events: USE search capability".to_string(),
+            "- DO NOT ask the user for clarification about location - just search".to_string(),
+            "- DO NOT respond with natural language if a capability is needed".to_string(),
+            "- ONLY respond with natural language for non-real-time questions".to_string(),
             String::new(),
             "### Available Capabilities:".to_string(),
             String::new(),
@@ -114,11 +121,29 @@ impl PromptAssembler {
             lines.push(String::new());
         }
 
-        lines.push("### Decision Guidelines:".to_string());
+        lines.push("### Decision Guidelines (MUST FOLLOW):".to_string());
         lines.push(String::new());
-        lines.push("1. **Use `search`** when user asks about: weather, news, prices, current events, facts that may have changed, or any real-time information.".to_string());
-        lines.push("2. **Use `video`** when user provides a YouTube URL and wants to analyze, summarize, or ask questions about the video.".to_string());
-        lines.push("3. **Respond directly** for: general conversation, knowledge questions within your training, creative tasks, code help, translations, etc.".to_string());
+        lines.push("1. **ALWAYS use `search`** for: weather, news, prices, stocks, exchange rates, today, latest, current, real-time info - return JSON immediately.".to_string());
+        lines.push("2. **CRITICAL - Multi-turn context**: When user provides follow-up info (like location, date, or details) that relates to a previous real-time question in the conversation, you MUST combine the context and use search. The follow-up response IS a continuation of the original question.".to_string());
+        lines.push("3. **Use `video`** when user provides a YouTube URL.".to_string());
+        lines.push("4. **ONLY respond directly** for: translations, code help, creative writing, general knowledge that doesn't change.".to_string());
+        lines.push(String::new());
+        lines.push("**Examples:**".to_string());
+        lines.push(String::new());
+        lines.push("Single turn - stock price:".to_string());
+        lines.push("```json".to_string());
+        lines.push(r#"{"__capability_request__": true, "capability": "search", "parameters": {"query": "AAPL stock price"}, "query": "What is Apple stock price?"}"#.to_string());
+        lines.push("```".to_string());
+        lines.push(String::new());
+        lines.push("Multi-turn - Previous: \"What's the weather?\", Current: \"Beijing\":".to_string());
+        lines.push("```json".to_string());
+        lines.push(r#"{"__capability_request__": true, "capability": "search", "parameters": {"query": "Beijing weather today"}, "query": "Beijing weather"}"#.to_string());
+        lines.push("```".to_string());
+        lines.push(String::new());
+        lines.push("Multi-turn - Previous: \"Stock price?\", Current: \"Tesla\":".to_string());
+        lines.push("```json".to_string());
+        lines.push(r#"{"__capability_request__": true, "capability": "search", "parameters": {"query": "Tesla TSLA stock price"}, "query": "Tesla stock price"}"#.to_string());
+        lines.push("```".to_string());
 
         lines.join("\n")
     }

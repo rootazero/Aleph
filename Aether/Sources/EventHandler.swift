@@ -314,14 +314,16 @@ class EventHandler: AetherEventHandler {
             announceToVoiceOver("Processing request")
 
         case .success:
-            // Show success checkmark only (no text)
-            haloWindow?.updateState(.success(finalText: nil))
-            announceToVoiceOver("Request completed successfully")
-
-            // Auto-hide after 2 seconds
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                self?.haloWindow?.hide()
+            // Skip in conversation mode - the conversation input UI should remain visible
+            if case .conversationInput = haloWindow?.viewModel.state {
+                print("[EventHandler] Skipping success state - conversation input mode active")
+                return
             }
+
+            // Simply hide Halo on success - the AI response is already visible in the target window
+            // No need to show a success icon, it just adds visual noise
+            haloWindow?.hide()
+            announceToVoiceOver("Request completed successfully")
 
         case .error:
             // Do NOT hide Halo here - errors are now shown via toast notification
