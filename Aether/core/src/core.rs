@@ -1887,9 +1887,26 @@ impl AetherCore {
             capabilities.push(Capability::Memory);
         }
 
+        // Determine the search query to use:
+        // 1. If AI provided a specific query in parameters.query, use that (more precise)
+        // 2. Otherwise fall back to the original user query
+        let search_query = request
+            .parameters
+            .get("query")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| request.query.clone());
+
+        info!(
+            original_query = %request.query,
+            search_query = %search_query,
+            has_parameter_query = request.parameters.contains_key("query"),
+            "Using search query from AI capability request"
+        );
+
         // Build enriched payload using existing infrastructure
         let enriched_payload = self.runtime.block_on(self.build_enriched_payload(
-            request.query.clone(),
+            search_query,
             context.clone(),
             provider.name().to_string(),
             capabilities,
