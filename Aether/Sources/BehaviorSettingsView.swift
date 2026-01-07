@@ -50,6 +50,8 @@ struct BehaviorSettingsView: View {
         // Scrollable content only (no internal save bar)
         ScrollView {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                multiTurnCard
+
                 outputModeCard
 
                 if outputMode == .typewriter {
@@ -57,8 +59,6 @@ struct BehaviorSettingsView: View {
                 }
 
                 piiScrubbingCard
-
-                multiTurnCard
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .padding(DesignTokens.Spacing.lg)
