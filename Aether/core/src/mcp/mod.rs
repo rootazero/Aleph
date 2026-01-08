@@ -38,10 +38,16 @@
 
 pub mod builtin;
 mod client;
+pub mod external;
+pub mod jsonrpc;
+pub mod transport;
 mod types;
 
 pub use builtin::{
     BuiltinMcpService, FsService, GitService, ShellService, SystemInfoService,
 };
-pub use client::McpClient;
+pub use client::{ExternalServerConfig, McpClient, McpClientBuilder};
+pub use external::{check_runtime, McpServerConnection, RuntimeKind};
+pub use jsonrpc::{IdGenerator, JsonRpcError, JsonRpcRequest, JsonRpcResponse};
+pub use transport::StdioTransport;
 pub use types::{McpResource, McpTool, McpToolCall, McpToolResult};

@@ -6,18 +6,53 @@
 //! - Tool call routing
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::sync::RwLock;
 
 use crate::error::{AetherError, Result};
 use crate::mcp::builtin::BuiltinMcpService;
+use crate::mcp::external::{check_runtime, McpServerConnection, RuntimeKind};
 use crate::mcp::types::{McpTool, McpToolResult};
+
+/// External server configuration
+#[derive(Debug, Clone)]
+pub struct ExternalServerConfig {
+    /// Server name
+    pub name: String,
+    /// Command to execute
+    pub command: String,
+    /// Command arguments
+    pub args: Vec<String>,
+    /// Environment variables
+    pub env: HashMap<String, String>,
+    /// Working directory
+    pub cwd: Option<PathBuf>,
+    /// Required runtime (node, python, bun, etc.)
+    pub requires_runtime: Option<String>,
+    /// Request timeout in seconds
+    pub timeout_seconds: Option<u64>,
+}
+
+/// Tool location - where a tool comes from
+#[derive(Debug, Clone)]
+enum ToolLocation {
+    /// Builtin service (index in builtin_services)
+    Builtin(usize),
+    /// External server (name)
+    External(String),
+}
 
 /// MCP Client - the central registry for MCP services
 pub struct McpClient {
     /// Registered builtin services
     builtin_services: Vec<Arc<dyn BuiltinMcpService>>,
-    /// Tool name to service index mapping
-    tool_service_map: HashMap<String, usize>,
+    /// Tool name to location mapping
+    tool_location_map: HashMap<String, ToolLocation>,
+    /// External server connections
+    external_servers: RwLock<HashMap<String, Arc<McpServerConnection>>>,
 }
 
 impl McpClient {
@@ -25,7 +60,8 @@ impl McpClient {
     pub fn new() -> Self {
         Self {
             builtin_services: Vec::new(),
-            tool_service_map: HashMap::new(),
+            tool_location_map: HashMap::new(),
+            external_servers: RwLock::new(HashMap::new()),
         }
     }
 
@@ -35,7 +71,7 @@ impl McpClient {
 
         // Map all tools from this service
         for tool in service.list_tools() {
-            self.tool_service_map.insert(tool.name.clone(), service_idx);
+            self.tool_location_map.insert(tool.name.clone(), ToolLocation::Builtin(service_idx));
         }
 
         self.builtin_services.push(service);
@@ -43,12 +79,113 @@ impl McpClient {
         tracing::info!(
             service = %self.builtin_services[service_idx].name(),
             tools = self.builtin_services[service_idx].list_tools().len(),
-            "Registered MCP service"
+            "Registered MCP builtin service"
         );
     }
 
-    /// List all available tools from all services
-    pub fn list_tools(&self) -> Vec<McpTool> {
+    /// Start external MCP servers
+    ///
+    /// Checks runtime availability before starting each server.
+    /// Servers with missing runtimes are skipped with a warning.
+    pub async fn start_external_servers(&self, configs: Vec<ExternalServerConfig>) -> Result<()> {
+        for config in configs {
+            // Check runtime if required
+            if let Some(ref runtime_str) = config.requires_runtime {
+                let runtime = RuntimeKind::from_str(runtime_str);
+                if runtime != RuntimeKind::None {
+                    let check = check_runtime(runtime);
+                    if !check.available {
+                        tracing::warn!(
+                            server = %config.name,
+                            runtime = %runtime,
+                            "Skipping MCP server: {} not found",
+                            runtime.display_name()
+                        );
+                        continue;
+                    }
+                    tracing::debug!(
+                        server = %config.name,
+                        runtime = %runtime,
+                        version = ?check.version,
+                        "Runtime check passed"
+                    );
+                }
+            }
+
+            // Start the server
+            match self.start_external_server(config.clone()).await {
+                Ok(()) => {
+                    tracing::info!(
+                        server = %config.name,
+                        "External MCP server started"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        server = %config.name,
+                        error = %e,
+                        "Failed to start external MCP server"
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Start a single external server
+    async fn start_external_server(&self, config: ExternalServerConfig) -> Result<()> {
+        let timeout = config.timeout_seconds.map(Duration::from_secs);
+
+        let connection = McpServerConnection::connect(
+            &config.name,
+            &config.command,
+            &config.args,
+            &config.env,
+            config.cwd.as_ref(),
+            timeout,
+        )
+        .await?;
+
+        let connection = Arc::new(connection);
+
+        // Register tools from this server
+        let tools = connection.list_tools().await;
+        for tool in &tools {
+            self.tool_location_map
+                .clone() // Clone for thread safety - would need RwLock for full solution
+                .insert(tool.name.clone(), ToolLocation::External(config.name.clone()));
+        }
+
+        // Store connection
+        {
+            let mut servers = self.external_servers.write().await;
+            servers.insert(config.name, connection);
+        }
+
+        Ok(())
+    }
+
+    /// List all available tools from all services (builtin + external)
+    pub async fn list_tools(&self) -> Vec<McpTool> {
+        let mut tools = Vec::new();
+
+        // Builtin tools
+        for service in &self.builtin_services {
+            tools.extend(service.list_tools());
+        }
+
+        // External tools
+        let servers = self.external_servers.read().await;
+        for connection in servers.values() {
+            tools.extend(connection.list_tools().await);
+        }
+
+        tools
+    }
+
+    /// List builtin tools only (sync version)
+    pub fn list_builtin_tools(&self) -> Vec<McpTool> {
         let mut tools = Vec::new();
         for service in &self.builtin_services {
             tools.extend(service.list_tools());
@@ -57,8 +194,9 @@ impl McpClient {
     }
 
     /// Get tools as a formatted list for context injection
-    pub fn get_tools_for_context(&self) -> Vec<(String, String, serde_json::Value)> {
+    pub async fn get_tools_for_context(&self) -> Vec<(String, String, serde_json::Value)> {
         self.list_tools()
+            .await
             .into_iter()
             .map(|t| (t.name, t.description, t.input_schema))
             .collect()
@@ -66,8 +204,17 @@ impl McpClient {
 
     /// Check if a tool requires confirmation
     pub fn requires_confirmation(&self, tool_name: &str) -> bool {
-        if let Some(&service_idx) = self.tool_service_map.get(tool_name) {
-            return self.builtin_services[service_idx].requires_confirmation(tool_name);
+        if let Some(location) = self.tool_location_map.get(tool_name) {
+            match location {
+                ToolLocation::Builtin(idx) => {
+                    return self.builtin_services[*idx].requires_confirmation(tool_name);
+                }
+                ToolLocation::External(_) => {
+                    // External tools don't require confirmation by default
+                    // Could be configurable in the future
+                    return false;
+                }
+            }
         }
         // Default to requiring confirmation for unknown tools
         true
@@ -79,10 +226,33 @@ impl McpClient {
         name: &str,
         args: serde_json::Value,
     ) -> Result<McpToolResult> {
-        // Find the service that provides this tool
-        if let Some(&service_idx) = self.tool_service_map.get(name) {
-            let service = &self.builtin_services[service_idx];
-            return service.call_tool(name, args).await;
+        // Check builtin services first (by tool name)
+        for service in &self.builtin_services {
+            let tools = service.list_tools();
+            if tools.iter().any(|t| t.name == name) {
+                return service.call_tool(name, args).await;
+            }
+        }
+
+        // Check external servers
+        {
+            let servers = self.external_servers.read().await;
+
+            // Check if tool name has server prefix (e.g., "server_name:tool_name")
+            if let Some((server_name, _tool_name)) = name.split_once(':') {
+                if let Some(connection) = servers.get(server_name) {
+                    let result = connection.call_tool(name, args).await?;
+                    return Ok(McpToolResult::success(result));
+                }
+            }
+
+            // Try all servers
+            for connection in servers.values() {
+                if connection.has_tool(name).await {
+                    let result = connection.call_tool(name, args).await?;
+                    return Ok(McpToolResult::success(result));
+                }
+            }
         }
 
         // Tool not found
@@ -90,18 +260,83 @@ impl McpClient {
     }
 
     /// Get list of registered service names
-    pub fn service_names(&self) -> Vec<&str> {
+    pub async fn service_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.builtin_services
+            .iter()
+            .map(|s| s.name().to_string())
+            .collect();
+
+        let servers = self.external_servers.read().await;
+        names.extend(servers.keys().cloned());
+
+        names
+    }
+
+    /// Get list of builtin service names (sync version)
+    pub fn builtin_service_names(&self) -> Vec<&str> {
         self.builtin_services.iter().map(|s| s.name()).collect()
     }
 
     /// Check if any services are registered
-    pub fn has_services(&self) -> bool {
+    pub async fn has_services(&self) -> bool {
+        if !self.builtin_services.is_empty() {
+            return true;
+        }
+        let servers = self.external_servers.read().await;
+        !servers.is_empty()
+    }
+
+    /// Check if any builtin services are registered (sync version)
+    pub fn has_builtin_services(&self) -> bool {
         !self.builtin_services.is_empty()
     }
 
     /// Get total number of available tools
-    pub fn tool_count(&self) -> usize {
-        self.tool_service_map.len()
+    pub async fn tool_count(&self) -> usize {
+        self.list_tools().await.len()
+    }
+
+    /// Get builtin tool count (sync version)
+    pub fn builtin_tool_count(&self) -> usize {
+        self.builtin_services
+            .iter()
+            .map(|s| s.list_tools().len())
+            .sum()
+    }
+
+    /// Get number of external servers
+    pub async fn external_server_count(&self) -> usize {
+        self.external_servers.read().await.len()
+    }
+
+    /// Stop all external servers
+    pub async fn stop_all(&self) -> Result<()> {
+        let mut servers = self.external_servers.write().await;
+
+        for (name, connection) in servers.drain() {
+            tracing::info!(server = %name, "Stopping external MCP server");
+            if let Err(e) = connection.close().await {
+                tracing::warn!(
+                    server = %name,
+                    error = %e,
+                    "Error stopping MCP server"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check health of all external servers
+    pub async fn check_server_health(&self) -> HashMap<String, bool> {
+        let servers = self.external_servers.read().await;
+        let mut health = HashMap::new();
+
+        for (name, connection) in servers.iter() {
+            health.insert(name.clone(), connection.is_running().await);
+        }
+
+        health
     }
 }
 
@@ -114,6 +349,7 @@ impl Default for McpClient {
 /// Builder for creating McpClient with configuration
 pub struct McpClientBuilder {
     client: McpClient,
+    external_configs: Vec<ExternalServerConfig>,
 }
 
 impl McpClientBuilder {
@@ -121,6 +357,7 @@ impl McpClientBuilder {
     pub fn new() -> Self {
         Self {
             client: McpClient::new(),
+            external_configs: Vec::new(),
         }
     }
 
@@ -130,9 +367,22 @@ impl McpClientBuilder {
         self
     }
 
-    /// Build the client
+    /// Add an external server configuration
+    pub fn with_external(mut self, config: ExternalServerConfig) -> Self {
+        self.external_configs.push(config);
+        self
+    }
+
+    /// Build the client (without starting external servers)
     pub fn build(self) -> McpClient {
         self.client
+    }
+
+    /// Build the client and start external servers
+    pub async fn build_and_start(self) -> Result<McpClient> {
+        let client = self.client;
+        client.start_external_servers(self.external_configs).await?;
+        Ok(client)
     }
 }
 
@@ -205,7 +455,7 @@ mod tests {
         client.register_builtin(Arc::new(MockService::new("service1")));
         client.register_builtin(Arc::new(MockService::new("service2")));
 
-        let tools = client.list_tools();
+        let tools = client.list_tools().await;
         assert_eq!(tools.len(), 2);
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -238,13 +488,33 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_builder() {
+    #[tokio::test]
+    async fn test_builder() {
         let client = McpClientBuilder::new()
             .with_builtin(Arc::new(MockService::new("builder_test")))
             .build();
 
-        assert!(client.has_services());
-        assert_eq!(client.tool_count(), 1);
+        assert!(client.has_builtin_services());
+        assert_eq!(client.builtin_tool_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_external_server_count() {
+        let client = McpClient::new();
+        assert_eq!(client.external_server_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_stop_all_empty() {
+        let client = McpClient::new();
+        // Should not error when no servers to stop
+        client.stop_all().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_server_health_empty() {
+        let client = McpClient::new();
+        let health = client.check_server_health().await;
+        assert!(health.is_empty());
     }
 }

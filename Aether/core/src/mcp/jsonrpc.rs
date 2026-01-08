@@ -1,0 +1,426 @@
+//! JSON-RPC 2.0 Protocol Implementation
+//!
+//! Provides types and utilities for MCP's JSON-RPC based communication.
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// JSON-RPC 2.0 Request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonRpcRequest {
+    /// JSON-RPC version (always "2.0")
+    pub jsonrpc: String,
+    /// Request ID for matching responses
+    pub id: u64,
+    /// Method name to invoke
+    pub method: String,
+    /// Optional parameters
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<Value>,
+}
+
+impl JsonRpcRequest {
+    /// Create a new JSON-RPC request
+    pub fn new(id: u64, method: impl Into<String>) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id,
+            method: method.into(),
+            params: None,
+        }
+    }
+
+    /// Create a new request with parameters
+    pub fn with_params(id: u64, method: impl Into<String>, params: Value) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id,
+            method: method.into(),
+            params: Some(params),
+        }
+    }
+
+    /// Serialize to JSON string with newline delimiter
+    pub fn to_json_line(&self) -> Result<String, serde_json::Error> {
+        let json = serde_json::to_string(self)?;
+        Ok(format!("{}\n", json))
+    }
+}
+
+/// JSON-RPC 2.0 Response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonRpcResponse {
+    /// JSON-RPC version (always "2.0")
+    pub jsonrpc: String,
+    /// Request ID this response corresponds to
+    pub id: Option<u64>,
+    /// Successful result (mutually exclusive with error)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    /// Error object (mutually exclusive with result)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<JsonRpcError>,
+}
+
+impl JsonRpcResponse {
+    /// Check if this is a successful response
+    pub fn is_success(&self) -> bool {
+        self.error.is_none() && self.result.is_some()
+    }
+
+    /// Check if this is an error response
+    pub fn is_error(&self) -> bool {
+        self.error.is_some()
+    }
+
+    /// Get the result, consuming the response
+    pub fn into_result(self) -> Result<Value, JsonRpcError> {
+        if let Some(error) = self.error {
+            Err(error)
+        } else {
+            Ok(self.result.unwrap_or(Value::Null))
+        }
+    }
+
+    /// Parse from JSON string
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+}
+
+/// JSON-RPC 2.0 Error Object
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonRpcError {
+    /// Error code
+    pub code: i32,
+    /// Human-readable error message
+    pub message: String,
+    /// Optional additional data
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+}
+
+impl std::fmt::Display for JsonRpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "JSON-RPC Error {}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for JsonRpcError {}
+
+/// Standard JSON-RPC error codes
+pub mod error_codes {
+    /// Parse error - Invalid JSON
+    pub const PARSE_ERROR: i32 = -32700;
+    /// Invalid Request - Not a valid JSON-RPC request
+    pub const INVALID_REQUEST: i32 = -32600;
+    /// Method not found
+    pub const METHOD_NOT_FOUND: i32 = -32601;
+    /// Invalid params
+    pub const INVALID_PARAMS: i32 = -32602;
+    /// Internal error
+    pub const INTERNAL_ERROR: i32 = -32603;
+}
+
+/// Thread-safe request ID generator
+pub struct IdGenerator {
+    next_id: AtomicU64,
+}
+
+impl IdGenerator {
+    /// Create a new ID generator starting from 1
+    pub fn new() -> Self {
+        Self {
+            next_id: AtomicU64::new(1),
+        }
+    }
+
+    /// Generate the next unique ID
+    pub fn next(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::SeqCst)
+    }
+}
+
+impl Default for IdGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// MCP-specific message types
+pub mod mcp {
+    use super::*;
+
+    /// MCP Initialize request parameters
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct InitializeParams {
+        /// Protocol version
+        pub protocol_version: String,
+        /// Client capabilities
+        pub capabilities: ClientCapabilities,
+        /// Client info
+        pub client_info: ClientInfo,
+    }
+
+    /// Client capabilities
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    pub struct ClientCapabilities {
+        /// Supported features
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub experimental: Option<Value>,
+    }
+
+    /// Client info
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ClientInfo {
+        /// Client name
+        pub name: String,
+        /// Client version
+        pub version: String,
+    }
+
+    /// MCP Initialize response result
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct InitializeResult {
+        /// Protocol version
+        pub protocol_version: String,
+        /// Server capabilities
+        pub capabilities: ServerCapabilities,
+        /// Server info
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub server_info: Option<ServerInfo>,
+    }
+
+    /// Server capabilities
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    pub struct ServerCapabilities {
+        /// Tool support
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub tools: Option<ToolCapability>,
+        /// Resource support
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub resources: Option<ResourceCapability>,
+        /// Prompt support
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub prompts: Option<PromptCapability>,
+    }
+
+    /// Tool capability config
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ToolCapability {
+        /// List changed notifications
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub list_changed: Option<bool>,
+    }
+
+    /// Resource capability config
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ResourceCapability {
+        /// Subscribe support
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub subscribe: Option<bool>,
+        /// List changed notifications
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub list_changed: Option<bool>,
+    }
+
+    /// Prompt capability config
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct PromptCapability {
+        /// List changed notifications
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub list_changed: Option<bool>,
+    }
+
+    /// Server info
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ServerInfo {
+        /// Server name
+        pub name: String,
+        /// Server version
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub version: Option<String>,
+    }
+
+    /// MCP Tool definition from server
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ToolDefinition {
+        /// Tool name
+        pub name: String,
+        /// Tool description
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub description: Option<String>,
+        /// Input schema (JSON Schema)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub input_schema: Option<Value>,
+    }
+
+    /// Tools list response
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ToolsListResult {
+        /// Available tools
+        pub tools: Vec<ToolDefinition>,
+    }
+
+    /// Tool call request parameters
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct ToolCallParams {
+        /// Tool name
+        pub name: String,
+        /// Tool arguments
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub arguments: Option<Value>,
+    }
+
+    /// Tool call result content
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(tag = "type")]
+    pub enum ToolResultContent {
+        /// Text content
+        #[serde(rename = "text")]
+        Text { text: String },
+        /// Image content (base64)
+        #[serde(rename = "image")]
+        Image { data: String, mime_type: String },
+        /// Resource reference
+        #[serde(rename = "resource")]
+        Resource { uri: String, text: Option<String> },
+    }
+
+    /// Tool call result
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ToolCallResult {
+        /// Result content
+        pub content: Vec<ToolResultContent>,
+        /// Whether the tool execution failed
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub is_error: Option<bool>,
+    }
+
+    impl InitializeParams {
+        /// Create default initialize params for Aether
+        pub fn aether_default() -> Self {
+            Self {
+                protocol_version: "2024-11-05".to_string(),
+                capabilities: ClientCapabilities::default(),
+                client_info: ClientInfo {
+                    name: "Aether".to_string(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_request_serialization() {
+        let req = JsonRpcRequest::new(1, "test_method");
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"jsonrpc\":\"2.0\""));
+        assert!(json.contains("\"id\":1"));
+        assert!(json.contains("\"method\":\"test_method\""));
+    }
+
+    #[test]
+    fn test_request_with_params() {
+        let req = JsonRpcRequest::with_params(2, "tools/call", json!({"name": "test_tool"}));
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("\"params\""));
+        assert!(json.contains("\"name\":\"test_tool\""));
+    }
+
+    #[test]
+    fn test_request_to_json_line() {
+        let req = JsonRpcRequest::new(1, "test");
+        let line = req.to_json_line().unwrap();
+        assert!(line.ends_with('\n'));
+    }
+
+    #[test]
+    fn test_response_success() {
+        let json = r#"{"jsonrpc":"2.0","id":1,"result":{"data":"test"}}"#;
+        let resp: JsonRpcResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.is_success());
+        assert!(!resp.is_error());
+        assert_eq!(resp.result.unwrap()["data"], "test");
+    }
+
+    #[test]
+    fn test_response_error() {
+        let json = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#;
+        let resp: JsonRpcResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.is_error());
+        assert!(!resp.is_success());
+        let err = resp.error.unwrap();
+        assert_eq!(err.code, error_codes::METHOD_NOT_FOUND);
+    }
+
+    #[test]
+    fn test_into_result_success() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(1),
+            result: Some(json!({"status": "ok"})),
+            error: None,
+        };
+        let result = resp.into_result().unwrap();
+        assert_eq!(result["status"], "ok");
+    }
+
+    #[test]
+    fn test_into_result_error() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(1),
+            result: None,
+            error: Some(JsonRpcError {
+                code: -32600,
+                message: "Invalid request".to_string(),
+                data: None,
+            }),
+        };
+        let result = resp.into_result();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_id_generator() {
+        let gen = IdGenerator::new();
+        assert_eq!(gen.next(), 1);
+        assert_eq!(gen.next(), 2);
+        assert_eq!(gen.next(), 3);
+    }
+
+    #[test]
+    fn test_mcp_initialize_params() {
+        let params = mcp::InitializeParams::aether_default();
+        assert_eq!(params.client_info.name, "Aether");
+        let json = serde_json::to_string(&params).unwrap();
+        assert!(json.contains("protocolVersion"));
+    }
+
+    #[test]
+    fn test_tool_definition_deserialization() {
+        let json = r#"{
+            "name": "file_read",
+            "description": "Read a file",
+            "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}}
+        }"#;
+        let tool: mcp::ToolDefinition = serde_json::from_str(json).unwrap();
+        assert_eq!(tool.name, "file_read");
+        assert!(tool.description.is_some());
+    }
+}
