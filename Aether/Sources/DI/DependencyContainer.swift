@@ -264,10 +264,7 @@ enum DependencyError: LocalizedError {
 
 // HaloWindowController - Implemented in Controllers/HaloWindowController.swift
 
-/// Placeholder for InputCoordinator (to be extracted from AppDelegate)
-class InputCoordinator {
-    // TODO: Implement in Step 1.5
-}
+// InputCoordinator - Implemented in Coordinator/InputCoordinator.swift
 
 // OutputCoordinator - Implemented in Coordinator/OutputCoordinator.swift
 

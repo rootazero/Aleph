@@ -35,6 +35,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Output coordinator for managing AI response output
     private var outputCoordinator: OutputCoordinator?
 
+    // Input coordinator for managing input capture
+    private var inputCoordinator: InputCoordinator?
+
     // Settings window (used by legacy Settings scene and WindowGroup)
     private var settingsWindow: NSWindow?
 
@@ -616,8 +619,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 haloWindowController?.configureCore(core)
                 // Configure output coordinator with core and halo window controller
                 outputCoordinator?.configure(core: core, haloWindowController: haloWindowController)
+                // Configure input coordinator with core, halo window controller, and event handler
+                inputCoordinator?.configure(core: core, haloWindowController: haloWindowController, eventHandler: eventHandler)
             }
-            print("[Aether] CommandCompletionManager and OutputCoordinator configured")
+            print("[Aether] CommandCompletionManager, OutputCoordinator, and InputCoordinator configured")
 
             // Set up command mode hotkey (Cmd+Opt+/)
             setupCommandModeHotkey()
@@ -726,6 +731,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         print("[Aether] Showing permission gate - permissions not granted")
 
         isPermissionGateActive = true
+        inputCoordinator?.isPermissionGateActive = true
 
         // Disable settings menu item
         settingsMenuItem?.isEnabled = false
@@ -780,6 +786,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         print("[Aether] Permission gate dismissed - all permissions granted")
 
         isPermissionGateActive = false
+        inputCoordinator?.isPermissionGateActive = false
 
         // Enable settings menu item
         settingsMenuItem?.isEnabled = true
@@ -901,6 +908,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Initialize output coordinator (will configure with core after Rust core init)
         outputCoordinator = OutputCoordinator()
         outputCoordinator?.start()
+
+        // Initialize input coordinator with callback to processWithInputMode
+        inputCoordinator = InputCoordinator()
+        inputCoordinator?.onProcessInput = { [weak self] useCutMode in
+            self?.processWithInputMode(useCutMode: useCutMode)
+        }
 
         // Start clipboard monitoring for context tracking
         ClipboardMonitor.shared.startMonitoring()
@@ -2034,14 +2047,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         print("[AppDelegate] Initializing trigger system: replace=\(replaceKey.rawValue), append=\(appendKey.rawValue)")
 
         // Create GlobalHotkeyMonitor with Replace/Append callbacks
+        // Delegate to InputCoordinator for trigger handling
         hotkeyMonitor = GlobalHotkeyMonitor(
             replaceKey: replaceKey,
             appendKey: appendKey,
             onReplaceTriggered: { [weak self] in
-                self?.handleReplaceTriggered()
+                self?.inputCoordinator?.handleReplaceTriggered()
             },
             onAppendTriggered: { [weak self] in
-                self?.handleAppendTriggered()
+                self?.inputCoordinator?.handleAppendTriggered()
             }
         )
 
@@ -2064,83 +2078,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         print("[AppDelegate] Trigger config updated: replace=\(replaceKey.rawValue), append=\(appendKey.rawValue)")
     }
 
-    // MARK: - Trigger Handlers (New Architecture)
-
-    /// Handle Replace trigger (double-tap replace hotkey, default: left Shift)
-    ///
-    /// AI response replaces the original selected text.
-    private func handleReplaceTriggered() {
-        print("[AppDelegate] 🔄 Replace triggered")
-
-        // Block if permission gate is active or core not initialized
-        guard !isPermissionGateActive, core != nil else {
-            print("[AppDelegate] ⚠️ Replace blocked - permission gate or core not ready")
-            NSSound.beep()
-            return
-        }
-
-        // NOTE: conversationUseCutMode is now set in processWithInputMode()
-        // to ensure it's set on main thread BEFORE async processing starts
-
-        // Store frontmost app
-        previousFrontmostApp = NSWorkspace.shared.frontmostApplication
-        print("[AppDelegate] 📱 Stored frontmost app: \(previousFrontmostApp?.localizedName ?? "Unknown")")
-
-        // Get best position for Halo
-        let haloPosition = CaretPositionHelper.getBestPosition()
-
-        // Show Halo immediately with processing state
-        if Thread.isMainThread {
-            haloWindow?.show(at: haloPosition)
-            haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
-        } else {
-            DispatchQueue.main.sync { [weak self] in
-                self?.haloWindow?.show(at: haloPosition)
-                self?.haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
-            }
-        }
-
-        // Process with replace mode (AI response replaces original text)
-        processWithInputMode(useCutMode: true)
-    }
-
-    /// Handle Append trigger (double-tap append hotkey, default: right Shift)
-    ///
-    /// AI response appends after the original selected text.
-    private func handleAppendTriggered() {
-        print("[AppDelegate] ➕ Append triggered")
-
-        // Block if permission gate is active or core not initialized
-        guard !isPermissionGateActive, core != nil else {
-            print("[AppDelegate] ⚠️ Append blocked - permission gate or core not ready")
-            NSSound.beep()
-            return
-        }
-
-        // NOTE: conversationUseCutMode is now set in processWithInputMode()
-        // to ensure it's set on main thread BEFORE async processing starts
-
-        // Store frontmost app
-        previousFrontmostApp = NSWorkspace.shared.frontmostApplication
-        print("[AppDelegate] 📱 Stored frontmost app: \(previousFrontmostApp?.localizedName ?? "Unknown")")
-
-        // Get best position for Halo
-        let haloPosition = CaretPositionHelper.getBestPosition()
-
-        // Show Halo immediately with processing state
-        if Thread.isMainThread {
-            haloWindow?.show(at: haloPosition)
-            haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
-        } else {
-            DispatchQueue.main.sync { [weak self] in
-                self?.haloWindow?.show(at: haloPosition)
-                self?.haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
-            }
-        }
-
-        // Process with append mode (AI response appends after original text)
-        processWithInputMode(useCutMode: false)
-    }
+    // NOTE: handleReplaceTriggered() and handleAppendTriggered() moved to InputCoordinator.swift
 
     // MARK: - Language Preference
 
