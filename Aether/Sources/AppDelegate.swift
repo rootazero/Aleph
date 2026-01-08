@@ -1728,7 +1728,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // Add newline for append mode
             if useAppendMode {
                 print("[AppDelegate] ⏎ Adding newline before response (append mode)")
-                KeyboardSimulator.shared.simulateKeyPress(.returnKey)
+                // Use typeTextInstant which calls typeSpecialKey with privateState
+                // This properly isolates modifier key state and clears flags
+                // More reliable than simulateKeyPress across different apps (e.g., Notes)
+                KeyboardSimulator.shared.typeTextInstant("\n")
                 Thread.sleep(forTimeInterval: 0.05)
             } else {
                 print("[AppDelegate] ✂️ No newline - replacing original text")
