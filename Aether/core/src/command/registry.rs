@@ -157,9 +157,10 @@ impl CommandRegistry {
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|| format!("/{} command", key));
 
-        // Truncate description if too long
-        let description = if description.len() > 50 {
-            format!("{}...", &description[..47])
+        // Truncate description if too long (using char boundaries for UTF-8 safety)
+        let description = if description.chars().count() > 50 {
+            let truncated: String = description.chars().take(47).collect();
+            format!("{}...", truncated)
         } else {
             description
         };

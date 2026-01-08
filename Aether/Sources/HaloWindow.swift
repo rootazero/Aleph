@@ -132,6 +132,41 @@ class HaloWindow: NSWindow {
         return false
     }
 
+    // MARK: - Click to Reactivate
+
+    /// Handle all events to reactivate window when it has lost focus
+    ///
+    /// When the window is in conversationInput or text clarification mode and loses
+    /// focus (e.g., user clicked on another app), clicking on the window should
+    /// reactivate it so the TextField can receive keyboard input again.
+    ///
+    /// We use sendEvent instead of mouseDown because mouseDown may be consumed
+    /// by child views (like TextField) before reaching the window.
+    override func sendEvent(_ event: NSEvent) {
+        // Only handle left mouse down events
+        if event.type == .leftMouseDown {
+            // Check if window should be activatable
+            let shouldActivate: Bool
+            switch haloViewModel.state {
+            case .conversationInput:
+                shouldActivate = true
+            case .clarification(let request):
+                shouldActivate = request.clarificationType == .text
+            default:
+                shouldActivate = false
+            }
+
+            // If window should be key but isn't, reactivate it
+            if shouldActivate && !isKeyWindow {
+                NSLog("[HaloWindow] Reactivating window on click (was not key window)")
+                NSApp.activate(ignoringOtherApps: true)
+                makeKeyAndOrderFront(nil)
+            }
+        }
+
+        super.sendEvent(event)
+    }
+
     // MARK: - Public API
 
     /// Set event handler reference for error action callbacks
