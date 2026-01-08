@@ -28,16 +28,8 @@
 //! - `SkillsRegistry`: Manages loaded skills from the skills directory
 //! - `SkillsInstaller`: Downloads and installs skills from GitHub/ZIP
 //!
-//! # Unified Skills Model (refactor-skills-ui-architecture)
-//!
-//! The unified module provides a single data model for all skill types:
-//! - BuiltinMcp: Builtin MCP services (Rust native)
-//! - ExternalMcp: External MCP servers (subprocess)
-//! - PromptTemplate: Prompt template skills (SKILL.md)
-
 pub mod installer;
 pub mod registry;
-pub mod unified;
 
 use crate::error::{AetherError, Result};
 use serde::{Deserialize, Serialize};
@@ -172,10 +164,6 @@ pub struct SkillInfo {
 // Re-exports
 pub use installer::SkillsInstaller;
 pub use registry::SkillsRegistry;
-pub use unified::{
-    McpTransport, UnifiedEnvVar, UnifiedSkillConfig, UnifiedSkillPermissions, UnifiedSkillStatus,
-    UnifiedSkillStatusInfo, UnifiedSkillType,
-};
 
 #[cfg(test)]
 mod tests {

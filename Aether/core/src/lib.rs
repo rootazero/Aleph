@@ -136,11 +136,7 @@ pub use crate::conversation::{ConversationManager, ConversationSession, Conversa
 pub use crate::intent::{AiIntentDetector, AiIntentResult};
 pub use crate::coordination::{ConversationAwareRouter, RoutingContext, RoutingResult};
 pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
-pub use crate::skills::{
-    McpTransport, Skill, SkillInfo, SkillsInstaller, SkillsRegistry, UnifiedEnvVar,
-    UnifiedSkillConfig, UnifiedSkillPermissions, UnifiedSkillStatus, UnifiedSkillStatusInfo,
-    UnifiedSkillType,
-};
+pub use crate::skills::{Skill, SkillInfo, SkillsInstaller, SkillsRegistry};
 pub use crate::mcp::{
     McpEnvVar, McpServerConfig, McpServerPermissions, McpServerStatus, McpServerStatusInfo,
     McpServerType, McpServiceInfo, McpSettingsConfig, McpToolInfo,
