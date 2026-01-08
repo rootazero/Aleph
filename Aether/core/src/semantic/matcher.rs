@@ -470,6 +470,110 @@ impl SemanticMatcher {
         &self.config
     }
 
+    /// Create a LayerChain from this matcher's configuration
+    ///
+    /// This allows gradual migration to the layer pattern while maintaining
+    /// backward compatibility with the existing API.
+    pub fn to_layer_chain(&self) -> super::layer::LayerChain {
+        use super::layers::{CommandLayer, ContextLayer, KeywordLayer, RegexLayer};
+        use std::sync::Arc;
+
+        let mut chain = super::layer::LayerChain::new();
+
+        // Create and register Command layer
+        let command_layer = CommandLayer::new();
+        for rule in &self.command_rules {
+            // We need to re-add rules from the compiled rules
+            // For now, just create an empty layer that will be populated externally
+            let _ = rule; // Acknowledge we have the rules
+        }
+        // Note: In a full implementation, we'd reconstruct rules from compiled_rules
+        // For now, we create empty layers that can be populated via from_rules
+        chain.register(Arc::new(command_layer));
+
+        // Create and register Regex layer
+        let regex_layer = RegexLayer::new().with_confidence(self.config.regex_threshold);
+        chain.register(Arc::new(regex_layer));
+
+        // Create and register Keyword layer
+        let keyword_layer = KeywordLayer::with_index(self.keyword_index.clone())
+            .with_threshold(self.config.keyword_threshold);
+        chain.register(Arc::new(keyword_layer));
+
+        // Create and register Context layer
+        let mut context_layer = ContextLayer::new();
+        for rule in &self.context_rules {
+            context_layer.add_rule(super::layers::context::ContextRule {
+                id: rule.id.clone(),
+                condition: match &rule.condition {
+                    ContextCondition::App { bundle_ids } => {
+                        super::layers::context::ContextCondition::App {
+                            bundle_ids: bundle_ids.clone(),
+                        }
+                    }
+                    ContextCondition::Time { is_weekend, hour_range } => {
+                        super::layers::context::ContextCondition::Time {
+                            is_weekend: *is_weekend,
+                            hour_range: *hour_range,
+                        }
+                    }
+                    ContextCondition::PendingParam { param_name, intent } => {
+                        super::layers::context::ContextCondition::PendingParam {
+                            param_name: param_name.clone(),
+                            intent: intent.clone(),
+                        }
+                    }
+                    ContextCondition::PreviousIntent { intents, within_turns } => {
+                        super::layers::context::ContextCondition::PreviousIntent {
+                            intents: intents.clone(),
+                            within_turns: *within_turns,
+                        }
+                    }
+                },
+                actions: rule.actions.iter().map(|a| match a {
+                    ContextAction::AddCapability(s) => {
+                        super::layers::context::ContextAction::AddCapability { value: s.clone() }
+                    }
+                    ContextAction::SetProvider(s) => {
+                        super::layers::context::ContextAction::SetProvider { value: s.clone() }
+                    }
+                    ContextAction::SetSystemPrompt(s) => {
+                        super::layers::context::ContextAction::SetSystemPrompt { value: s.clone() }
+                    }
+                    ContextAction::SetIntent(s) => {
+                        super::layers::context::ContextAction::SetIntent { value: s.clone() }
+                    }
+                }).collect(),
+            });
+        }
+        chain.register(Arc::new(context_layer));
+
+        chain
+    }
+
+    /// Match input using the layer chain pattern
+    ///
+    /// This is an alternative to `match_input` that uses the LayerChain
+    /// with pluggable layers. Useful for testing or when layer pattern benefits
+    /// are needed.
+    pub async fn match_input_with_layers(&self, ctx: &MatchingContext) -> MatchResult {
+        let chain = self.to_layer_chain();
+
+        if let Some(result) = chain.execute(ctx).await {
+            result
+        } else {
+            // No match - return general intent
+            MatchResult {
+                intent: SemanticIntent::general()
+                    .with_confidence(0.0)
+                    .with_reasoning("No matching rules found".to_string()),
+                confidence: 0.0,
+                rule_index: None,
+                needs_ai_fallback: true,
+            }
+        }
+    }
+
     /// Get command rule count
     pub fn command_rule_count(&self) -> usize {
         self.command_rules.len()

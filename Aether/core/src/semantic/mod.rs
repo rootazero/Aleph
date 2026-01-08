@@ -48,6 +48,8 @@ pub mod assembler;
 pub mod context;
 pub mod intent;
 pub mod keyword;
+pub mod layer;
+pub mod layers;
 pub mod matcher;
 pub mod template;
 
@@ -59,5 +61,7 @@ pub use context::{
 };
 pub use intent::{DetectionMethod, IntentCategory, ParamValue, SemanticIntent};
 pub use keyword::{KeywordIndex, KeywordMatch};
+pub use layer::{LayerChain, LayerEnabledFlag, MatchingLayer};
+pub use layers::{CommandLayer, ContextLayer, KeywordLayer, RegexLayer};
 pub use matcher::{MatchResult, MatcherConfig, SemanticMatcher};
 pub use template::{ContextSection, PromptTemplate, TemplateVariable};

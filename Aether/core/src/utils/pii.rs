@@ -34,9 +34,16 @@ fn get_patterns() -> &'static PiiPatterns {
         // Credit card numbers (simple pattern: 4 groups of 4 digits)
         credit_card: Regex::new(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b").unwrap(),
 
-        // API keys (OpenAI, Anthropic, etc.)
-        // Matches: sk-..., sk-ant-..., Bearer ...
-        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-]{20,}|Bearer\s+[a-zA-Z0-9._\-]{20,})\b").unwrap(),
+        // API keys (OpenAI, Anthropic, Tavily, Google, xAI, etc.)
+        // Matches: sk-..., sk-ant-..., tvly-..., xai-..., AIza..., Bearer ...
+        // Pattern explanation:
+        // - sk-[...]{20,}: OpenAI keys (sk-proj..., sk-...)
+        // - sk-ant-[...]{20,}: Anthropic keys
+        // - tvly-[...]{20,}: Tavily keys
+        // - xai-[...]{20,}: xAI keys
+        // - AIza[...]{30,}: Google API keys
+        // - Bearer [token]: OAuth/JWT tokens
+        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|Bearer\s+[a-zA-Z0-9._\-]{20,})\b").unwrap(),
     })
 }
 
@@ -149,6 +156,27 @@ mod tests {
         let text = "Using sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890";
         let scrubbed = scrub_pii(text);
         assert_eq!(scrubbed, "Using [REDACTED]");
+    }
+
+    #[test]
+    fn test_scrub_api_key_tavily() {
+        let text = "Tavily key: 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";
+        let scrubbed = scrub_pii(text);
+        assert_eq!(scrubbed, "Tavily key: [REDACTED]");
+    }
+
+    #[test]
+    fn test_scrub_api_key_xai() {
+        let text = "xAI key: xai-abcdefghij1234567890klmnopqrstuvwxyz";
+        let scrubbed = scrub_pii(text);
+        assert_eq!(scrubbed, "xAI key: [REDACTED]");
+    }
+
+    #[test]
+    fn test_scrub_api_key_google() {
+        let text = "Google key: AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+        let scrubbed = scrub_pii(text);
+        assert_eq!(scrubbed, "Google key: [REDACTED]");
     }
 
     #[test]

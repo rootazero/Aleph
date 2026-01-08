@@ -2,6 +2,8 @@
 //!
 //! This module provides:
 //! - **CapabilityExecutor**: Executes capabilities in priority order (Memory → Search → MCP → Video)
+//! - **CapabilityStrategy**: Trait for pluggable capability implementations
+//! - **CompositeCapabilityExecutor**: Strategy-based executor for decoupled capability execution
 //! - **CapabilityDeclaration**: Describes capabilities for AI understanding
 //! - **CapabilityRequest/AiResponse**: Types for AI capability invocation requests
 //! - **ResponseParser**: Parses AI responses to detect capability requests
@@ -9,11 +11,15 @@
 pub mod declaration;
 pub mod request;
 pub mod response_parser;
+pub mod strategies;
+pub mod strategy;
 
 // Re-exports for convenience
 pub use declaration::{CapabilityDeclaration, CapabilityParameter, CapabilityRegistry};
 pub use request::{AiResponse, CapabilityRequest, ClarificationInfo, ClarificationReason};
 pub use response_parser::ResponseParser;
+pub use strategies::{McpStrategy, MemoryStrategy, SearchStrategy, VideoStrategy};
+pub use strategy::{CapabilityStrategy, CompositeCapabilityExecutor};
 
 // ============================================================================
 // Capability Executor
@@ -436,6 +442,76 @@ impl CapabilityExecutor {
         }
 
         Ok(payload)
+    }
+
+    /// Create a CompositeCapabilityExecutor from this executor's configuration
+    ///
+    /// This allows gradual migration to the strategy pattern while maintaining
+    /// backward compatibility with the existing API.
+    ///
+    /// Note: This creates a simplified executor that doesn't include AI retrieval
+    /// configuration. For full AI retrieval support, use the original execute methods.
+    pub fn to_composite_executor(&self) -> CompositeCapabilityExecutor {
+        let mut executor = CompositeCapabilityExecutor::new();
+
+        // Register Memory strategy if configured
+        if self.memory_db.is_some() && self.memory_config.is_some() {
+            let mut memory_strategy = MemoryStrategy::new(
+                self.memory_db.clone(),
+                self.memory_config.clone(),
+            );
+
+            // Configure AI retrieval if provider is available
+            if self.ai_provider.is_some() {
+                memory_strategy = memory_strategy.with_ai_retrieval(
+                    self.ai_provider.clone(),
+                    self.use_ai_retrieval,
+                    std::time::Duration::from_millis(self.ai_retrieval_timeout_ms),
+                    self.ai_retrieval_max_candidates,
+                    self.ai_retrieval_fallback_count,
+                );
+            }
+
+            // Add exclusion set if any
+            if !self.memory_exclusion_set.is_empty() {
+                memory_strategy = memory_strategy.with_exclusion_set(self.memory_exclusion_set.clone());
+            }
+
+            executor.register(Arc::new(memory_strategy));
+        }
+
+        // Register Search strategy if configured
+        if self.search_registry.is_some() {
+            let search_strategy = SearchStrategy::new(
+                self.search_registry.clone(),
+                Some(self.search_options.clone()),
+                self.pii_scrubbing_enabled,
+            );
+            executor.register(Arc::new(search_strategy));
+        }
+
+        // Register Video strategy
+        let video_strategy = VideoStrategy::new(self.video_config.clone());
+        executor.register(Arc::new(video_strategy));
+
+        // Register MCP strategy (placeholder)
+        let mcp_strategy = McpStrategy::new();
+        executor.register(Arc::new(mcp_strategy));
+
+        executor
+    }
+
+    /// Execute all capabilities using the strategy pattern
+    ///
+    /// This is an alternative to `execute_all` that uses the CompositeCapabilityExecutor
+    /// with pluggable strategies. Useful for testing or when strategy pattern benefits
+    /// are needed.
+    ///
+    /// Note: This simplified version doesn't include AI retrieval configuration.
+    /// For full AI retrieval support, use `execute_all` instead.
+    pub async fn execute_all_with_strategies(&self, payload: AgentPayload) -> Result<AgentPayload> {
+        let composite = self.to_composite_executor();
+        composite.execute_all(payload).await
     }
 
     /// Execute Video capability
