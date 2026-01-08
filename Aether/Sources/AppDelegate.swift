@@ -10,8 +10,6 @@ import SwiftUI
 import Combine
 import Carbon.HIToolbox
 
-// TextSource, OutputSessionType, OutputContext moved to OutputCoordinator.swift
-
 class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Menu bar manager for status item
     private var menuBarManager: MenuBarManager?
@@ -62,10 +60,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     // Command mode coordinator for slash command completion
     private var commandModeCoordinator: CommandModeCoordinator?
-
-    // Note: typewriterCancellation and escapeKeyMonitor moved to OutputCoordinator
-    // Note: previousFrontmostApp moved to InputCoordinator
-    // Note: commandHotkeyMonitor, commandModeInputMonitor moved to CommandModeCoordinator
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hide from Dock (menu bar only)
@@ -755,7 +749,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             object: nil
         )
 
-        // NOTE: Conversation notifications now observed by ConversationCoordinator
     }
 
     /// Handle config change notification (rebuild providers menu)
@@ -764,12 +757,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         rebuildProvidersMenu()
     }
 
-    // NOTE: Hotkey handling (handleHotkeyPressed, processWithInputMode) moved to InputCoordinator.swift
-    // NOTE: Multi-turn conversation support moved to ConversationCoordinator.swift
-    // NOTE: Output pipeline (performOutput, executeTypewriterOutput, etc.) moved to OutputCoordinator.swift
-    // NOTE: Command mode hotkey handling moved to CommandModeCoordinator.swift
-
-    // MARK: - Command Mode (delegating to CommandModeCoordinator)
+    // MARK: - Command Mode
 
     /// Update command prompt hotkey at runtime (called from ShortcutsView)
     func updateCommandPromptHotkey(_ shortcuts: ShortcutsConfig) {
@@ -844,8 +832,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         print("[AppDelegate] Trigger config updated: replace=\(replaceKey.rawValue), append=\(appendKey.rawValue)")
     }
-
-    // NOTE: handleReplaceTriggered() and handleAppendTriggered() moved to InputCoordinator.swift
 
     // MARK: - Language Preference
 
