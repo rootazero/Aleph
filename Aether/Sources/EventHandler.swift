@@ -49,6 +49,11 @@ class EventHandler: AetherEventHandler {
         self.core = core
     }
 
+    // Set HaloWindow reference after initialization (for DependencyContainer use)
+    func setHaloWindow(_ window: HaloWindow?) {
+        self.haloWindow = window
+    }
+
     // MARK: - AetherEventHandler Protocol
 
     func onStateChanged(state: ProcessingState) {
