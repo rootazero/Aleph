@@ -41,52 +41,58 @@
 ## Phase 2: Swift 组件库
 
 ### 2.1 创建组件目录结构
-- [ ] 创建 `Aether/Sources/Components/Skills/` 目录
-- [ ] 创建组件索引文件
+- [x] 创建 `Aether/Sources/Components/Skills/` 目录
+- [x] 创建组件索引文件
 
-### 2.2 SkillCard 组件
-- [ ] 定义 `SkillCard` 视图结构
-- [ ] 实现图标 + 名称 + 状态指示器布局
-- [ ] 实现 hover 效果
-- [ ] 实现 Toggle 开关绑定
-- [ ] 实现更多操作按钮 (...)
-- [ ] 添加 Preview
+### 2.2 UnifiedSkillCard 组件 (renamed from SkillCard to avoid conflict)
+- [x] 定义 `UnifiedSkillCard` 视图结构
+- [x] 实现图标 + 名称 + 状态指示器布局
+- [x] 实现 hover 效果
+- [x] 实现 Toggle 开关绑定
+- [x] 实现更多操作按钮 (context menu)
+- [x] 添加 Preview
+- [x] 添加 `SkillListRow` 紧凑列表行变体
 
 ### 2.3 SkillFilterSidebar 组件
-- [ ] 定义 `SkillFilterSidebar` 视图结构
-- [ ] 实现状态筛选 (全部/已启用/已停用/错误)
-- [ ] 实现类型筛选 (内置核心/外部扩展/提示模板)
-- [ ] 实现 "添加" 按钮
-- [ ] 实现 "JSON 模式" 按钮
-- [ ] 添加 Preview
+- [x] 定义 `SkillFilterSidebar` 视图结构
+- [x] 实现状态筛选 (全部/已启用/已停用/错误)
+- [x] 实现类型筛选 (内置核心/外部扩展/提示模板)
+- [x] 实现 "添加" 按钮
+- [x] 实现 "JSON 模式" 按钮
+- [x] 添加 Preview
+- [x] 添加 `SkillCounts` 统计结构
 
 ### 2.4 SkillEnvVarEditor 组件
-- [ ] 定义 `SkillEnvVarEditor` 视图结构
-- [ ] 实现 Key-Value 行编辑
-- [ ] 实现 SecureField + 眼睛按钮切换
-- [ ] 实现添加/删除行
-- [ ] 实现空状态提示
-- [ ] 添加 Preview
+- [x] 定义 `SkillEnvVarEditor` 视图结构
+- [x] 实现 Key-Value 行编辑
+- [x] 实现 SecureField + 眼睛按钮切换
+- [x] 实现添加/删除行
+- [x] 实现空状态提示
+- [x] 添加 Preview
 
 ### 2.5 SkillArgsEditor 组件
-- [ ] 定义 `SkillArgsEditor` 视图结构
-- [ ] 实现动态参数列表
-- [ ] 实现拖拽排序
-- [ ] 实现添加/删除参数
-- [ ] 添加 Preview
+- [x] 定义 `SkillArgsEditor` 视图结构
+- [x] 实现动态参数列表
+- [x] 实现重排序 (上下移动按钮)
+- [x] 实现添加/删除参数
+- [x] 添加 Preview
+- [x] 实现命令路径浏览器
+- [x] 实现工作目录选择
 
 ### 2.6 SkillPermissionsEditor 组件
-- [ ] 定义 `SkillPermissionsEditor` 视图结构
-- [ ] 实现 "需要确认" Toggle
-- [ ] 实现 Allowed Paths 编辑 (文件夹选择)
-- [ ] 实现 Allowed Commands 编辑 (shell 服务)
-- [ ] 添加 Preview
+- [x] 定义 `SkillPermissionsEditor` 视图结构
+- [x] 实现 "需要确认" Toggle
+- [x] 实现 Allowed Paths 编辑 (文件夹选择)
+- [x] 实现 Allowed Commands 编辑 (shell 服务)
+- [x] 添加 Preview
+- [x] 实现自动批准警告提示
 
 ### 2.7 SkillStatusIndicator 组件
-- [ ] 定义 `SkillStatusIndicator` 视图结构
-- [ ] 实现状态颜色映射 (Running=绿, Stopped=灰, Error=红, Connecting=黄)
-- [ ] 实现状态文本本地化
-- [ ] 添加 Preview
+- [x] 定义 `SkillStatusIndicator` 视图结构
+- [x] 实现状态颜色映射 (Running=绿, Stopped=灰, Error=红, Starting=黄)
+- [x] 实现状态文本本地化
+- [x] 添加 Preview
+- [x] 添加 `SkillStatusBadge` 胶囊样式变体
 
 ---
 
