@@ -161,10 +161,46 @@ class HaloWindow: NSWindow {
                 NSLog("[HaloWindow] Reactivating window on click (was not key window)")
                 NSApp.activate(ignoringOtherApps: true)
                 makeKeyAndOrderFront(nil)
+
+                // Refocus TextField after window activation
+                // Use async to ensure window is fully activated first
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                    self?.refocusTextField()
+                }
             }
         }
 
         super.sendEvent(event)
+    }
+
+    /// Find and focus the editable TextField in the window
+    ///
+    /// This is called when reactivating the window to ensure the input field
+    /// regains keyboard focus for continued typing.
+    private func refocusTextField() {
+        guard let contentView = contentView else { return }
+
+        if let textField = findEditableTextField(in: contentView) {
+            let success = makeFirstResponder(textField)
+            NSLog("[HaloWindow] TextField refocused: %@", success ? "success" : "failed")
+        }
+    }
+
+    /// Recursively search for an editable NSTextField in the view hierarchy
+    private func findEditableTextField(in view: NSView) -> NSTextField? {
+        // Check if this view is an editable text field
+        if let textField = view as? NSTextField, textField.isEditable {
+            return textField
+        }
+
+        // Recursively search subviews
+        for subview in view.subviews {
+            if let textField = findEditableTextField(in: subview) {
+                return textField
+            }
+        }
+
+        return nil
     }
 
     // MARK: - Public API
