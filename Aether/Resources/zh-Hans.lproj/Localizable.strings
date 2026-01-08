@@ -159,7 +159,7 @@
 
 // MARK: - Settings Window - Routing Tab
 "settings.routing.title" = "路由规则";
-"settings.routing.description" = "定义如何根据模式将剪贴板内容路由到 AI 提供商。";
+"settings.routing.description" = "定义如何根据模式将对话内容路由到 AI 提供商。";
 "settings.routing.add_rule" = "添加规则";
 "settings.routing.edit_rule" = "编辑规则";
 "settings.routing.delete_rule" = "删除规则";
