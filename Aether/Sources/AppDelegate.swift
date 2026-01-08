@@ -13,11 +13,15 @@ import Carbon.HIToolbox
 // TextSource, OutputSessionType, OutputContext moved to OutputCoordinator.swift
 
 class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
-    // Menu bar status item
-    private var statusItem: NSStatusItem?
+    // Menu bar manager for status item
+    private var menuBarManager: MenuBarManager?
 
-    // Menu item for Settings (stored separately for enable/disable)
-    private var settingsMenuItem: NSMenuItem?
+    // Permission coordinator for permission gate
+    private var permissionCoordinator: PermissionCoordinator?
+
+    // Legacy properties for gradual migration
+    private var statusItem: NSStatusItem? { menuBarManager?.statusItem }
+    private var settingsMenuItem: NSMenuItem? { menuBarManager?.settingsMenuItem }
 
     // Rust core instance (internal for access from AetherApp)
     // Published to trigger UI updates when initialized
@@ -44,10 +48,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Settings window (used by legacy Settings scene and WindowGroup)
     private var settingsWindow: NSWindow?
 
-    // Permission gate window
-    private var permissionGateWindow: NSWindow?
-
-    // Permission gate active state
+    // Permission gate active state (backward compatibility - synced with permissionCoordinator.isActive)
     private var isPermissionGateActive: Bool = false
 
     // First-time initialization window
@@ -244,78 +245,32 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // MARK: - Menu Bar Setup
 
     private func setupMenuBar() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-
-        if let button = statusItem?.button {
-            // Use custom menu bar icon from Assets.xcassets
-            if let menuBarIcon = NSImage(named: "MenuBarIcon") {
-                menuBarIcon.isTemplate = true
-                button.image = menuBarIcon
-            } else {
-                // Fallback to SF Symbol if custom icon not found
-                button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Aether")
-                button.image?.isTemplate = true
-            }
+        // Initialize MenuBarManager if not already created
+        if menuBarManager == nil {
+            menuBarManager = MenuBarManager()
         }
 
-        // Create menu
-        let menu = NSMenu()
-
-        menu.addItem(NSMenuItem(
-            title: L("menu.about"),
-            action: #selector(showAbout),
-            keyEquivalent: ""
-        ))
-        menu.addItem(NSMenuItem.separator())
-
-        // Add "Default Provider" submenu (will be populated by rebuildProvidersMenu)
-        let defaultProviderMenuItem = NSMenuItem(
-            title: L("menu.default_provider"),
-            action: nil,
-            keyEquivalent: ""
-        )
-        defaultProviderMenuItem.submenu = NSMenu()  // Create empty submenu for now
-        menu.addItem(defaultProviderMenuItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        // Create and store Settings menu item for enable/disable control
-        settingsMenuItem = NSMenuItem(
-            title: L("menu.settings"),
-            action: #selector(showSettings),
-            keyEquivalent: ","
-        )
-        menu.addItem(settingsMenuItem!)
-
-        // Debug menu items (only in DEBUG builds)
+        // Debug actions for DEBUG builds
         #if DEBUG
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(
-            title: "Test Clarification (Select)",
-            action: #selector(testClarificationSelect),
-            keyEquivalent: "d"
-        ))
-        menu.addItem(NSMenuItem(
-            title: "Test Clarification (Text)",
-            action: #selector(testClarificationText),
-            keyEquivalent: "t"
-        ))
+        let debugActions: [(title: String, action: Selector, keyEquivalent: String)] = [
+            ("Test Clarification (Select)", #selector(testClarificationSelect), "d"),
+            ("Test Clarification (Text)", #selector(testClarificationText), "t")
+        ]
+        #else
+        let debugActions: [(title: String, action: Selector, keyEquivalent: String)]? = nil
         #endif
 
-        menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(
-            title: L("menu.quit"),
-            action: #selector(quit),
-            keyEquivalent: "q"
-        ))
-
-        statusItem?.menu = menu
+        // Setup menu bar via MenuBarManager
+        menuBarManager?.setup(
+            target: self,
+            showAboutAction: #selector(showAbout),
+            showSettingsAction: #selector(showSettings),
+            quitAction: #selector(quit),
+            debugActions: debugActions
+        )
 
         // Initially disable Settings menu if permissions not granted
-        settingsMenuItem?.isEnabled = !isPermissionGateActive
-
-        // Rebuild providers menu when core is initialized
-        // (will be called later after initializeRustCore)
+        menuBarManager?.setSettingsEnabled(!isPermissionGateActive)
     }
 
     @objc private func showAbout() {
@@ -421,77 +376,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         NSApplication.shared.terminate(nil)
     }
 
-    // MARK: - Providers Menu Management (NEW for default provider management)
-
-    /// Generic menu rebuilder to eliminate duplication
-    ///
-    /// This helper method extracts the common pattern used by `rebuildProvidersMenu()`.
-    ///
-    /// - Parameters:
-    ///   - menuItemTitle: Localized title of the menu item containing the submenu
-    ///   - items: Array of (id, displayName) tuples representing menu items
-    ///   - currentSelection: Currently selected item ID (for checkmark)
-    ///   - action: Selector to invoke when an item is clicked
-    ///   - placeholderText: Optional text to show when items array is empty
-    private func rebuildMenu(
-        menuItemTitle: String,
-        items: [(id: String, displayName: String)],
-        currentSelection: String?,
-        action: Selector,
-        placeholderText: String? = nil
-    ) {
-        guard let menu = statusItem?.menu else { return }
-
-        // Find the menu item
-        guard let targetMenuItem = menu.items.first(where: { $0.title == menuItemTitle }),
-              let submenu = targetMenuItem.submenu else {
-            print("[AppDelegate] ERROR: Menu item '\(menuItemTitle)' submenu not found")
-            return
-        }
-
-        // Clear existing submenu items
-        submenu.removeAllItems()
-
-        if !items.isEmpty {
-            // Add menu items for each entry
-            for (id, displayName) in items {
-                let item = NSMenuItem(
-                    title: displayName,
-                    action: action,
-                    keyEquivalent: ""
-                )
-                item.representedObject = id
-
-                // Add checkmark if this is the current selection
-                if let currentSelection = currentSelection, id == currentSelection {
-                    item.state = .on
-                } else {
-                    item.state = .off
-                }
-
-                submenu.addItem(item)
-            }
-
-            // Enable the parent menu item
-            targetMenuItem.isEnabled = true
-
-            print("[AppDelegate] Rebuilt '\(menuItemTitle)' submenu with \(items.count) items")
-        } else {
-            // No items available - handle empty state
-            if let placeholder = placeholderText {
-                let placeholderItem = NSMenuItem(
-                    title: placeholder,
-                    action: nil,
-                    keyEquivalent: ""
-                )
-                placeholderItem.isEnabled = false
-                submenu.addItem(placeholderItem)
-            }
-
-            targetMenuItem.isEnabled = false
-            print("[AppDelegate] No items for '\(menuItemTitle)', disabling submenu")
-        }
-    }
+    // MARK: - Providers Menu Management
 
     /// Rebuild the providers submenu with enabled providers
     private func rebuildProvidersMenu() {
@@ -504,13 +389,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Map providers to (id, displayName) tuples
         let items = enabledProviders.map { ($0, $0) }
 
-        // Use generic menu builder
-        rebuildMenu(
-            menuItemTitle: L("menu.default_provider"),
-            items: items,
+        // Delegate to MenuBarManager
+        menuBarManager?.rebuildProvidersMenu(
+            providers: items,
             currentSelection: defaultProvider,
-            action: #selector(selectDefaultProvider(_:)),
-            placeholderText: L("menu.no_providers")
+            target: self,
+            action: #selector(selectDefaultProvider(_:))
         )
     }
 
@@ -684,48 +568,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     private func updateMenuBarIcon(state: ProcessingState) {
-        DispatchQueue.main.async { [weak self] in
-            guard let button = self?.statusItem?.button else { return }
-
-            switch state {
-            case .idle:
-                // Use custom menu bar icon for idle state
-                if let menuBarIcon = NSImage(named: "MenuBarIcon") {
-                    menuBarIcon.isTemplate = true
-                    button.image = menuBarIcon
-                } else {
-                    button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Aether")
-                }
-            case .listening:
-                // Use custom icon for listening state too
-                if let menuBarIcon = NSImage(named: "MenuBarIcon") {
-                    menuBarIcon.isTemplate = true
-                    button.image = menuBarIcon
-                } else {
-                    button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Aether Listening")
-                }
-            case .retrievingMemory:
-                button.image = NSImage(systemSymbolName: "brain.head.profile", accessibilityDescription: "Retrieving Memory")
-            case .processingWithAi:
-                button.image = NSImage(systemSymbolName: "cpu", accessibilityDescription: "Processing with AI")
-            case .processing:
-                button.image = NSImage(systemSymbolName: "sparkles.square.filled.on.square", accessibilityDescription: "Aether Processing")
-            case .typewriting:
-                button.image = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "Typewriting")
-            case .success:
-                button.image = NSImage(systemSymbolName: "checkmark.circle", accessibilityDescription: "Success")
-            case .error:
-                button.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "Error")
-            }
-        }
+        // Delegate to MenuBarManager
+        menuBarManager?.updateIcon(for: state)
     }
 
     /// Update menu bar icon with custom symbol (for permission gate states)
     private func updateMenuBarIcon(systemSymbol: String) {
-        DispatchQueue.main.async { [weak self] in
-            guard let button = self?.statusItem?.button else { return }
-            button.image = NSImage(systemSymbolName: systemSymbol, accessibilityDescription: "Aether")
-        }
+        // Delegate to MenuBarManager
+        menuBarManager?.updateIcon(systemSymbol: systemSymbol)
     }
 
 
@@ -733,72 +583,38 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Show mandatory permission gate window
     private func showPermissionGate() {
-        print("[Aether] Showing permission gate - permissions not granted")
-
-        isPermissionGateActive = true
-        inputCoordinator?.isPermissionGateActive = true
-
-        // Disable settings menu item
-        settingsMenuItem?.isEnabled = false
-
-        // Update menu bar icon to show "waiting" state
-        updateMenuBarIcon(systemSymbol: "exclamationmark.triangle")
-
-        // Create permission gate view
-        let permissionGateView = PermissionGateView {
-            // Callback when all permissions are granted
-            self.onPermissionGateDismissed()
+        // Initialize and configure PermissionCoordinator if needed
+        if permissionCoordinator == nil {
+            permissionCoordinator = PermissionCoordinator()
         }
 
-        let hostingController = NSHostingController(rootView: permissionGateView)
+        // Configure with dependencies
+        permissionCoordinator?.configure(
+            menuBarManager: menuBarManager,
+            inputCoordinator: inputCoordinator
+        )
 
-        // Create window for permission gate
-        let window = NSWindow(contentViewController: hostingController)
-        window.title = "Aether 需要权限"
-        window.setContentSize(NSSize(width: 600, height: 600))
-        window.styleMask = [.titled, .closable, .miniaturizable]
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        window.center()
+        // Set callback for when permissions are granted
+        permissionCoordinator?.onPermissionGranted = { [weak self] in
+            self?.onPermissionGateDismissed()
+        }
 
-        // CRITICAL: Prevent window from hiding when losing focus
-        // This ensures the permission gate stays visible even when user switches to System Settings
-        window.hidesOnDeactivate = false
-        window.isReleasedWhenClosed = false
+        // Delegate to PermissionCoordinator
+        permissionCoordinator?.showPermissionGate()
 
-        // Set window level to modal panel (less aggressive than floating)
-        // This keeps the window visible without conflicting with system windows
-        window.level = .modalPanel
-
-        // Keep window in front of other apps' windows
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-
-        // Make window non-closable by overriding close button behavior
-        window.standardWindowButton(.closeButton)?.isEnabled = false
-
-        // Store window reference
-        permissionGateWindow = window
-
-        // Show window and bring to front
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-
-        print("[Aether] Permission gate window shown with floating level")
+        // Sync local state (for backward compatibility)
+        isPermissionGateActive = true
     }
 
     /// Called when permission gate is dismissed (all permissions granted)
     private func onPermissionGateDismissed() {
-        print("[Aether] Permission gate dismissed - all permissions granted")
+        print("[AppDelegate] Permission gate dismissed - all permissions granted")
 
+        // Update local state (for backward compatibility)
         isPermissionGateActive = false
-        inputCoordinator?.isPermissionGateActive = false
 
-        // Enable settings menu item
-        settingsMenuItem?.isEnabled = true
-
-        // Close permission gate window
-        permissionGateWindow?.close()
-        permissionGateWindow = nil
+        // Reset menu bar icon to default
+        menuBarManager?.resetIcon()
 
         // Check if first-time initialization is needed
         checkAndRunFirstTimeInit()
