@@ -268,7 +268,4 @@ enum DependencyError: LocalizedError {
 
 // OutputCoordinator - Implemented in Coordinator/OutputCoordinator.swift
 
-/// Placeholder for ConversationCoordinator (to be extracted from AppDelegate)
-class ConversationCoordinator {
-    // TODO: Implement in Step 1.6
-}
+// ConversationCoordinator - Implemented in Coordinator/ConversationCoordinator.swift
