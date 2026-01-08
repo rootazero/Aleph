@@ -95,6 +95,8 @@ pub mod coordination; // NEW: Conversation-aware routing coordination layer
 pub mod suggestion; // NEW: AI response suggestion parsing
 pub mod utils; // NEW: Capability executor for enriching payloads
 pub mod video; // NEW: Video transcript extraction (YouTube)
+pub mod services; // NEW: Shared foundation services (FileOps, GitOps, SystemInfo)
+pub mod mcp; // NEW: MCP (Model Context Protocol) capability
 
 // Re-export public types
 // NOTE: ImageData/ImageFormat still exported for AI provider image encoding

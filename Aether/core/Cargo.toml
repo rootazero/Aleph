@@ -58,6 +58,14 @@ once_cell = "1.19"
 serde_yaml = "0.9"
 # For skills ZIP extraction
 zip = "2.2"
+# For git operations (MCP/Services)
+git2 = "0.19"
+# For file pattern matching (MCP/Services)
+glob = "0.3"
+# For hostname detection (Services)
+hostname = "0.4"
+# For username detection (Services)
+whoami = "1.5"
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }

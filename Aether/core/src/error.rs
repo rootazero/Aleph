@@ -113,6 +113,26 @@ pub enum AetherError {
         message: String,
         suggestion: Option<String>,
     },
+
+    /// File or resource not found
+    #[error("Not found: {0}")]
+    NotFound(String),
+
+    /// I/O operation error
+    #[error("I/O error: {0}")]
+    IoError(String),
+
+    /// Git operation error
+    #[error("Git error: {0}")]
+    GitError(String),
+
+    /// MCP tool not found
+    #[error("MCP tool not found: {0}")]
+    McpToolNotFound(String),
+
+    /// MCP request timeout
+    #[error("MCP request timed out")]
+    McpTimeout,
 }
 
 impl AetherError {
@@ -271,6 +291,12 @@ impl AetherError {
             | AetherError::Other { suggestion, .. }
             | AetherError::PermissionDenied { suggestion, .. }
             | AetherError::VideoError { suggestion, .. } => suggestion.as_deref(),
+            // Simple error types without suggestion field
+            AetherError::NotFound(_)
+            | AetherError::IoError(_)
+            | AetherError::GitError(_)
+            | AetherError::McpToolNotFound(_)
+            | AetherError::McpTimeout => None,
         }
     }
 
@@ -371,12 +397,33 @@ impl AetherError {
                     message
                 )
             }
+            AetherError::NotFound(path) => {
+                format!("File or resource not found: {}", path)
+            }
+            AetherError::IoError(msg) => {
+                format!("I/O error: {}", msg)
+            }
+            AetherError::GitError(msg) => {
+                format!("Git operation failed: {}", msg)
+            }
+            AetherError::McpToolNotFound(tool) => {
+                format!("MCP tool '{}' not found", tool)
+            }
+            AetherError::McpTimeout => {
+                "MCP request timed out. Please try again.".to_string()
+            }
         }
     }
 }
 
 /// Type alias for Results using AetherError
 pub type Result<T> = std::result::Result<T, AetherError>;
+
+impl From<serde_json::Error> for AetherError {
+    fn from(err: serde_json::Error) -> Self {
+        AetherError::IoError(format!("JSON serialization error: {}", err))
+    }
+}
 
 /// Simple exception enum for UniFFI 0.25 compatibility
 ///
