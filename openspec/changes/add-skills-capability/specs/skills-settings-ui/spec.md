@@ -1,6 +1,6 @@
 # Skills Settings UI Specification
 
-This specification defines the Skills management interface in Aether's Settings UI.
+This specification defines the Skills management interface in Aether's Settings UI. The UI focuses on installation and deletion only - no editing functionality to keep the interface lightweight.
 
 ## ADDED Requirements
 
@@ -39,7 +39,7 @@ The system SHALL display all installed Skills in a list format.
 - **GIVEN** no skills are installed
 - **WHEN** the Skills tab is viewed
 - **THEN** an empty state view SHALL be displayed
-- **AND** offer an "Install Skills" button
+- **AND** offer install options
 
 #### Scenario: Search filter
 
@@ -66,11 +66,11 @@ The system SHALL display each skill in a card format.
 - **THEN** the card SHALL show skill icon, name, and description
 - **AND** description SHALL be limited to 2 lines
 
-#### Scenario: Hover actions
+#### Scenario: Hover delete action
 
 - **GIVEN** a skill card is hovered
 - **WHEN** the mouse is over the card
-- **THEN** Edit and Delete buttons SHALL appear
+- **THEN** a Delete button SHALL appear
 
 #### Scenario: Skill-specific icons
 
@@ -160,66 +160,6 @@ The system SHALL support installing skills from local ZIP files.
 
 ---
 
-### Requirement: Create New Skill
-
-The system SHALL provide a skill creation interface.
-
-#### Scenario: Create button
-
-- **GIVEN** the Skills tab is viewed
-- **WHEN** the user clicks "Create"
-- **THEN** the SkillEditorPanel SHALL open as a sheet
-
-#### Scenario: Editor fields
-
-- **GIVEN** the skill editor is open for creation
-- **THEN** the following fields SHALL be available:
-  - Name (required, editable)
-  - Description (required, editable)
-  - Instructions (Markdown editor)
-
-#### Scenario: Name validation
-
-- **GIVEN** the user enters a skill name
-- **WHEN** the name contains invalid characters
-- **THEN** the Save button SHALL be disabled
-- **AND** validation error SHALL be shown
-
-#### Scenario: Save new skill
-
-- **GIVEN** all required fields are filled
-- **WHEN** the user clicks Save
-- **THEN** a SKILL.md file SHALL be generated
-- **AND** saved to `~/.config/aether/skills/<name>/SKILL.md`
-- **AND** the skills list SHALL refresh
-
----
-
-### Requirement: Edit Existing Skill
-
-The system SHALL provide skill editing functionality.
-
-#### Scenario: Edit button
-
-- **GIVEN** a skill card is hovered
-- **WHEN** the user clicks Edit
-- **THEN** the SkillEditorPanel SHALL open with skill data
-
-#### Scenario: Editor pre-populated
-
-- **GIVEN** the editor opens for an existing skill
-- **THEN** name, description, and instructions SHALL be pre-filled
-- **AND** the name field SHALL be read-only
-
-#### Scenario: Save changes
-
-- **GIVEN** changes are made to an existing skill
-- **WHEN** the user clicks Save
-- **THEN** the SKILL.md file SHALL be updated
-- **AND** the skills list SHALL refresh
-
----
-
 ### Requirement: Delete Skill
 
 The system SHALL provide skill deletion with confirmation.
@@ -242,24 +182,6 @@ The system SHALL provide skill deletion with confirmation.
 - **GIVEN** the confirmation dialog is shown
 - **WHEN** the user clicks Cancel
 - **THEN** the skill SHALL NOT be deleted
-
----
-
-### Requirement: Skill Editor Preview
-
-The system SHALL provide Markdown preview in the editor.
-
-#### Scenario: Preview toggle
-
-- **GIVEN** the skill editor is open
-- **WHEN** the user toggles preview mode
-- **THEN** the instructions SHALL render as Markdown
-
-#### Scenario: Raw mode
-
-- **GIVEN** preview mode is off
-- **WHEN** viewing instructions
-- **THEN** raw Markdown text SHALL be shown in editor
 
 ---
 

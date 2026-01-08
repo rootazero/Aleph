@@ -96,11 +96,9 @@
 - [ ] 5.2.5 Skip existing skills (no overwrite)
 - [ ] 5.2.6 Return list of installed skill names
 
-### 5.3 CRUD Operations
-- [ ] 5.3.1 Implement `create_skill(name, content)` - validate and save
-- [ ] 5.3.2 Implement `update_skill(name, content)` - validate and update
-- [ ] 5.3.3 Implement `delete_skill(id)` - remove directory
-- [ ] 5.3.4 Add unit tests for installer operations
+### 5.3 Delete Operation
+- [ ] 5.3.1 Implement `delete_skill(id)` - remove directory
+- [ ] 5.3.2 Add unit tests for installer operations
 
 ### 5.4 Dependencies
 - [ ] 5.4.1 Add `zip` crate to Cargo.toml
@@ -133,9 +131,7 @@
 - [ ] 7.2.1 Add `install_official_skills()` async method
 - [ ] 7.2.2 Add `install_skill_from_url(url)` async method
 - [ ] 7.2.3 Add `install_skill_from_zip(path)` async method
-- [ ] 7.2.4 Add `create_skill(name, content)` method
-- [ ] 7.2.5 Add `update_skill(name, content)` method
-- [ ] 7.2.6 Add `delete_skill(id)` method
+- [ ] 7.2.4 Add `delete_skill(id)` method
 
 ### 7.3 Generate Bindings
 - [ ] 7.3.1 Run `uniffi-bindgen generate` to update Swift bindings
@@ -158,7 +154,7 @@
 
 ### 9.2 SkillsSettingsView
 - [ ] 9.2.1 Create `SkillsSettingsView.swift`
-- [ ] 9.2.2 Implement toolbar section (search, create, install buttons)
+- [ ] 9.2.2 Implement toolbar section (search bar)
 - [ ] 9.2.3 Implement skills list section with `SkillCard`
 - [ ] 9.2.4 Implement install options section (3 buttons)
 - [ ] 9.2.5 Implement empty state view
@@ -168,42 +164,32 @@
 ### 9.3 SkillCard Component
 - [ ] 9.3.1 Create `Components/Molecules/SkillCard.swift`
 - [ ] 9.3.2 Implement skill icon, name, description layout
-- [ ] 9.3.3 Implement hover-to-show edit/delete actions
+- [ ] 9.3.3 Implement hover-to-show delete action
 - [ ] 9.3.4 Implement delete confirmation dialog
 - [ ] 9.3.5 Add skill-specific icons (refine-text, translate, summarize)
 
-### 9.4 SkillEditorPanel
-- [ ] 9.4.1 Create `Components/Organisms/SkillEditorPanel.swift`
-- [ ] 9.4.2 Implement name field (readonly when editing)
-- [ ] 9.4.3 Implement description field
-- [ ] 9.4.4 Implement Markdown instructions editor
-- [ ] 9.4.5 Implement preview toggle (raw vs rendered)
-- [ ] 9.4.6 Generate SKILL.md content from form
-- [ ] 9.4.7 Implement save/cancel buttons
+### 9.4 SkillInstallSheet
+- [ ] 9.4.1 Create `Components/Organisms/SkillInstallSheet.swift`
+- [ ] 9.4.2 Implement URL input field
+- [ ] 9.4.3 Implement install progress indicator
+- [ ] 9.4.4 Display installed skills list
+- [ ] 9.4.5 Handle errors with user-friendly messages
 
-### 9.5 SkillInstallSheet
-- [ ] 9.5.1 Create `Components/Organisms/SkillInstallSheet.swift`
-- [ ] 9.5.2 Implement URL input field
-- [ ] 9.5.3 Implement install progress indicator
-- [ ] 9.5.4 Display installed skills list
-- [ ] 9.5.5 Handle errors with user-friendly messages
+### 9.5 Install Actions
+- [ ] 9.5.1 Implement `installOfficialSkills()` action
+- [ ] 9.5.2 Implement `uploadZipFile()` with NSOpenPanel
+- [ ] 9.5.3 Implement URL install via sheet
+- [ ] 9.5.4 Show Toast notifications for success/failure
 
-### 9.6 Install Actions
-- [ ] 9.6.1 Implement `installOfficialSkills()` action
-- [ ] 9.6.2 Implement `uploadZipFile()` with NSOpenPanel
-- [ ] 9.6.3 Implement URL install via sheet
-- [ ] 9.6.4 Show Toast notifications for success/failure
-
-### 9.7 CRUD Actions
-- [ ] 9.7.1 Implement `loadSkills()` from core
-- [ ] 9.7.2 Implement `saveSkill()` (create/update)
-- [ ] 9.7.3 Implement `deleteSkill()` with confirmation
+### 9.6 Delete Action
+- [ ] 9.6.1 Implement `loadSkills()` from core
+- [ ] 9.6.2 Implement `deleteSkill()` with confirmation
 
 ## Phase 10: Localization
 
 ### 10.1 English Strings
 - [ ] 10.1.1 Add `settings.skills.*` keys to en.lproj
-- [ ] 10.1.2 Keys: search, create, install, installed, empty, etc.
+- [ ] 10.1.2 Keys: search, install, installed, empty, etc.
 - [ ] 10.1.3 Keys: official, from_url, upload_zip descriptions
 - [ ] 10.1.4 Keys: delete_confirm, installed_count
 
@@ -222,7 +208,7 @@
 - [ ] 11.1.6 Test: PromptAssembler includes skill instructions
 - [ ] 11.1.7 Test: Installer URL normalization
 - [ ] 11.1.8 Test: Installer name validation
-- [ ] 11.1.9 Test: Installer create/update/delete
+- [ ] 11.1.9 Test: Installer delete
 
 ### 11.2 Integration Tests
 - [ ] 11.2.1 E2E test: `/skill refine-text` explicit call
@@ -234,13 +220,11 @@
 ### 11.3 UI Manual Testing
 - [ ] 11.3.1 Test: Skills list displays correctly
 - [ ] 11.3.2 Test: Search filters skills
-- [ ] 11.3.3 Test: Create new skill via editor
-- [ ] 11.3.4 Test: Edit existing skill
-- [ ] 11.3.5 Test: Delete skill with confirmation
-- [ ] 11.3.6 Test: Install official skills button
-- [ ] 11.3.7 Test: Install from URL
-- [ ] 11.3.8 Test: Upload ZIP file
-- [ ] 11.3.9 Test: Empty state and error handling
+- [ ] 11.3.3 Test: Delete skill with confirmation
+- [ ] 11.3.4 Test: Install official skills button
+- [ ] 11.3.5 Test: Install from URL
+- [ ] 11.3.6 Test: Upload ZIP file
+- [ ] 11.3.7 Test: Empty state and error handling
 
 ## Phase 12: Documentation
 
@@ -252,7 +236,7 @@
 ### 12.2 User Documentation
 - [ ] 12.2.1 Add Skills section to CLAUDE.md
 - [ ] 12.2.2 Document SKILL.md format
-- [ ] 12.2.3 Add example: Creating a custom skill
+- [ ] 12.2.3 Add example: Creating a custom skill (manual editing)
 - [ ] 12.2.4 Document `/skill` command usage
 - [ ] 12.2.5 Document Settings UI skill management
 
@@ -297,15 +281,15 @@ Phase 12 (Documentation) can start after Phase 9                 │
 | 2 | 2 new, 2 modified | ~250 |
 | 3 | 2 modified | ~100 |
 | 4 | 1 modified | ~50 |
-| 5 | 1 new, 1 modified | ~250 |
+| 5 | 1 new, 1 modified | ~200 |
 | 6 | 3 new files | ~100 |
-| 7 | 2 modified | ~100 |
+| 7 | 2 modified | ~80 |
 | 8 | 1 modified | ~10 |
-| 9 | 4 new files, 1 modified | ~600 |
-| 10 | 2 modified | ~50 |
-| 11 | 2 modified | ~200 |
-| 12 | 2 modified | ~150 |
-| **Total** | ~18 files | ~2160 lines |
+| 9 | 3 new files, 1 modified | ~400 |
+| 10 | 2 modified | ~40 |
+| 11 | 2 modified | ~150 |
+| 12 | 2 modified | ~100 |
+| **Total** | ~15 files | ~1780 lines |
 
 ## Completion Criteria
 
@@ -320,13 +304,12 @@ Phase 12 (Documentation) can start after Phase 9                 │
 - [ ] Official skills install successfully
 - [ ] GitHub URL install works
 - [ ] ZIP upload installs correctly
-- [ ] Create/update/delete operations work
+- [ ] Delete operation works
 
 ### UI
 - [ ] Skills tab visible in Settings
 - [ ] Skills list displays with search
-- [ ] All install options work
-- [ ] Editor creates valid SKILL.md
+- [ ] All 3 install options work
 - [ ] Delete has confirmation dialog
 
 ### Documentation

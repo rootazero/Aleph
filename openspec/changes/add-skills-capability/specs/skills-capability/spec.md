@@ -338,31 +338,11 @@ The system SHALL provide a SkillsInstaller for downloading and managing skills.
 - **THEN** the existing skill SHALL NOT be overwritten
 - **AND** the system SHALL log that it was skipped
 
-#### Scenario: Create skill
-
-- **GIVEN** valid skill name and content
-- **WHEN** `create_skill(name, content)` is called
-- **THEN** a new skill directory SHALL be created
-- **AND** SKILL.md SHALL be written
-
-#### Scenario: Update skill
-
-- **GIVEN** an existing skill
-- **WHEN** `update_skill(name, content)` is called
-- **THEN** the SKILL.md file SHALL be updated
-
 #### Scenario: Delete skill
 
 - **GIVEN** an existing skill
 - **WHEN** `delete_skill(id)` is called
 - **THEN** the skill directory SHALL be removed
-
-#### Scenario: Validate skill name
-
-- **GIVEN** a skill name
-- **WHEN** the name contains invalid characters
-- **THEN** `create_skill()` SHALL return an error
-- **AND** suggest valid name format
 
 ---
 
@@ -382,11 +362,11 @@ The system SHALL expose skills operations through UniFFI.
 - **WHEN** the async method completes
 - **THEN** it SHALL return list of installed skill names
 
-#### Scenario: CRUD operations via UniFFI
+#### Scenario: Delete skill via UniFFI
 
-- **GIVEN** Swift code calls `core.createSkill()`
+- **GIVEN** Swift code calls `core.deleteSkill(id)`
 - **WHEN** the operation succeeds
-- **THEN** the skill SHALL be available in `listSkills()`
+- **THEN** the skill SHALL be removed from `listSkills()`
 
 ---
 

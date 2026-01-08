@@ -65,20 +65,20 @@ OpenAI、GitHub Copilot 等已采用相同规范。Aether 作为 OS-Level AI 中
 │                        Settings - Skills                                 │
 ├─────────────────────────────────────────────────────────────────────────┤
 │ ┌─────────────────────────────────────────────────────────────────────┐ │
-│ │  搜索栏: [🔍 Search skills...]           [+ Create] [↓ Install]    │ │
+│ │  搜索栏: [🔍 Search skills...]                                      │ │
 │ └─────────────────────────────────────────────────────────────────────┘ │
 │                                                                         │
 │ ┌─ Installed Skills ────────────────────────────────────────────────┐   │
 │ │ ┌─────────────────────────────────────────────────────────────┐   │   │
-│ │ │ 📝 refine-text                                    [Edit][🗑️] │   │   │
+│ │ │ 📝 refine-text                                         [🗑️] │   │   │
 │ │ │ Improve and polish writing                                   │   │   │
 │ │ └─────────────────────────────────────────────────────────────┘   │   │
 │ │ ┌─────────────────────────────────────────────────────────────┐   │   │
-│ │ │ 🌐 translate                                      [Edit][🗑️] │   │   │
+│ │ │ 🌐 translate                                           [🗑️] │   │   │
 │ │ │ Translate text between languages                             │   │   │
 │ │ └─────────────────────────────────────────────────────────────┘   │   │
 │ │ ┌─────────────────────────────────────────────────────────────┐   │   │
-│ │ │ 📋 summarize                                      [Edit][🗑️] │   │   │
+│ │ │ 📋 summarize                                           [🗑️] │   │   │
 │ │ │ Summarize long content into concise form                     │   │   │
 │ │ └─────────────────────────────────────────────────────────────┘   │   │
 │ └───────────────────────────────────────────────────────────────────┘   │
@@ -88,7 +88,7 @@ OpenAI、GitHub Copilot 等已采用相同规范。Aether 作为 OS-Level AI 中
 │ │                                                                   │   │
 │ │ [🔗 Install from URL]  github.com/user/skill-repo                │   │
 │ │                                                                   │   │
-│ │ [📁 Upload ZIP]  Drag & drop or click to upload                  │   │
+│ │ [📁 Upload ZIP]  Click to select ZIP file                        │   │
 │ └───────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -97,31 +97,24 @@ OpenAI、GitHub Copilot 等已采用相同规范。Aether 作为 OS-Level AI 中
 
 1. **Skills 列表展示**
    - 显示所有已安装的 Skills
-   - 卡片式布局（名称、描述、来源标签）
+   - 卡片式布局（名称、描述）
    - 支持搜索过滤
-   - 快速操作（编辑、删除）
+   - 删除操作（带确认对话框）
 
 2. **官方 Skills 一键安装**
    - 按钮触发从 `anthropics/skills` 仓库下载
    - 显示下载进度
    - 自动解析并安装到 `~/.config/aether/skills/`
 
-3. **第三方 Skills 安装**
+3. **第三方 Skills 安装（URL）**
    - URL 输入框（支持 GitHub 仓库地址）
    - 格式：`github.com/user/skill-name` 或完整 URL
-   - 自动克隆/下载并安装
+   - 自动下载并安装
 
 4. **ZIP 文件上传安装**
-   - 拖拽上传或文件选择器
+   - 文件选择器选择 ZIP 文件
    - 自动解压到 skills 目录
    - 验证 SKILL.md 存在
-
-5. **Skills 创建/编辑器**
-   - 模态窗口或侧边面板
-   - 表单字段：name, description, allowed_tools
-   - Markdown 编辑器（SKILL.md 内容）
-   - 预览功能
-   - 保存到 `~/.config/aether/skills/<name>/SKILL.md`
 
 ---
 
@@ -151,7 +144,6 @@ OpenAI、GitHub Copilot 等已采用相同规范。Aether 作为 OS-Level AI 中
   Phase 7: Skills Settings UI (Swift)
   ├── Aether/Sources/SkillsSettingsView.swift (NEW)
   ├── Aether/Sources/Components/Molecules/SkillCard.swift (NEW)
-  ├── Aether/Sources/Components/Organisms/SkillEditorPanel.swift (NEW)
   └── Aether/Sources/SettingsView.swift (ADD .skills tab)
 
   Phase 8: Localization
@@ -222,9 +214,8 @@ When refining text, follow these principles:
 9. ✅ 一键安装官方 Skills
 10. ✅ URL 输入安装第三方 Skills
 11. ✅ ZIP 文件上传安装
-12. ✅ Skills 创建/编辑功能
-13. ✅ Skills 删除功能
-14. ✅ 搜索过滤 Skills
+12. ✅ Skills 删除功能（带确认对话框）
+13. ✅ 搜索过滤 Skills
 
 ---
 
@@ -269,20 +260,20 @@ When refining text, follow these principles:
 1. 官方一键安装（推荐）
 2. GitHub URL 安装
 3. ZIP 上传安装
-4. 手动创建
 
 **理由**：
 - 从最简单到最灵活的渐进式体验
 - 官方 Skills 经过验证，最安全
+- 不提供编辑功能，保持 UI 简洁
 
-### Decision 6: Skills 编辑器设计
+### Decision 6: 不提供编辑功能
 
-**选择**：模态 Sheet 编辑器
+**选择**：Settings UI 只提供安装和删除功能，不提供编辑
 
 **理由**：
-- 与 macOS 设计规范一致
-- 聚焦编辑任务
-- 不占用主界面空间
+- 减少 UI 复杂度
+- Skills 创建/编辑是高级操作，可直接编辑 `~/.config/aether/skills/<name>/SKILL.md`
+- 保持设置界面轻量化
 
 ---
 
