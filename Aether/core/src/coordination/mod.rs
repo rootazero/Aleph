@@ -18,15 +18,27 @@
 //! - **Separation of Concerns**: Each component has a single responsibility
 //! - **Gradual Enhancement**: Optional components can be enabled independently
 //! - **Backward Compatible**: Works with existing Router API
+//!
+//! # Semantic Matching
+//!
+//! The coordination layer can optionally use SemanticMatcher for enhanced matching:
+//! - Layer 1: Fast path (command/regex matching via Router)
+//! - Layer 2: Keyword index matching
+//! - Layer 3: Context-aware inference
+//! - Layer 4: AI detection fallback
+//!
+//! SemanticMatcher can be provided in two ways:
+//! 1. Via `with_semantic_matcher()` - independent instance
+//! 2. Via Router's embedded matcher - for backward compatibility
 
 pub mod routing_result;
 
 use crate::conversation::ConversationManager;
 use crate::core::CapturedContext;
 use crate::router::Router;
-use crate::semantic::SemanticMatcher;
+use crate::semantic::{MatchResult, MatchingContext, SemanticMatcher};
 use std::sync::{Arc, Mutex};
-use tracing::debug;
+use tracing::{debug, info};
 
 // Re-exports
 pub use routing_result::RoutingResult;
@@ -254,6 +266,134 @@ impl ConversationAwareRouter {
     /// Get the conversation manager
     pub fn conversation_manager(&self) -> &Arc<Mutex<ConversationManager>> {
         &self.conversation_manager
+    }
+
+    // ========================================================================
+    // Semantic Matching Methods
+    // ========================================================================
+
+    /// Check if semantic matching is available
+    ///
+    /// Returns true if either:
+    /// - An independent SemanticMatcher was provided
+    /// - The Router has an embedded SemanticMatcher
+    pub fn is_semantic_matching_available(&self) -> bool {
+        self.semantic_matcher.is_some() || self.router.is_semantic_matching_enabled()
+    }
+
+    /// Get the semantic matcher
+    ///
+    /// Returns the independent matcher if provided, otherwise tries the router's embedded matcher.
+    pub fn get_semantic_matcher(&self) -> Option<&SemanticMatcher> {
+        self.semantic_matcher
+            .as_ref()
+            .map(|m| m.as_ref())
+            .or_else(|| self.router.semantic_matcher())
+    }
+
+    /// Perform semantic matching with conversation context
+    ///
+    /// This method combines conversation history with semantic detection:
+    /// 1. Builds MatchingContext with conversation history
+    /// 2. Runs semantic matcher (keyword + context inference)
+    /// 3. Returns MatchResult with intent classification
+    ///
+    /// # Arguments
+    /// * `input` - User input text
+    /// * `context` - Captured context (app, window)
+    ///
+    /// # Returns
+    /// * `Some(MatchResult)` - Semantic match result
+    /// * `None` - Semantic matching is not available
+    pub async fn route_semantic(
+        &self,
+        input: &str,
+        context: &CapturedContext,
+    ) -> Option<MatchResult> {
+        // Get the matcher (independent or from router)
+        let matcher = self.get_semantic_matcher()?;
+
+        // Build MatchingContext with conversation history
+        let matching_context = self.build_matching_context(input, context);
+
+        info!(
+            input_length = input.len(),
+            has_conversation = !matching_context.conversation.history.is_empty(),
+            "Performing semantic matching with conversation context"
+        );
+
+        // Perform semantic matching
+        Some(matcher.match_input(&matching_context).await)
+    }
+
+    /// Build a MatchingContext for semantic detection
+    ///
+    /// Creates a context that includes:
+    /// - User input
+    /// - App context (bundle ID, window title)
+    /// - Conversation history (if available)
+    fn build_matching_context(&self, input: &str, context: &CapturedContext) -> MatchingContext {
+        use crate::semantic::{
+            AppContext, ConversationContext as SemanticConversationContext,
+            ConversationTurn as SemanticTurn,
+        };
+
+        // Use the builder pattern from semantic module
+        let mut builder = MatchingContext::builder().raw_input(input);
+
+        // Extract app name from bundle ID (e.g., "com.apple.Notes" → "Notes")
+        let app_name = context
+            .app_bundle_id
+            .split('.')
+            .next_back()
+            .unwrap_or("Unknown");
+
+        // Build app context
+        let mut app_context = AppContext::new(&context.app_bundle_id, app_name);
+        if let Some(ref title) = context.window_title {
+            app_context = app_context.with_window_title(title);
+        }
+        builder = builder.app(app_context);
+
+        // Build conversation context if available
+        if let Ok(manager) = self.conversation_manager.lock() {
+            if let Some(session) = manager.active_session() {
+                // Convert ConversationManager turns to semantic ConversationTurns
+                let semantic_turns: Vec<SemanticTurn> = session
+                    .turns
+                    .iter()
+                    .map(|turn| SemanticTurn::new(&turn.user_input, &turn.ai_response))
+                    .collect();
+
+                if !semantic_turns.is_empty() {
+                    let conv_ctx = SemanticConversationContext {
+                        session_id: Some(session.id().to_string()),
+                        turn_count: session.turn_count(),
+                        previous_intents: Vec::new(),
+                        pending_params: std::collections::HashMap::new(),
+                        last_response_summary: session
+                            .turns
+                            .last()
+                            .map(|t| t.ai_response.chars().take(200).collect()),
+                        history: semantic_turns,
+                    };
+                    builder = builder.conversation(conv_ctx);
+                }
+            }
+        }
+
+        builder.build()
+    }
+
+    /// Perform keyword matching only (synchronous)
+    ///
+    /// This is useful for quick keyword checks without the full semantic pipeline.
+    pub fn match_keywords(&self, input: &str) -> Vec<crate::semantic::KeywordMatch> {
+        if let Some(matcher) = self.get_semantic_matcher() {
+            matcher.match_keywords_only(input)
+        } else {
+            Vec::new()
+        }
     }
 }
 

@@ -2,9 +2,15 @@
 //!
 //! This module defines the result types returned by ConversationAwareRouter,
 //! which include both the routing decision and conversation context.
+//!
+//! # Components
+//!
+//! - `RoutingMatch`: Core rule-based matching (commands, keywords)
+//! - `MatchResult`: Semantic matching result (intent, confidence)
+//! - `RoutingResult`: Combined result with conversation context
 
 use crate::router::RoutingMatch;
-use crate::semantic::MatchResult;
+pub use crate::semantic::MatchResult;
 
 /// Result of conversation-aware routing
 ///
