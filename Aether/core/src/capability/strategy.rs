@@ -100,6 +100,7 @@ pub trait CapabilityStrategy: Send + Sync {
             Capability::Search => "search",
             Capability::Mcp => "mcp",
             Capability::Video => "video",
+            Capability::Skills => "skills",
         }
     }
 

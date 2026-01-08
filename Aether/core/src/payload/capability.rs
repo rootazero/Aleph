@@ -1,6 +1,6 @@
 /// Capability enumeration - Agent capability types
 ///
-/// Executed in fixed order: Memory → Search → MCP → Video
+/// Executed in fixed order: Memory → Search → MCP → Video → Skills
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Capability {
     /// Memory retrieval (local vector database)
@@ -14,6 +14,9 @@ pub enum Capability {
 
     /// Video transcript extraction (YouTube)
     Video = 3,
+
+    /// Skills - dynamic instruction injection (Claude Agent Skills standard)
+    Skills = 4,
 }
 
 impl Capability {
@@ -24,6 +27,7 @@ impl Capability {
             "search" => Ok(Capability::Search),
             "mcp" => Ok(Capability::Mcp),
             "video" => Ok(Capability::Video),
+            "skills" => Ok(Capability::Skills),
             _ => Err(format!("Unknown capability: {}", s)),
         }
     }
@@ -35,6 +39,7 @@ impl Capability {
             Capability::Search => "search",
             Capability::Mcp => "mcp",
             Capability::Video => "video",
+            Capability::Skills => "skills",
         }
     }
 
@@ -63,6 +68,8 @@ mod tests {
         assert_eq!(Capability::parse("Mcp").unwrap(), Capability::Mcp);
         assert_eq!(Capability::parse("video").unwrap(), Capability::Video);
         assert_eq!(Capability::parse("VIDEO").unwrap(), Capability::Video);
+        assert_eq!(Capability::parse("skills").unwrap(), Capability::Skills);
+        assert_eq!(Capability::parse("SKILLS").unwrap(), Capability::Skills);
         assert!(Capability::parse("invalid").is_err());
     }
 
@@ -72,6 +79,7 @@ mod tests {
         assert_eq!(Capability::Search.as_str(), "search");
         assert_eq!(Capability::Mcp.as_str(), "mcp");
         assert_eq!(Capability::Video.as_str(), "video");
+        assert_eq!(Capability::Skills.as_str(), "skills");
     }
 
     #[test]
@@ -110,6 +118,7 @@ mod tests {
         assert_eq!(Capability::Search.to_string(), "search");
         assert_eq!(Capability::Mcp.to_string(), "mcp");
         assert_eq!(Capability::Video.to_string(), "video");
+        assert_eq!(Capability::Skills.to_string(), "skills");
     }
 
     #[test]
@@ -117,6 +126,29 @@ mod tests {
         assert!(Capability::Memory < Capability::Search);
         assert!(Capability::Search < Capability::Mcp);
         assert!(Capability::Mcp < Capability::Video);
-        assert!(Capability::Memory < Capability::Video);
+        assert!(Capability::Video < Capability::Skills);
+        assert!(Capability::Memory < Capability::Skills);
+    }
+
+    #[test]
+    fn test_capability_sort_with_skills() {
+        let caps = vec![
+            Capability::Skills,
+            Capability::Video,
+            Capability::Mcp,
+            Capability::Memory,
+            Capability::Search,
+        ];
+        let sorted = Capability::sort_by_priority(caps);
+        assert_eq!(
+            sorted,
+            vec![
+                Capability::Memory,
+                Capability::Search,
+                Capability::Mcp,
+                Capability::Video,
+                Capability::Skills
+            ]
+        );
     }
 }

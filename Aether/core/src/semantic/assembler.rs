@@ -705,6 +705,7 @@ mod tests {
             video_transcript: None,
             workflow_state: None,
             attachments: None,
+            skill_instructions: None,
         };
 
         let (truncated, was_truncated) = assembler.truncate_context(&context, 100);

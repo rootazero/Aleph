@@ -255,6 +255,14 @@ impl PromptAssembler {
             // TODO: Implement MCP formatting
         }
 
+        // Skills instructions section
+        if let Some(instructions) = &context.skill_instructions {
+            if !instructions.is_empty() {
+                let skill_section = format!("## Skill Instructions\n\n{}", instructions);
+                sections.push(skill_section);
+            }
+        }
+
         if sections.is_empty() {
             None
         } else {
@@ -814,6 +822,7 @@ mod tests {
             video_transcript: None,
             workflow_state: None,
             attachments: None,
+            skill_instructions: None,
         };
 
         let prompt = assembler.build_capability_aware_prompt("Base prompt.", &capabilities, Some(&context));

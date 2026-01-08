@@ -48,6 +48,9 @@ pub struct Config {
     /// Video transcript configuration (YouTube transcript extraction)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video: Option<VideoConfig>,
+    /// Skills configuration (Claude Agent Skills standard)
+    #[serde(default)]
+    pub skills: SkillsConfig,
     /// Trigger configuration (hotkey system refactor)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger: Option<TriggerConfig>,
@@ -1474,6 +1477,65 @@ impl Default for VideoConfig {
     }
 }
 
+/// Skills configuration (Claude Agent Skills standard)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillsConfig {
+    /// Enable skills capability
+    #[serde(default = "default_skills_enabled")]
+    pub enabled: bool,
+
+    /// Skills directory path (relative to config dir or absolute)
+    #[serde(default = "default_skills_dir")]
+    pub skills_dir: String,
+
+    /// Enable auto-matching skills based on user input
+    #[serde(default = "default_auto_match_enabled")]
+    pub auto_match_enabled: bool,
+}
+
+fn default_skills_enabled() -> bool {
+    true
+}
+
+fn default_skills_dir() -> String {
+    "skills".to_string()
+}
+
+fn default_auto_match_enabled() -> bool {
+    false // Off by default, explicit /skill command required
+}
+
+impl Default for SkillsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_skills_enabled(),
+            skills_dir: default_skills_dir(),
+            auto_match_enabled: default_auto_match_enabled(),
+        }
+    }
+}
+
+impl SkillsConfig {
+    /// Get the full path to the skills directory
+    ///
+    /// If skills_dir is relative, it's relative to ~/.config/aether/
+    /// If absolute, use as-is
+    pub fn get_skills_dir_path(&self) -> std::path::PathBuf {
+        let path = std::path::Path::new(&self.skills_dir);
+
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            // Relative to config directory
+            if let Some(home) = dirs::home_dir() {
+                home.join(".config").join("aether").join(&self.skills_dir)
+            } else {
+                path.to_path_buf()
+            }
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -1487,6 +1549,7 @@ impl Default for Config {
             behavior: Some(BehaviorConfig::default()),
             search: None,
             video: Some(VideoConfig::default()),
+            skills: SkillsConfig::default(),
             trigger: Some(TriggerConfig::default()),
             smart_flow: SmartFlowConfig::default(),
             smart_matching: SmartMatchingConfig::default(),

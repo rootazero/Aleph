@@ -141,6 +141,10 @@ pub struct AgentContext {
     /// Video transcript for video analysis capability
     /// Contains extracted transcript from YouTube or other video platforms
     pub video_transcript: Option<crate::video::VideoTranscript>,
+
+    /// Skills instructions - dynamically injected from matched SKILL.md
+    /// Contains the instructions from the skill's markdown body
+    pub skill_instructions: Option<String>,
 }
 
 // ====== Reserved structures for future stages ======

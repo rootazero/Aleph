@@ -89,6 +89,7 @@ pub mod payload; // Structured context protocol with capability support
 pub mod providers;
 pub mod router;
 pub mod search; // NEW: Search capability with multiple provider support
+pub mod skills; // NEW: Claude Agent Skills support
 pub mod semantic; // NEW: Unified semantic detection system
 pub mod coordination; // NEW: Conversation-aware routing coordination layer
 pub mod suggestion; // NEW: AI response suggestion parsing
@@ -103,7 +104,7 @@ pub use crate::config::{
     BehaviorConfig, Config, ContextRuleConfig, FullConfig, GeneralConfig, IntentDetectionConfig,
     KeywordRuleConfig, MemoryConfig, PIIConfig, ProviderConfig, ProviderConfigEntry,
     RoutingRuleConfig, SearchBackendConfig, SearchBackendEntry, SearchConfig, SearchConfigInternal,
-    ShortcutsConfig, SmartFlowConfig, SmartMatchingConfig, SuggestionParsingConfig,
+    ShortcutsConfig, SkillsConfig, SmartFlowConfig, SmartMatchingConfig, SuggestionParsingConfig,
     TestConnectionResult, TriggerConfig, VideoConfig,
 };
 pub use crate::core::{
@@ -131,6 +132,7 @@ pub use crate::conversation::{ConversationManager, ConversationSession, Conversa
 pub use crate::intent::{AiIntentDetector, AiIntentResult};
 pub use crate::coordination::{ConversationAwareRouter, RoutingContext, RoutingResult};
 pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
+pub use crate::skills::{Skill, SkillsInstaller, SkillsRegistry};
 pub use crate::utils::pii;
 
 // Test-only exports

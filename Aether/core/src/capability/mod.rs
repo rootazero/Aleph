@@ -18,7 +18,7 @@ pub mod strategy;
 pub use declaration::{CapabilityDeclaration, CapabilityParameter, CapabilityRegistry};
 pub use request::{AiResponse, CapabilityRequest, ClarificationInfo, ClarificationReason};
 pub use response_parser::ResponseParser;
-pub use strategies::{McpStrategy, MemoryStrategy, SearchStrategy, VideoStrategy};
+pub use strategies::{McpStrategy, MemoryStrategy, SearchStrategy, SkillsStrategy, VideoStrategy};
 pub use strategy::{CapabilityStrategy, CompositeCapabilityExecutor};
 
 // ============================================================================
@@ -29,11 +29,12 @@ pub use strategy::{CapabilityStrategy, CompositeCapabilityExecutor};
 ///
 /// This module orchestrates the execution of different capabilities (Memory, Search, MCP, Video)
 /// in a fixed priority order, enriching the AgentPayload with context data.
-use crate::config::{MemoryConfig, VideoConfig};
+use crate::config::{MemoryConfig, SkillsConfig, VideoConfig};
 use crate::error::{AetherError, Result};
 use crate::memory::{EmbeddingModel, MemoryRetrieval, VectorDatabase};
 use crate::payload::{AgentPayload, Capability};
 use crate::search::{SearchOptions, SearchRegistry};
+use crate::skills::SkillsRegistry;
 use crate::utils::pii;
 use crate::video::{extract_youtube_url, YouTubeExtractor};
 use std::path::PathBuf;
@@ -42,7 +43,7 @@ use tracing::{debug, info, warn};
 
 /// Capability executor that enriches AgentPayload with context data
 ///
-/// Executes capabilities in priority order: Memory → Search → MCP → Video
+/// Executes capabilities in priority order: Memory → Search → MCP → Video → Skills
 pub struct CapabilityExecutor {
     /// Optional memory database for vector retrieval
     memory_db: Option<Arc<VectorDatabase>>,
@@ -56,6 +57,10 @@ pub struct CapabilityExecutor {
     pii_scrubbing_enabled: bool,
     /// Video transcript configuration
     video_config: Option<Arc<VideoConfig>>,
+    /// Skills registry for Skills capability
+    skills_registry: Option<Arc<SkillsRegistry>>,
+    /// Skills configuration
+    skills_config: Option<Arc<SkillsConfig>>,
 
     // AI Memory Retrieval Configuration
     /// AI provider for memory selection (required for AI retrieval)
@@ -97,6 +102,8 @@ impl CapabilityExecutor {
             search_options: search_options.unwrap_or_default(),
             pii_scrubbing_enabled,
             video_config: None,
+            skills_registry: None,
+            skills_config: None,
             // AI Memory Retrieval defaults
             ai_provider: None,
             memory_exclusion_set: Vec::new(),
@@ -110,6 +117,22 @@ impl CapabilityExecutor {
     /// Create a new capability executor with video config
     pub fn with_video_config(mut self, video_config: Option<Arc<VideoConfig>>) -> Self {
         self.video_config = video_config;
+        self
+    }
+
+    /// Configure skills capability
+    ///
+    /// # Arguments
+    ///
+    /// * `skills_registry` - Skills registry containing loaded skills
+    /// * `skills_config` - Skills configuration
+    pub fn with_skills(
+        mut self,
+        skills_registry: Option<Arc<SkillsRegistry>>,
+        skills_config: Option<Arc<SkillsConfig>>,
+    ) -> Self {
+        self.skills_registry = skills_registry;
+        self.skills_config = skills_config;
         self
     }
 
@@ -209,6 +232,9 @@ impl CapabilityExecutor {
             }
             Capability::Video => {
                 payload = self.execute_video(payload).await?;
+            }
+            Capability::Skills => {
+                payload = self.execute_skills(payload).await?;
             }
         }
 
@@ -581,6 +607,77 @@ impl CapabilityExecutor {
                 );
                 // Don't fail the request - continue without transcript
             }
+        }
+
+        Ok(payload)
+    }
+
+    /// Execute Skills capability
+    ///
+    /// Looks up skill by ID from Intent::Skills or auto-matches based on user input,
+    /// then injects skill instructions into the payload context.
+    ///
+    /// # Arguments
+    ///
+    /// * `payload` - The agent payload
+    ///
+    /// # Returns
+    ///
+    /// The payload with skill_instructions populated (if skill matched)
+    async fn execute_skills(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
+        // Check if skills config is available and enabled
+        let default_config = SkillsConfig::default();
+        let config = self.skills_config.as_ref().map(|c| c.as_ref()).unwrap_or(&default_config);
+
+        if !config.enabled {
+            debug!("Skills capability disabled in config");
+            return Ok(payload);
+        }
+
+        // Check if skills registry is available
+        let Some(registry) = &self.skills_registry else {
+            warn!("Skills capability requested but no registry configured");
+            return Ok(payload);
+        };
+
+        // Check if a skill is explicitly specified via Intent::Skills
+        let skill_id = payload.meta.intent.skills_id();
+
+        // If skill_id is specified, look up directly
+        if let Some(id) = skill_id {
+            if let Some(skill) = registry.get_skill(id) {
+                info!(
+                    skill_id = %id,
+                    skill_name = %skill.name(),
+                    "Injecting skill instructions from explicit /skill command"
+                );
+                payload.context.skill_instructions = Some(skill.instructions.clone());
+                return Ok(payload);
+            } else {
+                warn!(
+                    skill_id = %id,
+                    "Skill not found in registry"
+                );
+                return Ok(payload);
+            }
+        }
+
+        // Auto-matching is only enabled when explicitly configured
+        if !config.auto_match_enabled {
+            debug!("Skills auto-matching disabled in config");
+            return Ok(payload);
+        }
+
+        // Try to auto-match skill based on user input
+        if let Some(skill) = registry.find_matching(&payload.user_input) {
+            info!(
+                skill_id = %skill.id,
+                skill_name = %skill.name(),
+                "Auto-matched skill based on user input"
+            );
+            payload.context.skill_instructions = Some(skill.instructions.clone());
+        } else {
+            debug!("No skill matched for user input");
         }
 
         Ok(payload)

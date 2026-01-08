@@ -54,6 +54,10 @@ async-trait = "0.1"
 fastembed = "4"
 # For stable get_or_try_init support
 once_cell = "1.19"
+# For SKILL.md YAML frontmatter parsing
+serde_yaml = "0.9"
+# For skills ZIP extraction
+zip = "2.2"
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }
