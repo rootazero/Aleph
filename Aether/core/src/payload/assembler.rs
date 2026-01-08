@@ -72,25 +72,44 @@ impl PromptAssembler {
     /// Format capability instructions for the AI.
     fn format_capability_instructions(&self, capabilities: &[&CapabilityDeclaration]) -> String {
         let mut lines = vec![
-            "## CRITICAL: Capability System Instructions".to_string(),
+            "## CRITICAL: Proactive Search Decision System".to_string(),
             String::new(),
-            "**YOU MUST FOLLOW THESE INSTRUCTIONS EXACTLY.**".to_string(),
+            "**YOU MUST PROACTIVELY DECIDE WHETHER TO SEARCH FOR EVERY QUESTION.**".to_string(),
             String::new(),
-            "You have access to capabilities that can fetch real-time data. When the user asks about weather, news, prices, current events, or any time-sensitive information, you MUST use the appropriate capability.".to_string(),
+            "You have the ability to search the internet in real-time. Before answering ANY question, you MUST first evaluate: \"Does answering this question accurately require up-to-date information from the internet?\"".to_string(),
             String::new(),
-            "### MANDATORY: How to Request a Capability".to_string(),
+            "### MANDATORY: Self-Assessment Before Every Response".to_string(),
             String::new(),
-            "When real-time data is needed, respond with ONLY this JSON (no other text):".to_string(),
+            "Ask yourself these questions:".to_string(),
+            "1. Is this about current events, recent news, or things that change over time?".to_string(),
+            "2. Would my training data (which has a knowledge cutoff) be outdated for this?".to_string(),
+            "3. Is the user asking about specific facts that I should verify rather than guess?".to_string(),
+            "4. Does the user explicitly or implicitly want the latest/current information?".to_string(),
+            String::new(),
+            "**If ANY of the above is YES → USE SEARCH IMMEDIATELY.**".to_string(),
+            String::new(),
+            "### When to Search (MUST search for these):".to_string(),
+            String::new(),
+            "- **Time-sensitive**: weather, stock prices, exchange rates, sports scores, election results".to_string(),
+            "- **Current events**: news, recent developments, \"what happened\", \"latest updates\"".to_string(),
+            "- **Specific entities**: company news, person updates, product releases, policy changes".to_string(),
+            "- **Factual verification**: statistics, data, facts that may have changed since training".to_string(),
+            "- **User intent keywords**: 搜索, 查一下, 找找, search, look up, find out, what's new".to_string(),
+            "- **Recency indicators**: 今天, 最近, 现在, 最新, today, now, latest, recent, current".to_string(),
+            String::new(),
+            "### How to Request Search".to_string(),
+            String::new(),
+            "When search is needed, respond with ONLY this JSON (no other text):".to_string(),
             "```json".to_string(),
-            r#"{"__capability_request__": true, "capability": "search", "parameters": {"query": "search terms"}, "query": "original user question"}"#.to_string(),
+            r#"{"__capability_request__": true, "capability": "search", "parameters": {"query": "optimized search terms"}, "query": "original user question"}"#.to_string(),
             "```".to_string(),
             String::new(),
-            "**IMPORTANT RULES:**".to_string(),
-            "- For weather queries (even without location): USE search capability with location inferred or generic".to_string(),
-            "- For news/prices/current events: USE search capability".to_string(),
-            "- DO NOT ask the user for clarification about location - just search".to_string(),
-            "- DO NOT respond with natural language if a capability is needed".to_string(),
-            "- ONLY respond with natural language for non-real-time questions".to_string(),
+            "**CRITICAL RULES:**".to_string(),
+            "- DO NOT guess or make up information when search would help".to_string(),
+            "- DO NOT say \"I don't have access to real-time data\" - you DO have search capability".to_string(),
+            "- DO NOT ask user for permission to search - just search proactively".to_string(),
+            "- DO NOT respond with natural language if search is needed - return JSON immediately".to_string(),
+            "- ONLY respond directly for: translations, code help, creative writing, timeless knowledge".to_string(),
             String::new(),
             "### Available Capabilities:".to_string(),
             String::new(),
@@ -121,29 +140,48 @@ impl PromptAssembler {
             lines.push(String::new());
         }
 
-        lines.push("### Decision Guidelines (MUST FOLLOW):".to_string());
+        lines.push("### Decision Framework (MUST FOLLOW):".to_string());
         lines.push(String::new());
-        lines.push("1. **ALWAYS use `search`** for: weather, news, prices, stocks, exchange rates, today, latest, current, real-time info - return JSON immediately.".to_string());
-        lines.push("2. **CRITICAL - Multi-turn context**: When user provides follow-up info (like location, date, or details) that relates to a previous real-time question in the conversation, you MUST combine the context and use search. The follow-up response IS a continuation of the original question.".to_string());
-        lines.push("3. **Use `video`** when user provides a YouTube URL.".to_string());
-        lines.push("4. **ONLY respond directly** for: translations, code help, creative writing, general knowledge that doesn't change.".to_string());
+        lines.push("**Step 1: Evaluate the question type**".to_string());
+        lines.push("- Does it involve time-sensitive information? → SEARCH".to_string());
+        lines.push("- Does it ask about specific real-world entities/events? → SEARCH".to_string());
+        lines.push("- Would outdated information harm the user? → SEARCH".to_string());
+        lines.push("- Is it purely about concepts, code, or creative tasks? → RESPOND DIRECTLY".to_string());
         lines.push(String::new());
-        lines.push("**Examples:**".to_string());
+        lines.push("**Step 2: When in doubt, SEARCH**".to_string());
+        lines.push("- It's better to search and provide accurate info than to guess and be wrong".to_string());
+        lines.push("- Users expect you to use your search capability proactively".to_string());
         lines.push(String::new());
-        lines.push("Single turn - stock price:".to_string());
+        lines.push("**Step 3: Multi-turn awareness**".to_string());
+        lines.push("- If previous conversation involved a search-worthy topic and user provides follow-up details, combine context and SEARCH".to_string());
+        lines.push(String::new());
+        lines.push("**Examples requiring SEARCH:**".to_string());
+        lines.push(String::new());
+        lines.push("User: \"今天中国有什么大新闻\" → SEARCH (current events)".to_string());
         lines.push("```json".to_string());
-        lines.push(r#"{"__capability_request__": true, "capability": "search", "parameters": {"query": "AAPL stock price"}, "query": "What is Apple stock price?"}"#.to_string());
+        lines.push(r#"{"__capability_request__": true, "capability": "search", "parameters": {"query": "中国今日新闻 头条"}, "query": "今天中国有什么大新闻"}"#.to_string());
         lines.push("```".to_string());
         lines.push(String::new());
-        lines.push("Multi-turn - Previous: \"What's the weather?\", Current: \"Beijing\":".to_string());
+        lines.push("User: \"苹果公司最近怎么样\" → SEARCH (company news)".to_string());
         lines.push("```json".to_string());
-        lines.push(r#"{"__capability_request__": true, "capability": "search", "parameters": {"query": "Beijing weather today"}, "query": "Beijing weather"}"#.to_string());
+        lines.push(r#"{"__capability_request__": true, "capability": "search", "parameters": {"query": "Apple company news 2024"}, "query": "苹果公司最近怎么样"}"#.to_string());
         lines.push("```".to_string());
         lines.push(String::new());
-        lines.push("Multi-turn - Previous: \"Stock price?\", Current: \"Tesla\":".to_string());
+        lines.push("User: \"帮我查一下北京到上海的高铁\" → SEARCH (user explicitly wants to look up)".to_string());
         lines.push("```json".to_string());
-        lines.push(r#"{"__capability_request__": true, "capability": "search", "parameters": {"query": "Tesla TSLA stock price"}, "query": "Tesla stock price"}"#.to_string());
+        lines.push(r#"{"__capability_request__": true, "capability": "search", "parameters": {"query": "北京到上海高铁时刻表票价"}, "query": "帮我查一下北京到上海的高铁"}"#.to_string());
         lines.push("```".to_string());
+        lines.push(String::new());
+        lines.push("User: \"What is the current Bitcoin price?\" → SEARCH (real-time price)".to_string());
+        lines.push("```json".to_string());
+        lines.push(r#"{"__capability_request__": true, "capability": "search", "parameters": {"query": "Bitcoin BTC price USD"}, "query": "What is the current Bitcoin price?"}"#.to_string());
+        lines.push("```".to_string());
+        lines.push(String::new());
+        lines.push("**Examples NOT requiring search (respond directly):**".to_string());
+        lines.push("- \"帮我翻译这段话\" → Translation task, no search needed".to_string());
+        lines.push("- \"写一首关于春天的诗\" → Creative writing, no search needed".to_string());
+        lines.push("- \"解释一下什么是递归\" → Timeless concept, no search needed".to_string());
+        lines.push("- \"帮我改一下这段代码\" → Code task, no search needed".to_string());
 
         lines.join("\n")
     }
@@ -705,16 +743,16 @@ mod tests {
         assert!(prompt.starts_with("You are helpful."));
 
         // Should contain capability instructions
-        assert!(prompt.contains("## Available Capabilities"));
+        assert!(prompt.contains("## CRITICAL: Proactive Search Decision System"));
         assert!(prompt.contains("__capability_request__"));
         assert!(prompt.contains("Web Search"));
         assert!(prompt.contains("search"));
 
-        // Should contain examples
-        assert!(prompt.contains("weather"));
+        // Should contain self-assessment instructions
+        assert!(prompt.contains("Self-Assessment Before Every Response"));
 
-        // Should contain decision guidelines
-        assert!(prompt.contains("Decision Guidelines"));
+        // Should contain decision framework
+        assert!(prompt.contains("Decision Framework"));
     }
 
     #[test]
@@ -782,7 +820,7 @@ mod tests {
 
         // Should contain base prompt, capabilities, AND memory context
         assert!(prompt.contains("Base prompt."));
-        assert!(prompt.contains("## Available Capabilities"));
+        assert!(prompt.contains("## CRITICAL: Proactive Search Decision System"));
         assert!(prompt.contains("### Context Information"));
         assert!(prompt.contains("**Relevant History**"));
         assert!(prompt.contains("Previous question"));
