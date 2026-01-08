@@ -750,6 +750,35 @@ pub struct MemoryConfig {
     /// Fallback count if AI selection fails
     #[serde(default = "default_ai_retrieval_fallback_count")]
     pub ai_retrieval_fallback_count: u32,
+
+    // ========================================
+    // Memory Compression Settings
+    // ========================================
+
+    /// Enable memory compression (LLM-based fact extraction)
+    #[serde(default = "default_compression_enabled")]
+    pub compression_enabled: bool,
+    /// Idle timeout in seconds to trigger compression (default: 300 = 5 minutes)
+    #[serde(default = "default_compression_idle_timeout")]
+    pub compression_idle_timeout_seconds: u32,
+    /// Number of conversation turns to trigger compression (default: 20)
+    #[serde(default = "default_compression_turn_threshold")]
+    pub compression_turn_threshold: u32,
+    /// Background compression check interval in seconds (default: 3600 = 1 hour)
+    #[serde(default = "default_compression_interval")]
+    pub compression_interval_seconds: u32,
+    /// Maximum memories to process per compression batch (default: 50)
+    #[serde(default = "default_compression_batch_size")]
+    pub compression_batch_size: u32,
+    /// Similarity threshold for conflict detection (default: 0.85)
+    #[serde(default = "default_conflict_similarity_threshold")]
+    pub conflict_similarity_threshold: f32,
+    /// Maximum facts to include in RAG context (default: 5)
+    #[serde(default = "default_max_facts_in_context")]
+    pub max_facts_in_context: u32,
+    /// Maximum raw memories to fallback when facts insufficient (default: 3)
+    #[serde(default = "default_raw_memory_fallback_count")]
+    pub raw_memory_fallback_count: u32,
 }
 
 // Default value functions for MemoryConfig
@@ -793,6 +822,39 @@ fn default_ai_retrieval_fallback_count() -> u32 {
     3 // Return 3 most recent memories if AI fails
 }
 
+// Compression configuration defaults
+fn default_compression_enabled() -> bool {
+    true
+}
+
+fn default_compression_idle_timeout() -> u32 {
+    300 // 5 minutes
+}
+
+fn default_compression_turn_threshold() -> u32 {
+    20
+}
+
+fn default_compression_interval() -> u32 {
+    3600 // 1 hour
+}
+
+fn default_compression_batch_size() -> u32 {
+    50
+}
+
+fn default_conflict_similarity_threshold() -> f32 {
+    0.85
+}
+
+fn default_max_facts_in_context() -> u32 {
+    5
+}
+
+fn default_raw_memory_fallback_count() -> u32 {
+    3
+}
+
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
@@ -812,6 +874,15 @@ impl Default for MemoryConfig {
             ai_retrieval_timeout_ms: default_ai_retrieval_timeout_ms(),
             ai_retrieval_max_candidates: default_ai_retrieval_max_candidates(),
             ai_retrieval_fallback_count: default_ai_retrieval_fallback_count(),
+            // Compression settings
+            compression_enabled: default_compression_enabled(),
+            compression_idle_timeout_seconds: default_compression_idle_timeout(),
+            compression_turn_threshold: default_compression_turn_threshold(),
+            compression_interval_seconds: default_compression_interval(),
+            compression_batch_size: default_compression_batch_size(),
+            conflict_similarity_threshold: default_conflict_similarity_threshold(),
+            max_facts_in_context: default_max_facts_in_context(),
+            raw_memory_fallback_count: default_raw_memory_fallback_count(),
         }
     }
 }
@@ -1410,85 +1481,8 @@ impl Default for Config {
             general: GeneralConfig::default(),
             memory: MemoryConfig::default(),
             providers: HashMap::new(),
-            // Preset routing rules for builtin commands (add-search-settings-ui)
-            rules: vec![
-                // /search command - web search capability
-                RoutingRuleConfig {
-                    rule_type: Some("command".to_string()),
-                    is_builtin: true,
-                    regex: r"^/search\s+".to_string(),
-                    provider: Some("openai".to_string()), // Default, user can override
-                    system_prompt: Some("You are a helpful search assistant. Use the search capability to find up-to-date information.".to_string()),
-                    strip_prefix: Some(true),
-                    capabilities: Some(vec!["search".to_string()]),
-                    intent_type: Some("builtin_search".to_string()),
-                    context_format: Some("markdown".to_string()),
-                    skill_id: None,
-                    skill_version: None,
-                    workflow: None,
-                    tools: None,
-                    knowledge_base: None,
-                    icon: None,
-                    hint: None,
-                },
-                // /mcp command - Model Context Protocol integration (reserved for future)
-                RoutingRuleConfig {
-                    rule_type: Some("command".to_string()),
-                    is_builtin: true,
-                    regex: r"^/mcp\s+".to_string(),
-                    provider: Some("openai".to_string()),
-                    system_prompt: Some("You are an MCP integration assistant. (Feature not yet implemented)".to_string()),
-                    strip_prefix: Some(true),
-                    capabilities: None, // Will add ["mcp"] when implemented
-                    intent_type: Some("builtin_mcp".to_string()),
-                    context_format: Some("markdown".to_string()),
-                    skill_id: None,
-                    skill_version: None,
-                    workflow: None,
-                    tools: None,
-                    knowledge_base: None,
-                    icon: None,
-                    hint: None,
-                },
-                // /skill command - Skills workflow execution (reserved for future)
-                RoutingRuleConfig {
-                    rule_type: Some("command".to_string()),
-                    is_builtin: true,
-                    regex: r"^/skill\s+".to_string(),
-                    provider: Some("openai".to_string()),
-                    system_prompt: Some("You are a skills execution assistant. (Feature not yet implemented)".to_string()),
-                    strip_prefix: Some(true),
-                    capabilities: None, // Will add ["skills"] when implemented
-                    intent_type: Some("skills".to_string()),
-                    context_format: Some("markdown".to_string()),
-                    skill_id: None,
-                    skill_version: None,
-                    workflow: None,
-                    tools: None,
-                    knowledge_base: None,
-                    icon: None,
-                    hint: None,
-                },
-                // /video command - YouTube video transcript analysis
-                RoutingRuleConfig {
-                    rule_type: Some("command".to_string()),
-                    is_builtin: true,
-                    regex: r"^/video\s+".to_string(),
-                    provider: Some("openai".to_string()), // Default, user can override
-                    system_prompt: Some("You are a video content analyst. A video transcript will be provided in the context section below if available. Analyze the transcript and provide insights, summaries, or answer questions about the video content. If no transcript is provided, explain that the video may not have captions enabled or transcript extraction failed.".to_string()),
-                    strip_prefix: Some(true),
-                    capabilities: Some(vec!["video".to_string(), "memory".to_string()]),
-                    intent_type: Some("video_analysis".to_string()),
-                    context_format: Some("markdown".to_string()),
-                    skill_id: None,
-                    skill_version: None,
-                    workflow: None,
-                    tools: None,
-                    knowledge_base: None,
-                    icon: None,
-                    hint: None,
-                },
-            ],
+            // Use builtin_rules() to ensure consistency with merge_builtin_rules()
+            rules: Config::builtin_rules(),
             shortcuts: Some(ShortcutsConfig::default()),
             behavior: Some(BehaviorConfig::default()),
             search: None,
@@ -1655,7 +1649,7 @@ impl Config {
 
     /// Get builtin routing rules
     ///
-    /// Returns the preset routing rules for builtin commands (/search, /mcp, /skill).
+    /// Returns the preset routing rules for builtin commands (/search, /mcp, /skill, /video, /chat).
     /// These rules are always available and merged with user-defined rules.
     fn builtin_rules() -> Vec<RoutingRuleConfig> {
         vec![
@@ -1716,12 +1710,50 @@ impl Config {
                 icon: None,
                 hint: None,
             },
+            // /video command - YouTube video transcript analysis
+            RoutingRuleConfig {
+                rule_type: Some("command".to_string()),
+                is_builtin: true,
+                regex: r"^/video\s+".to_string(),
+                provider: Some("openai".to_string()),
+                system_prompt: Some("You are a video content analyst. A video transcript will be provided in the context section below if available. Analyze the transcript and provide insights, summaries, or answer questions about the video content. If no transcript is provided, explain that the video may not have captions enabled or transcript extraction failed.".to_string()),
+                strip_prefix: Some(true),
+                capabilities: Some(vec!["video".to_string(), "memory".to_string()]),
+                intent_type: Some("video_analysis".to_string()),
+                context_format: Some("markdown".to_string()),
+                skill_id: None,
+                skill_version: None,
+                workflow: None,
+                tools: None,
+                knowledge_base: None,
+                icon: None,
+                hint: None,
+            },
+            // /chat command - General conversation assistant
+            RoutingRuleConfig {
+                rule_type: Some("command".to_string()),
+                is_builtin: true,
+                regex: r"^/chat\s+".to_string(),
+                provider: Some("openai".to_string()),
+                system_prompt: Some("You are a helpful AI assistant. Engage in natural conversation and provide helpful responses.".to_string()),
+                strip_prefix: Some(true),
+                capabilities: Some(vec!["memory".to_string()]),
+                intent_type: Some("general_chat".to_string()),
+                context_format: Some("markdown".to_string()),
+                skill_id: None,
+                skill_version: None,
+                workflow: None,
+                tools: None,
+                knowledge_base: None,
+                icon: None,
+                hint: None,
+            },
         ]
     }
 
     /// Merge builtin rules with user-defined rules
     ///
-    /// Builtin rules (/search, /mcp, /skill) are prepended to user rules
+    /// Builtin rules (/search, /mcp, /skill, /video, /chat) are prepended to user rules
     /// unless the user has defined a rule with the same regex pattern.
     /// This ensures builtin commands always work while allowing user overrides.
     ///

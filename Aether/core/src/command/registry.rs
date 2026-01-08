@@ -21,12 +21,10 @@ pub fn get_builtin_hint(command_key: &str, language: &str) -> Option<String> {
     // Format: (command_key, english_hint, chinese_hint)
     static BUILTIN_HINTS: &[(&str, &str, &str)] = &[
         ("search", "Web search", "网页搜索"),
-        ("en", "To English", "译成英文"),
-        ("zh", "To Chinese", "译成中文"),
-        ("draw", "Gen image", "生成图片"),
         ("mcp", "MCP tools", "MCP工具"),
-        ("code", "Code help", "代码助手"),
+        ("skill", "Skills", "技能"),
         ("video", "Video info", "视频信息"),
+        ("chat", "Chat", "对话"),
     ];
 
     let is_chinese = language.starts_with("zh");
