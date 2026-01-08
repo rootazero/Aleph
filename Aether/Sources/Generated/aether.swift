@@ -2114,10 +2114,11 @@ public struct FullConfig {
     public var search: SearchConfig?
     public var trigger: TriggerConfig?
     public var smartMatching: SmartMatchingConfig
+    public var skills: SkillsConfig?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultHotkey: String, general: GeneralConfig, memory: MemoryConfig, providers: [ProviderConfigEntry], rules: [RoutingRuleConfig], shortcuts: ShortcutsConfig?, behavior: BehaviorConfig?, search: SearchConfig?, trigger: TriggerConfig?, smartMatching: SmartMatchingConfig) {
+    public init(defaultHotkey: String, general: GeneralConfig, memory: MemoryConfig, providers: [ProviderConfigEntry], rules: [RoutingRuleConfig], shortcuts: ShortcutsConfig?, behavior: BehaviorConfig?, search: SearchConfig?, trigger: TriggerConfig?, smartMatching: SmartMatchingConfig, skills: SkillsConfig?) {
         self.defaultHotkey = defaultHotkey
         self.general = general
         self.memory = memory
@@ -2128,6 +2129,7 @@ public struct FullConfig {
         self.search = search
         self.trigger = trigger
         self.smartMatching = smartMatching
+        self.skills = skills
     }
 }
 
@@ -2165,6 +2167,9 @@ extension FullConfig: Equatable, Hashable {
         if lhs.smartMatching != rhs.smartMatching {
             return false
         }
+        if lhs.skills != rhs.skills {
+            return false
+        }
         return true
     }
 
@@ -2179,6 +2184,7 @@ extension FullConfig: Equatable, Hashable {
         hasher.combine(search)
         hasher.combine(trigger)
         hasher.combine(smartMatching)
+        hasher.combine(skills)
     }
 }
 
@@ -2199,7 +2205,8 @@ public struct FfiConverterTypeFullConfig: FfiConverterRustBuffer {
                 behavior: FfiConverterOptionTypeBehaviorConfig.read(from: &buf), 
                 search: FfiConverterOptionTypeSearchConfig.read(from: &buf), 
                 trigger: FfiConverterOptionTypeTriggerConfig.read(from: &buf), 
-                smartMatching: FfiConverterTypeSmartMatchingConfig.read(from: &buf)
+                smartMatching: FfiConverterTypeSmartMatchingConfig.read(from: &buf), 
+                skills: FfiConverterOptionTypeSkillsConfig.read(from: &buf)
         )
     }
 
@@ -2214,6 +2221,7 @@ public struct FfiConverterTypeFullConfig: FfiConverterRustBuffer {
         FfiConverterOptionTypeSearchConfig.write(value.search, into: &buf)
         FfiConverterOptionTypeTriggerConfig.write(value.trigger, into: &buf)
         FfiConverterTypeSmartMatchingConfig.write(value.smartMatching, into: &buf)
+        FfiConverterOptionTypeSkillsConfig.write(value.skills, into: &buf)
     }
 }
 
@@ -3945,6 +3953,162 @@ public func FfiConverterTypeShortcutsConfig_lower(_ value: ShortcutsConfig) -> R
 }
 
 
+public struct SkillInfo {
+    public var id: String
+    public var name: String
+    public var description: String
+    public var allowedTools: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, name: String, description: String, allowedTools: [String]) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.allowedTools = allowedTools
+    }
+}
+
+
+
+extension SkillInfo: Equatable, Hashable {
+    public static func ==(lhs: SkillInfo, rhs: SkillInfo) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.allowedTools != rhs.allowedTools {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(name)
+        hasher.combine(description)
+        hasher.combine(allowedTools)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSkillInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SkillInfo {
+        return
+            try SkillInfo(
+                id: FfiConverterString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                description: FfiConverterString.read(from: &buf), 
+                allowedTools: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SkillInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.description, into: &buf)
+        FfiConverterSequenceString.write(value.allowedTools, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSkillInfo_lift(_ buf: RustBuffer) throws -> SkillInfo {
+    return try FfiConverterTypeSkillInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSkillInfo_lower(_ value: SkillInfo) -> RustBuffer {
+    return FfiConverterTypeSkillInfo.lower(value)
+}
+
+
+public struct SkillsConfig {
+    public var enabled: Bool
+    public var skillsDir: String
+    public var autoMatchEnabled: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(enabled: Bool, skillsDir: String, autoMatchEnabled: Bool) {
+        self.enabled = enabled
+        self.skillsDir = skillsDir
+        self.autoMatchEnabled = autoMatchEnabled
+    }
+}
+
+
+
+extension SkillsConfig: Equatable, Hashable {
+    public static func ==(lhs: SkillsConfig, rhs: SkillsConfig) -> Bool {
+        if lhs.enabled != rhs.enabled {
+            return false
+        }
+        if lhs.skillsDir != rhs.skillsDir {
+            return false
+        }
+        if lhs.autoMatchEnabled != rhs.autoMatchEnabled {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(enabled)
+        hasher.combine(skillsDir)
+        hasher.combine(autoMatchEnabled)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSkillsConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SkillsConfig {
+        return
+            try SkillsConfig(
+                enabled: FfiConverterBool.read(from: &buf), 
+                skillsDir: FfiConverterString.read(from: &buf), 
+                autoMatchEnabled: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SkillsConfig, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterString.write(value.skillsDir, into: &buf)
+        FfiConverterBool.write(value.autoMatchEnabled, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSkillsConfig_lift(_ buf: RustBuffer) throws -> SkillsConfig {
+    return try FfiConverterTypeSkillsConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSkillsConfig_lower(_ value: SkillsConfig) -> RustBuffer {
+    return FfiConverterTypeSkillsConfig.lower(value)
+}
+
+
 public struct SmartMatchingConfig {
     public var enabled: Bool
     public var commandConfidence: Double
@@ -5659,6 +5823,30 @@ fileprivate struct FfiConverterOptionTypeShortcutsConfig: FfiConverterRustBuffer
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeSkillsConfig: FfiConverterRustBuffer {
+    typealias SwiftType = SkillsConfig?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeSkillsConfig.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeSkillsConfig.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeTriggerConfig: FfiConverterRustBuffer {
     typealias SwiftType = TriggerConfig?
 
@@ -6079,6 +6267,31 @@ fileprivate struct FfiConverterSequenceTypeSearchBackendEntry: FfiConverterRustB
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeSkillInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [SkillInfo]
+
+    public static func write(_ value: [SkillInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSkillInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SkillInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SkillInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSkillInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterDictionaryStringUInt64: FfiConverterRustBuffer {
     public static func write(_ value: [String: UInt64], into buf: inout [UInt8]) {
         let len = Int32(value.count)
@@ -6107,6 +6320,12 @@ public func checkEmbeddingModelExists()throws  -> Bool {
     )
 })
 }
+public func deleteSkill(skillId: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_func_delete_skill(
+        FfiConverterString.lower(skillId),$0
+    )
+}
+}
 public func downloadEmbeddingModelStandalone(progressHandler: InitializationProgressHandler?)throws  -> Bool {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_func_download_embedding_model_standalone(
@@ -6114,9 +6333,41 @@ public func downloadEmbeddingModelStandalone(progressHandler: InitializationProg
     )
 })
 }
+public func getSkillsDirString()throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_func_get_skills_dir_string($0
+    )
+})
+}
+public func initializeBuiltinSkillsFfi(bundleSkillsDir: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_func_initialize_builtin_skills_ffi(
+        FfiConverterString.lower(bundleSkillsDir),$0
+    )
+}
+}
+public func installSkillFromUrl(url: String)throws  -> SkillInfo {
+    return try  FfiConverterTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_func_install_skill_from_url(
+        FfiConverterString.lower(url),$0
+    )
+})
+}
+public func installSkillsFromZip(zipPath: String)throws  -> [String] {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_func_install_skills_from_zip(
+        FfiConverterString.lower(zipPath),$0
+    )
+})
+}
 public func isFreshInstall()throws  -> Bool {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_func_is_fresh_install($0
+    )
+})
+}
+public func listInstalledSkills()throws  -> [SkillInfo] {
+    return try  FfiConverterSequenceTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_func_list_installed_skills($0
     )
 })
 }
@@ -6145,10 +6396,28 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_func_check_embedding_model_exists() != 65318) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_func_delete_skill() != 41346) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_func_download_embedding_model_standalone() != 33400) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_func_get_skills_dir_string() != 54210) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_func_initialize_builtin_skills_ffi() != 33816) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_func_install_skill_from_url() != 56852) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_func_install_skills_from_zip() != 10047) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_func_is_fresh_install() != 56701) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_func_list_installed_skills() != 7975) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_func_run_first_time_init() != 14662) {

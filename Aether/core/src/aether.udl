@@ -48,6 +48,11 @@ namespace aether {
   // Returns the installed skill info
   [Throws=AetherException]
   SkillInfo install_skill_from_url(string url);
+
+  // Install skills from a local ZIP file path
+  // Returns list of installed skill IDs
+  [Throws=AetherException]
+  sequence<string> install_skills_from_zip(string zip_path);
 };
 
 // Processing states for Aether system

@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Skills Settings View
 
@@ -76,8 +77,11 @@ struct SkillsSettingsView: View {
         }
         .sheet(isPresented: $showInstallSheet) {
             SkillInstallSheet(
-                onInstall: { url in
+                onInstallURL: { url in
                     installSkillFromURL(url)
+                },
+                onInstallZIP: { path in
+                    installSkillFromZIP(path)
                 },
                 onDismiss: {
                     showInstallSheet = false
@@ -228,6 +232,27 @@ struct SkillsSettingsView: View {
             }
         }
     }
+
+    private func installSkillFromZIP(_ path: String) {
+        Task {
+            do {
+                let installedIds = try installSkillsFromZip(zipPath: path)
+                // Reload skills list to show newly installed skills
+                let loadedSkills = try listInstalledSkills()
+                await MainActor.run {
+                    skills = loadedSkills
+                    showInstallSheet = false
+                    if installedIds.isEmpty {
+                        errorMessage = L("settings.skills.zip_no_skills")
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = L("settings.skills.install_failed", error.localizedDescription)
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Skill Card
@@ -296,11 +321,26 @@ struct SkillCard: View {
 
 // MARK: - Skill Install Sheet
 
+enum InstallMethod: String, CaseIterable {
+    case url = "url"
+    case zip = "zip"
+
+    var label: String {
+        switch self {
+        case .url: return L("settings.skills.install_method_url")
+        case .zip: return L("settings.skills.install_method_zip")
+        }
+    }
+}
+
 struct SkillInstallSheet: View {
-    let onInstall: (String) -> Void
+    let onInstallURL: (String) -> Void
+    let onInstallZIP: (String) -> Void
     let onDismiss: () -> Void
 
+    @State private var installMethod: InstallMethod = .url
     @State private var urlInput = ""
+    @State private var selectedZipPath: String?
     @State private var isInstalling = false
     @State private var errorMessage: String?
 
@@ -321,19 +361,20 @@ struct SkillInstallSheet: View {
                 .buttonStyle(.plain)
             }
 
-            // URL input
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                Text(L("settings.skills.github_url"))
-                    .font(DesignTokens.Typography.caption)
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
+            // Install method picker
+            Picker("", selection: $installMethod) {
+                ForEach(InstallMethod.allCases, id: \.self) { method in
+                    Text(method.label).tag(method)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
 
-                TextField(L("settings.skills.url_placeholder"), text: $urlInput)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(isInstalling)
-
-                Text(L("settings.skills.url_example"))
-                    .font(.system(size: 10))
-                    .foregroundColor(DesignTokens.Colors.textSecondary.opacity(0.7))
+            // Content based on install method
+            if installMethod == .url {
+                urlInstallContent
+            } else {
+                zipInstallContent
             }
 
             // Error message
@@ -354,7 +395,7 @@ struct SkillInstallSheet: View {
                 .disabled(isInstalling)
 
                 Button {
-                    installFromURL()
+                    performInstall()
                 } label: {
                     if isInstalling {
                         ProgressView()
@@ -365,19 +406,104 @@ struct SkillInstallSheet: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(urlInput.isEmpty || isInstalling)
+                .disabled(!canInstall || isInstalling)
             }
         }
         .padding(DesignTokens.Spacing.lg)
-        .frame(width: 400)
+        .frame(width: 420)
     }
 
-    private func installFromURL() {
-        guard !urlInput.isEmpty else { return }
+    // MARK: - URL Install Content
 
+    private var urlInstallContent: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+            Text(L("settings.skills.github_url"))
+                .font(DesignTokens.Typography.caption)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
+
+            TextField(L("settings.skills.url_placeholder"), text: $urlInput)
+                .textFieldStyle(.roundedBorder)
+                .disabled(isInstalling)
+
+            Text(L("settings.skills.url_example"))
+                .font(.system(size: 10))
+                .foregroundColor(DesignTokens.Colors.textSecondary.opacity(0.7))
+        }
+    }
+
+    // MARK: - ZIP Install Content
+
+    private var zipInstallContent: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+            Text(L("settings.skills.zip_file"))
+                .font(DesignTokens.Typography.caption)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
+
+            HStack {
+                Text(selectedZipPath ?? L("settings.skills.no_file_selected"))
+                    .font(DesignTokens.Typography.body)
+                    .foregroundColor(selectedZipPath != nil ? DesignTokens.Colors.textPrimary : DesignTokens.Colors.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button {
+                    selectZipFile()
+                } label: {
+                    Text(L("settings.skills.browse"))
+                }
+                .buttonStyle(.bordered)
+                .disabled(isInstalling)
+            }
+            .padding(DesignTokens.Spacing.sm)
+            .background(DesignTokens.Colors.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small, style: .continuous)
+                    .stroke(DesignTokens.Colors.border, lineWidth: 1)
+            )
+
+            Text(L("settings.skills.zip_description"))
+                .font(.system(size: 10))
+                .foregroundColor(DesignTokens.Colors.textSecondary.opacity(0.7))
+        }
+    }
+
+    // MARK: - Helpers
+
+    private var canInstall: Bool {
+        switch installMethod {
+        case .url:
+            return !urlInput.isEmpty
+        case .zip:
+            return selectedZipPath != nil
+        }
+    }
+
+    private func selectZipFile() {
+        let panel = NSOpenPanel()
+        panel.title = L("settings.skills.select_zip")
+        panel.allowedContentTypes = [.zip]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+
+        if panel.runModal() == .OK, let url = panel.url {
+            selectedZipPath = url.path
+        }
+    }
+
+    private func performInstall() {
         isInstalling = true
         errorMessage = nil
-        onInstall(urlInput)
+
+        switch installMethod {
+        case .url:
+            onInstallURL(urlInput)
+        case .zip:
+            if let path = selectedZipPath {
+                onInstallZIP(path)
+            }
+        }
     }
 }
 

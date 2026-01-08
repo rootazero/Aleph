@@ -706,6 +706,46 @@ pub fn install_skill_from_url(url: String) -> Result<crate::skills::SkillInfo> {
     Ok(skill.to_info())
 }
 
+/// Install skills from a local ZIP file
+///
+/// Extracts and installs skills from a ZIP file at the given path.
+/// Returns a list of installed skill IDs.
+pub fn install_skills_from_zip(zip_path: String) -> Result<Vec<String>> {
+    use crate::skills::SkillsInstaller;
+    use std::path::PathBuf;
+
+    let skills_dir = get_skills_dir()?;
+    let zip_path = PathBuf::from(&zip_path);
+
+    // Verify ZIP file exists
+    if !zip_path.exists() {
+        return Err(AetherError::invalid_config(format!(
+            "ZIP file not found: {}",
+            zip_path.display()
+        )));
+    }
+
+    // Ensure skills directory exists
+    fs::create_dir_all(&skills_dir)
+        .map_err(|e| AetherError::config(format!("Failed to create skills directory: {}", e)))?;
+
+    // Use the installer to extract and install
+    let installer = SkillsInstaller::new(skills_dir);
+
+    // Use tokio runtime to call async method
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|e| AetherError::config(format!("Failed to create async runtime: {}", e)))?;
+
+    let installed = runtime.block_on(installer.install_from_zip(&zip_path))?;
+
+    info!(
+        count = installed.len(),
+        "Installed skills from ZIP"
+    );
+
+    Ok(installed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

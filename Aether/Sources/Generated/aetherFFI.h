@@ -707,14 +707,46 @@ int8_t uniffi_aethecore_fn_func_check_embedding_model_exists(RustCallStatus *_No
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_DELETE_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_DELETE_SKILL
+void uniffi_aethecore_fn_func_delete_skill(RustBuffer skill_id, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_DOWNLOAD_EMBEDDING_MODEL_STANDALONE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_DOWNLOAD_EMBEDDING_MODEL_STANDALONE
 int8_t uniffi_aethecore_fn_func_download_embedding_model_standalone(RustBuffer progress_handler, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_GET_SKILLS_DIR_STRING
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_GET_SKILLS_DIR_STRING
+RustBuffer uniffi_aethecore_fn_func_get_skills_dir_string(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
+void uniffi_aethecore_fn_func_initialize_builtin_skills_ffi(RustBuffer bundle_skills_dir, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INSTALL_SKILL_FROM_URL
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INSTALL_SKILL_FROM_URL
+RustBuffer uniffi_aethecore_fn_func_install_skill_from_url(RustBuffer url, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INSTALL_SKILLS_FROM_ZIP
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INSTALL_SKILLS_FROM_ZIP
+RustBuffer uniffi_aethecore_fn_func_install_skills_from_zip(RustBuffer zip_path, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_IS_FRESH_INSTALL
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_IS_FRESH_INSTALL
 int8_t uniffi_aethecore_fn_func_is_fresh_install(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_LIST_INSTALLED_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_LIST_INSTALLED_SKILLS
+RustBuffer uniffi_aethecore_fn_func_list_installed_skills(RustCallStatus *_Nonnull out_status
     
 );
 #endif
@@ -1009,15 +1041,51 @@ uint16_t uniffi_aethecore_checksum_func_check_embedding_model_exists(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_DELETE_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_DELETE_SKILL
+uint16_t uniffi_aethecore_checksum_func_delete_skill(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_DOWNLOAD_EMBEDDING_MODEL_STANDALONE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_DOWNLOAD_EMBEDDING_MODEL_STANDALONE
 uint16_t uniffi_aethecore_checksum_func_download_embedding_model_standalone(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_GET_SKILLS_DIR_STRING
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_GET_SKILLS_DIR_STRING
+uint16_t uniffi_aethecore_checksum_func_get_skills_dir_string(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
+uint16_t uniffi_aethecore_checksum_func_initialize_builtin_skills_ffi(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INSTALL_SKILL_FROM_URL
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INSTALL_SKILL_FROM_URL
+uint16_t uniffi_aethecore_checksum_func_install_skill_from_url(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INSTALL_SKILLS_FROM_ZIP
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INSTALL_SKILLS_FROM_ZIP
+uint16_t uniffi_aethecore_checksum_func_install_skills_from_zip(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_IS_FRESH_INSTALL
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_IS_FRESH_INSTALL
 uint16_t uniffi_aethecore_checksum_func_is_fresh_install(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_LIST_INSTALLED_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_LIST_INSTALLED_SKILLS
+uint16_t uniffi_aethecore_checksum_func_list_installed_skills(void
     
 );
 #endif

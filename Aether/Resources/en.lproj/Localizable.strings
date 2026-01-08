@@ -363,6 +363,14 @@
 "settings.skills.delete_failed" = "Failed to delete skill: %@";
 "settings.skills.install_failed" = "Failed to install skill: %@";
 "settings.skills.usage_hint" = "Use with: /skill %@";
+"settings.skills.install_method_url" = "GitHub URL";
+"settings.skills.install_method_zip" = "ZIP File";
+"settings.skills.zip_file" = "ZIP File";
+"settings.skills.no_file_selected" = "No file selected";
+"settings.skills.browse" = "Browse...";
+"settings.skills.select_zip" = "Select ZIP File";
+"settings.skills.zip_description" = "Select a ZIP file containing skills (each with SKILL.md)";
+"settings.skills.zip_no_skills" = "No valid skills found in the ZIP file";
 
 // MARK: - Settings Window - Memory Tab
 "settings.memory.title" = "Memory Management";

@@ -365,6 +365,14 @@
 "settings.skills.delete_failed" = "删除技能失败：%@";
 "settings.skills.install_failed" = "安装技能失败：%@";
 "settings.skills.usage_hint" = "使用方式：/skill %@";
+"settings.skills.install_method_url" = "GitHub URL";
+"settings.skills.install_method_zip" = "ZIP 文件";
+"settings.skills.zip_file" = "ZIP 文件";
+"settings.skills.no_file_selected" = "未选择文件";
+"settings.skills.browse" = "浏览...";
+"settings.skills.select_zip" = "选择 ZIP 文件";
+"settings.skills.zip_description" = "选择包含技能的 ZIP 文件（每个技能需包含 SKILL.md）";
+"settings.skills.zip_no_skills" = "ZIP 文件中未找到有效的技能";
 
 // MARK: - Settings Window - Memory Tab
 "settings.memory.title" = "记忆管理";
