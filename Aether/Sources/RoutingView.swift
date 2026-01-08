@@ -697,7 +697,7 @@ enum PresetRules {
             command: "/mcp",
             description: "Invoke MCP tools for extended capabilities",
             descriptionKey: "settings.routing.preset.mcp.description",
-            isImplemented: false,
+            isImplemented: true,
             icon: "puzzlepiece.extension",
             usage: "/mcp <tool> [params]",
             usageKey: "settings.routing.preset.mcp.usage",
@@ -706,13 +706,13 @@ enum PresetRules {
                     name: "list",
                     description: "List available MCP tools",
                     descriptionKey: "settings.routing.preset.mcp.sub.list",
-                    isImplemented: false
+                    isImplemented: true
                 ),
                 PresetSubcommand(
                     name: "<tool_name>",
                     description: "Execute specific MCP tool",
                     descriptionKey: "settings.routing.preset.mcp.sub.tool",
-                    isImplemented: false
+                    isImplemented: true
                 )
             ]
         ),
@@ -720,7 +720,7 @@ enum PresetRules {
             command: "/skill",
             description: "Execute predefined skill workflows",
             descriptionKey: "settings.routing.preset.skills.description",
-            isImplemented: false,
+            isImplemented: true,
             icon: "wand.and.stars",
             usage: "/skill <name>",
             usageKey: "settings.routing.preset.skills.usage",
@@ -729,13 +729,13 @@ enum PresetRules {
                     name: "list",
                     description: "List available skills",
                     descriptionKey: "settings.routing.preset.skills.sub.list",
-                    isImplemented: false
+                    isImplemented: true
                 ),
                 PresetSubcommand(
                     name: "<skill_name>",
                     description: "Execute specific skill",
                     descriptionKey: "settings.routing.preset.skills.sub.skill",
-                    isImplemented: false
+                    isImplemented: true
                 )
             ]
         ),

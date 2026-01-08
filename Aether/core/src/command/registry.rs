@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use crate::config::{Config, RoutingRuleConfig};
+use crate::skills::SkillInfo;
 
 use super::types::{CommandExecutionResult, CommandNode, CommandType};
 
@@ -358,6 +359,77 @@ impl CommandRegistry {
     /// Add static children for a parent key (for testing/MCP stub)
     pub fn add_children(&mut self, parent_key: &str, children: Vec<CommandNode>) {
         self.children_map.insert(parent_key.to_string(), children);
+    }
+
+    /// Inject installed skills as children of the /skill command
+    ///
+    /// This method:
+    /// 1. Ensures the /skill command exists and has_children is set to true
+    /// 2. Adds all installed skills as subcommands
+    pub fn inject_skills(&mut self, skills: &[SkillInfo]) {
+        // Ensure /skill command exists and is marked as having children
+        for node in &mut self.builtin_commands {
+            if node.key == "skill" {
+                node.has_children = true;
+                break;
+            }
+        }
+
+        // If no /skill command exists, add it as a namespace
+        let has_skill = self.builtin_commands.iter().any(|n| n.key == "skill");
+        if !has_skill {
+            let skill_hint = if self.show_hints {
+                get_builtin_hint("skill", &self.language)
+            } else {
+                None
+            };
+
+            let mut skill_node =
+                CommandNode::new("skill", "Execute predefined skill workflows", CommandType::Prompt)
+                    .with_icon("wand.and.stars")
+                    .with_source_id("builtin:skill");
+
+            skill_node.has_children = true;
+
+            if let Some(hint) = skill_hint {
+                skill_node = skill_node.with_hint(hint);
+            }
+
+            self.builtin_commands.push(skill_node);
+            // Re-sort after adding
+            self.builtin_commands
+                .sort_by(|a, b| a.key.cmp(&b.key));
+        }
+
+        // Build skill children nodes
+        let skill_children: Vec<CommandNode> = skills
+            .iter()
+            .map(|skill| {
+                let hint = if self.show_hints {
+                    Some(skill.name.clone())
+                } else {
+                    None
+                };
+
+                let mut node = CommandNode::new(
+                    skill.id.clone(),
+                    skill.description.clone(),
+                    CommandType::Prompt,
+                )
+                .with_icon("wand.and.stars")
+                .with_source_id(format!("skill:{}", skill.id));
+
+                if let Some(h) = hint {
+                    node = node.with_hint(h);
+                }
+
+                node
+            })
+            .collect();
+
+        // Add skills as children of /skill
+        self.children_map
+            .insert("skill".to_string(), skill_children);
     }
 }
 

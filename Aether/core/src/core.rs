@@ -2875,7 +2875,13 @@ impl AetherCore {
             .language
             .as_deref()
             .unwrap_or("en");
-        let registry = crate::command::CommandRegistry::from_config(&config, language);
+        let mut registry = crate::command::CommandRegistry::from_config(&config, language);
+
+        // Inject installed skills as /skill subcommands
+        if let Ok(skills) = crate::list_installed_skills() {
+            registry.inject_skills(&skills);
+        }
+
         registry.get_root_commands()
     }
 
@@ -2896,7 +2902,13 @@ impl AetherCore {
             .language
             .as_deref()
             .unwrap_or("en");
-        let registry = crate::command::CommandRegistry::from_config(&config, language);
+        let mut registry = crate::command::CommandRegistry::from_config(&config, language);
+
+        // Inject installed skills as /skill subcommands
+        if let Ok(skills) = crate::list_installed_skills() {
+            registry.inject_skills(&skills);
+        }
+
         registry.get_children(&parent_key)
     }
 
