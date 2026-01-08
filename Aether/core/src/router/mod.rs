@@ -38,7 +38,7 @@ pub mod decision;
 
 use crate::config::{Config, KeywordRuleConfig, SmartMatchingConfig};
 use crate::error::{AetherError, Result};
-use crate::payload::Capability;
+use crate::payload::{Capability, Intent};
 use crate::providers::{create_provider, AiProvider};
 use crate::semantic::{
     KeywordIndex, KeywordMatch, MatchResult, MatcherConfig, MatchingContext, SemanticMatcher,
@@ -56,6 +56,44 @@ pub use decision::RoutingDecision;
 // Import for tests
 #[cfg(test)]
 use crate::config::{ProviderConfig, RoutingRuleConfig};
+
+// ============================================================================
+// Skill Command Parsing
+// ============================================================================
+
+/// Extract skill_id and remaining input from a `/skill <name> <input>` command.
+///
+/// # Format
+///
+/// `/skill <skill_name> <remaining_input>`
+///
+/// The skill_name must be a valid identifier (alphanumeric, hyphens, underscores).
+///
+/// # Returns
+///
+/// - `Some((skill_id, remaining_input))` if the input matches the `/skill <name>` pattern
+/// - `None` if the input doesn't match the pattern
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let (skill_id, remaining) = extract_skill_command("/skill refine-text Fix this text").unwrap();
+/// assert_eq!(skill_id, "refine-text");
+/// assert_eq!(remaining, "Fix this text");
+/// ```
+pub fn extract_skill_command(input: &str) -> Option<(String, String)> {
+    // Match /skill followed by whitespace, then skill name (alphanumeric, hyphens, underscores)
+    // Regex: ^/skill\s+([a-zA-Z0-9_-]+)\s*(.*)$
+    static SKILL_COMMAND_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r"^/skill\s+([a-zA-Z0-9_-]+)\s*(.*)$").expect("Invalid skill command regex")
+    });
+
+    SKILL_COMMAND_REGEX.captures(input).map(|caps| {
+        let skill_id = caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+        let remaining = caps.get(2).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+        (skill_id, remaining)
+    })
+}
 
 // Type aliases for complex return types
 /// Primary provider with system prompt, and optional fallback provider
@@ -278,6 +316,8 @@ pub struct MatchedCommandRule {
     pub capabilities: Vec<Capability>,
     /// Index of the matched rule (for debugging/logging)
     pub rule_index: usize,
+    /// Skill ID extracted from /skill <name> command (None for non-skill commands)
+    pub skill_id: Option<String>,
 }
 
 /// A matched keyword rule with system prompt
@@ -344,6 +384,40 @@ impl RoutingMatch {
             .as_ref()
             .map(|c| c.capabilities.clone())
             .unwrap_or_default()
+    }
+
+    /// Get skill ID from the matched command rule (for /skill commands)
+    ///
+    /// Returns None if no skill command matched or skill_id was not extracted.
+    pub fn get_skill_id(&self) -> Option<&str> {
+        self.command_rule
+            .as_ref()
+            .and_then(|c| c.skill_id.as_deref())
+    }
+
+    /// Create an Intent based on the matched rule
+    ///
+    /// For /skill commands, creates Intent::Skills with the extracted skill_id.
+    /// For other commands, returns the intent from the rule config.
+    /// For no match, returns Intent::GeneralChat.
+    ///
+    /// # Arguments
+    ///
+    /// * `rule_configs` - Reference to rule configurations for intent lookup
+    pub fn to_intent(&self, rule_configs: &[crate::config::RoutingRuleConfig]) -> Intent {
+        if let Some(ref cmd) = self.command_rule {
+            // If skill_id was extracted, create Intent::Skills
+            if let Some(ref skill_id) = cmd.skill_id {
+                return Intent::Skills(skill_id.clone());
+            }
+
+            // Otherwise, get intent from rule config
+            if let Some(rule_config) = rule_configs.get(cmd.rule_index) {
+                return Intent::from_rule(rule_config);
+            }
+        }
+
+        Intent::GeneralChat
     }
 }
 
@@ -791,17 +865,39 @@ impl Router {
         // Phase 1: Find command rule (first-match-stops)
         for (index, rule) in &self.command_rules {
             if rule.matches(input) {
-                let cleaned_input = rule.strip_matched_prefix(input);
+                let rule_config = &self.rule_configs[*index];
+
+                // Check if this is a /skill command (intent_type = "skills")
+                let is_skill_command = rule_config.intent_type.as_deref() == Some("skills");
+
+                // For /skill command, extract skill_id from input
+                let (skill_id, cleaned_input) = if is_skill_command {
+                    if let Some((skill_id, remaining)) = extract_skill_command(input) {
+                        info!(
+                            skill_id = %skill_id,
+                            remaining_input_length = remaining.len(),
+                            "Extracted skill_id from /skill command"
+                        );
+                        (Some(skill_id), remaining)
+                    } else {
+                        // /skill without skill name - use normal prefix stripping
+                        (None, rule.strip_matched_prefix(input))
+                    }
+                } else {
+                    // Normal command - just strip prefix
+                    (None, rule.strip_matched_prefix(input))
+                };
 
                 info!(
                     rule_index = index,
                     provider = %rule.provider_name(),
                     cleaned_input_length = cleaned_input.len(),
+                    skill_id = ?skill_id,
                     "Command rule matched (first-match-stops)"
                 );
 
                 // Get capabilities from the rule config
-                let capabilities = self.rule_configs[*index].get_capabilities();
+                let capabilities = rule_config.get_capabilities();
 
                 result.command_rule = Some(MatchedCommandRule {
                     provider_name: rule.provider_name().to_string(),
@@ -809,6 +905,7 @@ impl Router {
                     cleaned_input,
                     capabilities,
                     rule_index: *index,
+                    skill_id,
                 });
 
                 break; // First match stops for command rules
@@ -908,6 +1005,13 @@ impl Router {
     /// Get the number of keyword rules
     pub fn keyword_rule_count(&self) -> usize {
         self.keyword_rules.len()
+    }
+
+    /// Get the rule configurations for intent resolution
+    ///
+    /// Used by RoutingMatch::to_intent() to create proper Intent from matched rules.
+    pub fn rule_configs(&self) -> &[crate::config::RoutingRuleConfig] {
+        &self.rule_configs
     }
 
     /// Route context and provide fallback provider if requested provider fails
@@ -1847,6 +1951,7 @@ mod tests {
             cleaned_input: "test".to_string(),
             capabilities: vec![],
             rule_index: 0,
+            skill_id: None,
         });
 
         assert_eq!(routing_match.provider_name(), Some("gemini"));
@@ -1886,5 +1991,172 @@ mod tests {
         // Check counts (builtin rules + custom rules)
         assert!(router.command_rule_count() >= 2); // At least 2 custom + builtin
         assert_eq!(router.keyword_rule_count(), 3); // Exactly 3 keyword rules
+    }
+
+    // ============================================================================
+    // Tests for skill command extraction
+    // ============================================================================
+
+    #[test]
+    fn test_extract_skill_command_basic() {
+        let result = extract_skill_command("/skill refine-text Fix this text");
+        assert!(result.is_some());
+
+        let (skill_id, remaining) = result.unwrap();
+        assert_eq!(skill_id, "refine-text");
+        assert_eq!(remaining, "Fix this text");
+    }
+
+    #[test]
+    fn test_extract_skill_command_with_underscore() {
+        let result = extract_skill_command("/skill build_macos_apps Create an app");
+        assert!(result.is_some());
+
+        let (skill_id, remaining) = result.unwrap();
+        assert_eq!(skill_id, "build_macos_apps");
+        assert_eq!(remaining, "Create an app");
+    }
+
+    #[test]
+    fn test_extract_skill_command_no_remaining_input() {
+        let result = extract_skill_command("/skill pdf");
+        assert!(result.is_some());
+
+        let (skill_id, remaining) = result.unwrap();
+        assert_eq!(skill_id, "pdf");
+        assert_eq!(remaining, "");
+    }
+
+    #[test]
+    fn test_extract_skill_command_extra_whitespace() {
+        let result = extract_skill_command("/skill   code-review   Please review this code");
+        assert!(result.is_some());
+
+        let (skill_id, remaining) = result.unwrap();
+        assert_eq!(skill_id, "code-review");
+        assert_eq!(remaining, "Please review this code");
+    }
+
+    #[test]
+    fn test_extract_skill_command_no_match_no_skill_name() {
+        // Missing skill name
+        let result = extract_skill_command("/skill");
+        assert!(result.is_none());
+
+        let result = extract_skill_command("/skill ");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_skill_command_no_match_wrong_command() {
+        let result = extract_skill_command("/draw something");
+        assert!(result.is_none());
+
+        let result = extract_skill_command("skill test");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_match_rules_skill_command() {
+        let mut config = Config::default();
+
+        // Add provider
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
+        config.general.default_provider = Some("openai".to_string());
+
+        let router = Router::new(&config).unwrap();
+
+        // Match /skill command (should use builtin /skill rule)
+        let result = router.match_rules("/skill refine-text Improve this text");
+
+        // Should have command rule matched with skill_id extracted
+        assert!(result.command_rule.is_some());
+        let cmd = result.command_rule.unwrap();
+
+        // Skill ID should be extracted
+        assert_eq!(cmd.skill_id, Some("refine-text".to_string()));
+        // Cleaned input should have both /skill and skill_name stripped
+        assert_eq!(cmd.cleaned_input, "Improve this text");
+    }
+
+    #[test]
+    fn test_routing_match_get_skill_id() {
+        let mut routing_match = RoutingMatch::default();
+        assert!(routing_match.get_skill_id().is_none());
+
+        routing_match.command_rule = Some(MatchedCommandRule {
+            provider_name: "openai".to_string(),
+            system_prompt: None,
+            cleaned_input: "test input".to_string(),
+            capabilities: vec![],
+            rule_index: 0,
+            skill_id: Some("build-macos-apps".to_string()),
+        });
+
+        assert_eq!(routing_match.get_skill_id(), Some("build-macos-apps"));
+    }
+
+    #[test]
+    fn test_routing_match_to_intent_with_skill() {
+        let mut config = Config::default();
+
+        // Add provider
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
+        config.general.default_provider = Some("openai".to_string());
+
+        let router = Router::new(&config).unwrap();
+
+        // Match /skill command
+        let result = router.match_rules("/skill pdf Extract text from document");
+
+        // Should create Intent::Skills with skill_id
+        let intent = result.to_intent(router.rule_configs());
+        assert!(intent.is_skills());
+        assert_eq!(intent.skills_id(), Some("pdf"));
+    }
+
+    #[test]
+    fn test_routing_match_to_intent_no_match() {
+        let mut config = Config::default();
+
+        // Add provider
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
+        config.general.default_provider = Some("openai".to_string());
+
+        let router = Router::new(&config).unwrap();
+
+        // No match - just plain text
+        let result = router.match_rules("Hello world");
+
+        // Should return GeneralChat
+        let intent = result.to_intent(router.rule_configs());
+        assert_eq!(intent, Intent::GeneralChat);
+    }
+
+    #[test]
+    fn test_routing_match_to_intent_search_command() {
+        let mut config = Config::default();
+
+        // Add provider
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
+        config.general.default_provider = Some("openai".to_string());
+
+        let router = Router::new(&config).unwrap();
+
+        // Match /search command (builtin rule)
+        let result = router.match_rules("/search latest news");
+
+        // Should return BuiltinSearch intent
+        let intent = result.to_intent(router.rule_configs());
+        // Note: builtin_search is the intent_type for /search
+        assert!(matches!(intent, Intent::BuiltinSearch | Intent::Custom(_)));
     }
 }

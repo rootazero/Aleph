@@ -1754,18 +1754,20 @@ impl Config {
                 icon: None,
                 hint: None,
             },
-            // /skill command - Skills workflow execution (reserved for future)
+            // /skill command - Claude Agent Skills instruction injection
+            // Usage: /skill <skill_name> <user_input>
+            // The skill_name is extracted and used to look up instructions from the skills registry
             RoutingRuleConfig {
                 rule_type: Some("command".to_string()),
                 is_builtin: true,
                 regex: r"^/skill\s+".to_string(),
                 provider: Some("openai".to_string()),
-                system_prompt: Some("You are a skills execution assistant. (Feature not yet implemented)".to_string()),
+                system_prompt: Some("You are a helpful AI assistant. Follow the skill instructions provided in the context to complete the task.".to_string()),
                 strip_prefix: Some(true),
-                capabilities: None, // Will add ["skills"] when implemented
+                capabilities: Some(vec!["skills".to_string(), "memory".to_string()]),
                 intent_type: Some("skills".to_string()),
                 context_format: Some("markdown".to_string()),
-                skill_id: None,
+                skill_id: None, // Extracted dynamically from command argument
                 skill_version: None,
                 workflow: None,
                 tools: None,
