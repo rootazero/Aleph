@@ -202,6 +202,7 @@ struct ProviderEditPanel: View {
         .onChange(of: isProviderActive) { _, _ in updateSaveBarState() }
         .onChange(of: temperature) { _, _ in updateSaveBarState() }
         .onChange(of: maxTokens) { _, _ in updateSaveBarState() }
+        .onChange(of: systemPromptMode) { _, _ in updateSaveBarState() }
         .onAppear {
             updateSaveBarState()
         }
@@ -414,6 +415,21 @@ struct ProviderEditPanel: View {
                     .foregroundColor(DesignTokens.Colors.textSecondary)
             }
 
+            // System Prompt Mode (OpenAI only) - outside generation params
+            if providerType == "openai" {
+                FormField(title: L("provider.field.system_prompt_mode")) {
+                    Picker("", selection: $systemPromptMode) {
+                        Text(L("provider.system_prompt_mode.standard")).tag("standard")
+                        Text(L("provider.system_prompt_mode.prepend")).tag("prepend")
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 280)
+                    Text(L("provider.help.system_prompt_mode"))
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+            }
+
             // Generation Parameters (collapsible)
             DisclosureGroup(L("provider.section.generation_params"), isExpanded: $isAdvancedExpanded) {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
@@ -479,18 +495,6 @@ struct ProviderEditPanel: View {
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 150)
                             Text("Encourage exploring new topics")
-                                .font(DesignTokens.Typography.caption)
-                                .foregroundColor(DesignTokens.Colors.textSecondary)
-                        }
-
-                        FormField(title: L("provider.field.system_prompt_mode")) {
-                            Picker("", selection: $systemPromptMode) {
-                                Text(L("provider.system_prompt_mode.standard")).tag("standard")
-                                Text(L("provider.system_prompt_mode.prepend")).tag("prepend")
-                            }
-                            .pickerStyle(.segmented)
-                            .frame(width: 280)
-                            Text(L("provider.help.system_prompt_mode"))
                                 .font(DesignTokens.Typography.caption)
                                 .foregroundColor(DesignTokens.Colors.textSecondary)
                         }
