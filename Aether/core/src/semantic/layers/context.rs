@@ -6,6 +6,7 @@
 //! - Time-based context rules
 //! - Previous intent continuation
 
+use crate::dispatcher::RoutingLayer;
 use crate::payload::Capability;
 use crate::semantic::context::{MatchingContext, PendingParam};
 use crate::semantic::intent::{DetectionMethod, IntentCategory, ParamValue, SemanticIntent};
@@ -161,12 +162,8 @@ impl ContextLayer {
                 "Context layer: completing pending param"
             );
 
-            return Some(MatchResult {
-                intent,
-                confidence: 0.85,
-                rule_index: None,
-                needs_ai_fallback: false,
-            });
+            // L2 Semantic match (context inference)
+            return Some(MatchResult::new(intent, 0.85, RoutingLayer::L2Semantic));
         }
 
         None
@@ -249,12 +246,8 @@ impl ContextLayer {
             "Context layer: applied rule"
         );
 
-        MatchResult {
-            intent,
-            confidence: self.default_confidence,
-            rule_index: None,
-            needs_ai_fallback: false,
-        }
+        // L2 Semantic match (context rule)
+        MatchResult::new(intent, self.default_confidence, RoutingLayer::L2Semantic)
     }
 }
 

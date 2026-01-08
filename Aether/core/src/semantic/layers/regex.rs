@@ -4,6 +4,7 @@
 //! Regex rules have priority 1 and can be terminal if confidence is high enough.
 
 use crate::config::RoutingRuleConfig;
+use crate::dispatcher::RoutingLayer;
 use crate::error::Result;
 use crate::payload::Capability;
 use crate::semantic::context::MatchingContext;
@@ -132,12 +133,10 @@ impl MatchingLayer for RegexLayer {
                     "Regex layer matched"
                 );
 
-                return Some(MatchResult {
-                    intent,
-                    confidence,
-                    rule_index: Some(rule.index),
-                    needs_ai_fallback: false,
-                });
+                return Some(
+                    MatchResult::new(intent, confidence, RoutingLayer::L1Rule)
+                        .with_rule_index(rule.index)
+                );
             }
         }
 

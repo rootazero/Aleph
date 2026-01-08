@@ -3,6 +3,7 @@
 //! This layer handles weighted keyword scoring for semantic matching.
 //! Keywords have priority 2 and are non-terminal (results can be merged).
 
+use crate::dispatcher::RoutingLayer;
 use crate::payload::Capability;
 use crate::semantic::context::MatchingContext;
 use crate::semantic::intent::{DetectionMethod, IntentCategory, SemanticIntent};
@@ -137,12 +138,11 @@ impl MatchingLayer for KeywordLayer {
                 "Keyword layer matched"
             );
 
-            return Some(MatchResult {
-                intent,
-                confidence,
-                rule_index: None,
-                needs_ai_fallback: false,
-            });
+            // L2 Semantic match
+            return Some(
+                MatchResult::new(intent, confidence, RoutingLayer::L2Semantic)
+                    .with_matched_keywords(best.matched_keywords)
+            );
         }
 
         None

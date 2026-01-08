@@ -237,6 +237,138 @@ impl ConversationContext {
             .take(within_turns)
             .any(|i| i == intent)
     }
+
+    // =========================================================================
+    // L3 Routing Context Methods
+    // =========================================================================
+
+    /// Build a summary for L3 routing context
+    ///
+    /// Creates a concise summary of recent conversation history suitable
+    /// for injection into L3 routing prompts.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_turns` - Maximum number of recent turns to include
+    ///
+    /// # Returns
+    ///
+    /// A formatted string summarizing the conversation context
+    pub fn build_l3_context_summary(&self, max_turns: usize) -> Option<String> {
+        // Check if there's any context worth summarizing
+        let has_active_pending = self.pending_params.values().any(|p| !p.is_expired());
+        if self.history.is_empty() && self.previous_intents.is_empty() && !has_active_pending {
+            return None;
+        }
+
+        let mut summary = String::new();
+
+        // Add recent intents summary
+        if !self.previous_intents.is_empty() {
+            let recent_intents: Vec<&str> = self
+                .previous_intents
+                .iter()
+                .take(3)
+                .map(|s| s.as_str())
+                .collect();
+            summary.push_str(&format!(
+                "Recent intents: {}\n",
+                recent_intents.join(" → ")
+            ));
+        }
+
+        // Add recent conversation turns
+        if !self.history.is_empty() {
+            summary.push_str("Recent exchanges:\n");
+
+            let recent_turns: Vec<&ConversationTurn> = self
+                .history
+                .iter()
+                .rev()
+                .take(max_turns)
+                .collect();
+
+            for (i, turn) in recent_turns.iter().rev().enumerate() {
+                // Truncate long inputs/responses
+                let user_preview = truncate_text(&turn.user_input, 100);
+                let ai_preview = truncate_text(&turn.ai_response, 150);
+
+                summary.push_str(&format!(
+                    "Turn {}: User: \"{}\" → AI: \"{}\"\n",
+                    i + 1,
+                    user_preview,
+                    ai_preview
+                ));
+            }
+        }
+
+        // Add pending parameters
+        if !self.pending_params.is_empty() {
+            summary.push_str("Pending parameters:\n");
+            for param in self.pending_params.values() {
+                if !param.is_expired() {
+                    summary.push_str(&format!(
+                        "- {} (for {}): \"{}\"\n",
+                        param.param_name, param.required_for, param.prompt_text
+                    ));
+                }
+            }
+        }
+
+        if summary.is_empty() {
+            None
+        } else {
+            Some(summary.trim().to_string())
+        }
+    }
+
+    /// Extract entity hints for pronoun resolution
+    ///
+    /// Analyzes recent conversation history to extract mentioned entities
+    /// that pronouns in the current input might refer to.
+    ///
+    /// # Returns
+    ///
+    /// A vector of entity descriptions suitable for pronoun resolution
+    pub fn extract_entity_hints(&self) -> Vec<String> {
+        let mut entities = Vec::new();
+
+        // Extract entities from recent turns
+        for turn in self.history.iter().rev().take(3) {
+            // Extract from user input
+            entities.extend(extract_entities_from_text(&turn.user_input));
+
+            // Extract from AI response (may mention important entities)
+            entities.extend(extract_entities_from_text(&turn.ai_response));
+        }
+
+        // Add last response summary if available
+        if let Some(ref summary) = self.last_response_summary {
+            entities.push(format!("Previous response: {}", truncate_text(summary, 100)));
+        }
+
+        // Deduplicate and limit
+        entities.sort();
+        entities.dedup();
+        entities.truncate(10);
+
+        entities
+    }
+
+    /// Get context for a specific previous turn
+    pub fn get_turn_context(&self, turns_back: usize) -> Option<&ConversationTurn> {
+        if turns_back == 0 || turns_back > self.history.len() {
+            return None;
+        }
+        self.history.get(self.history.len() - turns_back)
+    }
+
+    /// Check if the conversation has meaningful context for routing
+    pub fn has_routing_context(&self) -> bool {
+        !self.history.is_empty()
+            || !self.previous_intents.is_empty()
+            || !self.pending_params.is_empty()
+    }
 }
 
 /// A single turn in the conversation
@@ -653,6 +785,81 @@ impl InputFeatures {
     }
 }
 
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+/// Truncate text to a maximum length, adding ellipsis if needed
+fn truncate_text(text: &str, max_len: usize) -> String {
+    if text.len() <= max_len {
+        text.to_string()
+    } else {
+        let truncated: String = text.chars().take(max_len - 3).collect();
+        format!("{}...", truncated)
+    }
+}
+
+/// Extract entities from text for pronoun resolution
+///
+/// This is a simple heuristic-based extraction. For production use,
+/// consider using NER (Named Entity Recognition) or more sophisticated methods.
+fn extract_entities_from_text(text: &str) -> Vec<String> {
+    let mut entities = Vec::new();
+
+    // Extract URLs (common reference targets)
+    let url_pattern = regex::Regex::new(r"https?://[^\s]+").ok();
+    if let Some(re) = url_pattern {
+        for cap in re.find_iter(text) {
+            let url = cap.as_str();
+            // Categorize URLs
+            if url.contains("youtube.com") || url.contains("youtu.be") {
+                entities.push(format!("YouTube video: {}", url));
+            } else if url.contains("github.com") {
+                entities.push(format!("GitHub link: {}", url));
+            } else {
+                entities.push(format!("URL: {}", url));
+            }
+        }
+    }
+
+    // Extract quoted strings (often specific references)
+    let quote_pattern = regex::Regex::new(r#""([^"]+)""#).ok();
+    if let Some(re) = quote_pattern {
+        for cap in re.captures_iter(text) {
+            if let Some(quoted) = cap.get(1) {
+                let content = quoted.as_str();
+                if content.len() > 2 && content.len() < 100 {
+                    entities.push(format!("Quoted: \"{}\"", content));
+                }
+            }
+        }
+    }
+
+    // Extract capitalized phrases (potential proper nouns/titles)
+    // Only for English text
+    let caps_pattern = regex::Regex::new(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b").ok();
+    if let Some(re) = caps_pattern {
+        for cap in re.captures_iter(text) {
+            if let Some(phrase) = cap.get(1) {
+                let content = phrase.as_str();
+                if content.len() >= 3 {
+                    entities.push(format!("Named: {}", content));
+                }
+            }
+        }
+    }
+
+    // Extract file paths (common in technical contexts)
+    let path_pattern = regex::Regex::new(r"(/[\w./\-]+\.\w+|[\w./\-]+\.(rs|py|js|ts|swift|md))").ok();
+    if let Some(re) = path_pattern {
+        for cap in re.find_iter(text) {
+            entities.push(format!("File: {}", cap.as_str()));
+        }
+    }
+
+    entities
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -775,5 +982,135 @@ mod tests {
 
         assert_eq!(features.urls.len(), 2);
         assert!(features.urls.contains(&"https://example.com".to_string()));
+    }
+
+    // =========================================================================
+    // L3 Context Tests
+    // =========================================================================
+
+    #[test]
+    fn test_build_l3_context_summary_empty() {
+        let ctx = ConversationContext::new();
+        assert!(ctx.build_l3_context_summary(3).is_none());
+    }
+
+    #[test]
+    fn test_build_l3_context_summary_with_intents() {
+        let mut ctx = ConversationContext::new();
+        ctx.record_intent("search");
+        ctx.record_intent("weather");
+
+        let summary = ctx.build_l3_context_summary(3).unwrap();
+        assert!(summary.contains("Recent intents:"));
+        assert!(summary.contains("weather"));
+        assert!(summary.contains("search"));
+    }
+
+    #[test]
+    fn test_build_l3_context_summary_with_history() {
+        let mut ctx = ConversationContext::new();
+        ctx.add_turn(ConversationTurn::new(
+            "What's the weather?",
+            "It's sunny today.",
+        ));
+        ctx.add_turn(ConversationTurn::new(
+            "What about tomorrow?",
+            "Tomorrow will be cloudy.",
+        ));
+
+        let summary = ctx.build_l3_context_summary(3).unwrap();
+        assert!(summary.contains("Recent exchanges:"));
+        assert!(summary.contains("weather"));
+        assert!(summary.contains("sunny"));
+    }
+
+    #[test]
+    fn test_build_l3_context_summary_with_pending_params() {
+        let mut ctx = ConversationContext::new();
+        ctx.add_pending_param(PendingParam::new(
+            "location",
+            "weather",
+            "Please provide a location:",
+        ));
+
+        let summary = ctx.build_l3_context_summary(3).unwrap();
+        assert!(summary.contains("Pending parameters:"));
+        assert!(summary.contains("location"));
+    }
+
+    #[test]
+    fn test_extract_entity_hints_empty() {
+        let ctx = ConversationContext::new();
+        let hints = ctx.extract_entity_hints();
+        assert!(hints.is_empty());
+    }
+
+    #[test]
+    fn test_extract_entity_hints_with_urls() {
+        let mut ctx = ConversationContext::new();
+        ctx.add_turn(ConversationTurn::new(
+            "Check this video: https://youtube.com/watch?v=abc123",
+            "I'll analyze that video for you.",
+        ));
+
+        let hints = ctx.extract_entity_hints();
+        assert!(!hints.is_empty());
+        assert!(hints.iter().any(|h| h.contains("YouTube")));
+    }
+
+    #[test]
+    fn test_extract_entity_hints_with_quoted_text() {
+        let mut ctx = ConversationContext::new();
+        ctx.add_turn(ConversationTurn::new(
+            "Translate \"Hello World\" to Chinese",
+            "你好世界",
+        ));
+
+        let hints = ctx.extract_entity_hints();
+        assert!(hints.iter().any(|h| h.contains("Hello World")));
+    }
+
+    #[test]
+    fn test_has_routing_context() {
+        let mut ctx = ConversationContext::new();
+        assert!(!ctx.has_routing_context());
+
+        ctx.record_intent("search");
+        assert!(ctx.has_routing_context());
+    }
+
+    #[test]
+    fn test_get_turn_context() {
+        let mut ctx = ConversationContext::new();
+        ctx.add_turn(ConversationTurn::new("First", "Response 1"));
+        ctx.add_turn(ConversationTurn::new("Second", "Response 2"));
+        ctx.add_turn(ConversationTurn::new("Third", "Response 3"));
+
+        // Get most recent turn (1 turn back)
+        let turn = ctx.get_turn_context(1).unwrap();
+        assert_eq!(turn.user_input, "Third");
+
+        // Get 2 turns back
+        let turn = ctx.get_turn_context(2).unwrap();
+        assert_eq!(turn.user_input, "Second");
+
+        // Invalid turns_back
+        assert!(ctx.get_turn_context(0).is_none());
+        assert!(ctx.get_turn_context(10).is_none());
+    }
+
+    #[test]
+    fn test_truncate_text() {
+        assert_eq!(truncate_text("short", 10), "short");
+        assert_eq!(truncate_text("this is a very long text", 10), "this is...");
+    }
+
+    #[test]
+    fn test_extract_entities_from_text() {
+        let text = "Check https://github.com/test/repo and file.rs";
+        let entities = extract_entities_from_text(text);
+
+        assert!(entities.iter().any(|e| e.contains("GitHub")));
+        assert!(entities.iter().any(|e| e.contains("file.rs")));
     }
 }

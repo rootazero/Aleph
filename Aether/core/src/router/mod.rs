@@ -46,11 +46,13 @@ use crate::semantic::{
 use crate::semantic::keyword::{KeywordMatchMode, KeywordRule};
 use crate::video::extract_youtube_url;
 use regex::Regex;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 // Re-export
+pub use crate::dispatcher::RoutingLayer;
 pub use decision::RoutingDecision;
 
 // Import for tests
@@ -276,6 +278,14 @@ impl RoutingRule {
 /// Contains the matched command rule (if any) and all matched keyword rules.
 /// Command rules use first-match-stops semantics, keyword rules use all-match.
 ///
+/// # Dispatcher Layer Integration
+///
+/// This struct now includes fields for the Dispatcher Layer (Aether Cortex):
+/// - `confidence`: Match confidence score (0.0 - 1.0)
+/// - `routing_layer`: Which routing layer produced this match (L1/L2/L3/Default)
+/// - `extracted_parameters`: Parameters extracted from the input (for tool calls)
+/// - `routing_reason`: Human-readable explanation of why this route was chosen
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -294,13 +304,58 @@ impl RoutingRule {
 ///
 /// // Get combined system prompt
 /// let final_prompt = result.assemble_prompt();
+///
+/// // Check routing confidence (Dispatcher Layer)
+/// if result.confidence < 0.8 {
+///     println!("Low confidence match, consider user confirmation");
+/// }
+/// println!("Routed via: {:?}", result.routing_layer);
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct RoutingMatch {
     /// Matched command rule (if any) - first-match-stops
     pub command_rule: Option<MatchedCommandRule>,
     /// All matched keyword rules - all-match semantics
     pub keyword_rules: Vec<MatchedKeywordRule>,
+
+    // === Dispatcher Layer Fields ===
+
+    /// Match confidence score (0.0 - 1.0)
+    ///
+    /// - L1 (regex): Always 1.0 (exact match)
+    /// - L2 (semantic): Based on keyword overlap score
+    /// - L3 (AI): From model's confidence output
+    /// - Default: 0.0 (fallback, no actual match)
+    pub confidence: f32,
+
+    /// Which routing layer produced this match
+    ///
+    /// Useful for debugging, metrics, and determining if confirmation is needed.
+    pub routing_layer: RoutingLayer,
+
+    /// Parameters extracted from the input (optional)
+    ///
+    /// For MCP/tool calls, this contains the JSON parameters.
+    /// L3 AI routing may extract these from natural language.
+    pub extracted_parameters: Option<Value>,
+
+    /// Human-readable explanation of the routing decision (optional)
+    ///
+    /// Useful for debugging and showing to users in confirmation dialogs.
+    pub routing_reason: Option<String>,
+}
+
+impl Default for RoutingMatch {
+    fn default() -> Self {
+        Self {
+            command_rule: None,
+            keyword_rules: Vec::new(),
+            confidence: 0.0,
+            routing_layer: RoutingLayer::Default,
+            extracted_parameters: None,
+            routing_reason: None,
+        }
+    }
 }
 
 /// A matched command rule with provider and cleaned input
@@ -418,6 +473,76 @@ impl RoutingMatch {
         }
 
         Intent::GeneralChat
+    }
+
+    // === Dispatcher Layer Methods ===
+
+    /// Check if this match requires user confirmation
+    ///
+    /// Returns true if the confidence is below the given threshold.
+    /// Typically used with threshold from config (e.g., 0.8).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let result = router.match_rules("search for news");
+    /// if result.needs_confirmation(0.8) {
+    ///     // Show Halo confirmation UI
+    /// }
+    /// ```
+    pub fn needs_confirmation(&self, threshold: f32) -> bool {
+        self.confidence < threshold && self.has_match()
+    }
+
+    /// Check if this was an L1 (regex) match
+    pub fn is_l1_match(&self) -> bool {
+        matches!(self.routing_layer, RoutingLayer::L1Rule)
+    }
+
+    /// Check if this was an L2 (semantic) match
+    pub fn is_l2_match(&self) -> bool {
+        matches!(self.routing_layer, RoutingLayer::L2Semantic)
+    }
+
+    /// Check if this was an L3 (AI inference) match
+    pub fn is_l3_match(&self) -> bool {
+        matches!(self.routing_layer, RoutingLayer::L3Inference)
+    }
+
+    /// Check if this is a default fallback (no actual match)
+    pub fn is_default_fallback(&self) -> bool {
+        matches!(self.routing_layer, RoutingLayer::Default)
+    }
+
+    /// Get the latency hint for this routing layer
+    ///
+    /// Returns a human-readable string like "<10ms", "200-500ms", etc.
+    pub fn latency_hint(&self) -> &'static str {
+        self.routing_layer.latency_hint()
+    }
+
+    /// Builder method: set confidence
+    pub fn with_confidence(mut self, confidence: f32) -> Self {
+        self.confidence = confidence;
+        self
+    }
+
+    /// Builder method: set routing layer
+    pub fn with_routing_layer(mut self, layer: RoutingLayer) -> Self {
+        self.routing_layer = layer;
+        self
+    }
+
+    /// Builder method: set extracted parameters
+    pub fn with_parameters(mut self, params: Value) -> Self {
+        self.extracted_parameters = Some(params);
+        self
+    }
+
+    /// Builder method: set routing reason
+    pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
+        self.routing_reason = Some(reason.into());
+        self
     }
 }
 
@@ -908,6 +1033,14 @@ impl Router {
                     skill_id,
                 });
 
+                // L1 regex match: confidence = 1.0 (exact match)
+                result.confidence = 1.0;
+                result.routing_layer = RoutingLayer::L1Rule;
+                result.routing_reason = Some(format!(
+                    "Matched command rule #{} (regex pattern)",
+                    index
+                ));
+
                 break; // First match stops for command rules
             }
         }
@@ -930,9 +1063,22 @@ impl Router {
             }
         }
 
+        // If keyword rules matched but no command rule, set L1 confidence
+        // (keyword rules are still regex-based, so L1)
+        if result.command_rule.is_none() && !result.keyword_rules.is_empty() {
+            result.confidence = 1.0;
+            result.routing_layer = RoutingLayer::L1Rule;
+            result.routing_reason = Some(format!(
+                "Matched {} keyword rule(s) (regex pattern)",
+                result.keyword_rules.len()
+            ));
+        }
+
         debug!(
             has_command = result.command_rule.is_some(),
             keyword_count = result.keyword_rules.len(),
+            confidence = result.confidence,
+            routing_layer = ?result.routing_layer,
             "Match result summary"
         );
 
@@ -2158,5 +2304,180 @@ mod tests {
         let intent = result.to_intent(router.rule_configs());
         // Note: builtin_search is the intent_type for /search
         assert!(matches!(intent, Intent::BuiltinSearch | Intent::Custom(_)));
+    }
+
+    // ============================================================================
+    // Tests for Dispatcher Layer fields (Phase 2)
+    // ============================================================================
+
+    #[test]
+    fn test_routing_match_default_values() {
+        let result = RoutingMatch::default();
+
+        assert!(result.command_rule.is_none());
+        assert!(result.keyword_rules.is_empty());
+        assert_eq!(result.confidence, 0.0);
+        assert!(matches!(result.routing_layer, RoutingLayer::Default));
+        assert!(result.extracted_parameters.is_none());
+        assert!(result.routing_reason.is_none());
+    }
+
+    #[test]
+    fn test_routing_match_l1_confidence_command() {
+        let mut config = Config::default();
+
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
+        config.general.default_provider = Some("openai".to_string());
+
+        // Add command rule
+        config
+            .rules
+            .push(RoutingRuleConfig::command(r"^/draw", "openai", Some("Artist")));
+
+        let router = Router::new(&config).unwrap();
+
+        // Match command rule
+        let result = router.match_rules("/draw a cat");
+
+        // L1 regex match should have confidence = 1.0
+        assert_eq!(result.confidence, 1.0);
+        assert!(result.is_l1_match());
+        assert!(result.routing_reason.is_some());
+        assert!(result.routing_reason.unwrap().contains("command rule"));
+    }
+
+    #[test]
+    fn test_routing_match_l1_confidence_keyword() {
+        let mut config = Config::default();
+
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
+        config.general.default_provider = Some("openai".to_string());
+
+        // Add keyword rule only (no command rule)
+        config
+            .rules
+            .push(RoutingRuleConfig::keyword("translate", "Translation prompt"));
+
+        let router = Router::new(&config).unwrap();
+
+        // Match keyword rule (no command rule match)
+        let result = router.match_rules("please translate this");
+
+        // Keyword match (still regex-based) should have confidence = 1.0
+        assert_eq!(result.confidence, 1.0);
+        assert!(result.is_l1_match());
+        assert!(result.command_rule.is_none()); // No command rule
+        assert_eq!(result.keyword_rules.len(), 1);
+    }
+
+    #[test]
+    fn test_routing_match_no_match_default_layer() {
+        let mut config = Config::default();
+
+        config
+            .providers
+            .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
+        config.general.default_provider = Some("openai".to_string());
+
+        // Add rule that won't match
+        config
+            .rules
+            .push(RoutingRuleConfig::command(r"^/draw", "openai", None));
+
+        let router = Router::new(&config).unwrap();
+
+        // No match
+        let result = router.match_rules("Hello world");
+
+        // No match should have confidence = 0.0 and Default layer
+        assert_eq!(result.confidence, 0.0);
+        assert!(result.is_default_fallback());
+        assert!(!result.has_match());
+    }
+
+    #[test]
+    fn test_routing_match_needs_confirmation() {
+        let mut result = RoutingMatch::default();
+
+        // No match - doesn't need confirmation (has_match is false)
+        assert!(!result.needs_confirmation(0.8));
+
+        // Add a command rule match with high confidence
+        result.command_rule = Some(MatchedCommandRule {
+            provider_name: "openai".to_string(),
+            system_prompt: None,
+            cleaned_input: "test".to_string(),
+            capabilities: vec![],
+            rule_index: 0,
+            skill_id: None,
+        });
+        result.confidence = 1.0;
+
+        // High confidence - doesn't need confirmation
+        assert!(!result.needs_confirmation(0.8));
+
+        // Low confidence - needs confirmation
+        result.confidence = 0.5;
+        assert!(result.needs_confirmation(0.8));
+    }
+
+    #[test]
+    fn test_routing_match_builder_methods() {
+        use serde_json::json;
+
+        let result = RoutingMatch::default()
+            .with_confidence(0.9)
+            .with_routing_layer(RoutingLayer::L2Semantic)
+            .with_parameters(json!({"query": "test"}))
+            .with_reason("Matched via semantic search");
+
+        assert_eq!(result.confidence, 0.9);
+        assert!(result.is_l2_match());
+        assert!(result.extracted_parameters.is_some());
+        assert_eq!(result.routing_reason, Some("Matched via semantic search".to_string()));
+    }
+
+    #[test]
+    fn test_routing_match_latency_hint() {
+        let mut result = RoutingMatch::default();
+
+        // Default layer
+        assert_eq!(result.latency_hint(), "0ms");
+
+        // L1 layer
+        result.routing_layer = RoutingLayer::L1Rule;
+        assert_eq!(result.latency_hint(), "<10ms");
+
+        // L2 layer
+        result.routing_layer = RoutingLayer::L2Semantic;
+        assert_eq!(result.latency_hint(), "200-500ms");
+
+        // L3 layer
+        result.routing_layer = RoutingLayer::L3Inference;
+        assert_eq!(result.latency_hint(), ">1s");
+    }
+
+    #[test]
+    fn test_routing_layer_checks() {
+        let mut result = RoutingMatch::default();
+
+        assert!(result.is_default_fallback());
+        assert!(!result.is_l1_match());
+        assert!(!result.is_l2_match());
+        assert!(!result.is_l3_match());
+
+        result.routing_layer = RoutingLayer::L1Rule;
+        assert!(result.is_l1_match());
+        assert!(!result.is_default_fallback());
+
+        result.routing_layer = RoutingLayer::L2Semantic;
+        assert!(result.is_l2_match());
+
+        result.routing_layer = RoutingLayer::L3Inference;
+        assert!(result.is_l3_match());
     }
 }

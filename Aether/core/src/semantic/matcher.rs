@@ -12,6 +12,7 @@ use super::intent::{
 };
 use super::keyword::{KeywordIndex, KeywordMatch, KeywordRule};
 use crate::config::RoutingRuleConfig;
+use crate::dispatcher::RoutingLayer;
 use crate::error::Result;
 use crate::payload::Capability;
 use regex::Regex;
@@ -180,12 +181,10 @@ impl SemanticMatcher {
                     intent
                 };
 
-                return Some(MatchResult {
-                    intent,
-                    confidence: 1.0,
-                    rule_index: Some(rule.index),
-                    needs_ai_fallback: false,
-                });
+                return Some(
+                    MatchResult::new(intent, 1.0, RoutingLayer::L1Rule)
+                        .with_rule_index(rule.index)
+                );
             }
         }
 
@@ -216,12 +215,10 @@ impl SemanticMatcher {
                     intent
                 };
 
-                return Some(MatchResult {
-                    intent,
-                    confidence: self.config.regex_threshold,
-                    rule_index: Some(rule.index),
-                    needs_ai_fallback: false,
-                });
+                return Some(
+                    MatchResult::new(intent, self.config.regex_threshold, RoutingLayer::L1Rule)
+                        .with_rule_index(rule.index)
+                );
             }
         }
 
@@ -229,6 +226,9 @@ impl SemanticMatcher {
     }
 
     /// Layer 2: Try keyword match
+    ///
+    /// Uses semantic keyword matching to find the best intent.
+    /// Sets `routing_layer = L2Semantic` for Dispatcher Layer integration.
     fn try_keyword_match(&self, input: &str, _ctx: &MatchingContext) -> Option<MatchResult> {
         let matches = self
             .keyword_index
@@ -259,12 +259,11 @@ impl SemanticMatcher {
                 intent
             };
 
-            return Some(MatchResult {
-                intent,
-                confidence,
-                rule_index: None,
-                needs_ai_fallback: false,
-            });
+            // L2 Semantic match - use keyword-based routing layer
+            return Some(
+                MatchResult::new(intent, confidence, RoutingLayer::L2Semantic)
+                    .with_matched_keywords(best.matched_keywords)
+            );
         }
 
         None
@@ -294,6 +293,8 @@ impl SemanticMatcher {
     ///
     /// E.g., Previous: "weather?" -> AI asks for location
     ///       Current: "Beijing" -> Infer this completes the location param
+    ///
+    /// Context inference is considered L2 (semantic) level matching.
     fn infer_param_completion(&self, ctx: &MatchingContext) -> Option<MatchResult> {
         if ctx.conversation.pending_params.is_empty() {
             return None;
@@ -337,12 +338,8 @@ impl SemanticMatcher {
                 param.param_name, param.required_for
             );
 
-            return Some(MatchResult {
-                intent,
-                confidence: 0.85,
-                rule_index: None,
-                needs_ai_fallback: false,
-            });
+            // Context inference is L2 semantic level
+            return Some(MatchResult::new(intent, 0.85, RoutingLayer::L2Semantic));
         }
 
         None
@@ -393,6 +390,8 @@ impl SemanticMatcher {
     }
 
     /// Apply a matched context rule
+    ///
+    /// Context rules produce L2 semantic matches.
     fn apply_context_rule(
         &self,
         rule: &ContextRule,
@@ -426,12 +425,8 @@ impl SemanticMatcher {
             }
         }
 
-        MatchResult {
-            intent,
-            confidence: 0.7,
-            rule_index: None,
-            needs_ai_fallback: false,
-        }
+        // Context rules are L2 semantic level
+        MatchResult::new(intent, 0.7, RoutingLayer::L2Semantic)
     }
 
     /// Merge results from different layers
@@ -452,15 +447,15 @@ impl SemanticMatcher {
             (Some(kw), None) => kw,
             (None, Some(ctx)) => ctx,
             (None, None) => {
-                // No match - return general intent
-                MatchResult {
-                    intent: SemanticIntent::general()
+                // No match - return general intent with Default routing layer
+                MatchResult::new(
+                    SemanticIntent::general()
                         .with_confidence(0.0)
                         .with_reasoning("No matching rules found".to_string()),
-                    confidence: 0.0,
-                    rule_index: None,
-                    needs_ai_fallback: true, // Signal that AI should be tried
-                }
+                    0.0,
+                    RoutingLayer::Default,
+                )
+                .with_needs_ai_fallback(true) // Signal that AI should be tried
             }
         }
     }
@@ -562,15 +557,15 @@ impl SemanticMatcher {
         if let Some(result) = chain.execute(ctx).await {
             result
         } else {
-            // No match - return general intent
-            MatchResult {
-                intent: SemanticIntent::general()
+            // No match - return general intent with Default routing layer
+            MatchResult::new(
+                SemanticIntent::general()
                     .with_confidence(0.0)
                     .with_reasoning("No matching rules found".to_string()),
-                confidence: 0.0,
-                rule_index: None,
-                needs_ai_fallback: true,
-            }
+                0.0,
+                RoutingLayer::Default,
+            )
+            .with_needs_ai_fallback(true)
         }
     }
 
@@ -703,6 +698,8 @@ impl CompiledRule {
 }
 
 /// Match result from SemanticMatcher
+///
+/// Includes routing layer information for Dispatcher Layer integration.
 #[derive(Debug, Clone)]
 pub struct MatchResult {
     /// Matched intent
@@ -716,18 +713,68 @@ pub struct MatchResult {
 
     /// Whether AI fallback should be attempted
     pub needs_ai_fallback: bool,
+
+    /// Which routing layer produced this match (Dispatcher Layer integration)
+    pub routing_layer: RoutingLayer,
+
+    /// Matched keywords (for L2 matches)
+    pub matched_keywords: Vec<String>,
 }
 
 impl MatchResult {
+    /// Create a new MatchResult with required fields
+    pub fn new(intent: SemanticIntent, confidence: f64, routing_layer: RoutingLayer) -> Self {
+        Self {
+            intent,
+            confidence,
+            rule_index: None,
+            needs_ai_fallback: false,
+            routing_layer,
+            matched_keywords: Vec::new(),
+        }
+    }
+
     /// Set needs_ai_fallback flag
     pub fn with_needs_ai_fallback(mut self, needs: bool) -> Self {
         self.needs_ai_fallback = needs;
         self
     }
 
+    /// Set rule index
+    pub fn with_rule_index(mut self, index: usize) -> Self {
+        self.rule_index = Some(index);
+        self
+    }
+
+    /// Set matched keywords
+    pub fn with_matched_keywords(mut self, keywords: Vec<String>) -> Self {
+        self.matched_keywords = keywords;
+        self
+    }
+
     /// Check if confident enough
     pub fn is_confident(&self, threshold: f64) -> bool {
         self.confidence >= threshold
+    }
+
+    /// Check if this is an L1 (regex) match
+    pub fn is_l1_match(&self) -> bool {
+        matches!(self.routing_layer, RoutingLayer::L1Rule)
+    }
+
+    /// Check if this is an L2 (semantic/keyword) match
+    pub fn is_l2_match(&self) -> bool {
+        matches!(self.routing_layer, RoutingLayer::L2Semantic)
+    }
+
+    /// Check if this is an L3 (AI inference) match
+    pub fn is_l3_match(&self) -> bool {
+        matches!(self.routing_layer, RoutingLayer::L3Inference)
+    }
+
+    /// Check if confirmation is needed based on confidence threshold
+    pub fn needs_confirmation(&self, threshold: f64) -> bool {
+        self.confidence < threshold && self.confidence > 0.0
     }
 }
 

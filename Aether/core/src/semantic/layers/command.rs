@@ -4,6 +4,7 @@
 //! Commands have the highest priority (0) and are terminal matches.
 
 use crate::config::RoutingRuleConfig;
+use crate::dispatcher::RoutingLayer;
 use crate::error::Result;
 use crate::payload::Capability;
 use crate::semantic::context::MatchingContext;
@@ -123,12 +124,10 @@ impl MatchingLayer for CommandLayer {
                     "Command layer matched"
                 );
 
-                return Some(MatchResult {
-                    intent,
-                    confidence: 1.0,
-                    rule_index: Some(rule.index),
-                    needs_ai_fallback: false,
-                });
+                return Some(
+                    MatchResult::new(intent, 1.0, RoutingLayer::L1Rule)
+                        .with_rule_index(rule.index)
+                );
             }
         }
 

@@ -423,6 +423,22 @@ interface AetherCore {
   // Import MCP configuration from claude_desktop_config.json format
   [Throws=AetherException]
   void import_mcp_config_json(string json);
+
+  // DISPATCHER LAYER METHODS (implement-dispatcher-layer)
+
+  // List all available tools from unified registry
+  // Returns tools from all sources: Native, MCP, Skills, Custom
+  sequence<UnifiedToolInfo> list_tools();
+
+  // List tools filtered by source type
+  sequence<UnifiedToolInfo> list_tools_by_source(ToolSourceType source_type);
+
+  // Search tools by name or description
+  sequence<UnifiedToolInfo> search_tools(string query);
+
+  // Refresh tool registry (reload from all sources)
+  [Throws=AetherException]
+  void refresh_tools();
 };
 
 // Callback interface for events from Rust to client
@@ -842,6 +858,31 @@ dictionary CommandNode {
   CommandType node_type;  // Action, Prompt, or Namespace
   boolean has_children; // Whether this node has child commands
   string? source_id;    // Optional source identifier (e.g., "rule:search", "mcp:git")
+};
+
+// ===== Dispatcher Layer Types (implement-dispatcher-layer) =====
+
+// Tool source type for unified tool registry
+enum ToolSourceType {
+  "Native",   // Built-in native capabilities (Search, Video)
+  "Mcp",      // MCP server tool
+  "Skill",    // Claude Agent Skill
+  "Custom",   // User-defined custom command
+};
+
+// Unified tool representation for FFI
+// All tools (Native, MCP, Skills, Custom) are normalized to this structure
+dictionary UnifiedToolInfo {
+  string id;                    // Unique identifier (e.g., "native:search")
+  string name;                  // Command/tool name for invocation
+  string display_name;          // Human-readable display name
+  string description;           // Tool description
+  ToolSourceType source_type;   // Tool source type
+  string? source_id;            // Source-specific ID (server for MCP, skill ID for Skill)
+  string? parameters_schema;    // JSON Schema string for input parameters
+  boolean is_active;            // Whether tool is enabled
+  boolean requires_confirmation; // Whether requires user confirmation
+  string? service_name;         // Parent service name (for MCP sub-tools)
 };
 
 // ===== MCP (Model Context Protocol) Types (implement-mcp-capability) =====

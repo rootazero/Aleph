@@ -624,15 +624,23 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func listMcpTools()  -> [McpToolInfo]
     
+    func listTools()  -> [UnifiedToolInfo]
+    
+    func listToolsBySource(sourceType: ToolSourceType)  -> [UnifiedToolInfo]
+    
     func loadConfig() throws  -> FullConfig
     
     func processInput(userInput: String, context: CapturedContext) throws  -> String
+    
+    func refreshTools() throws 
     
     func retrieveAndAugmentPrompt(basePrompt: String, userInput: String) throws  -> String
     
     func retryLastRequest() throws 
     
     func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32) throws  -> [MemoryEntry]
+    
+    func searchTools(query: String)  -> [UnifiedToolInfo]
     
     func setCurrentContext(context: CapturedContext) 
     
@@ -966,6 +974,21 @@ open func listMcpTools() -> [McpToolInfo] {
 })
 }
     
+open func listTools() -> [UnifiedToolInfo] {
+    return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_list_tools(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func listToolsBySource(sourceType: ToolSourceType) -> [UnifiedToolInfo] {
+    return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_list_tools_by_source(self.uniffiClonePointer(),
+        FfiConverterTypeToolSourceType.lower(sourceType),$0
+    )
+})
+}
+    
 open func loadConfig()throws  -> FullConfig {
     return try  FfiConverterTypeFullConfig.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_load_config(self.uniffiClonePointer(),$0
@@ -980,6 +1003,12 @@ open func processInput(userInput: String, context: CapturedContext)throws  -> St
         FfiConverterTypeCapturedContext.lower(context),$0
     )
 })
+}
+    
+open func refreshTools()throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_refresh_tools(self.uniffiClonePointer(),$0
+    )
+}
 }
     
 open func retrieveAndAugmentPrompt(basePrompt: String, userInput: String)throws  -> String {
@@ -1003,6 +1032,14 @@ open func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt3
         FfiConverterString.lower(appBundleId),
         FfiConverterOptionString.lower(windowTitle),
         FfiConverterUInt32.lower(limit),$0
+    )
+})
+}
+    
+open func searchTools(query: String) -> [UnifiedToolInfo] {
+    return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_search_tools(self.uniffiClonePointer(),
+        FfiConverterString.lower(query),$0
     )
 })
 }
@@ -5130,6 +5167,136 @@ public func FfiConverterTypeTriggerConfig_lower(_ value: TriggerConfig) -> RustB
 }
 
 
+public struct UnifiedToolInfo {
+    public var id: String
+    public var name: String
+    public var displayName: String
+    public var description: String
+    public var sourceType: ToolSourceType
+    public var sourceId: String?
+    public var parametersSchema: String?
+    public var isActive: Bool
+    public var requiresConfirmation: Bool
+    public var serviceName: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, name: String, displayName: String, description: String, sourceType: ToolSourceType, sourceId: String?, parametersSchema: String?, isActive: Bool, requiresConfirmation: Bool, serviceName: String?) {
+        self.id = id
+        self.name = name
+        self.displayName = displayName
+        self.description = description
+        self.sourceType = sourceType
+        self.sourceId = sourceId
+        self.parametersSchema = parametersSchema
+        self.isActive = isActive
+        self.requiresConfirmation = requiresConfirmation
+        self.serviceName = serviceName
+    }
+}
+
+
+
+extension UnifiedToolInfo: Equatable, Hashable {
+    public static func ==(lhs: UnifiedToolInfo, rhs: UnifiedToolInfo) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.displayName != rhs.displayName {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.sourceType != rhs.sourceType {
+            return false
+        }
+        if lhs.sourceId != rhs.sourceId {
+            return false
+        }
+        if lhs.parametersSchema != rhs.parametersSchema {
+            return false
+        }
+        if lhs.isActive != rhs.isActive {
+            return false
+        }
+        if lhs.requiresConfirmation != rhs.requiresConfirmation {
+            return false
+        }
+        if lhs.serviceName != rhs.serviceName {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(name)
+        hasher.combine(displayName)
+        hasher.combine(description)
+        hasher.combine(sourceType)
+        hasher.combine(sourceId)
+        hasher.combine(parametersSchema)
+        hasher.combine(isActive)
+        hasher.combine(requiresConfirmation)
+        hasher.combine(serviceName)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUnifiedToolInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UnifiedToolInfo {
+        return
+            try UnifiedToolInfo(
+                id: FfiConverterString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                displayName: FfiConverterString.read(from: &buf), 
+                description: FfiConverterString.read(from: &buf), 
+                sourceType: FfiConverterTypeToolSourceType.read(from: &buf), 
+                sourceId: FfiConverterOptionString.read(from: &buf), 
+                parametersSchema: FfiConverterOptionString.read(from: &buf), 
+                isActive: FfiConverterBool.read(from: &buf), 
+                requiresConfirmation: FfiConverterBool.read(from: &buf), 
+                serviceName: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: UnifiedToolInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.displayName, into: &buf)
+        FfiConverterString.write(value.description, into: &buf)
+        FfiConverterTypeToolSourceType.write(value.sourceType, into: &buf)
+        FfiConverterOptionString.write(value.sourceId, into: &buf)
+        FfiConverterOptionString.write(value.parametersSchema, into: &buf)
+        FfiConverterBool.write(value.isActive, into: &buf)
+        FfiConverterBool.write(value.requiresConfirmation, into: &buf)
+        FfiConverterOptionString.write(value.serviceName, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUnifiedToolInfo_lift(_ buf: RustBuffer) throws -> UnifiedToolInfo {
+    return try FfiConverterTypeUnifiedToolInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUnifiedToolInfo_lower(_ value: UnifiedToolInfo) -> RustBuffer {
+    return FfiConverterTypeUnifiedToolInfo.lower(value)
+}
+
+
 public enum AetherException {
 
     
@@ -5812,6 +5979,84 @@ public func FfiConverterTypeProcessingState_lower(_ value: ProcessingState) -> R
 
 
 extension ProcessingState: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum ToolSourceType {
+    
+    case native
+    case mcp
+    case skill
+    case custom
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeToolSourceType: FfiConverterRustBuffer {
+    typealias SwiftType = ToolSourceType
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ToolSourceType {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .native
+        
+        case 2: return .mcp
+        
+        case 3: return .skill
+        
+        case 4: return .custom
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ToolSourceType, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .native:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .mcp:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .skill:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .custom:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeToolSourceType_lift(_ buf: RustBuffer) throws -> ToolSourceType {
+    return try FfiConverterTypeToolSourceType.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeToolSourceType_lower(_ value: ToolSourceType) -> RustBuffer {
+    return FfiConverterTypeToolSourceType.lower(value)
+}
+
+
+
+extension ToolSourceType: Equatable, Hashable {}
 
 
 
@@ -7333,6 +7578,31 @@ fileprivate struct FfiConverterSequenceTypeSkillInfo: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeUnifiedToolInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [UnifiedToolInfo]
+
+    public static func write(_ value: [UnifiedToolInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeUnifiedToolInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UnifiedToolInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [UnifiedToolInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeUnifiedToolInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterDictionaryStringUInt64: FfiConverterRustBuffer {
     public static func write(_ value: [String: UInt64], into buf: inout [UInt8]) {
         let len = Int32(value.count)
@@ -7557,10 +7827,19 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_list_mcp_tools() != 7193) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_list_tools() != 25812) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_list_tools_by_source() != 3320) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_load_config() != 33928) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_process_input() != 803) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_refresh_tools() != 51434) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_retrieve_and_augment_prompt() != 61661) {
@@ -7570,6 +7849,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_search_memories() != 31229) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_search_tools() != 64229) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_set_current_context() != 16529) {

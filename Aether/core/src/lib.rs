@@ -97,17 +97,18 @@ pub mod utils; // NEW: Capability executor for enriching payloads
 pub mod video; // NEW: Video transcript extraction (YouTube)
 pub mod services; // NEW: Shared foundation services (FileOps, GitOps, SystemInfo)
 pub mod mcp; // NEW: MCP (Model Context Protocol) capability
+pub mod dispatcher; // NEW: Intelligent tool routing (Dispatcher Layer)
 
 // Re-export public types
 // NOTE: ImageData/ImageFormat still exported for AI provider image encoding
 pub use crate::clipboard::{ImageData, ImageFormat};
 pub use crate::command::{CommandExecutionResult, CommandNode, CommandRegistry, CommandType};
 pub use crate::config::{
-    BehaviorConfig, Config, ContextRuleConfig, FullConfig, GeneralConfig, IntentDetectionConfig,
-    KeywordRuleConfig, MemoryConfig, PIIConfig, ProviderConfig, ProviderConfigEntry,
-    RoutingRuleConfig, SearchBackendConfig, SearchBackendEntry, SearchConfig, SearchConfigInternal,
-    ShortcutsConfig, SkillsConfig, SmartFlowConfig, SmartMatchingConfig, SuggestionParsingConfig,
-    TestConnectionResult, TriggerConfig, VideoConfig,
+    BehaviorConfig, Config, ContextRuleConfig, DispatcherConfigToml, FullConfig, GeneralConfig,
+    IntentDetectionConfig, KeywordRuleConfig, MemoryConfig, PIIConfig, ProviderConfig,
+    ProviderConfigEntry, RoutingRuleConfig, SearchBackendConfig, SearchBackendEntry, SearchConfig,
+    SearchConfigInternal, ShortcutsConfig, SkillsConfig, SmartFlowConfig, SmartMatchingConfig,
+    SuggestionParsingConfig, TestConnectionResult, TriggerConfig, VideoConfig,
 };
 pub use crate::core::{
     AetherCore, AppMemoryInfo, CapturedContext, CompressionStats, MediaAttachment,
@@ -140,6 +141,13 @@ pub use crate::skills::{Skill, SkillInfo, SkillsInstaller, SkillsRegistry};
 pub use crate::mcp::{
     McpEnvVar, McpServerConfig, McpServerPermissions, McpServerStatus, McpServerStatusInfo,
     McpServerType, McpServiceInfo, McpSettingsConfig, McpToolInfo,
+};
+pub use crate::dispatcher::{
+    ConfirmationAction, ConfirmationConfig, ConfirmationDecision, DispatcherAction,
+    DispatcherConfig, DispatcherIntegration, DispatcherResult, L3RoutingOptions,
+    L3RoutingResponse, L3RoutingResult, L3Router, PromptBuilder, PromptFormat, RoutingLayer,
+    ToolConfirmation, ToolFilter, ToolRegistry, ToolSource, ToolSourceType, UnifiedTool,
+    UnifiedToolInfo,
 };
 pub use crate::utils::pii;
 

@@ -611,6 +611,16 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_list_mcp_services(void*_Nonnull
 RustBuffer uniffi_aethecore_fn_method_aethercore_list_mcp_tools(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_TOOLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_TOOLS
+RustBuffer uniffi_aethecore_fn_method_aethercore_list_tools(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_TOOLS_BY_SOURCE
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_TOOLS_BY_SOURCE
+RustBuffer uniffi_aethecore_fn_method_aethercore_list_tools_by_source(void*_Nonnull ptr, RustBuffer source_type, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LOAD_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LOAD_CONFIG
 RustBuffer uniffi_aethecore_fn_method_aethercore_load_config(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -619,6 +629,11 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_load_config(void*_Nonnull ptr, 
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROCESS_INPUT
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROCESS_INPUT
 RustBuffer uniffi_aethecore_fn_method_aethercore_process_input(void*_Nonnull ptr, RustBuffer user_input, RustBuffer context, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_REFRESH_TOOLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_REFRESH_TOOLS
+void uniffi_aethecore_fn_method_aethercore_refresh_tools(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_RETRIEVE_AND_AUGMENT_PROMPT
@@ -634,6 +649,11 @@ void uniffi_aethecore_fn_method_aethercore_retry_last_request(void*_Nonnull ptr,
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SEARCH_MEMORIES
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SEARCH_MEMORIES
 RustBuffer uniffi_aethecore_fn_method_aethercore_search_memories(void*_Nonnull ptr, RustBuffer app_bundle_id, RustBuffer window_title, uint32_t limit, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SEARCH_TOOLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SEARCH_TOOLS
+RustBuffer uniffi_aethecore_fn_method_aethercore_search_tools(void*_Nonnull ptr, RustBuffer query, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SET_CURRENT_CONTEXT
@@ -1346,6 +1366,18 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_list_mcp_tools(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_TOOLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_TOOLS
+uint16_t uniffi_aethecore_checksum_method_aethercore_list_tools(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_TOOLS_BY_SOURCE
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_TOOLS_BY_SOURCE
+uint16_t uniffi_aethecore_checksum_method_aethercore_list_tools_by_source(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LOAD_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LOAD_CONFIG
 uint16_t uniffi_aethecore_checksum_method_aethercore_load_config(void
@@ -1355,6 +1387,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_load_config(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_PROCESS_INPUT
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_PROCESS_INPUT
 uint16_t uniffi_aethecore_checksum_method_aethercore_process_input(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_REFRESH_TOOLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_REFRESH_TOOLS
+uint16_t uniffi_aethecore_checksum_method_aethercore_refresh_tools(void
     
 );
 #endif
@@ -1373,6 +1411,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_retry_last_request(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_SEARCH_MEMORIES
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_SEARCH_MEMORIES
 uint16_t uniffi_aethecore_checksum_method_aethercore_search_memories(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_SEARCH_TOOLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_SEARCH_TOOLS
+uint16_t uniffi_aethecore_checksum_method_aethercore_search_tools(void
     
 );
 #endif

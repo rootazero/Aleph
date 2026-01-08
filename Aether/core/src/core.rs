@@ -103,6 +103,8 @@ pub struct AetherCore {
     config_watcher: Option<Arc<ConfigWatcher>>,
     // Multi-turn conversation support
     conversation_manager: Arc<Mutex<crate::conversation::ConversationManager>>,
+    // Unified tool registry (implement-dispatcher-layer)
+    tool_registry: Arc<crate::dispatcher::ToolRegistry>,
 }
 
 impl AetherCore {
@@ -534,6 +536,9 @@ impl AetherCore {
             Some(watcher)
         };
 
+        // Initialize unified tool registry (implement-dispatcher-layer)
+        let tool_registry = Arc::new(crate::dispatcher::ToolRegistry::new());
+
         Ok(Self {
             event_handler,
             runtime: Arc::new(runtime),
@@ -550,6 +555,7 @@ impl AetherCore {
             mcp_client,
             config_watcher,
             conversation_manager: Arc::new(Mutex::new(crate::conversation::ConversationManager::new())),
+            tool_registry,
         })
     }
 
@@ -3805,6 +3811,172 @@ impl AetherCore {
         Ok(())
     }
 
+    // ========================================================================
+    // Tool Registry Methods (implement-dispatcher-layer)
+    // ========================================================================
+
+    /// Refresh the unified tool registry
+    ///
+    /// This method aggregates tools from all sources:
+    /// - Native capabilities (Search, Video)
+    /// - System tools (fs, git, shell, sys)
+    /// - External MCP servers
+    /// - Installed skills
+    /// - Custom commands from config rules
+    ///
+    /// Call this method when:
+    /// - Application starts (after initialization)
+    /// - Config file changes (hot-reload callback)
+    /// - MCP servers connect/disconnect
+    /// - Skills are installed/removed
+    pub fn refresh_tool_registry(&self) {
+        let registry = Arc::clone(&self.tool_registry);
+        let config = self.lock_config().clone();
+        let mcp_client = self.mcp_client.clone();
+
+        // Run refresh in tokio runtime
+        self.runtime.spawn(async move {
+            // 1. Register native tools
+            registry.register_native_tools().await;
+
+            // 2. Register system tools (from MCP client)
+            if let Some(client) = &mcp_client {
+                let tools = client.list_builtin_tools();
+                let mcp_tool_infos: Vec<crate::mcp::McpToolInfo> = tools
+                    .into_iter()
+                    .map(|tool| {
+                        let service_name = tool
+                            .name
+                            .split(':')
+                            .next()
+                            .unwrap_or("unknown")
+                            .to_string();
+                        crate::mcp::McpToolInfo {
+                            name: tool.name,
+                            description: tool.description,
+                            requires_confirmation: tool.requires_confirmation,
+                            service_name,
+                        }
+                    })
+                    .collect();
+
+                // Group by service name
+                let mut by_service: std::collections::HashMap<String, Vec<crate::mcp::McpToolInfo>> =
+                    std::collections::HashMap::new();
+                for tool in mcp_tool_infos {
+                    by_service
+                        .entry(tool.service_name.clone())
+                        .or_default()
+                        .push(tool);
+                }
+
+                for (service_name, tools) in by_service {
+                    registry
+                        .register_mcp_tools(&tools, &service_name, true)
+                        .await;
+                }
+            }
+
+            // 3. Register skills
+            if let Ok(skills) = crate::initialization::list_installed_skills() {
+                registry.register_skills(&skills).await;
+            }
+
+            // 4. Register custom commands from routing rules
+            registry.register_custom_commands(&config.rules).await;
+
+            info!(
+                "Tool registry refreshed: {} tools",
+                registry.active_count().await
+            );
+        });
+    }
+
+    /// Get all registered tools from the unified registry
+    ///
+    /// Returns a list of all active tools for UI display or
+    /// prompt generation.
+    pub fn list_unified_tools(&self) -> Vec<crate::dispatcher::UnifiedTool> {
+        self.runtime
+            .block_on(async { self.tool_registry.list_all().await })
+    }
+
+    /// Search tools by name or description
+    ///
+    /// # Arguments
+    /// * `query` - Search query string
+    ///
+    /// # Returns
+    /// * `Vec<UnifiedTool>` - Matching tools sorted by relevance
+    pub fn search_unified_tools(&self, query: &str) -> Vec<crate::dispatcher::UnifiedTool> {
+        self.runtime
+            .block_on(async { self.tool_registry.search(query).await })
+    }
+
+    /// Get tool registry prompt block for L3 routing
+    ///
+    /// Returns a markdown-formatted list of all active tools
+    /// suitable for injection into the router LLM system prompt.
+    pub fn get_tool_prompt_block(&self) -> String {
+        self.runtime
+            .block_on(async { self.tool_registry.to_prompt_block().await })
+    }
+
+    // ========================================================================
+    // Dispatcher Layer FFI Methods (UniFFI exports)
+    // ========================================================================
+
+    /// List all available tools from unified registry
+    ///
+    /// Returns tools from all sources: Native, MCP, Skills, Custom.
+    /// This is the UniFFI-exposed method that returns FFI-safe types.
+    pub fn list_tools(&self) -> Vec<crate::dispatcher::UnifiedToolInfo> {
+        self.list_unified_tools()
+            .into_iter()
+            .map(crate::dispatcher::UnifiedToolInfo::from)
+            .collect()
+    }
+
+    /// List tools filtered by source type
+    ///
+    /// # Arguments
+    /// * `source_type` - Filter by this source type
+    ///
+    /// # Returns
+    /// * `Vec<UnifiedToolInfo>` - Matching tools
+    pub fn list_tools_by_source(
+        &self,
+        source_type: crate::dispatcher::ToolSourceType,
+    ) -> Vec<crate::dispatcher::UnifiedToolInfo> {
+        self.list_unified_tools()
+            .into_iter()
+            .filter(|tool| crate::dispatcher::ToolSourceType::from(&tool.source) == source_type)
+            .map(crate::dispatcher::UnifiedToolInfo::from)
+            .collect()
+    }
+
+    /// Search tools by name or description
+    ///
+    /// # Arguments
+    /// * `query` - Search query string
+    ///
+    /// # Returns
+    /// * `Vec<UnifiedToolInfo>` - Matching tools sorted by relevance
+    pub fn search_tools(&self, query: String) -> Vec<crate::dispatcher::UnifiedToolInfo> {
+        self.search_unified_tools(&query)
+            .into_iter()
+            .map(crate::dispatcher::UnifiedToolInfo::from)
+            .collect()
+    }
+
+    /// Refresh tool registry (reload from all sources)
+    ///
+    /// This method triggers a refresh of the unified tool registry,
+    /// re-aggregating tools from all sources.
+    pub fn refresh_tools(&self) -> Result<()> {
+        self.refresh_tool_registry();
+        Ok(())
+    }
 }
 
 /// Helper struct for async memory storage operations

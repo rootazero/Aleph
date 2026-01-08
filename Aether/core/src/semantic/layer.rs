@@ -22,6 +22,7 @@
 
 use super::context::MatchingContext;
 use super::matcher::MatchResult;
+use crate::dispatcher::RoutingLayer;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -407,12 +408,11 @@ mod tests {
     }
 
     fn make_result(confidence: f64) -> MatchResult {
-        MatchResult {
-            intent: SemanticIntent::general().with_confidence(confidence),
+        MatchResult::new(
+            SemanticIntent::general().with_confidence(confidence),
             confidence,
-            rule_index: None,
-            needs_ai_fallback: false,
-        }
+            RoutingLayer::L2Semantic,
+        )
     }
 
     #[tokio::test]

@@ -140,7 +140,8 @@ aether/
 │       │   ├── input/             # Input simulation (enigo)
 │       │   ├── providers/         # AI provider clients
 │       │   ├── config/            # TOML config parsing
-│       │   └── memory/            # Memory module (Local RAG)
+│       │   ├── memory/            # Memory module (Local RAG)
+│       │   └── dispatcher/        # Dispatcher Layer (multi-layer routing)
 │       └── uniffi.toml            # UniFFI configuration
 │
 ├── docs/                          # Documentation
@@ -454,6 +455,14 @@ provider_type = "google"
 api_key = "AIzaSy..."
 engine_id = "012345..."            # Custom Search Engine ID
 
+[dispatcher]
+enabled = true                     # Enable Dispatcher Layer
+l3_enabled = true                  # Enable L3 AI inference routing
+l3_timeout_ms = 5000               # L3 inference timeout (ms)
+confirmation_enabled = true        # Enable tool confirmation UI
+confirmation_threshold = 0.7       # Confidence below this triggers confirmation
+confirmation_timeout_ms = 30000    # Auto-cancel after timeout (ms)
+
 [providers.openai]
 api_key = "sk-..."
 model = "gpt-4o"
@@ -680,6 +689,98 @@ Prepend Mode (without rule prompt):
 - Prompt assembly: `Aether/core/src/payload/assembler.rs` → `PromptAssembler`
 - System prompt mode handling: `Aether/core/src/core.rs` (search for `provider_uses_prepend`)
 - API request formatting: `Aether/core/src/providers/openai.rs` (search for `system_prompt_mode`)
+
+### Dispatcher Layer (Aether Cortex)
+
+The Dispatcher Layer provides intelligent tool routing with confidence-based confirmation:
+
+**Architecture:**
+```
+User Input
+     ↓
+┌─────────────────────┐
+│   Dispatcher Layer  │
+│                     │
+│  ┌───────────────┐  │
+│  │ ToolRegistry  │  │  ← Aggregates Native/MCP/Skills/Custom
+│  └───────┬───────┘  │
+│          ↓          │
+│  ┌───────────────┐  │
+│  │ Multi-Layer   │  │
+│  │ Router        │  │  ← L1 → L2 → L3 cascade
+│  └───────┬───────┘  │
+│          ↓          │
+│  ┌───────────────┐  │
+│  │ Confirmation  │  │  ← If confidence < threshold
+│  └───────────────┘  │
+└──────────┼──────────┘
+           ↓
+   Execution Layer
+```
+
+**Multi-Layer Routing:**
+
+| Layer | Method | Latency | Confidence | Use Case |
+|-------|--------|---------|------------|----------|
+| L1 | Regex pattern match | <10ms | 1.0 | Explicit slash commands (`/search`, `/translate`) |
+| L2 | Semantic keyword match | 200-500ms | 0.7 | Natural language with keywords ("search for...", "translate this") |
+| L3 | LLM inference | >1s | 0.5-0.9 | Ambiguous intent, pronoun resolution, complex queries |
+| Default | Fallback | 0ms | 0.0 | General chat when no tool matches |
+
+**Routing Cascade:**
+- L1 tries first → if match (confidence ≥ 0.9), execute
+- L2 tries if L1 fails → if match (confidence ≥ 0.7), execute
+- L3 tries if L2 fails or confidence too low → AI decides tool + params
+- Default provider if all layers fail
+
+**Tool Sources:**
+
+| Source | Description | Example |
+|--------|-------------|---------|
+| `Native` | Built-in capabilities | Search, Video transcript |
+| `Mcp` | MCP server tools | `github:git_status`, `filesystem:read_file` |
+| `Skill` | Claude Agent Skills | `refine-text`, `code-review` |
+| `Custom` | User-defined rules | `[[rules]]` in config.toml |
+
+**Confirmation Flow:**
+- Tools with `confidence < confirmation_threshold` trigger user confirmation
+- Halo shows tool preview (name, icon, parameters)
+- User can Execute, Edit parameters, or Cancel
+- Cancel falls back to GeneralChat
+
+**Configuration:**
+```toml
+[dispatcher]
+enabled = true                    # Enable Dispatcher Layer
+l3_enabled = true                 # Enable L3 AI inference
+l3_timeout_ms = 5000              # L3 inference timeout
+confirmation_enabled = true       # Enable confirmation UI
+confirmation_threshold = 0.7      # Confidence below this triggers confirmation
+confirmation_timeout_ms = 30000   # Auto-cancel after timeout
+```
+
+**Code Locations:**
+- Dispatcher module: `Aether/core/src/dispatcher/`
+- Tool Registry: `dispatcher/registry.rs`
+- L3 Router: `dispatcher/l3_router.rs`
+- Prompt Builder: `dispatcher/prompt_builder.rs`
+- Confirmation: `dispatcher/confirmation.rs`
+- Integration: `dispatcher/integration.rs`
+
+**UniFFI Interface:**
+```swift
+// List all available tools
+let tools = core.listTools()
+
+// Filter by source type
+let mcpTools = core.listToolsBySource(sourceType: .mcp)
+
+// Search tools by query
+let matches = core.searchTools(query: "git")
+
+// Refresh registry (after MCP server changes)
+try core.refreshTools()
+```
 
 ### Privacy & Security
 
