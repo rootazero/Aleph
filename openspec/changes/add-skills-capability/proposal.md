@@ -16,9 +16,13 @@ OpenAI、GitHub Copilot 等已采用相同规范。Aether 作为 OS-Level AI 中
 
 ## What Changes
 
-### Architecture Integration
+本提案分为两大部分：**Rust Core 集成** 和 **Swift UI 管理界面**。
 
-本提案采用现有的 **Strategy Pattern** 架构，将 Skills 作为一个独立的 Capability 实现：
+---
+
+### Part A: Rust Core Architecture Integration
+
+采用现有的 **Strategy Pattern** 架构，将 Skills 作为一个独立的 Capability 实现：
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -31,72 +35,132 @@ OpenAI、GitHub Copilot 等已采用相同规范。Aether 作为 OS-Level AI 中
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### New Components
+#### New Rust Components
 
 1. **Capability::Skills (payload/capability.rs)**
    - 添加 `Skills = 4` 变体（Video 之后执行）
-   - Skills 在所有其他 Capability 之后执行，以便收集完整上下文
 
 2. **SkillsStrategy (capability/strategies/skills.rs)**
    - 实现 `CapabilityStrategy` trait
    - 从 `SkillsRegistry` 加载匹配的 Skill
-   - 将 Skill 指令注入 `payload.context.skill_instructions`
 
 3. **SkillsRegistry (skills/registry.rs)**
    - 管理 Skills 目录 (`~/.config/aether/skills/`)
    - 解析 SKILL.md 文件（YAML frontmatter + Markdown body）
-   - 支持热重载（目录变更检测）
+   - 支持热重载
 
-4. **Skill Data Types (skills/mod.rs)**
-   - `SkillFrontmatter`: name, description, allowed_tools
-   - `Skill`: frontmatter + instructions (markdown body)
-   - `SkillsConfig`: enabled, skills_dir, auto_match_enabled
+4. **SkillsInstaller (skills/installer.rs)** — NEW
+   - 从 GitHub 仓库克隆/下载 Skills
+   - 解压 ZIP 文件安装 Skills
+   - 验证 SKILL.md 格式
 
-### Modified Components
+---
 
-1. **AgentContext (payload/mod.rs)**
-   - 添加 `skill_instructions: Option<String>` 字段
+### Part B: Skills Settings UI (Swift)
 
-2. **PromptAssembler (payload/assembler.rs)**
-   - 在 system prompt 末尾注入 skill_instructions
-   - 格式: `## Skill Instructions\n\n{instructions}`
+在设置界面添加 **Skills 管理标签页**，提供完整的 Skills 管理功能：
 
-3. **Config (config/mod.rs)**
-   - 添加 `[skills]` 配置节
-   - 支持 `enabled`, `skills_dir`, `auto_match_enabled` 选项
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        Settings - Skills                                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│ ┌─────────────────────────────────────────────────────────────────────┐ │
+│ │  搜索栏: [🔍 Search skills...]           [+ Create] [↓ Install]    │ │
+│ └─────────────────────────────────────────────────────────────────────┘ │
+│                                                                         │
+│ ┌─ Installed Skills ────────────────────────────────────────────────┐   │
+│ │ ┌─────────────────────────────────────────────────────────────┐   │   │
+│ │ │ 📝 refine-text                                    [Edit][🗑️] │   │   │
+│ │ │ Improve and polish writing                                   │   │   │
+│ │ └─────────────────────────────────────────────────────────────┘   │   │
+│ │ ┌─────────────────────────────────────────────────────────────┐   │   │
+│ │ │ 🌐 translate                                      [Edit][🗑️] │   │   │
+│ │ │ Translate text between languages                             │   │   │
+│ │ └─────────────────────────────────────────────────────────────┘   │   │
+│ │ ┌─────────────────────────────────────────────────────────────┐   │   │
+│ │ │ 📋 summarize                                      [Edit][🗑️] │   │   │
+│ │ │ Summarize long content into concise form                     │   │   │
+│ │ └─────────────────────────────────────────────────────────────┘   │   │
+│ └───────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│ ┌─ Install Options ─────────────────────────────────────────────────┐   │
+│ │ [📦 Install Official Skills]  Download from anthropics/skills     │   │
+│ │                                                                   │   │
+│ │ [🔗 Install from URL]  github.com/user/skill-repo                │   │
+│ │                                                                   │   │
+│ │ [📁 Upload ZIP]  Drag & drop or click to upload                  │   │
+│ └───────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
-4. **Router (router/mod.rs)**
-   - 检测 `/skill <name>` 命令（显式调用）
-   - 支持基于 description 的自动匹配（可选）
+#### UI Features
+
+1. **Skills 列表展示**
+   - 显示所有已安装的 Skills
+   - 卡片式布局（名称、描述、来源标签）
+   - 支持搜索过滤
+   - 快速操作（编辑、删除）
+
+2. **官方 Skills 一键安装**
+   - 按钮触发从 `anthropics/skills` 仓库下载
+   - 显示下载进度
+   - 自动解析并安装到 `~/.config/aether/skills/`
+
+3. **第三方 Skills 安装**
+   - URL 输入框（支持 GitHub 仓库地址）
+   - 格式：`github.com/user/skill-name` 或完整 URL
+   - 自动克隆/下载并安装
+
+4. **ZIP 文件上传安装**
+   - 拖拽上传或文件选择器
+   - 自动解压到 skills 目录
+   - 验证 SKILL.md 存在
+
+5. **Skills 创建/编辑器**
+   - 模态窗口或侧边面板
+   - 表单字段：name, description, allowed_tools
+   - Markdown 编辑器（SKILL.md 内容）
+   - 预览功能
+   - 保存到 `~/.config/aether/skills/<name>/SKILL.md`
+
+---
 
 ## Impact
 
 - **Affected specs**:
-  - `skills-capability` (NEW) - Skills 系统规范
+  - `skills-capability` (MODIFIED) - 添加 installer 和 UI 规范
+  - `skills-settings-ui` (NEW) - Skills UI 规范
 
 - **Affected code** (按依赖顺序):
+
   ```
-  Phase 1: 数据类型和注册表
-  ├── Aether/core/src/skills/mod.rs (NEW)
-  ├── Aether/core/src/skills/registry.rs (NEW)
-  └── Aether/core/src/payload/capability.rs (ADD Skills variant)
+  Phase 1-4: Rust Core (已有)
+  ├── Aether/core/src/skills/mod.rs
+  ├── Aether/core/src/skills/registry.rs
+  ├── Aether/core/src/capability/strategies/skills.rs
+  └── ...
 
-  Phase 2: Strategy 实现
-  ├── Aether/core/src/capability/strategies/skills.rs (NEW)
-  ├── Aether/core/src/capability/strategies/mod.rs (ADD export)
-  └── Aether/core/src/payload/mod.rs (ADD skill_instructions field)
+  Phase 5: Skills Installer (Rust)
+  ├── Aether/core/src/skills/installer.rs (NEW)
+  └── Aether/core/src/skills/mod.rs (ADD installer exports)
 
-  Phase 3: 集成和配置
-  ├── Aether/core/src/config/mod.rs (ADD SkillsConfig)
-  ├── Aether/core/src/core.rs (REGISTER SkillsStrategy)
-  └── Aether/core/src/payload/assembler.rs (ADD skill injection)
+  Phase 6: UniFFI Interface
+  ├── Aether/core/src/aether.udl (ADD Skill types and methods)
+  └── Aether/Sources/Generated/aether.swift (REGENERATE)
 
-  Phase 4: 路由和命令
-  ├── Aether/core/src/router/mod.rs (ADD /skill command)
-  └── Aether/core/src/lib.rs (RE-EXPORT skills module)
+  Phase 7: Skills Settings UI (Swift)
+  ├── Aether/Sources/SkillsSettingsView.swift (NEW)
+  ├── Aether/Sources/Components/Molecules/SkillCard.swift (NEW)
+  ├── Aether/Sources/Components/Organisms/SkillEditorPanel.swift (NEW)
+  └── Aether/Sources/SettingsView.swift (ADD .skills tab)
+
+  Phase 8: Localization
+  └── Aether/Resources/Localizations/*.lproj/Localizable.strings
   ```
 
 - **Breaking changes**: None（增量添加）
+
+---
 
 ## Claude Agent Skills Standard
 
@@ -128,23 +192,41 @@ When refining text, follow these principles:
 - Improve sentence structure where needed
 ```
 
-### 关键特性
+### 官方 Skills 仓库
 
-1. **不是可执行代码**：Skills 是指令，不是程序
-2. **描述匹配**：系统根据 `description` 自动匹配适用的 Skill
-3. **工具约束**：`allowed-tools` 限制 Skill 可使用的工具（预留给 MCP 集成）
-4. **可组合**：多个 Skills 可以同时生效
+- **地址**: https://github.com/anthropics/skills
+- **结构**:
+  ```
+  anthropics/skills/
+  ├── skills/           # 分类 Skills
+  ├── spec/             # 规范文档
+  └── template/         # 创建模板
+  ```
+- **安装方式**: 克隆仓库或下载 ZIP
+
+---
 
 ## Success Criteria
 
+### Core Functionality
 1. ✅ 支持 Claude Agent Skills 标准格式（SKILL.md）
 2. ✅ 支持 `/skill <name>` 显式调用
 3. ✅ 支持基于描述的自动匹配（可配置开关）
 4. ✅ 内置 3 个 Skills 可用（refine-text, translate, summarize）
 5. ✅ Skill 指令正确注入到 system prompt
-6. ✅ 与现有 Capability 系统（Memory/Search/Video）协同工作
-7. ✅ Skills 热加载（目录变更检测）
-8. ✅ 遵循 Strategy Pattern 架构
+6. ✅ 与现有 Capability 系统协同工作
+7. ✅ Skills 热加载
+
+### UI Management
+8. ✅ Settings 界面显示 Skills 列表
+9. ✅ 一键安装官方 Skills
+10. ✅ URL 输入安装第三方 Skills
+11. ✅ ZIP 文件上传安装
+12. ✅ Skills 创建/编辑功能
+13. ✅ Skills 删除功能
+14. ✅ 搜索过滤 Skills
+
+---
 
 ## Design Decisions
 
@@ -153,8 +235,7 @@ When refining text, follow these principles:
 **选择**：`Skills = 4`（在 Video 之后）
 
 **理由**：
-- Skills 是指令增强，应在所有上下文收集（Memory, Search, Video）完成后执行
-- 这样 Skill 指令可以引用其他 Capability 提供的上下文
+- Skills 是指令增强，应在所有上下文收集完成后执行
 - 与 Claude Code 的 Skills 执行顺序一致
 
 ### Decision 2: Strategy Pattern 集成
@@ -163,8 +244,7 @@ When refining text, follow these principles:
 
 **理由**：
 - 与现有架构（MemoryStrategy, SearchStrategy, VideoStrategy）保持一致
-- 低耦合：SkillsStrategy 可独立测试和替换
-- 高内聚：所有 Skill 相关逻辑封装在 skills/ 模块
+- 低耦合高内聚
 
 ### Decision 3: 自动匹配默认关闭
 
@@ -172,17 +252,39 @@ When refining text, follow these principles:
 
 **理由**：
 - 防止误匹配导致意外行为
-- 用户需要显式启用才会触发自动匹配
-- 始终可以通过 `/skill <name>` 显式调用
+- 用户需要显式启用
 
-### Decision 4: 与 Phantom Flow 解耦
+### Decision 4: Skills UI 标签页位置
 
-**选择**：完全解耦
+**选择**：在 Search 之后，作为独立标签页
 
 **理由**：
-- Skills 本身是指令注入，不需要用户交互
-- 如果 Skill 需要参数，可以独立调用 Phantom Flow
-- 保持两个系统的单一职责
+- Skills 是高级功能，但常用
+- 与 Providers、Routing、Search 等配置平级
+- 不嵌入其他设置以保持清晰
+
+### Decision 5: 安装方式优先级
+
+**选择**：
+1. 官方一键安装（推荐）
+2. GitHub URL 安装
+3. ZIP 上传安装
+4. 手动创建
+
+**理由**：
+- 从最简单到最灵活的渐进式体验
+- 官方 Skills 经过验证，最安全
+
+### Decision 6: Skills 编辑器设计
+
+**选择**：模态 Sheet 编辑器
+
+**理由**：
+- 与 macOS 设计规范一致
+- 聚焦编辑任务
+- 不占用主界面空间
+
+---
 
 ## References
 
@@ -190,4 +292,5 @@ When refining text, follow these principles:
 - [Anthropic Skills GitHub](https://github.com/anthropics/skills)
 - [Simon Willison: Claude Skills](https://simonwillison.net/2025/Oct/16/claude-skills/)
 - Current CapabilityStrategy: `Aether/core/src/capability/strategy.rs`
-- Existing Strategies: `Aether/core/src/capability/strategies/`
+- Existing Settings UI: `Aether/Sources/SettingsView.swift`
+- UI Components: `Aether/Sources/Components/`

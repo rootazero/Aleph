@@ -305,9 +305,95 @@ The system SHALL register SkillsStrategy with CompositeCapabilityExecutor.
 
 ---
 
+### Requirement: Skills Installer
+
+The system SHALL provide a SkillsInstaller for downloading and managing skills.
+
+#### Scenario: Install official skills
+
+- **GIVEN** the user requests official skills installation
+- **WHEN** `install_official_skills()` is called
+- **THEN** the system SHALL download from `anthropics/skills` repository
+- **AND** extract and install valid SKILL.md files
+
+#### Scenario: Install from GitHub URL
+
+- **GIVEN** a GitHub URL `github.com/user/skill-repo`
+- **WHEN** `install_from_github(url)` is called
+- **THEN** the system SHALL normalize the URL
+- **AND** download the repository as ZIP
+- **AND** install valid skills
+
+#### Scenario: Install from local ZIP
+
+- **GIVEN** a local ZIP file path
+- **WHEN** `install_from_zip(path)` is called
+- **THEN** the system SHALL extract SKILL.md files
+- **AND** validate and install each skill
+
+#### Scenario: Skip existing skills
+
+- **GIVEN** a skill already exists in the skills directory
+- **WHEN** the same skill is being installed
+- **THEN** the existing skill SHALL NOT be overwritten
+- **AND** the system SHALL log that it was skipped
+
+#### Scenario: Create skill
+
+- **GIVEN** valid skill name and content
+- **WHEN** `create_skill(name, content)` is called
+- **THEN** a new skill directory SHALL be created
+- **AND** SKILL.md SHALL be written
+
+#### Scenario: Update skill
+
+- **GIVEN** an existing skill
+- **WHEN** `update_skill(name, content)` is called
+- **THEN** the SKILL.md file SHALL be updated
+
+#### Scenario: Delete skill
+
+- **GIVEN** an existing skill
+- **WHEN** `delete_skill(id)` is called
+- **THEN** the skill directory SHALL be removed
+
+#### Scenario: Validate skill name
+
+- **GIVEN** a skill name
+- **WHEN** the name contains invalid characters
+- **THEN** `create_skill()` SHALL return an error
+- **AND** suggest valid name format
+
+---
+
+### Requirement: UniFFI Skills Interface
+
+The system SHALL expose skills operations through UniFFI.
+
+#### Scenario: List skills via UniFFI
+
+- **GIVEN** Swift code calls `core.listSkills()`
+- **WHEN** the method executes
+- **THEN** it SHALL return a list of SkillInfo objects
+
+#### Scenario: Install skills via UniFFI
+
+- **GIVEN** Swift code calls `core.installOfficialSkills()`
+- **WHEN** the async method completes
+- **THEN** it SHALL return list of installed skill names
+
+#### Scenario: CRUD operations via UniFFI
+
+- **GIVEN** Swift code calls `core.createSkill()`
+- **WHEN** the operation succeeds
+- **THEN** the skill SHALL be available in `listSkills()`
+
+---
+
 ## Cross-References
 
 - **core-library**: AetherCore initialization and capability executor setup
 - **ai-routing**: Router /skill command detection
+- **skills-settings-ui**: Skills management UI specification
 - Existing Strategies: `Aether/core/src/capability/strategies/` (memory.rs, search.rs, video.rs)
 - CapabilityStrategy trait: `Aether/core/src/capability/strategy.rs`

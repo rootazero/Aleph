@@ -18,6 +18,7 @@ Claude Agent Skills 是 Anthropic 发布的开放标准，用于教 Claude 如�
 2. **Strategy Pattern 集成**：作为 `CapabilityStrategy` 实现
 3. **低耦合高内聚**：与现有模块（Memory, Search, Video）保持相同设计模式
 4. **热加载**：Skills 变更无需重启应用
+5. **UI 一致性**：与现有 Settings UI 设计语言保持一致
 
 ## Goals / Non-Goals
 
@@ -27,6 +28,8 @@ Claude Agent Skills 是 Anthropic 发布的开放标准，用于教 Claude 如�
 - 作为 `CapabilityStrategy` 集成到现有架构
 - 支持显式调用（`/skill <name>`）和自动匹配
 - 提供内置 Skills（refine-text, translate, summarize）
+- **提供 Settings UI 管理 Skills**
+- **支持多种安装方式**（官方、URL、ZIP、手动创建）
 
 ### Non-Goals
 
@@ -35,7 +38,9 @@ Claude Agent Skills 是 Anthropic 发布的开放标准，用于教 Claude 如�
 - Skills 版本管理
 - 多 Skill 组合（MVP 只支持单个 Skill）
 
-## Architecture Overview
+---
+
+## Part A: Core Architecture
 
 ### System Integration
 
@@ -49,20 +54,46 @@ Claude Agent Skills 是 Anthropic 发布的开放标准，用于教 Claude 如�
 │  │  │ Memory   │ │ Search   │ │ MCP      │ │ Video    │ │  Skills   │ │ │
 │  │  │ Strategy │ │ Strategy │ │ Strategy │ │ Strategy │ │  Strategy │ │ │
 │  │  │ (0)      │ │ (1)      │ │ (2)      │ │ (3)      │ │  (4)      │ │ │
-│  │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘ └─────┬─────┘ │ │
-│  │       │            │            │            │              │       │ │
-│  │       └────────────┴────────────┴────────────┴──────────────┘       │ │
-│  │                                │                                    │ │
-│  │                        AgentPayload                                 │ │
-│  │                    (context enrichment)                             │ │
+│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └───────────┘ │ │
 │  └────────────────────────────────────────────────────────────────────┘ │
-│                                   │                                     │
-│                                   ▼                                     │
+│                                                                         │
 │  ┌────────────────────────────────────────────────────────────────────┐ │
-│  │                       PromptAssembler                               │ │
-│  │  system_prompt = base + memory + search + video + skill_instructions│ │
+│  │                       SkillsRegistry                                │ │
+│  │  - load_all() / reload()                                           │ │
+│  │  - get_skill(id) / list_skills()                                   │ │
+│  │  - find_matching(input)                                            │ │
+│  └────────────────────────────────────────────────────────────────────┘ │
+│                                                                         │
+│  ┌────────────────────────────────────────────────────────────────────┐ │
+│  │                       SkillsInstaller                               │ │
+│  │  - install_from_github(url)                                        │ │
+│  │  - install_from_zip(path)                                          │ │
+│  │  - install_official_skills()                                       │ │
+│  │  - create_skill(name, content)                                     │ │
+│  │  - delete_skill(id)                                                │ │
 │  └────────────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Module Structure (Rust)
+
+```
+Aether/core/src/
+├── skills/                      # Skills module
+│   ├── mod.rs                   # Module exports, Skill struct
+│   ├── registry.rs              # SkillsRegistry implementation
+│   └── installer.rs             # SkillsInstaller implementation (NEW)
+│
+├── capability/
+│   └── strategies/
+│       └── skills.rs            # SkillsStrategy
+│
+├── payload/
+│   ├── mod.rs                   # ADD: skill_instructions to AgentContext
+│   └── capability.rs            # ADD: Capability::Skills
+│
+└── config/
+    └── mod.rs                   # ADD: SkillsConfig
 ```
 
 ### Data Flow
@@ -75,509 +106,814 @@ User Input: "/skill refine-text Fix this text"
 │                              Router                                      │
 │  1. Detect /skill command                                               │
 │  2. Extract skill_name = "refine-text"                                  │
-│  3. Set RoutingDecision.capabilities = [Skills]                         │
-│  4. Set payload.meta.skill_id = "refine-text"                           │
-└──────────────────────────────┬──────────────────────────────────────────┘
-                               ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        PayloadBuilder                                    │
-│  Create AgentPayload with:                                              │
-│  - meta.skill_id = "refine-text"                                        │
-│  - config.capabilities = [Skills]                                       │
-│  - user_input = "Fix this text" (prefix stripped)                       │
+│  3. Set payload.meta.skill_id = "refine-text"                           │
 └──────────────────────────────┬──────────────────────────────────────────┘
                                ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                   CompositeCapabilityExecutor                            │
 │                                                                         │
-│  for capability in [Memory, Search, MCP, Video, Skills]:                │
-│      if strategy.is_enabled_for(payload):                               │
-│          payload = strategy.execute(payload)                            │
-│                                                                         │
 │  SkillsStrategy.execute():                                              │
 │      1. skill = registry.get_skill(payload.meta.skill_id)               │
 │      2. payload.context.skill_instructions = skill.instructions         │
-│      3. return payload                                                  │
 └──────────────────────────────┬──────────────────────────────────────────┘
                                ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        PromptAssembler                                   │
-│                                                                         │
-│  final_system_prompt =                                                  │
-│      [Base system prompt]                                               │
-│      + [Memory context]                                                 │
-│      + [Search results]                                                 │
-│      + [Video transcript]                                               │
-│      + ## Skill Instructions                                            │
-│        {skill.instructions}                                             │
-└──────────────────────────────┬──────────────────────────────────────────┘
-                               ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                          AI Provider                                     │
-│  Process with enhanced system prompt                                    │
+│  system_prompt = base + memory + search + video + skill_instructions    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Module Structure
-
-```
-Aether/core/src/
-├── skills/                      # NEW: Skills module
-│   ├── mod.rs                   # Module exports, Skill struct
-│   └── registry.rs              # SkillsRegistry implementation
-│
-├── capability/
-│   ├── strategy.rs              # CapabilityStrategy trait (existing)
-│   └── strategies/
-│       ├── mod.rs               # ADD: export skills
-│       ├── memory.rs            # Existing
-│       ├── search.rs            # Existing
-│       ├── mcp.rs               # Existing
-│       ├── video.rs             # Existing
-│       └── skills.rs            # NEW: SkillsStrategy
-│
-├── payload/
-│   ├── mod.rs                   # ADD: skill_instructions to AgentContext
-│   ├── capability.rs            # ADD: Capability::Skills
-│   └── assembler.rs             # ADD: skill_instructions injection
-│
-└── config/
-    └── mod.rs                   # ADD: SkillsConfig
-```
-
-## SKILL.md Parsing
-
-### File Structure
-
-```
-~/.config/aether/skills/
-├── refine-text/
-│   └── SKILL.md
-├── translate/
-│   └── SKILL.md
-└── summarize/
-    └── SKILL.md
-```
-
-### SKILL.md Format
-
-```markdown
----
-name: refine-text
-description: Improve and polish writing. Use when asked to refine, improve, or enhance text.
-allowed-tools:
-  - Read
-  - Edit
 ---
 
-# Instructions
+## Part B: Skills Installer (Rust)
 
-[Markdown content that will be injected into system prompt]
-```
-
-### Parsing Logic (Rust)
+### SkillsInstaller Implementation
 
 ```rust
-use serde::Deserialize;
-
-/// YAML frontmatter from SKILL.md
-#[derive(Debug, Clone, Deserialize)]
-pub struct SkillFrontmatter {
-    /// Skill name (must match directory name)
-    pub name: String,
-    /// Description for auto-matching
-    pub description: String,
-    /// Allowed tools (reserved for MCP)
-    #[serde(default)]
-    pub allowed_tools: Vec<String>,
-}
-
-/// A parsed Skill from SKILL.md
-#[derive(Debug, Clone)]
-pub struct Skill {
-    /// Directory name (unique identifier)
-    pub id: String,
-    /// Parsed frontmatter
-    pub frontmatter: SkillFrontmatter,
-    /// Markdown body (instructions)
-    pub instructions: String,
-}
-
-impl Skill {
-    /// Parse SKILL.md content
-    pub fn parse(id: &str, content: &str) -> Result<Self> {
-        // Split frontmatter and body
-        let parts: Vec<&str> = content.splitn(3, "---").collect();
-        if parts.len() < 3 {
-            return Err(AetherError::invalid_config("Invalid SKILL.md format"));
-        }
-
-        let frontmatter: SkillFrontmatter = serde_yaml::from_str(parts[1])?;
-        let instructions = parts[2].trim().to_string();
-
-        Ok(Self {
-            id: id.to_string(),
-            frontmatter,
-            instructions,
-        })
-    }
-}
-```
-
-## SkillsStrategy Implementation
-
-```rust
-use crate::capability::strategy::CapabilityStrategy;
-use crate::error::Result;
-use crate::payload::{AgentPayload, Capability};
-use crate::skills::SkillsRegistry;
-use async_trait::async_trait;
-use std::sync::Arc;
-
-/// Skills capability strategy
-///
-/// Loads skill instructions from the registry and injects them into
-/// the payload context for prompt assembly.
-pub struct SkillsStrategy {
-    /// Skills registry
-    registry: Option<Arc<SkillsRegistry>>,
-    /// Enable auto-matching by description
-    auto_match_enabled: bool,
-}
-
-impl SkillsStrategy {
-    pub fn new(registry: Option<Arc<SkillsRegistry>>, auto_match_enabled: bool) -> Self {
-        Self {
-            registry,
-            auto_match_enabled,
-        }
-    }
-}
-
-#[async_trait]
-impl CapabilityStrategy for SkillsStrategy {
-    fn capability_type(&self) -> Capability {
-        Capability::Skills
-    }
-
-    fn priority(&self) -> u32 {
-        4 // After Video (3)
-    }
-
-    fn is_available(&self) -> bool {
-        self.registry.is_some()
-    }
-
-    async fn execute(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
-        let Some(registry) = &self.registry else {
-            return Ok(payload);
-        };
-
-        // Get skill by explicit ID or auto-match
-        let skill = if let Some(ref skill_id) = payload.meta.skill_id {
-            // Explicit skill ID from /skill command
-            registry.get_skill(skill_id)
-        } else if self.auto_match_enabled {
-            // Auto-match by description
-            registry.find_matching(&payload.user_input)
-        } else {
-            None
-        };
-
-        if let Some(skill) = skill {
-            tracing::info!(
-                skill_id = %skill.id,
-                skill_name = %skill.frontmatter.name,
-                "Loading skill instructions"
-            );
-            payload.context.skill_instructions = Some(skill.instructions.clone());
-        }
-
-        Ok(payload)
-    }
-}
-```
-
-## SkillsRegistry Implementation
-
-```rust
-use crate::error::Result;
+use crate::error::{AetherError, Result};
 use crate::skills::Skill;
-use notify::{Watcher, RecursiveMode, Event};
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::io::{Read, Write};
 
-/// Skills registry with hot-reload support
-pub struct SkillsRegistry {
-    /// Skills directory path
+/// Skills installer for downloading and managing skills
+pub struct SkillsInstaller {
     skills_dir: PathBuf,
-    /// Loaded skills (id -> Skill)
-    skills: RwLock<HashMap<String, Skill>>,
 }
 
-impl SkillsRegistry {
-    /// Create a new registry and load all skills
-    pub fn new(skills_dir: PathBuf) -> Result<Self> {
-        let registry = Self {
-            skills_dir,
-            skills: RwLock::new(HashMap::new()),
-        };
-        registry.load_all()?;
-        Ok(registry)
+impl SkillsInstaller {
+    pub fn new(skills_dir: PathBuf) -> Self {
+        Self { skills_dir }
     }
 
-    /// Load all skills from the skills directory
-    pub fn load_all(&self) -> Result<()> {
-        let mut skills = self.skills.write().unwrap();
-        skills.clear();
+    /// Install official skills from anthropics/skills repository
+    pub async fn install_official_skills(&self) -> Result<Vec<String>> {
+        let url = "https://github.com/anthropics/skills/archive/refs/heads/main.zip";
+        self.install_from_github_zip(url, Some("skills/")).await
+    }
 
-        if !self.skills_dir.exists() {
-            return Ok(());
-        }
+    /// Install skill from GitHub repository URL
+    /// Supports formats:
+    /// - https://github.com/user/repo
+    /// - github.com/user/repo
+    /// - user/repo (assumes GitHub)
+    pub async fn install_from_github(&self, url: &str) -> Result<Vec<String>> {
+        let normalized = self.normalize_github_url(url)?;
+        let zip_url = format!("{}/archive/refs/heads/main.zip", normalized);
+        self.install_from_github_zip(&zip_url, None).await
+    }
 
-        for entry in std::fs::read_dir(&self.skills_dir)? {
-            let entry = entry?;
-            let path = entry.path();
+    /// Install from ZIP file (local path)
+    pub async fn install_from_zip(&self, zip_path: &PathBuf) -> Result<Vec<String>> {
+        let file = std::fs::File::open(zip_path)?;
+        let mut archive = zip::ZipArchive::new(file)?;
 
-            if path.is_dir() {
-                let skill_file = path.join("SKILL.md");
-                if skill_file.exists() {
-                    let id = path.file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("unknown")
-                        .to_string();
+        let mut installed = Vec::new();
 
-                    let content = std::fs::read_to_string(&skill_file)?;
-                    match Skill::parse(&id, &content) {
-                        Ok(skill) => {
-                            skills.insert(id, skill);
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                skill_id = %id,
-                                error = %e,
-                                "Failed to parse SKILL.md"
-                            );
-                        }
-                    }
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i)?;
+            let name = file.name().to_string();
+
+            // Look for SKILL.md files
+            if name.ends_with("SKILL.md") {
+                let skill_dir_name = self.extract_skill_dir_name(&name)?;
+                let target_dir = self.skills_dir.join(&skill_dir_name);
+
+                // Skip if already exists
+                if target_dir.exists() {
+                    tracing::info!(skill = %skill_dir_name, "Skill already exists, skipping");
+                    continue;
                 }
+
+                std::fs::create_dir_all(&target_dir)?;
+
+                let mut content = String::new();
+                file.read_to_string(&mut content)?;
+
+                // Validate SKILL.md format
+                Skill::parse(&skill_dir_name, &content)?;
+
+                let target_path = target_dir.join("SKILL.md");
+                std::fs::write(&target_path, &content)?;
+
+                installed.push(skill_dir_name);
             }
         }
 
-        tracing::info!(
-            skills_count = skills.len(),
-            "Loaded skills from registry"
-        );
+        Ok(installed)
+    }
+
+    /// Create a new skill manually
+    pub fn create_skill(&self, name: &str, content: &str) -> Result<()> {
+        // Validate name (lowercase, hyphens, alphanumeric)
+        if !self.is_valid_skill_name(name) {
+            return Err(AetherError::invalid_config(
+                "Skill name must be lowercase with hyphens only"
+            ));
+        }
+
+        // Validate content format
+        Skill::parse(name, content)?;
+
+        let skill_dir = self.skills_dir.join(name);
+        std::fs::create_dir_all(&skill_dir)?;
+
+        let skill_path = skill_dir.join("SKILL.md");
+        std::fs::write(&skill_path, content)?;
 
         Ok(())
     }
 
-    /// Get a skill by ID (directory name)
-    pub fn get_skill(&self, id: &str) -> Option<Skill> {
-        self.skills.read().unwrap().get(id).cloned()
+    /// Update an existing skill
+    pub fn update_skill(&self, name: &str, content: &str) -> Result<()> {
+        let skill_dir = self.skills_dir.join(name);
+        if !skill_dir.exists() {
+            return Err(AetherError::not_found(format!("Skill '{}' not found", name)));
+        }
+
+        // Validate content format
+        Skill::parse(name, content)?;
+
+        let skill_path = skill_dir.join("SKILL.md");
+        std::fs::write(&skill_path, content)?;
+
+        Ok(())
     }
 
-    /// Find a skill matching the input (by description keywords)
-    pub fn find_matching(&self, input: &str) -> Option<Skill> {
-        let input_lower = input.to_lowercase();
-        let skills = self.skills.read().unwrap();
+    /// Delete a skill
+    pub fn delete_skill(&self, name: &str) -> Result<()> {
+        let skill_dir = self.skills_dir.join(name);
+        if !skill_dir.exists() {
+            return Err(AetherError::not_found(format!("Skill '{}' not found", name)));
+        }
 
-        for skill in skills.values() {
-            let desc_lower = skill.frontmatter.description.to_lowercase();
-            // Simple keyword matching: check if description keywords appear in input
-            let keywords: Vec<&str> = desc_lower
-                .split_whitespace()
-                .filter(|w| w.len() > 3)
-                .collect();
+        std::fs::remove_dir_all(&skill_dir)?;
+        Ok(())
+    }
 
-            let matches = keywords.iter().filter(|k| input_lower.contains(*k)).count();
-            if matches >= 2 {
-                return Some(skill.clone());
+    // --- Private helpers ---
+
+    fn normalize_github_url(&self, url: &str) -> Result<String> {
+        let url = url.trim();
+
+        // Handle short format: user/repo
+        if !url.contains("://") && !url.starts_with("github.com") {
+            if url.matches('/').count() == 1 {
+                return Ok(format!("https://github.com/{}", url));
             }
         }
 
-        None
+        // Handle github.com/user/repo
+        if url.starts_with("github.com/") {
+            return Ok(format!("https://{}", url));
+        }
+
+        // Already full URL
+        if url.starts_with("https://github.com/") {
+            return Ok(url.to_string());
+        }
+
+        Err(AetherError::invalid_config("Invalid GitHub URL format"))
     }
 
-    /// List all loaded skills
-    pub fn list_skills(&self) -> Vec<Skill> {
-        self.skills.read().unwrap().values().cloned().collect()
+    fn extract_skill_dir_name(&self, path: &str) -> Result<String> {
+        // Path format: repo-main/skills/skill-name/SKILL.md
+        let parts: Vec<&str> = path.split('/').collect();
+        if parts.len() >= 2 {
+            let parent = parts[parts.len() - 2];
+            return Ok(parent.to_string());
+        }
+        Err(AetherError::invalid_config("Cannot extract skill name from path"))
+    }
+
+    fn is_valid_skill_name(&self, name: &str) -> bool {
+        !name.is_empty()
+            && name.chars().all(|c| c.is_ascii_lowercase() || c == '-' || c.is_ascii_digit())
+            && !name.starts_with('-')
+            && !name.ends_with('-')
+    }
+
+    async fn install_from_github_zip(
+        &self,
+        url: &str,
+        filter_prefix: Option<&str>
+    ) -> Result<Vec<String>> {
+        // Download ZIP to temp file
+        let response = reqwest::get(url).await?;
+        let bytes = response.bytes().await?;
+
+        let temp_dir = std::env::temp_dir();
+        let temp_zip = temp_dir.join(format!("aether-skill-{}.zip", uuid::Uuid::new_v4()));
+        std::fs::write(&temp_zip, &bytes)?;
+
+        // Install from the downloaded ZIP
+        let result = self.install_from_zip(&temp_zip).await;
+
+        // Cleanup
+        let _ = std::fs::remove_file(&temp_zip);
+
+        result
     }
 }
 ```
 
-## Configuration
+### UniFFI Interface Extension
 
-### config.toml
+Add to `aether.udl`:
 
-```toml
-[skills]
-enabled = true
-skills_dir = "~/.config/aether/skills"  # Default path
-auto_match_enabled = false              # Disable auto-matching by default
+```idl
+// Skill data types
+dictionary SkillInfo {
+    string id;
+    string name;
+    string description;
+    sequence<string> allowed_tools;
+};
+
+// Skills management methods on AetherCore
+interface AetherCore {
+    // ... existing methods ...
+
+    // Skills Registry
+    sequence<SkillInfo> list_skills();
+    SkillInfo? get_skill(string id);
+    void reload_skills();
+
+    // Skills Installer
+    [Async]
+    sequence<string> install_official_skills();
+
+    [Async]
+    sequence<string> install_skill_from_url(string url);
+
+    [Async]
+    sequence<string> install_skill_from_zip(string path);
+
+    [Throws=AetherError]
+    void create_skill(string name, string content);
+
+    [Throws=AetherError]
+    void update_skill(string name, string content);
+
+    [Throws=AetherError]
+    void delete_skill(string id);
+};
 ```
 
-### SkillsConfig (Rust)
+---
 
-```rust
-#[derive(Debug, Clone, Deserialize)]
-pub struct SkillsConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
+## Part C: Skills Settings UI (Swift)
 
-    #[serde(default = "default_skills_dir")]
-    pub skills_dir: String,
+### UI Architecture Overview
 
-    #[serde(default)]
-    pub auto_match_enabled: bool,
-}
-
-fn default_true() -> bool { true }
-
-fn default_skills_dir() -> String {
-    dirs::config_dir()
-        .map(|p| p.join("aether").join("skills"))
-        .unwrap_or_else(|| PathBuf::from("~/.config/aether/skills"))
-        .to_string_lossy()
-        .to_string()
-}
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      RootContentView                                     │
+│  SettingsTab = .skills                                                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────────┐│
+│  │                    SkillsSettingsView                                ││
+│  │  @StateObject saveBarState (shared)                                 ││
+│  │  @State skills: [SkillInfo]                                         ││
+│  │  @State searchText: String                                          ││
+│  │  @State isLoading: Bool                                             ││
+│  │  @State showInstallSheet: Bool                                      ││
+│  │  @State showEditorSheet: Bool                                       ││
+│  │  @State editingSkill: SkillInfo?                                    ││
+│  │                                                                     ││
+│  │  ┌─────────────────────────────────────────────────────────────────┐││
+│  │  │ Toolbar: [SearchBar] [+ Create] [↓ Install]                     │││
+│  │  └─────────────────────────────────────────────────────────────────┘││
+│  │                                                                     ││
+│  │  ┌─────────────────────────────────────────────────────────────────┐││
+│  │  │ ScrollView: Skills List                                         │││
+│  │  │  ┌─────────────────────────────────────────────────────────────┐│││
+│  │  │  │ SkillCard (refine-text)              [Edit] [Delete]        ││││
+│  │  │  └─────────────────────────────────────────────────────────────┘│││
+│  │  │  ┌─────────────────────────────────────────────────────────────┐│││
+│  │  │  │ SkillCard (translate)                [Edit] [Delete]        ││││
+│  │  │  └─────────────────────────────────────────────────────────────┘│││
+│  │  │  ...                                                            │││
+│  │  └─────────────────────────────────────────────────────────────────┘││
+│  │                                                                     ││
+│  │  ┌─────────────────────────────────────────────────────────────────┐││
+│  │  │ Install Options Card                                            │││
+│  │  │  [📦 Official Skills] [🔗 From URL] [📁 Upload ZIP]             │││
+│  │  └─────────────────────────────────────────────────────────────────┘││
+│  └─────────────────────────────────────────────────────────────────────┘│
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────────┐│
+│  │ .sheet: SkillInstallSheet (when showInstallSheet)                  ││
+│  │  - URL input field                                                  ││
+│  │  - Progress indicator                                               ││
+│  │  - Install results                                                  ││
+│  └─────────────────────────────────────────────────────────────────────┘│
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────────┐│
+│  │ .sheet: SkillEditorPanel (when showEditorSheet)                    ││
+│  │  - Name field (readonly if editing)                                 ││
+│  │  - Description field                                                ││
+│  │  - Allowed tools selector                                           ││
+│  │  - Markdown editor (instructions)                                   ││
+│  │  - Preview toggle                                                   ││
+│  │  - [Cancel] [Save]                                                  ││
+│  └─────────────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## PayloadMeta Extension
+### Component Structure (Swift)
 
-Add `skill_id` field to `PayloadMeta`:
-
-```rust
-/// Payload metadata
-#[derive(Debug, Clone)]
-pub struct PayloadMeta {
-    pub intent: Intent,
-    pub timestamp: i64,
-    pub context_anchor: ContextAnchor,
-    /// Explicit skill ID from /skill command
-    pub skill_id: Option<String>,  // NEW
-}
+```
+Aether/Sources/
+├── SettingsView.swift              # ADD: SettingsTab.skills case
+├── SkillsSettingsView.swift        # NEW: Main skills settings view
+│
+├── Components/
+│   ├── Molecules/
+│   │   └── SkillCard.swift         # NEW: Skill list item card
+│   │
+│   └── Organisms/
+│       ├── SkillEditorPanel.swift  # NEW: Create/Edit skill sheet
+│       └── SkillInstallSheet.swift # NEW: Install skill sheet
 ```
 
-## AgentContext Extension
+### SkillsSettingsView Design
 
-Add `skill_instructions` field:
+```swift
+import SwiftUI
 
-```rust
-/// Agent context (extension area)
-#[derive(Debug, Clone, Default)]
-pub struct AgentContext {
-    pub memory_snippets: Option<Vec<MemoryEntry>>,
-    pub search_results: Option<Vec<SearchResult>>,
-    pub mcp_resources: Option<HashMap<String, serde_json::Value>>,
-    pub workflow_state: Option<WorkflowState>,
-    pub attachments: Option<Vec<MediaAttachment>>,
-    pub video_transcript: Option<VideoTranscript>,
-    pub skill_instructions: Option<String>,  // NEW
-}
-```
+struct SkillsSettingsView: View {
+    @ObservedObject var saveBarState: SettingsSaveBarState
 
-## PromptAssembler Extension
+    // State
+    @State private var skills: [SkillInfo] = []
+    @State private var searchText: String = ""
+    @State private var isLoading: Bool = false
+    @State private var errorMessage: String?
 
-```rust
-impl PromptAssembler {
-    pub fn assemble_system_prompt(&self, payload: &AgentPayload, base_prompt: &str) -> String {
-        let mut parts = vec![base_prompt.to_string()];
+    // Sheets
+    @State private var showInstallSheet: Bool = false
+    @State private var showEditorSheet: Bool = false
+    @State private var editingSkill: SkillInfo? = nil
 
-        // Memory context
-        if let Some(ref memories) = payload.context.memory_snippets {
-            if !memories.is_empty() {
-                parts.push(self.format_memories(memories));
+    var filteredSkills: [SkillInfo] {
+        if searchText.isEmpty {
+            return skills
+        }
+        return skills.filter {
+            $0.name.localizedCaseInsensitiveContains(searchText) ||
+            $0.description.localizedCaseInsensitiveContains(searchText)
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                // Toolbar
+                toolbarSection
+
+                // Skills List
+                skillsListSection
+
+                // Install Options
+                installOptionsSection
+            }
+            .padding(DesignTokens.Spacing.lg)
+        }
+        .onAppear {
+            loadSkills()
+            saveBarState.reset()
+        }
+        .sheet(isPresented: $showInstallSheet) {
+            SkillInstallSheet(onInstalled: loadSkills)
+        }
+        .sheet(isPresented: $showEditorSheet) {
+            SkillEditorPanel(
+                skill: editingSkill,
+                onSave: { name, content in
+                    saveSkill(name: name, content: content)
+                },
+                onCancel: {
+                    showEditorSheet = false
+                    editingSkill = nil
+                }
+            )
+        }
+    }
+
+    // MARK: - Sections
+
+    private var toolbarSection: some View {
+        HStack(spacing: DesignTokens.Spacing.md) {
+            SearchBar(text: $searchText, placeholder: L("settings.skills.search"))
+
+            Spacer()
+
+            Button(action: {
+                editingSkill = nil
+                showEditorSheet = true
+            }) {
+                Label(L("settings.skills.create"), systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+
+            Button(action: { showInstallSheet = true }) {
+                Label(L("settings.skills.install"), systemImage: "arrow.down.circle")
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    private var skillsListSection: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            Label(L("settings.skills.installed"), systemImage: "book.closed")
+                .font(DesignTokens.Typography.heading)
+
+            if isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .padding()
+            } else if filteredSkills.isEmpty {
+                emptyStateView
+            } else {
+                ForEach(filteredSkills, id: \.id) { skill in
+                    SkillCard(
+                        skill: skill,
+                        onEdit: {
+                            editingSkill = skill
+                            showEditorSheet = true
+                        },
+                        onDelete: {
+                            deleteSkill(skill)
+                        }
+                    )
+                }
             }
         }
+    }
 
-        // Search results
-        if let Some(ref results) = payload.context.search_results {
-            if !results.is_empty() {
-                parts.push(self.format_search_results(results));
+    private var installOptionsSection: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            Label(L("settings.skills.install_options"), systemImage: "square.and.arrow.down")
+                .font(DesignTokens.Typography.heading)
+
+            HStack(spacing: DesignTokens.Spacing.md) {
+                InstallOptionButton(
+                    title: L("settings.skills.official"),
+                    icon: "building.columns",
+                    description: L("settings.skills.official_desc"),
+                    action: installOfficialSkills
+                )
+
+                InstallOptionButton(
+                    title: L("settings.skills.from_url"),
+                    icon: "link",
+                    description: L("settings.skills.from_url_desc"),
+                    action: { showInstallSheet = true }
+                )
+
+                InstallOptionButton(
+                    title: L("settings.skills.upload_zip"),
+                    icon: "doc.zipper",
+                    description: L("settings.skills.upload_zip_desc"),
+                    action: uploadZipFile
+                )
             }
         }
+        .padding(DesignTokens.Spacing.md)
+        .background(DesignTokens.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium))
+    }
 
-        // Video transcript
-        if let Some(ref transcript) = payload.context.video_transcript {
-            parts.push(self.format_video_transcript(transcript));
+    private var emptyStateView: some View {
+        VStack(spacing: DesignTokens.Spacing.md) {
+            Image(systemName: "book.closed")
+                .font(.system(size: 48))
+                .foregroundColor(.secondary)
+            Text(L("settings.skills.empty"))
+                .font(DesignTokens.Typography.body)
+                .foregroundColor(.secondary)
+            Button(L("settings.skills.install_first")) {
+                showInstallSheet = true
+            }
+            .buttonStyle(.borderedProminent)
         }
+        .frame(maxWidth: .infinity)
+        .padding(DesignTokens.Spacing.xl)
+    }
 
-        // Skill instructions (NEW - at the end for prominence)
-        if let Some(ref instructions) = payload.context.skill_instructions {
-            parts.push(format!("## Skill Instructions\n\n{}", instructions));
+    // MARK: - Actions
+
+    private func loadSkills() {
+        isLoading = true
+        Task {
+            do {
+                let core = AetherCore.shared
+                skills = try await core.listSkills()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isLoading = false
         }
+    }
 
-        parts.join("\n\n")
+    private func installOfficialSkills() {
+        isLoading = true
+        Task {
+            do {
+                let core = AetherCore.shared
+                let installed = try await core.installOfficialSkills()
+                await MainActor.run {
+                    loadSkills()
+                    ToastManager.shared.show(
+                        message: L("settings.skills.installed_count", installed.count)
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                }
+            }
+            isLoading = false
+        }
+    }
+
+    private func uploadZipFile() {
+        let panel = NSOpenPanel()
+        panel.title = L("settings.skills.select_zip")
+        panel.allowedContentTypes = [.zip]
+        panel.allowsMultipleSelection = false
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        isLoading = true
+        Task {
+            do {
+                let core = AetherCore.shared
+                let installed = try await core.installSkillFromZip(path: url.path)
+                await MainActor.run {
+                    loadSkills()
+                    ToastManager.shared.show(
+                        message: L("settings.skills.installed_count", installed.count)
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                }
+            }
+            isLoading = false
+        }
+    }
+
+    private func saveSkill(name: String, content: String) {
+        Task {
+            do {
+                let core = AetherCore.shared
+                if editingSkill != nil {
+                    try await core.updateSkill(name: name, content: content)
+                } else {
+                    try await core.createSkill(name: name, content: content)
+                }
+                await MainActor.run {
+                    loadSkills()
+                    showEditorSheet = false
+                    editingSkill = nil
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func deleteSkill(_ skill: SkillInfo) {
+        Task {
+            do {
+                let core = AetherCore.shared
+                try await core.deleteSkill(id: skill.id)
+                await MainActor.run {
+                    loadSkills()
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
     }
 }
 ```
 
-## Built-in Skills
+### SkillCard Component
 
-### refine-text/SKILL.md
+```swift
+struct SkillCard: View {
+    let skill: SkillInfo
+    let onEdit: () -> Void
+    let onDelete: () -> Void
 
-```markdown
----
-name: refine-text
-description: Improve and polish writing. Use when asked to refine, improve, edit, or enhance text quality.
-allowed-tools: []
----
+    @State private var isHovered: Bool = false
+    @State private var showDeleteConfirm: Bool = false
 
-# Refine Text
+    var body: some View {
+        HStack(spacing: DesignTokens.Spacing.md) {
+            // Icon
+            Image(systemName: skillIcon)
+                .font(.system(size: 24))
+                .foregroundColor(DesignTokens.Colors.accentBlue)
+                .frame(width: 40, height: 40)
+                .background(DesignTokens.Colors.accentBlue.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
 
-When refining text, follow these principles:
+            // Info
+            VStack(alignment: .leading, spacing: 4) {
+                Text(skill.name)
+                    .font(DesignTokens.Typography.heading)
+                Text(skill.description)
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+            }
 
-1. **Clarity**: Remove ambiguity and improve readability
-2. **Conciseness**: Eliminate redundancy without losing meaning
-3. **Flow**: Ensure logical progression of ideas
-4. **Grammar**: Fix errors in grammar, spelling, and punctuation
+            Spacer()
 
-Preserve the original meaning and intent. Maintain consistent voice and style.
+            // Actions (visible on hover)
+            if isHovered {
+                HStack(spacing: DesignTokens.Spacing.sm) {
+                    Button(action: onEdit) {
+                        Image(systemName: "pencil")
+                    }
+                    .buttonStyle(.borderless)
+
+                    Button(action: { showDeleteConfirm = true }) {
+                        Image(systemName: "trash")
+                            .foregroundColor(DesignTokens.Colors.error)
+                    }
+                    .buttonStyle(.borderless)
+                }
+                .transition(.opacity)
+            }
+        }
+        .padding(DesignTokens.Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                .fill(isHovered ? DesignTokens.Colors.cardBackground : Color.clear)
+        )
+        .onHover { isHovered = $0 }
+        .confirmationDialog(
+            L("settings.skills.delete_confirm"),
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button(L("common.delete"), role: .destructive, action: onDelete)
+            Button(L("common.cancel"), role: .cancel) {}
+        }
+    }
+
+    private var skillIcon: String {
+        switch skill.id {
+        case "refine-text": return "text.quote"
+        case "translate": return "globe"
+        case "summarize": return "doc.plaintext"
+        default: return "book.closed"
+        }
+    }
+}
 ```
 
-### translate/SKILL.md
+### SkillEditorPanel Component
 
-```markdown
----
-name: translate
-description: Translate text between languages. Use when asked to translate content.
-allowed-tools: []
----
+```swift
+struct SkillEditorPanel: View {
+    let skill: SkillInfo?
+    let onSave: (String, String) -> Void
+    let onCancel: () -> Void
 
-# Translate
+    @State private var name: String = ""
+    @State private var description: String = ""
+    @State private var allowedTools: [String] = []
+    @State private var instructions: String = ""
+    @State private var showPreview: Bool = false
 
-When translating:
+    private var isEditing: Bool { skill != nil }
 
-1. Preserve the original meaning and nuance
-2. Adapt idioms and cultural references appropriately
-3. Maintain the original tone and formality level
-4. If target language is not specified, translate to English
+    private var generatedContent: String {
+        """
+        ---
+        name: \(name)
+        description: \(description)
+        allowed-tools: [\(allowedTools.joined(separator: ", "))]
+        ---
 
-Output only the translated text without explanations.
+        \(instructions)
+        """
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text(isEditing ? L("settings.skills.edit") : L("settings.skills.create"))
+                    .font(DesignTokens.Typography.title)
+                Spacer()
+                Button(action: onCancel) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding()
+
+            Divider()
+
+            // Form
+            ScrollView {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                    // Name field
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                        Text(L("settings.skills.name"))
+                            .font(DesignTokens.Typography.caption)
+                        TextField(L("settings.skills.name_placeholder"), text: $name)
+                            .textFieldStyle(.roundedBorder)
+                            .disabled(isEditing)
+                    }
+
+                    // Description field
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                        Text(L("settings.skills.description"))
+                            .font(DesignTokens.Typography.caption)
+                        TextField(L("settings.skills.description_placeholder"), text: $description)
+                            .textFieldStyle(.roundedBorder)
+                    }
+
+                    // Instructions (Markdown editor)
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                        HStack {
+                            Text(L("settings.skills.instructions"))
+                                .font(DesignTokens.Typography.caption)
+                            Spacer()
+                            Toggle(L("settings.skills.preview"), isOn: $showPreview)
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                            Text(L("settings.skills.preview"))
+                                .font(DesignTokens.Typography.caption)
+                        }
+
+                        if showPreview {
+                            // Markdown preview
+                            ScrollView {
+                                Text(try! AttributedString(markdown: instructions))
+                                    .textSelection(.enabled)
+                            }
+                            .frame(minHeight: 200)
+                            .padding(DesignTokens.Spacing.md)
+                            .background(DesignTokens.Colors.cardBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small))
+                        } else {
+                            // Text editor
+                            TextEditor(text: $instructions)
+                                .font(DesignTokens.Typography.code)
+                                .frame(minHeight: 200)
+                                .padding(DesignTokens.Spacing.sm)
+                                .background(DesignTokens.Colors.cardBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small))
+                        }
+                    }
+                }
+                .padding()
+            }
+
+            Divider()
+
+            // Footer
+            HStack {
+                Spacer()
+                Button(L("common.cancel"), action: onCancel)
+                    .buttonStyle(.bordered)
+                Button(L("common.save")) {
+                    onSave(name, generatedContent)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(name.isEmpty || description.isEmpty)
+            }
+            .padding()
+        }
+        .frame(width: 600, height: 500)
+        .onAppear {
+            if let skill = skill {
+                name = skill.name
+                description = skill.description
+                // Parse instructions from existing skill content
+                // (would need to load full content from core)
+            }
+        }
+    }
+}
 ```
 
-### summarize/SKILL.md
-
-```markdown
 ---
-name: summarize
-description: Summarize long content into concise form. Use when asked to summarize or condense text.
-allowed-tools: []
----
-
-# Summarize
-
-When summarizing:
-
-1. Identify the main ideas and key points
-2. Preserve essential information
-3. Remove redundancy and filler content
-4. Maintain logical flow
-
-Default to 2-3 paragraphs unless length is specified.
-```
 
 ## Decisions
 
@@ -591,67 +927,90 @@ Default to 2-3 paragraphs unless length is specified.
 
 **理由**：Skills 是指令增强，应在所有上下文收集完成后执行
 
-### Decision 2: 自动匹配策略
+### Decision 2: 安装方式实现
 
-**选择**：MVP 使用简单关键词匹配，默认关闭
-
-**权衡**：
-- 优点：实现简单，无需额外依赖
-- 缺点：匹配精度不如 embedding 相似度
-
-**理由**：用户可以通过 `/skill <name>` 显式调用绕过自动匹配
-
-### Decision 3: PayloadMeta.skill_id vs Intent
-
-**选择**：添加 `skill_id` 字段到 `PayloadMeta`
+**选择**：HTTP 下载 ZIP + 本地解压
 
 **权衡**：
-- 方案 A：使用 `Intent::Skills(skill_id)` 变体
-- 方案 B：添加独立字段 `skill_id`
+- 方案 A：使用 git clone（需要 git 依赖）
+- 方案 B：下载 ZIP（无外部依赖）
 
-**理由**：方案 B 更灵活，允许 Skill 与其他 Intent 组合使用
+**理由**：方案 B 更轻量，不需要用户安装 git
 
-### Decision 4: 热加载实现
+### Decision 3: UI 放置位置
 
-**选择**：MVP 使用简单的 `load_all()` 重载，不使用 notify
+**选择**：独立的 Settings Tab（.skills）
 
 **权衡**：
-- 优点：实现简单，依赖少
-- 缺点：需要手动触发重载
+- 方案 A：嵌入 General Settings
+- 方案 B：独立 Tab
 
-**理由**：MVP 阶段简化实现，后续可添加 file watcher
+**理由**：Skills 功能足够重要，值得独立 Tab；与 Providers、Search 等平级
+
+### Decision 4: 编辑器设计
+
+**选择**：模态 Sheet
+
+**权衡**：
+- 方案 A：侧边面板（如 ProvidersView）
+- 方案 B：模态 Sheet
+
+**理由**：Skill 编辑需要较大空间（Markdown 编辑器），Sheet 提供更好的焦点
+
+### Decision 5: 删除确认
+
+**选择**：使用 confirmationDialog
+
+**权衡**：
+- 方案 A：直接删除
+- 方案 B：确认对话框
+
+**理由**：防止误删，与 macOS 设计规范一致
+
+---
 
 ## Risks / Trade-offs
 
-### Risk 1: Auto-matching 误匹配
+### Risk 1: GitHub API 限制
 
 **缓解**：
-- 默认关闭自动匹配
-- 提供 `/skill <name>` 显式调用
-- 未来：让用户确认自动匹配的 Skill
+- 使用 ZIP 下载而非 API
+- 缓存下载结果
+- 显示清晰的错误信息
 
-### Risk 2: Skill 指令与用户输入冲突
-
-**缓解**：
-- Skill 指令放在 system prompt 末尾
-- 用户可以在输入中覆盖 Skill 行为
-
-### Risk 3: Skills 目录不存在
+### Risk 2: ZIP 格式不标准
 
 **缓解**：
-- 首次启动时创建目录
-- 复制内置 Skills 到用户目录（如不存在）
+- 验证 SKILL.md 存在
+- 跳过无效的 skill 目录
+- 日志记录跳过原因
+
+### Risk 3: 名称冲突
+
+**缓解**：
+- 跳过已存在的 skill（不覆盖）
+- 显示哪些被跳过
+- 允许用户手动删除后重新安装
+
+### Risk 4: Markdown 注入
+
+**缓解**：
+- Skill 指令只注入到 system prompt
+- 不执行任何代码
+- 用户可以查看完整 SKILL.md
+
+---
 
 ## Open Questions
 
-1. **Q: 是否支持 Skill 参数？**
-   - A: MVP 不支持。Skill 指令是静态的。如需参数化，用户可在输入中指定。
+1. **Q: 是否支持 Skill 版本管理？**
+   - A: MVP 不支持。后续可通过 manifest.json 添加版本信息。
 
-2. **Q: 是否支持多 Skill 组合？**
-   - A: MVP 只支持单个 Skill。未来可支持多 Skill 指令合并。
+2. **Q: 是否显示 Skill 来源？**
+   - A: MVP 不追踪来源。后续可添加 metadata 字段记录来源。
 
-3. **Q: 是否与 Claude Code Skills 目录结构完全兼容？**
-   - A: 目标是兼容 SKILL.md 格式。目录结构可能有差异（Aether 使用 `~/.config/aether/skills/`）。
+3. **Q: 是否支持批量删除？**
+   - A: MVP 只支持单个删除。后续可添加多选功能。
 
-4. **Q: 如何处理 `allowed-tools` 字段？**
-   - A: MVP 解析但不强制执行。预留给 MCP 集成。
+4. **Q: 如何处理大型 ZIP 文件？**
+   - A: 添加进度指示器；设置合理的超时。
