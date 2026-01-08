@@ -346,6 +346,38 @@
 "settings.search.get_api_key" = "免费获取 API";
 "settings.search.documentation" = "文档";
 
+// MARK: - Settings Window - MCP Tab
+"settings.mcp.title" = "MCP 工具";
+"settings.mcp.description" = "配置模型上下文协议服务以供 AI 访问工具。服务提供 AI 可用于执行操作的工具。";
+"settings.mcp.enable" = "启用 MCP 能力";
+"settings.mcp.enable_description" = "允许 AI 模型访问已配置的 MCP 工具以增强功能。";
+"settings.mcp.builtin_services" = "内置服务";
+"settings.mcp.builtin_services_description" = "内置服务直接在 Aether 中运行，无需外部依赖。";
+"settings.mcp.service.fs" = "文件系统";
+"settings.mcp.service.fs_description" = "在允许的目录中读取、写入和列出文件。";
+"settings.mcp.service.git" = "Git";
+"settings.mcp.service.git_description" = "对允许的仓库执行 Git 操作（状态、日志、差异）。";
+"settings.mcp.service.shell" = "Shell 命令";
+"settings.mcp.service.shell_description" = "执行白名单 Shell 命令，带超时保护。";
+"settings.mcp.service.system_info" = "系统信息";
+"settings.mcp.service.system_info_description" = "查询系统信息（主机名、平台、内存）。";
+"settings.mcp.security" = "安全设置";
+"settings.mcp.security_description" = "为每个服务配置访问限制。";
+"settings.mcp.allowed_roots" = "允许的文件系统根目录";
+"settings.mcp.allowed_roots_description" = "文件系统工具可操作的目录。";
+"settings.mcp.allowed_repos" = "允许的 Git 仓库";
+"settings.mcp.allowed_repos_description" = "可访问的 Git 仓库。";
+"settings.mcp.allowed_commands" = "允许的 Shell 命令";
+"settings.mcp.allowed_commands_description" = "可执行的命令（逗号分隔）。";
+"settings.mcp.shell_timeout" = "命令超时";
+"settings.mcp.seconds" = "秒";
+"settings.mcp.available_tools" = "可用工具";
+"settings.mcp.refresh_tools" = "刷新工具列表";
+"settings.mcp.no_tools" = "暂无可用工具。启用服务以查看可用工具。";
+"settings.mcp.requires_confirmation" = "需要确认";
+"settings.mcp.restart_title" = "需要重启";
+"settings.mcp.restart_message" = "MCP 服务更改将在重启 Aether 后生效。";
+
 // MARK: - Settings Window - Skills Tab
 "settings.skills.title" = "Claude 技能";
 "settings.skills.description" = "安装和管理 Claude Agent 技能。技能注入专业指令以增强 AI 能力。";

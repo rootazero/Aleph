@@ -96,6 +96,8 @@ pub struct AetherCore {
     // Search capability (integrate-search-registry)
     // RwLock allows hot-reload when search config changes
     search_registry: Arc<RwLock<Option<Arc<crate::search::SearchRegistry>>>>,
+    // MCP client for tool access (implement-mcp-capability)
+    mcp_client: Option<Arc<crate::mcp::McpClient>>,
     // Config hot-reload (must be kept alive for file watching)
     #[allow(dead_code)]
     config_watcher: Option<Arc<ConfigWatcher>>,
@@ -349,6 +351,87 @@ impl AetherCore {
             }
         };
 
+        // Initialize MCP client with builtin services (implement-mcp-capability)
+        let mcp_client = {
+            use crate::mcp::builtin::{
+                FsServiceConfig, GitServiceConfig, ShellServiceConfig,
+            };
+
+            let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
+            if cfg.mcp.enabled {
+                let mut client = crate::mcp::McpClient::new();
+
+                // Register builtin services based on config
+                let builtin = &cfg.mcp.builtin;
+
+                // Helper to expand ~ in paths
+                let expand_path = |s: &str| -> PathBuf {
+                    if s.starts_with("~/") {
+                        if let Ok(home) = std::env::var("HOME") {
+                            return PathBuf::from(home).join(&s[2..]);
+                        }
+                    }
+                    PathBuf::from(s)
+                };
+
+                // Register filesystem service
+                if builtin.fs_enabled {
+                    let allowed_roots: Vec<PathBuf> = builtin
+                        .allowed_roots
+                        .iter()
+                        .map(|s| expand_path(s))
+                        .collect();
+                    let fs_config = FsServiceConfig { allowed_roots };
+                    let fs_service = crate::mcp::FsService::new(fs_config);
+                    client.register_builtin(Arc::new(fs_service));
+                    info!("Registered MCP FsService");
+                }
+
+                // Register git service
+                if builtin.git_enabled {
+                    let allowed_repos: Vec<PathBuf> = builtin
+                        .allowed_repos
+                        .iter()
+                        .map(|s| expand_path(s))
+                        .collect();
+                    let git_config = GitServiceConfig { allowed_repos };
+                    let git_service = crate::mcp::GitService::new(git_config);
+                    client.register_builtin(Arc::new(git_service));
+                    info!("Registered MCP GitService");
+                }
+
+                // Register shell service
+                if builtin.shell_enabled {
+                    let shell_config = ShellServiceConfig {
+                        enabled: true,
+                        timeout_seconds: builtin.shell_timeout_seconds,
+                        allowed_commands: builtin.allowed_commands.clone(),
+                    };
+                    let shell_service = crate::mcp::ShellService::new(shell_config);
+                    client.register_builtin(Arc::new(shell_service));
+                    info!("Registered MCP ShellService");
+                }
+
+                // Register system info service
+                if builtin.system_info_enabled {
+                    let sys_info_service = crate::mcp::SystemInfoService::new();
+                    client.register_builtin(Arc::new(sys_info_service));
+                    info!("Registered MCP SystemInfoService");
+                }
+
+                info!(
+                    services = client.builtin_service_names().len(),
+                    tools = client.builtin_tool_count(),
+                    "MCP client initialized"
+                );
+
+                Some(Arc::new(client))
+            } else {
+                debug!("MCP capability disabled in config");
+                None
+            }
+        };
+
         // Initialize config watcher for hot-reload
         let config_watcher = {
             let handler_clone = Arc::clone(&event_handler);
@@ -464,6 +547,7 @@ impl AetherCore {
             compression_task_handle,
             router,
             search_registry,
+            mcp_client,
             config_watcher,
             conversation_manager: Arc::new(Mutex::new(crate::conversation::ConversationManager::new())),
         })
@@ -3160,6 +3244,147 @@ impl AetherCore {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         manager.turn_count()
+    }
+
+    // ========== MCP CAPABILITY METHODS (implement-mcp-capability Phase 3) ==========
+
+    /// Get MCP configuration for Settings UI
+    ///
+    /// Returns the current MCP configuration including enabled services
+    /// and their security settings (allowed paths, commands, etc.)
+    ///
+    /// # Returns
+    /// * `McpSettingsConfig` - Current MCP configuration
+    pub fn get_mcp_config(&self) -> crate::mcp::McpSettingsConfig {
+        let config = self.lock_config();
+        crate::mcp::McpSettingsConfig {
+            enabled: config.mcp.enabled,
+            fs_enabled: config.mcp.builtin.fs_enabled,
+            git_enabled: config.mcp.builtin.git_enabled,
+            shell_enabled: config.mcp.builtin.shell_enabled,
+            system_info_enabled: config.mcp.builtin.system_info_enabled,
+            allowed_roots: config.mcp.builtin.allowed_roots.clone(),
+            allowed_repos: config.mcp.builtin.allowed_repos.clone(),
+            allowed_commands: config.mcp.builtin.allowed_commands.clone(),
+            shell_timeout_seconds: config.mcp.builtin.shell_timeout_seconds,
+        }
+    }
+
+    /// Update MCP configuration
+    ///
+    /// Updates the MCP configuration and persists to disk.
+    /// Note: Service changes will take effect on next app restart.
+    ///
+    /// # Arguments
+    /// * `new_config` - New MCP configuration from UI
+    ///
+    /// # Returns
+    /// * `Result<()>` - Success or error
+    pub fn update_mcp_config(&self, new_config: crate::mcp::McpSettingsConfig) -> Result<()> {
+        let mut config = self.lock_config();
+
+        // Update config
+        config.mcp.enabled = new_config.enabled;
+        config.mcp.builtin.fs_enabled = new_config.fs_enabled;
+        config.mcp.builtin.git_enabled = new_config.git_enabled;
+        config.mcp.builtin.shell_enabled = new_config.shell_enabled;
+        config.mcp.builtin.system_info_enabled = new_config.system_info_enabled;
+        config.mcp.builtin.allowed_roots = new_config.allowed_roots;
+        config.mcp.builtin.allowed_repos = new_config.allowed_repos;
+        config.mcp.builtin.allowed_commands = new_config.allowed_commands;
+        config.mcp.builtin.shell_timeout_seconds = new_config.shell_timeout_seconds;
+
+        // Persist to disk
+        config.save()?;
+
+        // Notify event handler
+        self.event_handler.on_config_changed();
+
+        info!("MCP configuration updated");
+        Ok(())
+    }
+
+    /// List registered MCP services
+    ///
+    /// Returns information about all registered MCP services (builtin and external).
+    ///
+    /// # Returns
+    /// * `Vec<McpServiceInfo>` - List of service information
+    pub fn list_mcp_services(&self) -> Vec<crate::mcp::McpServiceInfo> {
+        let Some(client) = &self.mcp_client else {
+            return Vec::new();
+        };
+
+        let mut services = Vec::new();
+
+        // Get all builtin tools for counting
+        let builtin_tools = client.list_builtin_tools();
+
+        // Get builtin service names
+        let builtin_names = client.builtin_service_names();
+        for name in builtin_names {
+            // Get tool count for this service (tools have format "service:tool_name")
+            let tool_count = builtin_tools
+                .iter()
+                .filter(|t| t.name.starts_with(&format!("{}:", name)))
+                .count() as u32;
+
+            services.push(crate::mcp::McpServiceInfo {
+                name: name.to_string(),
+                description: Self::get_service_description(name),
+                is_builtin: true,
+                is_running: true, // Builtin services are always running
+                tool_count,
+            });
+        }
+
+        services
+    }
+
+    /// Get service description by name
+    fn get_service_description(name: &str) -> String {
+        match name {
+            "fs" => "Filesystem operations (read, write, list files)".to_string(),
+            "git" => "Git repository operations (status, log, diff)".to_string(),
+            "shell" => "Shell command execution (whitelisted commands)".to_string(),
+            "system_info" => "System information (hostname, platform, memory)".to_string(),
+            _ => format!("External MCP service: {}", name),
+        }
+    }
+
+    /// List available MCP tools
+    ///
+    /// Returns information about all available MCP tools from registered services.
+    ///
+    /// # Returns
+    /// * `Vec<McpToolInfo>` - List of tool information
+    pub fn list_mcp_tools(&self) -> Vec<crate::mcp::McpToolInfo> {
+        let Some(client) = &self.mcp_client else {
+            return Vec::new();
+        };
+
+        // Use block_on to get tools from async context
+        let tools = self.runtime.block_on(async { client.list_tools().await });
+
+        tools
+            .into_iter()
+            .map(|tool| {
+                // Extract service name from tool name (format: "service:tool_name")
+                let service_name = tool
+                    .name
+                    .split(':')
+                    .next()
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                crate::mcp::McpToolInfo {
+                    name: tool.name,
+                    description: tool.description,
+                    requires_confirmation: tool.requires_confirmation,
+                    service_name,
+                }
+            })
+            .collect()
     }
 }
 

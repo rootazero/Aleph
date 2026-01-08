@@ -19,6 +19,7 @@ enum SettingsTab: Hashable {
     case behavior
     case memory
     case search
+    case mcp
     case skills
 }
 

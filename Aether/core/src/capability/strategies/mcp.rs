@@ -1,30 +1,53 @@
 //! MCP (Model Context Protocol) capability strategy.
 //!
-//! This is a placeholder strategy for future MCP integration.
-//! MCP allows AI models to access external tools and data sources.
+//! Provides AI models with access to MCP tools via builtin services
+//! and external server connections.
 
 use crate::capability::strategy::CapabilityStrategy;
+use crate::config::McpConfig;
 use crate::error::Result;
+use crate::mcp::McpClient;
 use crate::payload::{AgentPayload, Capability};
 use async_trait::async_trait;
-use tracing::warn;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tracing::{debug, info};
 
-/// MCP capability strategy (placeholder)
+/// MCP capability strategy
 ///
-/// This strategy will integrate with MCP servers to provide
+/// This strategy integrates with MCP servers to provide
 /// additional tools and data sources to AI models.
 ///
-/// Currently not implemented - reserved for future use.
+/// It populates the payload with available MCP tools that can be
+/// included in the system prompt for the AI to understand what
+/// capabilities are available.
 pub struct McpStrategy {
-    // Future fields:
-    // mcp_client: Option<Arc<McpClient>>,
-    // mcp_config: Option<Arc<McpConfig>>,
+    /// MCP client for tool access
+    mcp_client: Option<Arc<McpClient>>,
+    /// MCP configuration
+    mcp_config: Option<Arc<McpConfig>>,
 }
 
 impl McpStrategy {
     /// Create a new MCP strategy
     pub fn new() -> Self {
-        Self {}
+        Self {
+            mcp_client: None,
+            mcp_config: None,
+        }
+    }
+
+    /// Create a new MCP strategy with client
+    pub fn with_client(client: Option<Arc<McpClient>>, config: Option<Arc<McpConfig>>) -> Self {
+        Self {
+            mcp_client: client,
+            mcp_config: config,
+        }
+    }
+
+    /// Set the MCP client
+    pub fn set_client(&mut self, client: Arc<McpClient>) {
+        self.mcp_client = Some(client);
     }
 }
 
@@ -45,13 +68,57 @@ impl CapabilityStrategy for McpStrategy {
     }
 
     fn is_available(&self) -> bool {
-        // MCP is not yet implemented
-        false
+        // Check if MCP is enabled and client is available
+        if let Some(config) = &self.mcp_config {
+            if !config.enabled {
+                return false;
+            }
+        }
+        self.mcp_client.is_some()
     }
 
-    async fn execute(&self, payload: AgentPayload) -> Result<AgentPayload> {
-        warn!("MCP capability not implemented yet (reserved for future)");
-        // Future: Call MCP client and populate payload.context.mcp_resources
+    async fn execute(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
+        // Check if client is available
+        let Some(client) = &self.mcp_client else {
+            debug!("MCP capability requested but no client configured");
+            return Ok(payload);
+        };
+
+        // Check if MCP is enabled
+        if let Some(config) = &self.mcp_config {
+            if !config.enabled {
+                debug!("MCP capability disabled in config");
+                return Ok(payload);
+            }
+        }
+
+        info!("Executing MCP capability - listing available tools");
+
+        // Get available tools from the MCP client
+        let tools = client.list_tools().await;
+
+        if tools.is_empty() {
+            debug!("No MCP tools available");
+            return Ok(payload);
+        }
+
+        info!(tool_count = tools.len(), "MCP tools available");
+
+        // Convert tools to mcp_resources format
+        // Format: tool_name -> { description, input_schema, requires_confirmation }
+        let mut resources: HashMap<String, serde_json::Value> = HashMap::new();
+
+        for tool in tools {
+            let tool_info = serde_json::json!({
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+                "requires_confirmation": tool.requires_confirmation,
+            });
+            resources.insert(tool.name, tool_info);
+        }
+
+        payload.context.mcp_resources = Some(resources);
+
         Ok(payload)
     }
 }
@@ -63,6 +130,15 @@ mod tests {
     #[test]
     fn test_mcp_strategy_not_available() {
         let strategy = McpStrategy::new();
+        assert!(!strategy.is_available());
+    }
+
+    #[test]
+    fn test_mcp_strategy_with_disabled_config() {
+        let mut config = McpConfig::default();
+        config.enabled = false;
+
+        let strategy = McpStrategy::with_client(None, Some(Arc::new(config)));
         assert!(!strategy.is_available());
     }
 

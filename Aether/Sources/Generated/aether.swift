@@ -592,6 +592,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func getLogLevel()  -> LogLevel
     
+    func getMcpConfig()  -> McpSettingsConfig
+    
     func getMemoryAppList() throws  -> [AppMemoryInfo]
     
     func getMemoryConfig()  -> MemoryConfig
@@ -601,6 +603,10 @@ public protocol AetherCoreProtocol : AnyObject {
     func getRootCommands()  -> [CommandNode]
     
     func hasActiveConversation()  -> Bool
+    
+    func listMcpServices()  -> [McpServiceInfo]
+    
+    func listMcpTools()  -> [McpToolInfo]
     
     func loadConfig() throws  -> FullConfig
     
@@ -641,6 +647,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func updateBehavior(behavior: BehaviorConfig) throws 
     
     func updateGeneralConfig(config: GeneralConfig) throws 
+    
+    func updateMcpConfig(config: McpSettingsConfig) throws 
     
     func updateMemoryConfig(config: MemoryConfig) throws 
     
@@ -824,6 +832,13 @@ open func getLogLevel() -> LogLevel {
 })
 }
     
+open func getMcpConfig() -> McpSettingsConfig {
+    return try!  FfiConverterTypeMcpSettingsConfig.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_mcp_config(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func getMemoryAppList()throws  -> [AppMemoryInfo] {
     return try  FfiConverterSequenceTypeAppMemoryInfo.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_get_memory_app_list(self.uniffiClonePointer(),$0
@@ -855,6 +870,20 @@ open func getRootCommands() -> [CommandNode] {
 open func hasActiveConversation() -> Bool {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_has_active_conversation(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func listMcpServices() -> [McpServiceInfo] {
+    return try!  FfiConverterSequenceTypeMcpServiceInfo.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_list_mcp_services(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func listMcpTools() -> [McpToolInfo] {
+    return try!  FfiConverterSequenceTypeMcpToolInfo.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_list_mcp_tools(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -1011,6 +1040,13 @@ open func updateBehavior(behavior: BehaviorConfig)throws  {try rustCallWithError
 open func updateGeneralConfig(config: GeneralConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_update_general_config(self.uniffiClonePointer(),
         FfiConverterTypeGeneralConfig.lower(config),$0
+    )
+}
+}
+    
+open func updateMcpConfig(config: McpSettingsConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_update_mcp_config(self.uniffiClonePointer(),
+        FfiConverterTypeMcpSettingsConfig.lower(config),$0
     )
 }
 }
@@ -2442,6 +2478,300 @@ public func FfiConverterTypeKeywordRuleConfig_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeKeywordRuleConfig_lower(_ value: KeywordRuleConfig) -> RustBuffer {
     return FfiConverterTypeKeywordRuleConfig.lower(value)
+}
+
+
+public struct McpServiceInfo {
+    public var name: String
+    public var description: String
+    public var isBuiltin: Bool
+    public var isRunning: Bool
+    public var toolCount: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(name: String, description: String, isBuiltin: Bool, isRunning: Bool, toolCount: UInt32) {
+        self.name = name
+        self.description = description
+        self.isBuiltin = isBuiltin
+        self.isRunning = isRunning
+        self.toolCount = toolCount
+    }
+}
+
+
+
+extension McpServiceInfo: Equatable, Hashable {
+    public static func ==(lhs: McpServiceInfo, rhs: McpServiceInfo) -> Bool {
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.isBuiltin != rhs.isBuiltin {
+            return false
+        }
+        if lhs.isRunning != rhs.isRunning {
+            return false
+        }
+        if lhs.toolCount != rhs.toolCount {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+        hasher.combine(description)
+        hasher.combine(isBuiltin)
+        hasher.combine(isRunning)
+        hasher.combine(toolCount)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMcpServiceInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> McpServiceInfo {
+        return
+            try McpServiceInfo(
+                name: FfiConverterString.read(from: &buf), 
+                description: FfiConverterString.read(from: &buf), 
+                isBuiltin: FfiConverterBool.read(from: &buf), 
+                isRunning: FfiConverterBool.read(from: &buf), 
+                toolCount: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: McpServiceInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.description, into: &buf)
+        FfiConverterBool.write(value.isBuiltin, into: &buf)
+        FfiConverterBool.write(value.isRunning, into: &buf)
+        FfiConverterUInt32.write(value.toolCount, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServiceInfo_lift(_ buf: RustBuffer) throws -> McpServiceInfo {
+    return try FfiConverterTypeMcpServiceInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServiceInfo_lower(_ value: McpServiceInfo) -> RustBuffer {
+    return FfiConverterTypeMcpServiceInfo.lower(value)
+}
+
+
+public struct McpSettingsConfig {
+    public var enabled: Bool
+    public var fsEnabled: Bool
+    public var gitEnabled: Bool
+    public var shellEnabled: Bool
+    public var systemInfoEnabled: Bool
+    public var allowedRoots: [String]
+    public var allowedRepos: [String]
+    public var allowedCommands: [String]
+    public var shellTimeoutSeconds: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(enabled: Bool, fsEnabled: Bool, gitEnabled: Bool, shellEnabled: Bool, systemInfoEnabled: Bool, allowedRoots: [String], allowedRepos: [String], allowedCommands: [String], shellTimeoutSeconds: UInt64) {
+        self.enabled = enabled
+        self.fsEnabled = fsEnabled
+        self.gitEnabled = gitEnabled
+        self.shellEnabled = shellEnabled
+        self.systemInfoEnabled = systemInfoEnabled
+        self.allowedRoots = allowedRoots
+        self.allowedRepos = allowedRepos
+        self.allowedCommands = allowedCommands
+        self.shellTimeoutSeconds = shellTimeoutSeconds
+    }
+}
+
+
+
+extension McpSettingsConfig: Equatable, Hashable {
+    public static func ==(lhs: McpSettingsConfig, rhs: McpSettingsConfig) -> Bool {
+        if lhs.enabled != rhs.enabled {
+            return false
+        }
+        if lhs.fsEnabled != rhs.fsEnabled {
+            return false
+        }
+        if lhs.gitEnabled != rhs.gitEnabled {
+            return false
+        }
+        if lhs.shellEnabled != rhs.shellEnabled {
+            return false
+        }
+        if lhs.systemInfoEnabled != rhs.systemInfoEnabled {
+            return false
+        }
+        if lhs.allowedRoots != rhs.allowedRoots {
+            return false
+        }
+        if lhs.allowedRepos != rhs.allowedRepos {
+            return false
+        }
+        if lhs.allowedCommands != rhs.allowedCommands {
+            return false
+        }
+        if lhs.shellTimeoutSeconds != rhs.shellTimeoutSeconds {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(enabled)
+        hasher.combine(fsEnabled)
+        hasher.combine(gitEnabled)
+        hasher.combine(shellEnabled)
+        hasher.combine(systemInfoEnabled)
+        hasher.combine(allowedRoots)
+        hasher.combine(allowedRepos)
+        hasher.combine(allowedCommands)
+        hasher.combine(shellTimeoutSeconds)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMcpSettingsConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> McpSettingsConfig {
+        return
+            try McpSettingsConfig(
+                enabled: FfiConverterBool.read(from: &buf), 
+                fsEnabled: FfiConverterBool.read(from: &buf), 
+                gitEnabled: FfiConverterBool.read(from: &buf), 
+                shellEnabled: FfiConverterBool.read(from: &buf), 
+                systemInfoEnabled: FfiConverterBool.read(from: &buf), 
+                allowedRoots: FfiConverterSequenceString.read(from: &buf), 
+                allowedRepos: FfiConverterSequenceString.read(from: &buf), 
+                allowedCommands: FfiConverterSequenceString.read(from: &buf), 
+                shellTimeoutSeconds: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: McpSettingsConfig, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterBool.write(value.fsEnabled, into: &buf)
+        FfiConverterBool.write(value.gitEnabled, into: &buf)
+        FfiConverterBool.write(value.shellEnabled, into: &buf)
+        FfiConverterBool.write(value.systemInfoEnabled, into: &buf)
+        FfiConverterSequenceString.write(value.allowedRoots, into: &buf)
+        FfiConverterSequenceString.write(value.allowedRepos, into: &buf)
+        FfiConverterSequenceString.write(value.allowedCommands, into: &buf)
+        FfiConverterUInt64.write(value.shellTimeoutSeconds, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpSettingsConfig_lift(_ buf: RustBuffer) throws -> McpSettingsConfig {
+    return try FfiConverterTypeMcpSettingsConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpSettingsConfig_lower(_ value: McpSettingsConfig) -> RustBuffer {
+    return FfiConverterTypeMcpSettingsConfig.lower(value)
+}
+
+
+public struct McpToolInfo {
+    public var name: String
+    public var description: String
+    public var requiresConfirmation: Bool
+    public var serviceName: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(name: String, description: String, requiresConfirmation: Bool, serviceName: String) {
+        self.name = name
+        self.description = description
+        self.requiresConfirmation = requiresConfirmation
+        self.serviceName = serviceName
+    }
+}
+
+
+
+extension McpToolInfo: Equatable, Hashable {
+    public static func ==(lhs: McpToolInfo, rhs: McpToolInfo) -> Bool {
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.requiresConfirmation != rhs.requiresConfirmation {
+            return false
+        }
+        if lhs.serviceName != rhs.serviceName {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+        hasher.combine(description)
+        hasher.combine(requiresConfirmation)
+        hasher.combine(serviceName)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMcpToolInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> McpToolInfo {
+        return
+            try McpToolInfo(
+                name: FfiConverterString.read(from: &buf), 
+                description: FfiConverterString.read(from: &buf), 
+                requiresConfirmation: FfiConverterBool.read(from: &buf), 
+                serviceName: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: McpToolInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.description, into: &buf)
+        FfiConverterBool.write(value.requiresConfirmation, into: &buf)
+        FfiConverterString.write(value.serviceName, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpToolInfo_lift(_ buf: RustBuffer) throws -> McpToolInfo {
+    return try FfiConverterTypeMcpToolInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpToolInfo_lower(_ value: McpToolInfo) -> RustBuffer {
+    return FfiConverterTypeMcpToolInfo.lower(value)
 }
 
 
@@ -6142,6 +6472,56 @@ fileprivate struct FfiConverterSequenceTypeKeywordRuleConfig: FfiConverterRustBu
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeMcpServiceInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [McpServiceInfo]
+
+    public static func write(_ value: [McpServiceInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeMcpServiceInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [McpServiceInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [McpServiceInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeMcpServiceInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeMcpToolInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [McpToolInfo]
+
+    public static func write(_ value: [McpToolInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeMcpToolInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [McpToolInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [McpToolInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeMcpToolInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeMediaAttachment: FfiConverterRustBuffer {
     typealias SwiftType = [MediaAttachment]
 
@@ -6468,6 +6848,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_get_log_level() != 16546) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_config() != 24168) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_get_memory_app_list() != 2639) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -6481,6 +6864,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_has_active_conversation() != 19478) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_list_mcp_services() != 51137) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_list_mcp_tools() != 7193) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_load_config() != 33928) {
@@ -6541,6 +6930,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_general_config() != 11598) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_update_mcp_config() != 6765) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_memory_config() != 52192) {

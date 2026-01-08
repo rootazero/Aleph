@@ -375,6 +375,21 @@ interface AetherCore {
 
   // Get the current turn count for the active conversation
   u32 conversation_turn_count();
+
+  // MCP (Model Context Protocol) METHODS (implement-mcp-capability)
+
+  // Get MCP configuration for Settings UI
+  McpSettingsConfig get_mcp_config();
+
+  // Update MCP configuration
+  [Throws=AetherException]
+  void update_mcp_config(McpSettingsConfig config);
+
+  // Get list of MCP services
+  sequence<McpServiceInfo> list_mcp_services();
+
+  // Get list of MCP tools
+  sequence<McpToolInfo> list_mcp_tools();
 };
 
 // Callback interface for events from Rust to client
@@ -794,4 +809,36 @@ dictionary CommandNode {
   CommandType node_type;  // Action, Prompt, or Namespace
   boolean has_children; // Whether this node has child commands
   string? source_id;    // Optional source identifier (e.g., "rule:search", "mcp:git")
+};
+
+// ===== MCP (Model Context Protocol) Types (implement-mcp-capability) =====
+
+// MCP service information for UI display
+dictionary McpServiceInfo {
+  string name;         // Service name (e.g., "fs", "git", "shell")
+  string description;  // Service description
+  boolean is_builtin;  // Whether this is a builtin service
+  boolean is_running;  // Whether the service is currently running
+  u32 tool_count;      // Number of tools provided by this service
+};
+
+// MCP tool information for UI display
+dictionary McpToolInfo {
+  string name;                    // Tool name (e.g., "fs:read_file", "git:status")
+  string description;             // Tool description
+  boolean requires_confirmation;  // Whether this tool requires user confirmation
+  string service_name;            // Parent service name
+};
+
+// MCP configuration for Settings UI
+dictionary McpSettingsConfig {
+  boolean enabled;                    // MCP capability enabled
+  boolean fs_enabled;                 // Filesystem service enabled
+  boolean git_enabled;                // Git service enabled
+  boolean shell_enabled;              // Shell service enabled
+  boolean system_info_enabled;        // System info service enabled
+  sequence<string> allowed_roots;     // Allowed filesystem roots
+  sequence<string> allowed_repos;     // Allowed git repositories
+  sequence<string> allowed_commands;  // Allowed shell commands
+  u64 shell_timeout_seconds;          // Shell command timeout
 };

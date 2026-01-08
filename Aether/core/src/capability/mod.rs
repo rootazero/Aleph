@@ -29,7 +29,8 @@ pub use strategy::{CapabilityStrategy, CompositeCapabilityExecutor};
 ///
 /// This module orchestrates the execution of different capabilities (Memory, Search, MCP, Video)
 /// in a fixed priority order, enriching the AgentPayload with context data.
-use crate::config::{MemoryConfig, SkillsConfig, VideoConfig};
+use crate::config::{McpConfig, MemoryConfig, SkillsConfig, VideoConfig};
+use crate::mcp::McpClient;
 use crate::error::{AetherError, Result};
 use crate::memory::{EmbeddingModel, MemoryRetrieval, VectorDatabase};
 use crate::payload::{AgentPayload, Capability};
@@ -61,6 +62,10 @@ pub struct CapabilityExecutor {
     skills_registry: Option<Arc<SkillsRegistry>>,
     /// Skills configuration
     skills_config: Option<Arc<SkillsConfig>>,
+    /// MCP client for tool access
+    mcp_client: Option<Arc<McpClient>>,
+    /// MCP configuration
+    mcp_config: Option<Arc<McpConfig>>,
 
     // AI Memory Retrieval Configuration
     /// AI provider for memory selection (required for AI retrieval)
@@ -104,6 +109,8 @@ impl CapabilityExecutor {
             video_config: None,
             skills_registry: None,
             skills_config: None,
+            mcp_client: None,
+            mcp_config: None,
             // AI Memory Retrieval defaults
             ai_provider: None,
             memory_exclusion_set: Vec::new(),
@@ -117,6 +124,22 @@ impl CapabilityExecutor {
     /// Create a new capability executor with video config
     pub fn with_video_config(mut self, video_config: Option<Arc<VideoConfig>>) -> Self {
         self.video_config = video_config;
+        self
+    }
+
+    /// Configure MCP capability
+    ///
+    /// # Arguments
+    ///
+    /// * `mcp_client` - MCP client for tool access
+    /// * `mcp_config` - MCP configuration
+    pub fn with_mcp(
+        mut self,
+        mcp_client: Option<Arc<McpClient>>,
+        mcp_config: Option<Arc<McpConfig>>,
+    ) -> Self {
+        self.mcp_client = mcp_client;
+        self.mcp_config = mcp_config;
         self
     }
 
@@ -227,8 +250,7 @@ impl CapabilityExecutor {
                 payload = self.execute_search(payload).await?;
             }
             Capability::Mcp => {
-                warn!("MCP capability not implemented yet (reserved for future)");
-                // Future: Call MCP client and populate payload.context.mcp_resources
+                payload = self.execute_mcp(payload).await?;
             }
             Capability::Video => {
                 payload = self.execute_video(payload).await?;
@@ -470,6 +492,65 @@ impl CapabilityExecutor {
         Ok(payload)
     }
 
+    /// Execute MCP capability
+    ///
+    /// Lists available MCP tools and populates the payload with tool information.
+    /// This allows the AI to understand what tools are available for use.
+    ///
+    /// # Arguments
+    ///
+    /// * `payload` - The agent payload
+    ///
+    /// # Returns
+    ///
+    /// The payload with mcp_resources populated (if tools available)
+    async fn execute_mcp(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
+        use std::collections::HashMap;
+
+        // Check if MCP config exists and is enabled
+        if let Some(config) = &self.mcp_config {
+            if !config.enabled {
+                debug!("MCP capability disabled in config");
+                return Ok(payload);
+            }
+        }
+
+        // Check if MCP client is available
+        let Some(client) = &self.mcp_client else {
+            debug!("MCP capability requested but no client configured");
+            return Ok(payload);
+        };
+
+        info!("Executing MCP capability - listing available tools");
+
+        // Get available tools from the MCP client
+        let tools = client.list_tools().await;
+
+        if tools.is_empty() {
+            debug!("No MCP tools available");
+            return Ok(payload);
+        }
+
+        info!(tool_count = tools.len(), "MCP tools available");
+
+        // Convert tools to mcp_resources format
+        // Format: tool_name -> { description, input_schema, requires_confirmation }
+        let mut resources: HashMap<String, serde_json::Value> = HashMap::new();
+
+        for tool in tools {
+            let tool_info = serde_json::json!({
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+                "requires_confirmation": tool.requires_confirmation,
+            });
+            resources.insert(tool.name, tool_info);
+        }
+
+        payload.context.mcp_resources = Some(resources);
+
+        Ok(payload)
+    }
+
     /// Create a CompositeCapabilityExecutor from this executor's configuration
     ///
     /// This allows gradual migration to the strategy pattern while maintaining
@@ -520,8 +601,11 @@ impl CapabilityExecutor {
         let video_strategy = VideoStrategy::new(self.video_config.clone());
         executor.register(Arc::new(video_strategy));
 
-        // Register MCP strategy (placeholder)
-        let mcp_strategy = McpStrategy::new();
+        // Register MCP strategy
+        let mcp_strategy = McpStrategy::with_client(
+            self.mcp_client.clone(),
+            self.mcp_config.clone(),
+        );
         executor.register(Arc::new(mcp_strategy));
 
         executor

@@ -137,6 +137,7 @@ pub use crate::intent::{AiIntentDetector, AiIntentResult};
 pub use crate::coordination::{ConversationAwareRouter, RoutingContext, RoutingResult};
 pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
 pub use crate::skills::{Skill, SkillInfo, SkillsInstaller, SkillsRegistry};
+pub use crate::mcp::{McpServiceInfo, McpSettingsConfig, McpToolInfo};
 pub use crate::utils::pii;
 
 // Test-only exports

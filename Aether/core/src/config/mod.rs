@@ -51,6 +51,9 @@ pub struct Config {
     /// Skills configuration (Claude Agent Skills standard)
     #[serde(default)]
     pub skills: SkillsConfig,
+    /// MCP (Model Context Protocol) configuration
+    #[serde(default)]
+    pub mcp: McpConfig,
     /// Trigger configuration (hotkey system refactor)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger: Option<TriggerConfig>,
@@ -1480,6 +1483,132 @@ impl Default for VideoConfig {
     }
 }
 
+/// MCP (Model Context Protocol) configuration
+///
+/// Controls builtin services and external server connections
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpConfig {
+    /// Enable MCP capability
+    #[serde(default = "default_mcp_enabled")]
+    pub enabled: bool,
+
+    /// Builtin services configuration
+    #[serde(default)]
+    pub builtin: McpBuiltinConfig,
+
+    /// External servers configuration (advanced)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_servers: Vec<McpExternalServerConfig>,
+}
+
+/// Configuration for MCP builtin services
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpBuiltinConfig {
+    /// Enable filesystem service
+    #[serde(default = "default_true")]
+    pub fs_enabled: bool,
+
+    /// Allowed filesystem roots (paths the fs service can access)
+    #[serde(default)]
+    pub allowed_roots: Vec<String>,
+
+    /// Enable git service
+    #[serde(default = "default_true")]
+    pub git_enabled: bool,
+
+    /// Allowed git repositories (paths the git service can access)
+    #[serde(default)]
+    pub allowed_repos: Vec<String>,
+
+    /// Enable shell service
+    #[serde(default)]
+    pub shell_enabled: bool,
+
+    /// Allowed shell commands (whitelist for security)
+    #[serde(default)]
+    pub allowed_commands: Vec<String>,
+
+    /// Shell command timeout in seconds
+    #[serde(default = "default_shell_timeout")]
+    pub shell_timeout_seconds: u64,
+
+    /// Enable system info service
+    #[serde(default = "default_true")]
+    pub system_info_enabled: bool,
+}
+
+/// Configuration for external MCP servers
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpExternalServerConfig {
+    /// Server name (unique identifier)
+    pub name: String,
+
+    /// Command to execute
+    pub command: String,
+
+    /// Command arguments
+    #[serde(default)]
+    pub args: Vec<String>,
+
+    /// Environment variables
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+
+    /// Working directory
+    #[serde(default)]
+    pub cwd: Option<String>,
+
+    /// Required runtime (node, python, bun, deno)
+    #[serde(default)]
+    pub requires_runtime: Option<String>,
+
+    /// Request timeout in seconds
+    #[serde(default = "default_mcp_timeout")]
+    pub timeout_seconds: u64,
+}
+
+fn default_mcp_enabled() -> bool {
+    true
+}
+
+fn default_shell_timeout() -> u64 {
+    30
+}
+
+fn default_mcp_timeout() -> u64 {
+    30
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_mcp_enabled(),
+            builtin: McpBuiltinConfig::default(),
+            external_servers: Vec::new(),
+        }
+    }
+}
+
+impl Default for McpBuiltinConfig {
+    fn default() -> Self {
+        Self {
+            fs_enabled: true,
+            allowed_roots: Vec::new(), // Empty means current directory only
+            git_enabled: true,
+            allowed_repos: Vec::new(), // Empty means current directory only
+            shell_enabled: false, // Disabled by default for security
+            allowed_commands: vec![
+                "ls".to_string(),
+                "cat".to_string(),
+                "echo".to_string(),
+                "pwd".to_string(),
+            ],
+            shell_timeout_seconds: default_shell_timeout(),
+            system_info_enabled: true,
+        }
+    }
+}
+
 /// Skills configuration (Claude Agent Skills standard)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillsConfig {
@@ -1553,6 +1682,7 @@ impl Default for Config {
             search: None,
             video: Some(VideoConfig::default()),
             skills: SkillsConfig::default(),
+            mcp: McpConfig::default(),
             trigger: Some(TriggerConfig::default()),
             smart_flow: SmartFlowConfig::default(),
             smart_matching: SmartMatchingConfig::default(),

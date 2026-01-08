@@ -344,6 +344,38 @@
 "settings.search.get_api_key" = "Get Free API";
 "settings.search.documentation" = "Docs";
 
+// MARK: - Settings Window - MCP Tab
+"settings.mcp.title" = "MCP Tools";
+"settings.mcp.description" = "Configure Model Context Protocol services for AI tool access. Services provide tools that AI can use to perform actions.";
+"settings.mcp.enable" = "Enable MCP Capability";
+"settings.mcp.enable_description" = "Allow AI models to access configured MCP tools for enhanced capabilities.";
+"settings.mcp.builtin_services" = "Builtin Services";
+"settings.mcp.builtin_services_description" = "Built-in services run directly in Aether without external dependencies.";
+"settings.mcp.service.fs" = "Filesystem";
+"settings.mcp.service.fs_description" = "Read, write, and list files within allowed directories.";
+"settings.mcp.service.git" = "Git";
+"settings.mcp.service.git_description" = "Git repository operations (status, log, diff) for allowed repos.";
+"settings.mcp.service.shell" = "Shell Commands";
+"settings.mcp.service.shell_description" = "Execute whitelisted shell commands with timeout protection.";
+"settings.mcp.service.system_info" = "System Info";
+"settings.mcp.service.system_info_description" = "Query system information (hostname, platform, memory).";
+"settings.mcp.security" = "Security Settings";
+"settings.mcp.security_description" = "Configure access restrictions for each service.";
+"settings.mcp.allowed_roots" = "Allowed Filesystem Roots";
+"settings.mcp.allowed_roots_description" = "Directories where filesystem tools can operate.";
+"settings.mcp.allowed_repos" = "Allowed Git Repositories";
+"settings.mcp.allowed_repos_description" = "Git repositories that can be accessed.";
+"settings.mcp.allowed_commands" = "Allowed Shell Commands";
+"settings.mcp.allowed_commands_description" = "Commands that can be executed (comma-separated).";
+"settings.mcp.shell_timeout" = "Command Timeout";
+"settings.mcp.seconds" = "seconds";
+"settings.mcp.available_tools" = "Available Tools";
+"settings.mcp.refresh_tools" = "Refresh tool list";
+"settings.mcp.no_tools" = "No tools available. Enable services to see available tools.";
+"settings.mcp.requires_confirmation" = "Requires Confirmation";
+"settings.mcp.restart_title" = "Restart Required";
+"settings.mcp.restart_message" = "MCP service changes will take effect after restarting Aether.";
+
 // MARK: - Settings Window - Skills Tab
 "settings.skills.title" = "Claude Skills";
 "settings.skills.description" = "Install and manage Claude Agent Skills. Skills inject specialized instructions to enhance AI capabilities.";

@@ -9,8 +9,8 @@ mod shell_service;
 mod system_info_service;
 mod traits;
 
-pub use fs_service::FsService;
-pub use git_service::GitService;
-pub use shell_service::ShellService;
+pub use fs_service::{FsService, FsServiceConfig};
+pub use git_service::{GitService, GitServiceConfig};
+pub use shell_service::{ShellService, ShellServiceConfig};
 pub use system_info_service::SystemInfoService;
 pub use traits::BuiltinMcpService;

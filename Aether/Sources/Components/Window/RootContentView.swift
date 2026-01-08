@@ -129,6 +129,8 @@ struct RootContentView: View {
             return L("settings.memory.title")
         case .search:
             return L("settings.search.title")
+        case .mcp:
+            return L("settings.mcp.title")
         case .skills:
             return L("settings.skills.title")
         }
@@ -151,6 +153,8 @@ struct RootContentView: View {
             return L("settings.memory.description")
         case .search:
             return L("settings.search.description")
+        case .mcp:
+            return L("settings.mcp.description")
         case .skills:
             return L("settings.skills.description")
         }
@@ -263,6 +267,14 @@ struct RootContentView: View {
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Search settings requires AetherCore initialization")
+            }
+
+        case .mcp:
+            if let core = appDelegate.core {
+                McpSettingsView(core: core, saveBarState: saveBarState)
+                    .id(configReloadTrigger)
+            } else {
+                placeholderView("MCP settings requires AetherCore initialization")
             }
 
         case .skills:

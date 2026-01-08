@@ -71,6 +71,59 @@ pub struct McpResource {
     pub mime_type: Option<String>,
 }
 
+// ===== UniFFI Types for Swift UI =====
+
+/// MCP service information for UI display
+#[derive(Debug, Clone)]
+pub struct McpServiceInfo {
+    /// Service name (e.g., "fs", "git", "shell")
+    pub name: String,
+    /// Service description
+    pub description: String,
+    /// Whether this is a builtin service
+    pub is_builtin: bool,
+    /// Whether the service is currently running
+    pub is_running: bool,
+    /// Number of tools provided by this service
+    pub tool_count: u32,
+}
+
+/// MCP tool information for UI display
+#[derive(Debug, Clone)]
+pub struct McpToolInfo {
+    /// Tool name (e.g., "fs:read_file", "git:status")
+    pub name: String,
+    /// Tool description
+    pub description: String,
+    /// Whether this tool requires user confirmation
+    pub requires_confirmation: bool,
+    /// Parent service name
+    pub service_name: String,
+}
+
+/// MCP configuration for Settings UI
+#[derive(Debug, Clone)]
+pub struct McpSettingsConfig {
+    /// MCP capability enabled
+    pub enabled: bool,
+    /// Filesystem service enabled
+    pub fs_enabled: bool,
+    /// Git service enabled
+    pub git_enabled: bool,
+    /// Shell service enabled
+    pub shell_enabled: bool,
+    /// System info service enabled
+    pub system_info_enabled: bool,
+    /// Allowed filesystem roots
+    pub allowed_roots: Vec<String>,
+    /// Allowed git repositories
+    pub allowed_repos: Vec<String>,
+    /// Allowed shell commands
+    pub allowed_commands: Vec<String>,
+    /// Shell command timeout
+    pub shell_timeout_seconds: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
