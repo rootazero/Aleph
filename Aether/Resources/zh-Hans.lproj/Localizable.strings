@@ -85,7 +85,6 @@
 // MARK: - Provider Configuration
 "provider.field.active" = "启用";
 "provider.field.provider_name" = "提供商名称";
-"provider.field.theme_color" = "主题颜色";
 "provider.field.api_key" = "API 密钥";
 "provider.field.model" = "模型";
 "provider.field.base_url" = "基础 URL";
@@ -116,7 +115,6 @@
 "provider.placeholder.top_k_ollama" = "例如：40";
 
 "provider.help.provider_name" = "此名称用于在路由规则中引用提供商";
-"provider.help.theme_color" = "在 Halo 叠加层中使用";
 "provider.help.api_key" = "安全存储在 macOS 钥匙串中";
 "provider.help.base_url" = "可选的自定义 API 端点";
 "provider.help.base_url_custom" = "OpenAI 兼容的 API 端点";

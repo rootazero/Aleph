@@ -85,7 +85,6 @@
 // MARK: - Provider Configuration
 "provider.field.active" = "Active";
 "provider.field.provider_name" = "Provider Name";
-"provider.field.theme_color" = "Theme Color";
 "provider.field.api_key" = "API Key";
 "provider.field.model" = "Model";
 "provider.field.base_url" = "Base URL";
@@ -116,7 +115,6 @@
 "provider.placeholder.top_k_ollama" = "e.g., 40";
 
 "provider.help.provider_name" = "This name is used to reference the provider in routing rules";
-"provider.help.theme_color" = "Used in Halo overlay";
 "provider.help.api_key" = "Stored securely in macOS Keychain";
 "provider.help.base_url" = "Optional custom API endpoint";
 "provider.help.base_url_custom" = "OpenAI-compatible API endpoint";
