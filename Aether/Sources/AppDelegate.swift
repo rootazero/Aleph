@@ -60,16 +60,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Global hotkey monitor (Swift layer)
     private var hotkeyMonitor: GlobalHotkeyMonitor?
 
-    // Command mode hotkey monitor (configurable, default: Cmd+Opt+/)
-    private var commandHotkeyMonitor: Any?
-    private var commandHotkeyModifiers: NSEvent.ModifierFlags = [.command, .option]
-    private var commandHotkeyKeyCode: UInt16 = 44  // "/" key
-
-    // Command mode input listener (captures keyboard input while command mode is active)
-    private var commandModeInputMonitor: Any?
+    // Command mode coordinator for slash command completion
+    private var commandModeCoordinator: CommandModeCoordinator?
 
     // Note: typewriterCancellation and escapeKeyMonitor moved to OutputCoordinator
     // Note: previousFrontmostApp moved to InputCoordinator
+    // Note: commandHotkeyMonitor, commandModeInputMonitor moved to CommandModeCoordinator
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hide from Dock (menu bar only)
@@ -123,7 +119,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         outputCoordinator?.stop()
 
         // Remove command mode hotkey monitor
-        removeCommandModeHotkey()
+        commandModeCoordinator?.removeCommandModeHotkey()
 
         // Clean up Rust core (only if initialized)
         // Note: No need to call stopListening() as hotkey monitoring is now in Swift
@@ -516,8 +512,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
             print("[Aether] All coordinators configured")
 
-            // Set up command mode hotkey (Cmd+Opt+/)
-            setupCommandModeHotkey()
+            // Initialize and configure command mode coordinator
+            commandModeCoordinator = CommandModeCoordinator()
+            if let core = core {
+                commandModeCoordinator?.configure(core: core, haloWindowController: haloWindowController)
+            }
+            commandModeCoordinator?.setupCommandModeHotkey()
 
             // Hide startup Halo animation (initialization succeeded)
             // Note: "No providers" error will be shown when user presses hotkey, not at startup
@@ -767,377 +767,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // NOTE: Hotkey handling (handleHotkeyPressed, processWithInputMode) moved to InputCoordinator.swift
     // NOTE: Multi-turn conversation support moved to ConversationCoordinator.swift
     // NOTE: Output pipeline (performOutput, executeTypewriterOutput, etc.) moved to OutputCoordinator.swift
+    // NOTE: Command mode hotkey handling moved to CommandModeCoordinator.swift
 
-    // MARK: - Command Mode Hotkey (add-command-completion-system)
-
-    /// Setup global hotkey for command mode (configurable, default: Cmd+Opt+/)
-    private func setupCommandModeHotkey() {
-        // Load command prompt hotkey from config
-        loadCommandPromptConfig()
-
-        commandHotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self = self else { return }
-            // Check for configured hotkey
-            var modifiersMatch = true
-            for modifier in [NSEvent.ModifierFlags.command, .option, .control, .shift] {
-                if self.commandHotkeyModifiers.contains(modifier) {
-                    if !event.modifierFlags.contains(modifier) {
-                        modifiersMatch = false
-                        break
-                    }
-                }
-            }
-            if modifiersMatch && event.keyCode == self.commandHotkeyKeyCode {
-                self.handleCommandModeHotkey()
-            }
-        }
-        print("[AppDelegate] Command mode hotkey monitor installed (keyCode: \(commandHotkeyKeyCode), modifiers: \(commandHotkeyModifiers))")
-    }
-
-    /// Load command prompt hotkey configuration from config
-    private func loadCommandPromptConfig() {
-        guard let core = core else { return }
-
-        do {
-            let config = try core.loadConfig()
-            if let shortcuts = config.shortcuts {
-                parseAndApplyCommandPromptHotkey(shortcuts.commandPrompt)
-            }
-        } catch {
-            print("[AppDelegate] Failed to load command prompt config: \(error)")
-        }
-    }
-
-    /// Parse command prompt config string (e.g., "Command+Option+/") and apply it
-    private func parseAndApplyCommandPromptHotkey(_ configString: String) {
-        let parts = configString.split(separator: "+").map { String($0) }
-        guard parts.count == 3 else {
-            print("[AppDelegate] Invalid command prompt config: \(configString)")
-            return
-        }
-
-        var modifiers: NSEvent.ModifierFlags = []
-
-        // Parse first two parts as modifiers
-        for i in 0..<2 {
-            switch parts[i] {
-            case "Command": modifiers.insert(.command)
-            case "Option": modifiers.insert(.option)
-            case "Control": modifiers.insert(.control)
-            case "Shift": modifiers.insert(.shift)
-            default: break
-            }
-        }
-
-        // Parse third part as key code
-        let keyCode: UInt16
-        switch parts[2] {
-        case "/": keyCode = 44
-        case "`": keyCode = 50
-        case "\\": keyCode = 42
-        case ";": keyCode = 41
-        case ",": keyCode = 43
-        case ".": keyCode = 47
-        case "Space": keyCode = 49
-        default: keyCode = 44  // Default to /
-        }
-
-        commandHotkeyModifiers = modifiers
-        commandHotkeyKeyCode = keyCode
-        print("[AppDelegate] Command prompt hotkey configured: \(configString) (keyCode: \(keyCode), modifiers: \(modifiers))")
-    }
+    // MARK: - Command Mode (delegating to CommandModeCoordinator)
 
     /// Update command prompt hotkey at runtime (called from ShortcutsView)
     func updateCommandPromptHotkey(_ shortcuts: ShortcutsConfig) {
-        parseAndApplyCommandPromptHotkey(shortcuts.commandPrompt)
-
-        // Reinstall the monitor with new settings
-        removeCommandModeHotkey()
-        commandHotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self = self else { return }
-            var modifiersMatch = true
-            for modifier in [NSEvent.ModifierFlags.command, .option, .control, .shift] {
-                if self.commandHotkeyModifiers.contains(modifier) {
-                    if !event.modifierFlags.contains(modifier) {
-                        modifiersMatch = false
-                        break
-                    }
-                }
-            }
-            if modifiersMatch && event.keyCode == self.commandHotkeyKeyCode {
-                self.handleCommandModeHotkey()
-            }
-        }
-        print("[AppDelegate] Command prompt hotkey updated and monitor reinstalled")
-    }
-
-    /// Remove command mode hotkey monitor
-    private func removeCommandModeHotkey() {
-        if let monitor = commandHotkeyMonitor {
-            NSEvent.removeMonitor(monitor)
-            commandHotkeyMonitor = nil
-            print("[AppDelegate] Command mode hotkey monitor removed")
-        }
-    }
-
-    /// Handle command mode hotkey (Cmd+Opt+/)
-    private func handleCommandModeHotkey() {
-        print("[AppDelegate] Command mode hotkey pressed")
-
-        guard let haloWindow = haloWindow else {
-            print("[AppDelegate] ❌ HaloWindow not available")
-            return
-        }
-
-        // If already in command mode, toggle off
-        if case .commandMode = haloWindow.viewModel.state {
-            exitCommandMode()
-            return
-        }
-
-        // Get best position: caret position (preferred) or mouse position (fallback)
-        let haloPosition = CaretPositionHelper.getBestPosition()
-        print("[AppDelegate] Command mode - haloPosition: (\(haloPosition.x), \(haloPosition.y))")
-
-        // Type "/" character to the active application
-        print("[AppDelegate] Typing '/' to active application")
-        _ = KeyboardSimulator.shared.typeTextInstant("/")
-        usleep(30_000) // 30ms delay
-
-        // Activate command mode
-        haloWindow.viewModel.commandManager.activateCommandMode { [weak self] selectedCommand in
-            // When user selects a command, complete the input
-            self?.handleCommandSelected(selectedCommand)
-        }
-
-        // CRITICAL: Set state directly (without animation) BEFORE showBelow
-        // This ensures getWindowSize() returns the correct size for command mode
-        // We bypass updateState() to avoid animation conflicts with showBelow()
-        haloWindow.viewModel.state = .commandMode
-        haloWindow.ignoresMouseEvents = false  // Enable mouse events for clicking commands
-
-        // Show halo BELOW the caret (like IDE autocomplete)
-        haloWindow.showBelow(at: haloPosition)
-
-        // Start keyboard input listener for command mode
-        startCommandModeInputListener()
-    }
-
-    /// Start listening for keyboard input during command mode
-    private func startCommandModeInputListener() {
-        // Remove existing monitor if any
-        stopCommandModeInputListener()
-
-        print("[AppDelegate] Starting command mode input listener")
-
-        // Monitor global keyboard events
-        commandModeInputMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-            self?.handleCommandModeKeyEvent(event)
-        }
-    }
-
-    /// Stop listening for keyboard input
-    private func stopCommandModeInputListener() {
-        if let monitor = commandModeInputMonitor {
-            NSEvent.removeMonitor(monitor)
-            commandModeInputMonitor = nil
-            print("[AppDelegate] Stopped command mode input listener")
-        }
-    }
-
-    /// Handle keyboard event during command mode
-    private func handleCommandModeKeyEvent(_ event: NSEvent) {
-        guard let haloWindow = haloWindow,
-              case .commandMode = haloWindow.viewModel.state else {
-            return
-        }
-
-        let commandManager = haloWindow.viewModel.commandManager
-        let keyCode = event.keyCode
-
-        // Handle special keys
-        switch Int(keyCode) {
-        case kVK_Escape:
-            // Exit command mode
-            print("[AppDelegate] Escape pressed, exiting command mode")
-            exitCommandMode()
-            return
-
-        case kVK_Return:
-            // Select current command
-            print("[AppDelegate] Enter pressed, selecting current command")
-            commandManager.selectCurrentCommand()
-            return
-
-        case kVK_UpArrow:
-            // Move selection up
-            commandManager.moveSelectionUp()
-            return
-
-        case kVK_DownArrow:
-            // Move selection down
-            commandManager.moveSelectionDown()
-            return
-
-        case kVK_Delete:
-            // Backspace - remove last character from prefix
-            var prefix = commandManager.inputPrefix
-            if !prefix.isEmpty {
-                prefix.removeLast()
-                commandManager.inputPrefix = prefix
-                print("[AppDelegate] Backspace, prefix now: '\(prefix)'")
-            } else {
-                // If prefix is empty and backspace, exit command mode
-                print("[AppDelegate] Backspace on empty prefix, exiting command mode")
-                exitCommandMode()
-            }
-            return
-
-        case kVK_Tab:
-            // Tab could auto-complete to first match
-            if let firstCommand = commandManager.displayedCommands.first {
-                commandManager.inputPrefix = firstCommand.key
-            }
-            return
-
-        default:
-            break
-        }
-
-        // Handle character input
-        if let characters = event.charactersIgnoringModifiers, !characters.isEmpty {
-            let char = characters.first!
-
-            // Only accept alphanumeric and common command characters
-            if char.isLetter || char.isNumber || char == "-" || char == "_" {
-                let newPrefix = commandManager.inputPrefix + String(char)
-                commandManager.inputPrefix = newPrefix
-                print("[AppDelegate] Character input: '\(char)', prefix now: '\(newPrefix)'")
-            }
-        }
-    }
-
-    /// Exit command mode and clean up
-    private func exitCommandMode() {
-        print("[AppDelegate] Exiting command mode")
-
-        // Stop input listener first
-        stopCommandModeInputListener()
-
-        // Deactivate command manager
-        haloWindow?.viewModel.commandManager.deactivateCommandMode()
-
-        // Hide Halo
-        haloWindow?.updateState(.idle)
-        haloWindow?.hide()
-    }
-
-    /// Handle command selection from command completion
-    private func handleCommandSelected(_ command: CommandNode) {
-        print("[AppDelegate] Command selected: /\(command.key)")
-
-        // Get the current input prefix (what user has typed so far, without the "/")
-        let inputPrefix = haloWindow?.viewModel.commandManager.inputPrefix ?? ""
-
-        // Stop input listener first
-        stopCommandModeInputListener()
-
-        // CRITICAL: Wait for Enter key event to be fully processed by the target app.
-        usleep(100_000) // 100ms delay
-
-        // NO-FLASH APPROACH: Use Accessibility API to read text and find "/" position.
-        // Then use backspaces to delete exactly the right amount - no visual selection.
-
-        var charsToDelete = 1 + inputPrefix.count  // Default: "/" + inputPrefix
-
-        // Try to get text content via Accessibility API
-        if let textBeforeCursor = getTextBeforeCursor(maxChars: charsToDelete + 5) {
-            NSLog("[AppDelegate] DEBUG: Text before cursor: '%@'", textBeforeCursor)
-
-            // Find "/" position from the end (rightmost "/")
-            if let slashRange = textBeforeCursor.range(of: "/", options: .backwards) {
-                let slashIndex = textBeforeCursor.distance(from: textBeforeCursor.startIndex, to: slashRange.lowerBound)
-                charsToDelete = textBeforeCursor.count - slashIndex  // From "/" to end
-                NSLog("[AppDelegate] DEBUG: Found '/' at index %d, will delete %d chars", slashIndex, charsToDelete)
-            }
-        } else {
-            NSLog("[AppDelegate] DEBUG: Could not read text via Accessibility, using default count: %d", charsToDelete)
-        }
-
-        // Delete using backspaces (no visual selection)
-        NSLog("[AppDelegate] Deleting %d characters with backspaces", charsToDelete)
-        _ = KeyboardSimulator.shared.typeBackspaces(count: charsToDelete)
-        usleep(50_000)
-
-        // Type the complete command
-        let commandText = "/\(command.key) "
-        NSLog("[AppDelegate] Typing command: '%@'", commandText)
-        _ = KeyboardSimulator.shared.typeTextInstant(commandText)
-
-        // Note: deactivateCommandMode() will be called by selectCurrentCommand() after this callback returns
-
-        // Hide Halo immediately (no success feedback needed since command is typed directly)
-        haloWindow?.updateState(.idle)
-        haloWindow?.hide()
-    }
-
-    /// Get text before cursor using Accessibility API (no visual selection)
-    ///
-    /// - Parameter maxChars: Maximum number of characters to retrieve
-    /// - Returns: Text before cursor, or nil if unavailable
-    private func getTextBeforeCursor(maxChars: Int) -> String? {
-        let systemWide = AXUIElementCreateSystemWide()
-
-        // Get focused element
-        var focusedRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
-              let focused = focusedRef else {
-            return nil
-        }
-
-        let element = focused as! AXUIElement
-
-        // Get selected text range (cursor position)
-        var rangeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success,
-              let rangeValue = rangeRef else {
-            return nil
-        }
-
-        // Extract range
-        var range = CFRange(location: 0, length: 0)
-        guard AXValueGetValue(rangeValue as! AXValue, .cfRange, &range) else {
-            return nil
-        }
-
-        // Calculate range for text before cursor
-        let cursorPosition = range.location
-        let startPosition = max(0, cursorPosition - maxChars)
-        let length = cursorPosition - startPosition
-
-        guard length > 0 else {
-            return ""
-        }
-
-        // Create range for text before cursor
-        var textRange = CFRange(location: startPosition, length: length)
-        guard let textRangeValue = AXValueCreate(.cfRange, &textRange) else {
-            return nil
-        }
-
-        // Get text for range
-        var textRef: CFTypeRef?
-        guard AXUIElementCopyParameterizedAttributeValue(
-            element,
-            kAXStringForRangeParameterizedAttribute as CFString,
-            textRangeValue,
-            &textRef
-        ) == .success,
-              let text = textRef as? String else {
-            return nil
-        }
-
-        return text
+        commandModeCoordinator?.updateCommandPromptHotkey(shortcuts)
     }
 
     // MARK: - Trigger System Configuration
