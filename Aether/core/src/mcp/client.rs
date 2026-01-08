@@ -49,8 +49,8 @@ enum ToolLocation {
 pub struct McpClient {
     /// Registered builtin services
     system_tools: Vec<Arc<dyn SystemTool>>,
-    /// Tool name to location mapping
-    tool_location_map: HashMap<String, ToolLocation>,
+    /// Tool name to location mapping (RwLock for thread-safe updates)
+    tool_location_map: RwLock<HashMap<String, ToolLocation>>,
     /// External server connections
     external_servers: RwLock<HashMap<String, Arc<McpServerConnection>>>,
 }
@@ -60,18 +60,23 @@ impl McpClient {
     pub fn new() -> Self {
         Self {
             system_tools: Vec::new(),
-            tool_location_map: HashMap::new(),
+            tool_location_map: RwLock::new(HashMap::new()),
             external_servers: RwLock::new(HashMap::new()),
         }
     }
 
     /// Register a builtin service
+    ///
+    /// Note: This method requires exclusive access (&mut self), so we can
+    /// directly mutate the tool_location_map without acquiring a lock.
     pub fn register_system_tool(&mut self, service: Arc<dyn SystemTool>) {
         let service_idx = self.system_tools.len();
 
         // Map all tools from this service
+        // Since we have &mut self, we can use get_mut() to access the inner HashMap
+        let map = self.tool_location_map.get_mut();
         for tool in service.list_tools() {
-            self.tool_location_map.insert(tool.name.clone(), ToolLocation::Builtin(service_idx));
+            map.insert(tool.name.clone(), ToolLocation::Builtin(service_idx));
         }
 
         self.system_tools.push(service);
@@ -149,12 +154,13 @@ impl McpClient {
 
         let connection = Arc::new(connection);
 
-        // Register tools from this server
+        // Register tools from this server (thread-safe via RwLock)
         let tools = connection.list_tools().await;
-        for tool in &tools {
-            self.tool_location_map
-                .clone() // Clone for thread safety - would need RwLock for full solution
-                .insert(tool.name.clone(), ToolLocation::External(config.name.clone()));
+        {
+            let mut map = self.tool_location_map.write().await;
+            for tool in &tools {
+                map.insert(tool.name.clone(), ToolLocation::External(config.name.clone()));
+            }
         }
 
         // Store connection
@@ -203,8 +209,9 @@ impl McpClient {
     }
 
     /// Check if a tool requires confirmation
-    pub fn requires_confirmation(&self, tool_name: &str) -> bool {
-        if let Some(location) = self.tool_location_map.get(tool_name) {
+    pub async fn requires_confirmation(&self, tool_name: &str) -> bool {
+        let map = self.tool_location_map.read().await;
+        if let Some(location) = map.get(tool_name) {
             match location {
                 ToolLocation::Builtin(idx) => {
                     return self.system_tools[*idx].requires_confirmation(tool_name);

@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::sync::RwLock;
 
 use crate::error::{AetherError, Result};
-use crate::mcp::jsonrpc::{IdGenerator, JsonRpcRequest, mcp as mcp_types};
+use crate::mcp::jsonrpc::{IdGenerator, JsonRpcNotification, JsonRpcRequest, mcp as mcp_types};
 use crate::mcp::transport::StdioTransport;
 use crate::mcp::types::McpTool;
 
@@ -132,10 +132,15 @@ impl McpServerConnection {
             *caps = Some(init_result.capabilities);
         }
 
-        // Send initialized notification (no response expected)
-        let notification = JsonRpcRequest::new(self.id_gen.next(), "notifications/initialized");
-        // We send but don't wait for response since it's a notification
-        let _ = self.transport.send(&notification).await;
+        // Send initialized notification (per JSON-RPC spec, notifications have no id)
+        let notification = JsonRpcNotification::new("notifications/initialized");
+        if let Err(e) = self.transport.send_notification(&notification).await {
+            tracing::warn!(
+                server = %self.name,
+                error = %e,
+                "Failed to send initialized notification (non-fatal)"
+            );
+        }
 
         // Update state
         {

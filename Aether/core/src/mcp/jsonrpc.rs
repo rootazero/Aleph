@@ -48,6 +48,47 @@ impl JsonRpcRequest {
     }
 }
 
+/// JSON-RPC 2.0 Notification (no id field per spec)
+///
+/// Notifications are requests without an id field. The server MUST NOT
+/// reply to a notification, and the client should not expect a response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonRpcNotification {
+    /// JSON-RPC version (always "2.0")
+    pub jsonrpc: String,
+    /// Method name to invoke
+    pub method: String,
+    /// Optional parameters
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<Value>,
+}
+
+impl JsonRpcNotification {
+    /// Create a new JSON-RPC notification
+    pub fn new(method: impl Into<String>) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            method: method.into(),
+            params: None,
+        }
+    }
+
+    /// Create a new notification with parameters
+    pub fn with_params(method: impl Into<String>, params: Value) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            method: method.into(),
+            params: Some(params),
+        }
+    }
+
+    /// Serialize to JSON string with newline delimiter
+    pub fn to_json_line(&self) -> Result<String, serde_json::Error> {
+        let json = serde_json::to_string(self)?;
+        Ok(format!("{}\n", json))
+    }
+}
+
 /// JSON-RPC 2.0 Response
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcResponse {
@@ -422,5 +463,35 @@ mod tests {
         let tool: mcp::ToolDefinition = serde_json::from_str(json).unwrap();
         assert_eq!(tool.name, "file_read");
         assert!(tool.description.is_some());
+    }
+
+    #[test]
+    fn test_notification_serialization() {
+        let notif = JsonRpcNotification::new("notifications/initialized");
+        let json = serde_json::to_string(&notif).unwrap();
+        assert!(json.contains("\"jsonrpc\":\"2.0\""));
+        assert!(json.contains("\"method\":\"notifications/initialized\""));
+        // Notifications should NOT have an id field
+        assert!(!json.contains("\"id\""));
+    }
+
+    #[test]
+    fn test_notification_with_params() {
+        let notif = JsonRpcNotification::with_params(
+            "tools/listChanged",
+            json!({"reason": "refresh"}),
+        );
+        let json = serde_json::to_string(&notif).unwrap();
+        assert!(json.contains("\"params\""));
+        assert!(json.contains("\"reason\":\"refresh\""));
+        assert!(!json.contains("\"id\""));
+    }
+
+    #[test]
+    fn test_notification_to_json_line() {
+        let notif = JsonRpcNotification::new("test/notify");
+        let line = notif.to_json_line().unwrap();
+        assert!(line.ends_with('\n'));
+        assert!(!line.contains("\"id\""));
     }
 }

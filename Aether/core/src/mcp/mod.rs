@@ -45,7 +45,7 @@ pub use crate::services::tools::BuiltinMcpService;
 
 pub use client::{ExternalServerConfig, McpClient, McpClientBuilder};
 pub use external::{check_runtime, McpServerConnection, RuntimeKind};
-pub use jsonrpc::{IdGenerator, JsonRpcError, JsonRpcRequest, JsonRpcResponse};
+pub use jsonrpc::{IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 pub use transport::StdioTransport;
 pub use types::{
     McpEnvVar, McpResource, McpServerConfig, McpServerPermissions, McpServerStatus,

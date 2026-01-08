@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 use crate::error::{AetherError, Result};
-use crate::mcp::jsonrpc::{JsonRpcRequest, JsonRpcResponse};
+use crate::mcp::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 
 /// Default timeout for RPC calls (30 seconds)
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
@@ -212,6 +212,72 @@ impl StdioTransport {
                 Err(AetherError::McpTimeout)
             }
         }
+    }
+
+    /// Send a JSON-RPC notification (no response expected)
+    ///
+    /// Unlike `send()`, this method does not wait for a response.
+    /// Per JSON-RPC 2.0 spec, notifications have no id and expect no reply.
+    pub async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()> {
+        let method = &notification.method;
+
+        tracing::debug!(
+            server = %self.server_name,
+            method = %method,
+            "Sending JSON-RPC notification"
+        );
+
+        let mut child = self.child.lock().await;
+
+        let stdin = match child.stdin.take() {
+            Some(stdin) => stdin,
+            None => {
+                return Err(AetherError::IoError(format!(
+                    "MCP server '{}' stdin not available",
+                    self.server_name
+                )));
+            }
+        };
+
+        // Serialize notification
+        let notification_json = match notification.to_json_line() {
+            Ok(json) => json,
+            Err(e) => {
+                child.stdin = Some(stdin);
+                return Err(AetherError::IoError(format!(
+                    "Failed to serialize notification: {}",
+                    e
+                )));
+            }
+        };
+
+        let mut stdin = stdin;
+        if let Err(e) = stdin.write_all(notification_json.as_bytes()).await {
+            child.stdin = Some(stdin);
+            return Err(AetherError::IoError(format!(
+                "Failed to write notification to MCP server '{}': {}",
+                self.server_name, e
+            )));
+        }
+
+        if let Err(e) = stdin.flush().await {
+            child.stdin = Some(stdin);
+            return Err(AetherError::IoError(format!(
+                "Failed to flush MCP server '{}' stdin: {}",
+                self.server_name, e
+            )));
+        }
+
+        // Put stdin back
+        child.stdin = Some(stdin);
+
+        tracing::debug!(
+            server = %self.server_name,
+            method = %method,
+            "JSON-RPC notification sent"
+        );
+
+        Ok(())
     }
 
     /// Close the transport and terminate the server process
