@@ -35,6 +35,19 @@ namespace aether {
   // Never overwrites existing user skills
   [Throws=AetherException]
   void initialize_builtin_skills_ffi(string bundle_skills_dir);
+
+  // List all installed skills
+  [Throws=AetherException]
+  sequence<SkillInfo> list_installed_skills();
+
+  // Delete a skill by ID
+  [Throws=AetherException]
+  void delete_skill(string skill_id);
+
+  // Install a skill from a GitHub URL (e.g., https://github.com/user/repo)
+  // Returns the installed skill info
+  [Throws=AetherException]
+  SkillInfo install_skill_from_url(string url);
 };
 
 // Processing states for Aether system

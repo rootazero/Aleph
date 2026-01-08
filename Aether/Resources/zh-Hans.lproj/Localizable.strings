@@ -346,6 +346,26 @@
 "settings.search.get_api_key" = "免费获取 API";
 "settings.search.documentation" = "文档";
 
+// MARK: - Settings Window - Skills Tab
+"settings.skills.title" = "Claude 技能";
+"settings.skills.description" = "安装和管理 Claude Agent 技能。技能注入专业指令以增强 AI 能力。";
+"settings.skills.installed_skills" = "已安装技能";
+"settings.skills.install" = "安装技能";
+"settings.skills.install_skill" = "安装技能";
+"settings.skills.install_first" = "安装您的第一个技能";
+"settings.skills.loading" = "加载技能中...";
+"settings.skills.empty_title" = "尚未安装技能";
+"settings.skills.empty_description" = "技能通过专业指令增强 AI 能力。\n从 GitHub 仓库安装技能。";
+"settings.skills.github_url" = "GitHub 仓库 URL";
+"settings.skills.url_placeholder" = "https://github.com/user/skill-repo";
+"settings.skills.url_example" = "示例：user/repo、github.com/user/repo 或完整 URL";
+"settings.skills.delete" = "删除技能";
+"settings.skills.delete_skill" = "删除技能";
+"settings.skills.delete_skill_message" = "确定要删除技能「%@」吗？此操作无法撤销。";
+"settings.skills.delete_failed" = "删除技能失败：%@";
+"settings.skills.install_failed" = "安装技能失败：%@";
+"settings.skills.usage_hint" = "使用方式：/skill %@";
+
 // MARK: - Settings Window - Memory Tab
 "settings.memory.title" = "记忆管理";
 "settings.memory.description" = "Aether 会记住过去的交互以提供上下文感知的响应。所有数据都存储在本地，永远不会离开您的设备。";

@@ -115,9 +115,10 @@ pub use crate::memory::context::CompressionResult;
 pub use crate::error::{AetherError, AetherException, Result};
 pub use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 pub use crate::initialization::{
-    check_embedding_model_exists, download_embedding_model_standalone, get_skills_dir,
-    get_skills_dir_string, initialize_builtin_skills, initialize_builtin_skills_ffi,
-    is_fresh_install, run_first_time_init, InitializationProgressHandler,
+    check_embedding_model_exists, delete_skill, download_embedding_model_standalone,
+    get_skills_dir, get_skills_dir_string, initialize_builtin_skills, initialize_builtin_skills_ffi,
+    install_skill_from_url, is_fresh_install, list_installed_skills, run_first_time_init,
+    InitializationProgressHandler,
 };
 pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer};
 pub use crate::memory::database::MemoryStats;

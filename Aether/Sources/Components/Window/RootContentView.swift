@@ -129,6 +129,8 @@ struct RootContentView: View {
             return L("settings.memory.title")
         case .search:
             return L("settings.search.title")
+        case .skills:
+            return L("settings.skills.title")
         }
     }
 
@@ -149,6 +151,8 @@ struct RootContentView: View {
             return L("settings.memory.description")
         case .search:
             return L("settings.search.description")
+        case .skills:
+            return L("settings.skills.description")
         }
     }
 
@@ -259,6 +263,14 @@ struct RootContentView: View {
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Search settings requires AetherCore initialization")
+            }
+
+        case .skills:
+            if let core = appDelegate.core {
+                SkillsSettingsView(core: core, saveBarState: saveBarState)
+                    .id(configReloadTrigger)
+            } else {
+                placeholderView("Skills management requires AetherCore initialization")
             }
         }
     }

@@ -193,7 +193,8 @@ struct SidebarWithTrafficLights: View {
             NavigationItemConfig(tab: .shortcuts, iconName: "command", titleKey: "settings.shortcuts.title"),
             NavigationItemConfig(tab: .behavior, iconName: "slider.horizontal.3", titleKey: "settings.behavior.title"),
             NavigationItemConfig(tab: .memory, iconName: "brain", titleKey: "settings.memory.title"),
-            NavigationItemConfig(tab: .search, iconName: "magnifyingglass", titleKey: "settings.search.title")
+            NavigationItemConfig(tab: .search, iconName: "magnifyingglass", titleKey: "settings.search.title"),
+            NavigationItemConfig(tab: .skills, iconName: "wand.and.stars", titleKey: "settings.skills.title")
         ]
     }
 }

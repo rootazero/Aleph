@@ -289,6 +289,35 @@ impl SkillsInstaller {
     pub fn skills_dir(&self) -> &PathBuf {
         &self.skills_dir
     }
+
+    /// Install skill from GitHub URL (synchronous wrapper)
+    ///
+    /// Blocks the current thread to perform the async download.
+    /// Returns the first successfully installed skill.
+    pub fn install_from_url_sync(&self, url: &str) -> Result<Skill> {
+        let runtime = tokio::runtime::Runtime::new().map_err(|e| {
+            AetherError::config(format!("Failed to create async runtime: {}", e))
+        })?;
+
+        let installed = runtime.block_on(self.install_from_github(url))?;
+
+        if installed.is_empty() {
+            return Err(AetherError::invalid_config(format!(
+                "No valid skills found at {}",
+                url
+            )));
+        }
+
+        // Load and return the first installed skill
+        let skill_id = &installed[0];
+        let skill_dir = self.skills_dir.join(skill_id);
+        let skill_md = skill_dir.join("SKILL.md");
+        let content = std::fs::read_to_string(&skill_md).map_err(|e| {
+            AetherError::config(format!("Failed to read installed skill: {}", e))
+        })?;
+
+        Skill::parse(skill_id, &content)
+    }
 }
 
 #[cfg(test)]

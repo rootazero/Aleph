@@ -636,6 +636,76 @@ pub fn initialize_builtin_skills(bundle_skills_dir: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// List all installed skills
+///
+/// Scans the skills directory and returns info for each valid skill.
+pub fn list_installed_skills() -> Result<Vec<crate::skills::SkillInfo>> {
+    use crate::skills::SkillsRegistry;
+
+    let skills_dir = get_skills_dir()?;
+
+    // Ensure skills directory exists
+    if !skills_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let registry = SkillsRegistry::new(skills_dir);
+    registry.load_all()?;
+
+    let skills = registry.list_skills();
+    Ok(skills.into_iter().map(|s| s.to_info()).collect())
+}
+
+/// Delete a skill by ID
+///
+/// Removes the skill directory from the skills folder.
+pub fn delete_skill(skill_id: String) -> Result<()> {
+    let skills_dir = get_skills_dir()?;
+    let skill_path = skills_dir.join(&skill_id);
+
+    if !skill_path.exists() {
+        return Err(AetherError::invalid_config(format!(
+            "Skill '{}' not found",
+            skill_id
+        )));
+    }
+
+    // Remove the entire skill directory
+    fs::remove_dir_all(&skill_path).map_err(|e| {
+        AetherError::config(format!("Failed to delete skill '{}': {}", skill_id, e))
+    })?;
+
+    info!(skill_id = %skill_id, "Deleted skill");
+    Ok(())
+}
+
+/// Install a skill from a GitHub URL
+///
+/// Downloads and installs a skill from a GitHub repository URL.
+/// The URL can be a repository URL (e.g., https://github.com/user/repo)
+/// or a specific branch/tag URL.
+pub fn install_skill_from_url(url: String) -> Result<crate::skills::SkillInfo> {
+    use crate::skills::SkillsInstaller;
+
+    let skills_dir = get_skills_dir()?;
+
+    // Ensure skills directory exists
+    fs::create_dir_all(&skills_dir)
+        .map_err(|e| AetherError::config(format!("Failed to create skills directory: {}", e)))?;
+
+    // Use the installer to download and install (synchronous)
+    let installer = SkillsInstaller::new(skills_dir);
+    let skill = installer.install_from_url_sync(&url)?;
+
+    info!(
+        skill_id = %skill.id,
+        skill_name = %skill.name(),
+        "Installed skill from URL"
+    );
+
+    Ok(skill.to_info())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

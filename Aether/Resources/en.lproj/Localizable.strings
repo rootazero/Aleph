@@ -344,6 +344,26 @@
 "settings.search.get_api_key" = "Get Free API";
 "settings.search.documentation" = "Docs";
 
+// MARK: - Settings Window - Skills Tab
+"settings.skills.title" = "Claude Skills";
+"settings.skills.description" = "Install and manage Claude Agent Skills. Skills inject specialized instructions to enhance AI capabilities.";
+"settings.skills.installed_skills" = "Installed Skills";
+"settings.skills.install" = "Install Skill";
+"settings.skills.install_skill" = "Install Skill";
+"settings.skills.install_first" = "Install Your First Skill";
+"settings.skills.loading" = "Loading skills...";
+"settings.skills.empty_title" = "No Skills Installed";
+"settings.skills.empty_description" = "Skills enhance AI capabilities with specialized instructions.\nInstall skills from GitHub repositories.";
+"settings.skills.github_url" = "GitHub Repository URL";
+"settings.skills.url_placeholder" = "https://github.com/user/skill-repo";
+"settings.skills.url_example" = "Example: user/repo, github.com/user/repo, or full URL";
+"settings.skills.delete" = "Delete Skill";
+"settings.skills.delete_skill" = "Delete Skill";
+"settings.skills.delete_skill_message" = "Are you sure you want to delete the skill \"%@\"? This action cannot be undone.";
+"settings.skills.delete_failed" = "Failed to delete skill: %@";
+"settings.skills.install_failed" = "Failed to install skill: %@";
+"settings.skills.usage_hint" = "Use with: /skill %@";
+
 // MARK: - Settings Window - Memory Tab
 "settings.memory.title" = "Memory Management";
 "settings.memory.description" = "Aether remembers past interactions to provide context-aware responses. All data is stored locally and never leaves your device.";

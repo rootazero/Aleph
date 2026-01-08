@@ -49,6 +49,11 @@ targets:
         type: group
         excludes:
           - "AppIcon/**"
+          - "skills/**"
+      - path: Aether/Resources/skills
+        name: skills
+        type: folder
+        buildPhase: resources
     info:
       path: Aether/Info.plist
       properties:
