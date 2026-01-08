@@ -261,8 +261,16 @@ impl PromptAssembler {
     /// - Snippet/excerpt text
     /// - Optional published date
     /// - Optional relevance score
+    ///
+    /// Also includes instructions to help AI understand that these results
+    /// were fetched by its own search capability, not provided by the user.
     fn format_search_results_markdown(&self, results: &[SearchResult]) -> String {
-        let mut lines = vec!["**Web Search Results**:".to_string()];
+        let mut lines = vec![
+            "**Web Search Results** (Retrieved by your search capability):".to_string(),
+            String::new(),
+            "_IMPORTANT: These results were just fetched by YOUR search capability in real-time. You HAVE successfully accessed the internet. Do NOT say \"I cannot access the internet\" or ask the user for more search results. Answer directly based on this data._".to_string(),
+            String::new(),
+        ];
 
         for (i, result) in results.iter().enumerate() {
             // Main entry with title as link
@@ -551,8 +559,9 @@ mod tests {
 
         let formatted = assembler.format_search_results_markdown(&results);
 
-        // Check header
-        assert!(formatted.contains("**Web Search Results**"));
+        // Check header and instruction
+        assert!(formatted.contains("**Web Search Results** (Retrieved by your search capability)"));
+        assert!(formatted.contains("YOUR search capability in real-time"));
 
         // Check first result
         assert!(formatted.contains("1. [Rust Programming Language](https://www.rust-lang.org)"));
@@ -603,8 +612,8 @@ mod tests {
         // Should contain context section
         assert!(prompt.contains("### Context Information"));
 
-        // Should contain search results
-        assert!(prompt.contains("**Web Search Results**"));
+        // Should contain search results with capability instruction
+        assert!(prompt.contains("**Web Search Results** (Retrieved by your search capability)"));
         assert!(prompt.contains("[Test Result](https://example.com)"));
         assert!(prompt.contains("Test snippet"));
         assert!(prompt.contains("Relevance: 90%"));
@@ -669,7 +678,7 @@ mod tests {
         // Should contain both memory and search sections
         assert!(prompt.contains("**Relevant History**"));
         assert!(prompt.contains("Previous question"));
-        assert!(prompt.contains("**Web Search Results**"));
+        assert!(prompt.contains("**Web Search Results** (Retrieved by your search capability)"));
         assert!(prompt.contains("Search Result"));
         assert!(prompt.contains("Relevant information"));
     }
