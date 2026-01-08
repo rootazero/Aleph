@@ -116,8 +116,8 @@ pub use crate::error::{AetherError, AetherException, Result};
 pub use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 pub use crate::initialization::{
     check_embedding_model_exists, download_embedding_model_standalone, get_skills_dir,
-    initialize_builtin_skills, is_fresh_install, run_first_time_init,
-    InitializationProgressHandler,
+    get_skills_dir_string, initialize_builtin_skills, initialize_builtin_skills_ffi,
+    is_fresh_install, run_first_time_init, InitializationProgressHandler,
 };
 pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer};
 pub use crate::memory::database::MemoryStats;
@@ -133,7 +133,7 @@ pub use crate::conversation::{ConversationManager, ConversationSession, Conversa
 pub use crate::intent::{AiIntentDetector, AiIntentResult};
 pub use crate::coordination::{ConversationAwareRouter, RoutingContext, RoutingResult};
 pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
-pub use crate::skills::{Skill, SkillsInstaller, SkillsRegistry};
+pub use crate::skills::{Skill, SkillInfo, SkillsInstaller, SkillsRegistry};
 pub use crate::utils::pii;
 
 // Test-only exports

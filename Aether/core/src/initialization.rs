@@ -167,9 +167,14 @@ pub fn get_model_dir() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("models").join("bge-small-zh-v1.5"))
 }
 
-/// Get the skills directory path
+/// Get the skills directory path as PathBuf (internal use)
 pub fn get_skills_dir() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("skills"))
+}
+
+/// Get the skills directory path as String (for UniFFI export)
+pub fn get_skills_dir_string() -> Result<String> {
+    Ok(get_skills_dir()?.to_string_lossy().to_string())
 }
 
 /// Run first-time initialization
@@ -521,6 +526,17 @@ async fn initialize_memory_database() -> Result<()> {
 
     info!("✅ Memory database initialized");
     Ok(())
+}
+
+/// Initialize built-in skills (UniFFI export)
+///
+/// Wrapper that takes a String path for UniFFI compatibility.
+///
+/// # Arguments
+/// * `bundle_skills_dir` - Path to the bundled skills directory as String
+pub fn initialize_builtin_skills_ffi(bundle_skills_dir: String) -> Result<()> {
+    let path = PathBuf::from(&bundle_skills_dir);
+    initialize_builtin_skills(&path)
 }
 
 /// Initialize built-in skills

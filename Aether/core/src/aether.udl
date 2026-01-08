@@ -24,6 +24,17 @@ namespace aether {
   // Returns true if download succeeded, false otherwise
   [Throws=AetherException]
   boolean download_embedding_model_standalone(InitializationProgressHandler? progress_handler);
+
+  // SKILLS MODULE MANAGEMENT (add-skills-capability)
+
+  // Get the skills directory path (~/.config/aether/skills)
+  [Throws=AetherException]
+  string get_skills_dir_string();
+
+  // Initialize built-in skills (copy from bundle to user directory)
+  // Never overwrites existing user skills
+  [Throws=AetherException]
+  void initialize_builtin_skills_ffi(string bundle_skills_dir);
 };
 
 // Processing states for Aether system
@@ -660,6 +671,21 @@ dictionary KeywordRuleConfig {
   f32? min_score;
 };
 
+// Skills configuration (add-skills-capability)
+dictionary SkillsConfig {
+  boolean enabled;           // Enable skills capability
+  string skills_dir;         // Path to skills directory (relative to config dir or absolute)
+  boolean auto_match_enabled;  // Enable auto-matching skills based on user input
+};
+
+// Skill information for UI display (add-skills-capability)
+dictionary SkillInfo {
+  string id;          // Skill ID (directory name)
+  string name;        // Human-readable name from SKILL.md
+  string description; // Description from SKILL.md
+  sequence<string> allowed_tools;  // Allowed tools (if any)
+};
+
 // Full configuration (all settings combined)
 dictionary FullConfig {
   string default_hotkey;
@@ -672,6 +698,7 @@ dictionary FullConfig {
   SearchConfig? search;
   TriggerConfig? trigger;
   SmartMatchingConfig smart_matching;
+  SkillsConfig? skills;  // Skills configuration (add-skills-capability)
 };
 
 // Provider config entry (name + config)

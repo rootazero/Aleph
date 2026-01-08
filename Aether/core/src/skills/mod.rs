@@ -134,6 +134,31 @@ impl Skill {
     pub fn allowed_tools(&self) -> &[String] {
         &self.frontmatter.allowed_tools
     }
+
+    /// Convert to SkillInfo for FFI/UI display
+    pub fn to_info(&self) -> SkillInfo {
+        SkillInfo {
+            id: self.id.clone(),
+            name: self.frontmatter.name.clone(),
+            description: self.frontmatter.description.clone(),
+            allowed_tools: self.frontmatter.allowed_tools.clone(),
+        }
+    }
+}
+
+/// Skill information for FFI/UI display
+///
+/// A simplified view of Skill without the full instructions.
+#[derive(Debug, Clone)]
+pub struct SkillInfo {
+    /// Skill ID (directory name)
+    pub id: String,
+    /// Human-readable name
+    pub name: String,
+    /// Description
+    pub description: String,
+    /// Allowed tools
+    pub allowed_tools: Vec<String>,
 }
 
 // Re-exports

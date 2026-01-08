@@ -247,6 +247,8 @@ pub struct FullConfig {
     pub trigger: Option<TriggerConfig>,
     #[serde(default)]
     pub smart_matching: SmartMatchingConfig,
+    #[serde(default)]
+    pub skills: Option<SkillsConfig>,
 }
 
 impl From<Config> for FullConfig {
@@ -270,6 +272,7 @@ impl From<Config> for FullConfig {
             search,
             trigger: config.trigger,
             smart_matching: config.smart_matching,
+            skills: Some(config.skills),
         }
     }
 }
