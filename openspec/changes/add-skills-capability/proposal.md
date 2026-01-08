@@ -3,6 +3,7 @@
 **Status**: Draft
 **Author**: AI Assistant
 **Created**: 2026-01-07
+**Updated**: 2026-01-08
 
 ## Why
 
@@ -15,46 +16,85 @@ OpenAI、GitHub Copilot 等已采用相同规范。Aether 作为 OS-Level AI 中
 
 ## What Changes
 
-### New Capabilities
+### Architecture Integration
 
-1. **Skills Registry（Rust Core）**
-   - 扫描 `~/.config/aether/skills/` 目录
-   - 解析 `SKILL.md` 文件（YAML frontmatter + Markdown instructions）
-   - 支持 Claude Agent Skills 标准字段：`name`, `description`, `allowed-tools`
+本提案采用现有的 **Strategy Pattern** 架构，将 Skills 作为一个独立的 Capability 实现：
 
-2. **Skills Loader（Rust Core）**
-   - 根据用户输入匹配 Skill（基于 `description` 字段）
-   - 支持显式调用：`/skill <name>`
-   - 支持自动匹配：当输入匹配 Skill 描述时自动加载
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                 CompositeCapabilityExecutor                      │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ │
+│  │ Memory   │ │ Search   │ │ MCP      │ │ Video    │ │ Skills │ │
+│  │ Strategy │ │ Strategy │ │ Strategy │ │ Strategy │ │Strategy│ │
+│  │ (0)      │ │ (1)      │ │ (2)      │ │ (3)      │ │ (4)    │ │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-3. **Skills Injection（Rust Core）**
-   - 将匹配的 Skill 指令注入到 system prompt
-   - 处理 `allowed-tools` 约束
-   - 与 Memory/Search 等 Capability 协同工作
+### New Components
 
-4. **Built-in Skills（Resources）**
-   - 内置常用 Skills：`refine-text`, `translate`, `summarize`
-   - 首次启动时复制到用户目录
+1. **Capability::Skills (payload/capability.rs)**
+   - 添加 `Skills = 4` 变体（Video 之后执行）
+   - Skills 在所有其他 Capability 之后执行，以便收集完整上下文
 
-### Modified Capabilities
+2. **SkillsStrategy (capability/strategies/skills.rs)**
+   - 实现 `CapabilityStrategy` trait
+   - 从 `SkillsRegistry` 加载匹配的 Skill
+   - 将 Skill 指令注入 `payload.context.skill_instructions`
 
-- **Capability 枚举**：添加 `Skills = 5` 变体
-- **CapabilityExecutor**：添加 `execute_skills()` 方法
-- **PayloadContext**：添加 `skill_instructions: Option<String>` 字段
-- **PromptAssembler**：处理 Skill 指令注入
+3. **SkillsRegistry (skills/registry.rs)**
+   - 管理 Skills 目录 (`~/.config/aether/skills/`)
+   - 解析 SKILL.md 文件（YAML frontmatter + Markdown body）
+   - 支持热重载（目录变更检测）
+
+4. **Skill Data Types (skills/mod.rs)**
+   - `SkillFrontmatter`: name, description, allowed_tools
+   - `Skill`: frontmatter + instructions (markdown body)
+   - `SkillsConfig`: enabled, skills_dir, auto_match_enabled
+
+### Modified Components
+
+1. **AgentContext (payload/mod.rs)**
+   - 添加 `skill_instructions: Option<String>` 字段
+
+2. **PromptAssembler (payload/assembler.rs)**
+   - 在 system prompt 末尾注入 skill_instructions
+   - 格式: `## Skill Instructions\n\n{instructions}`
+
+3. **Config (config/mod.rs)**
+   - 添加 `[skills]` 配置节
+   - 支持 `enabled`, `skills_dir`, `auto_match_enabled` 选项
+
+4. **Router (router/mod.rs)**
+   - 检测 `/skill <name>` 命令（显式调用）
+   - 支持基于 description 的自动匹配（可选）
 
 ## Impact
 
 - **Affected specs**:
   - `skills-capability` (NEW) - Skills 系统规范
 
-- **Affected code**:
-  - `Aether/core/src/skills/` - 新增模块
-  - `Aether/core/src/capability/mod.rs` - 添加 Skills 执行器
-  - `Aether/core/src/payload/capability.rs` - 添加 Skills 变体
-  - `Aether/core/src/payload/context.rs` - 添加 skill_instructions 字段
-  - `Aether/core/src/payload/assembler.rs` - 处理 Skill 注入
-  - `Aether/Resources/skills/` - 内置 Skills 资源
+- **Affected code** (按依赖顺序):
+  ```
+  Phase 1: 数据类型和注册表
+  ├── Aether/core/src/skills/mod.rs (NEW)
+  ├── Aether/core/src/skills/registry.rs (NEW)
+  └── Aether/core/src/payload/capability.rs (ADD Skills variant)
+
+  Phase 2: Strategy 实现
+  ├── Aether/core/src/capability/strategies/skills.rs (NEW)
+  ├── Aether/core/src/capability/strategies/mod.rs (ADD export)
+  └── Aether/core/src/payload/mod.rs (ADD skill_instructions field)
+
+  Phase 3: 集成和配置
+  ├── Aether/core/src/config/mod.rs (ADD SkillsConfig)
+  ├── Aether/core/src/core.rs (REGISTER SkillsStrategy)
+  └── Aether/core/src/payload/assembler.rs (ADD skill injection)
+
+  Phase 4: 路由和命令
+  ├── Aether/core/src/router/mod.rs (ADD /skill command)
+  └── Aether/core/src/lib.rs (RE-EXPORT skills module)
+  ```
 
 - **Breaking changes**: None（增量添加）
 
@@ -97,16 +137,57 @@ When refining text, follow these principles:
 
 ## Success Criteria
 
-1. 支持 Claude Agent Skills 标准格式（SKILL.md）
-2. 支持 `/skill <name>` 显式调用
-3. 支持基于描述的自动匹配
-4. 内置 3 个 Skills 可用
-5. Skill 指令正确注入到 system prompt
-6. 与 Memory/Search Capability 协同工作
-7. Skills 热加载（目录变更检测）
+1. ✅ 支持 Claude Agent Skills 标准格式（SKILL.md）
+2. ✅ 支持 `/skill <name>` 显式调用
+3. ✅ 支持基于描述的自动匹配（可配置开关）
+4. ✅ 内置 3 个 Skills 可用（refine-text, translate, summarize）
+5. ✅ Skill 指令正确注入到 system prompt
+6. ✅ 与现有 Capability 系统（Memory/Search/Video）协同工作
+7. ✅ Skills 热加载（目录变更检测）
+8. ✅ 遵循 Strategy Pattern 架构
+
+## Design Decisions
+
+### Decision 1: Capability 优先级
+
+**选择**：`Skills = 4`（在 Video 之后）
+
+**理由**：
+- Skills 是指令增强，应在所有上下文收集（Memory, Search, Video）完成后执行
+- 这样 Skill 指令可以引用其他 Capability 提供的上下文
+- 与 Claude Code 的 Skills 执行顺序一致
+
+### Decision 2: Strategy Pattern 集成
+
+**选择**：实现 `CapabilityStrategy` trait
+
+**理由**：
+- 与现有架构（MemoryStrategy, SearchStrategy, VideoStrategy）保持一致
+- 低耦合：SkillsStrategy 可独立测试和替换
+- 高内聚：所有 Skill 相关逻辑封装在 skills/ 模块
+
+### Decision 3: 自动匹配默认关闭
+
+**选择**：`auto_match_enabled = false` 为默认值
+
+**理由**：
+- 防止误匹配导致意外行为
+- 用户需要显式启用才会触发自动匹配
+- 始终可以通过 `/skill <name>` 显式调用
+
+### Decision 4: 与 Phantom Flow 解耦
+
+**选择**：完全解耦
+
+**理由**：
+- Skills 本身是指令注入，不需要用户交互
+- 如果 Skill 需要参数，可以独立调用 Phantom Flow
+- 保持两个系统的单一职责
 
 ## References
 
 - [Claude Agent Skills Overview](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview)
 - [Anthropic Skills GitHub](https://github.com/anthropics/skills)
 - [Simon Willison: Claude Skills](https://simonwillison.net/2025/Oct/16/claude-skills/)
+- Current CapabilityStrategy: `Aether/core/src/capability/strategy.rs`
+- Existing Strategies: `Aether/core/src/capability/strategies/`
