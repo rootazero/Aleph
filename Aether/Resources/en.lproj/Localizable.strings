@@ -376,6 +376,43 @@
 "settings.mcp.restart_title" = "Restart Required";
 "settings.mcp.restart_message" = "MCP service changes will take effect after restarting Aether.";
 
+// Master-Detail UI (redesign-mcp-settings-ui)
+"settings.mcp.server_list.builtin" = "BUILT-IN CORE";
+"settings.mcp.server_list.extensions" = "EXTENSIONS";
+"settings.mcp.server_list.add" = "Add Server";
+"settings.mcp.no_extensions" = "No extensions installed";
+"settings.mcp.select_server" = "Select a server from the list";
+"settings.mcp.delete_server" = "Delete server";
+"settings.mcp.delete_confirm_title" = "Delete Server?";
+"settings.mcp.delete_confirm_message" = "This action cannot be undone.";
+"settings.mcp.add_server_title" = "Add External Server";
+"settings.mcp.add_server.name" = "Server Name";
+"settings.mcp.add_server.command" = "Command";
+"settings.mcp.add_server.args" = "Arguments (comma-separated)";
+"settings.mcp.add_server.args_hint" = "Enter arguments separated by commas";
+"settings.mcp.logs_title" = "Server Logs";
+"settings.mcp.no_logs" = "No logs available";
+"settings.mcp.detail.command" = "Command & Arguments";
+"settings.mcp.detail.command_path" = "Command";
+"settings.mcp.detail.args" = "Args";
+"settings.mcp.detail.add_arg" = "Add Argument";
+"settings.mcp.detail.working_dir" = "Work Dir";
+"settings.mcp.detail.browse" = "Browse";
+"settings.mcp.detail.env_vars" = "Environment Variables";
+"settings.mcp.detail.env_vars_description" = "Environment variables are masked by default to protect sensitive values.";
+"settings.mcp.detail.add_variable" = "Add Variable";
+"settings.mcp.detail.permissions" = "Permissions";
+"settings.mcp.detail.requires_confirmation" = "Require confirmation before tool execution";
+"settings.mcp.detail.requires_confirmation_description" = "Ask for user confirmation before running any tool from this server.";
+"settings.mcp.detail.allowed_paths" = "Allowed Paths";
+"settings.mcp.detail.allowed_commands" = "Allowed Commands";
+"settings.mcp.detail.show_logs" = "Show Logs";
+"settings.mcp.detail.json_mode" = "JSON Configuration";
+"settings.mcp.detail.status.running" = "Running";
+"settings.mcp.detail.status.stopped" = "Stopped";
+"settings.mcp.detail.status.starting" = "Starting";
+"settings.mcp.detail.status.error" = "Error";
+
 // MARK: - Settings Window - Skills Tab
 "settings.skills.title" = "Claude Skills";
 "settings.skills.description" = "Install and manage Claude Agent Skills. Skills inject specialized instructions to enhance AI capabilities.";

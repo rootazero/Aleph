@@ -73,6 +73,87 @@ pub struct McpResource {
 
 // ===== UniFFI Types for Swift UI =====
 
+/// MCP server type (builtin or external)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpServerType {
+    /// Builtin service (Rust native implementation)
+    Builtin,
+    /// External server (user installed)
+    External,
+}
+
+/// MCP server status
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpServerStatus {
+    /// Server is stopped
+    Stopped,
+    /// Server is starting
+    Starting,
+    /// Server is running
+    Running,
+    /// Server has an error
+    Error,
+}
+
+/// MCP server permissions configuration
+#[derive(Debug, Clone, Default)]
+pub struct McpServerPermissions {
+    /// Whether this server requires user confirmation before tool execution
+    pub requires_confirmation: bool,
+    /// Allowed file paths (for file operations)
+    pub allowed_paths: Vec<String>,
+    /// Allowed commands (for shell operations)
+    pub allowed_commands: Vec<String>,
+}
+
+/// MCP server configuration (for both builtin and external servers)
+/// This is the UI-facing configuration structure
+#[derive(Debug, Clone)]
+pub struct McpServerConfig {
+    /// Server unique identifier
+    pub id: String,
+    /// Server display name
+    pub name: String,
+    /// Server type (builtin or external)
+    pub server_type: McpServerType,
+    /// Whether the server is enabled
+    pub enabled: bool,
+    /// Command to execute (external servers only)
+    pub command: Option<String>,
+    /// Command arguments (external servers only)
+    pub args: Vec<String>,
+    /// Environment variables (key-value pairs)
+    pub env: Vec<McpEnvVar>,
+    /// Working directory (external servers only)
+    pub working_directory: Option<String>,
+    /// Trigger command in Halo (e.g., /mcp/git)
+    pub trigger_command: Option<String>,
+    /// Server permissions
+    pub permissions: McpServerPermissions,
+    /// SF Symbol icon name
+    pub icon: String,
+    /// Theme color (hex)
+    pub color: String,
+}
+
+/// Environment variable key-value pair (for UniFFI)
+#[derive(Debug, Clone)]
+pub struct McpEnvVar {
+    pub key: String,
+    pub value: String,
+}
+
+/// MCP server status info (for UI display)
+#[derive(Debug, Clone)]
+pub struct McpServerStatusInfo {
+    /// Current status
+    pub status: McpServerStatus,
+    /// Status message
+    pub message: Option<String>,
+    /// Last error message (if any)
+    pub last_error: Option<String>,
+}
+
 /// MCP service information for UI display
 #[derive(Debug, Clone)]
 pub struct McpServiceInfo {

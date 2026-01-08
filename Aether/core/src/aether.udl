@@ -390,6 +390,39 @@ interface AetherCore {
 
   // Get list of MCP tools
   sequence<McpToolInfo> list_mcp_tools();
+
+  // MCP Server Management Methods (redesign-mcp-settings-ui)
+
+  // List all MCP servers (builtin and external)
+  sequence<McpServerConfig> list_mcp_servers();
+
+  // Get a specific MCP server by ID
+  McpServerConfig? get_mcp_server(string id);
+
+  // Get MCP server status
+  McpServerStatusInfo get_mcp_server_status(string id);
+
+  // Add an external MCP server
+  [Throws=AetherException]
+  void add_mcp_server(McpServerConfig config);
+
+  // Update an MCP server configuration
+  [Throws=AetherException]
+  void update_mcp_server(McpServerConfig config);
+
+  // Delete an external MCP server
+  [Throws=AetherException]
+  void delete_mcp_server(string id);
+
+  // Get MCP server logs
+  sequence<string> get_mcp_server_logs(string id, u32 max_lines);
+
+  // Export MCP configuration as claude_desktop_config.json format
+  string export_mcp_config_json();
+
+  // Import MCP configuration from claude_desktop_config.json format
+  [Throws=AetherException]
+  void import_mcp_config_json(string json);
 };
 
 // Callback interface for events from Rust to client
@@ -841,4 +874,56 @@ dictionary McpSettingsConfig {
   sequence<string> allowed_repos;     // Allowed git repositories
   sequence<string> allowed_commands;  // Allowed shell commands
   u64 shell_timeout_seconds;          // Shell command timeout
+};
+
+// ===== MCP Server Management Types (redesign-mcp-settings-ui) =====
+
+// MCP server type (builtin or external)
+enum McpServerType {
+  "Builtin",   // Builtin service (Rust native implementation)
+  "External",  // External server (user installed)
+};
+
+// MCP server status
+enum McpServerStatus {
+  "Stopped",    // Server is stopped
+  "Starting",   // Server is starting
+  "Running",    // Server is running
+  "Error",      // Server has an error
+};
+
+// Environment variable key-value pair
+dictionary McpEnvVar {
+  string key;
+  string value;
+};
+
+// MCP server permissions configuration
+dictionary McpServerPermissions {
+  boolean requires_confirmation;     // Whether this server requires user confirmation
+  sequence<string> allowed_paths;    // Allowed file paths
+  sequence<string> allowed_commands; // Allowed commands
+};
+
+// MCP server configuration (for both builtin and external servers)
+dictionary McpServerConfig {
+  string id;                          // Server unique identifier
+  string name;                        // Server display name
+  McpServerType server_type;          // Server type (builtin or external)
+  boolean enabled;                    // Whether the server is enabled
+  string? command;                    // Command to execute (external servers only)
+  sequence<string> args;              // Command arguments
+  sequence<McpEnvVar> env;            // Environment variables
+  string? working_directory;          // Working directory
+  string? trigger_command;            // Trigger command in Halo (e.g., /mcp/git)
+  McpServerPermissions permissions;   // Server permissions
+  string icon;                        // SF Symbol icon name
+  string color;                       // Theme color (hex)
+};
+
+// MCP server status info (for UI display)
+dictionary McpServerStatusInfo {
+  McpServerStatus status;  // Current status
+  string? message;         // Status message
+  string? last_error;      // Last error message
 };

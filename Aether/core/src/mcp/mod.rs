@@ -51,6 +51,7 @@ pub use external::{check_runtime, McpServerConnection, RuntimeKind};
 pub use jsonrpc::{IdGenerator, JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 pub use transport::StdioTransport;
 pub use types::{
-    McpResource, McpServiceInfo, McpSettingsConfig, McpTool, McpToolCall, McpToolInfo,
-    McpToolResult,
+    McpEnvVar, McpResource, McpServerConfig, McpServerPermissions, McpServerStatus,
+    McpServerStatusInfo, McpServerType, McpServiceInfo, McpSettingsConfig, McpTool, McpToolCall,
+    McpToolInfo, McpToolResult,
 };

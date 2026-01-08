@@ -2,441 +2,723 @@
 //  McpSettingsView.swift
 //  Aether
 //
-//  MCP (Model Context Protocol) settings view for configuring builtin services
-//  and viewing available tools.
-//
-//  Phase 3.3 of implement-mcp-capability proposal.
+//  MCP Settings View with Master-Detail layout.
+//  Redesigned per redesign-mcp-settings-ui proposal.
 //
 
 import SwiftUI
 
-/// MCP settings view with builtin service configuration
+/// MCP settings view with Master-Detail layout
 struct McpSettingsView: View {
     // Dependencies
     let core: AetherCore
     @ObservedObject var saveBarState: SettingsSaveBarState
 
-    // Current config state
-    @State private var mcpEnabled = true
-    @State private var fsEnabled = true
-    @State private var gitEnabled = true
-    @State private var shellEnabled = false
-    @State private var systemInfoEnabled = true
+    // Server selection state
+    @State private var selectedServerId: String? = nil
 
-    // Saved state for comparison
-    @State private var savedEnabled = true
-    @State private var savedFsEnabled = true
-    @State private var savedGitEnabled = true
-    @State private var savedShellEnabled = false
-    @State private var savedSystemInfoEnabled = true
+    // Server list
+    @State private var servers: [McpServerConfig] = []
 
-    // Security settings
-    @State private var allowedRoots: [String] = []
-    @State private var allowedRepos: [String] = []
-    @State private var allowedCommands: [String] = []
-    @State private var shellTimeout: UInt64 = 30
-
-    @State private var savedAllowedRoots: [String] = []
-    @State private var savedAllowedRepos: [String] = []
-    @State private var savedAllowedCommands: [String] = []
-    @State private var savedShellTimeout: UInt64 = 30
+    // Edit state for selected server
+    @State private var editingConfig: McpServerConfig? = nil
+    @State private var originalConfig: McpServerConfig? = nil
 
     // UI state
     @State private var isSaving = false
-    @State private var errorMessage: String?
-    @State private var services: [McpServiceInfo] = []
-    @State private var tools: [McpToolInfo] = []
-
-    // New path/command input
-    @State private var newRootPath = ""
-    @State private var newRepoPath = ""
-    @State private var newCommand = ""
+    @State private var errorMessage: String? = nil
+    @State private var showAddServerSheet = false
+    @State private var showDeleteConfirmation = false
+    @State private var showImportSheet = false
+    @State private var showLogsSheet = false
+    @State private var isJsonMode = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                // Global enable toggle
-                globalEnableSection
+        HSplitView {
+            // Left sidebar - Server list
+            serverListView
+                .frame(minWidth: 200, maxWidth: 280)
 
-                if mcpEnabled {
-                    // Builtin services section
-                    builtinServicesSection
-
-                    // Security settings section
-                    securitySettingsSection
-
-                    // Available tools section
-                    availableToolsSection
-                }
+            // Right detail panel
+            if let config = editingConfig {
+                serverDetailView(config: config)
+            } else {
+                emptyDetailView
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(DesignTokens.Spacing.lg)
         }
-        .scrollEdge(edges: [.top, .bottom], style: .hard())
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            loadSettings()
-            loadServicesAndTools()
-            updateSaveBarState()
+            loadServers()
+            selectFirstServer()
         }
-        .onChange(of: mcpEnabled) { _, _ in updateSaveBarState() }
-        .onChange(of: fsEnabled) { _, _ in updateSaveBarState() }
-        .onChange(of: gitEnabled) { _, _ in updateSaveBarState() }
-        .onChange(of: shellEnabled) { _, _ in updateSaveBarState() }
-        .onChange(of: systemInfoEnabled) { _, _ in updateSaveBarState() }
-        .onChange(of: allowedRoots) { _, _ in updateSaveBarState() }
-        .onChange(of: allowedRepos) { _, _ in updateSaveBarState() }
-        .onChange(of: allowedCommands) { _, _ in updateSaveBarState() }
-        .onChange(of: shellTimeout) { _, _ in updateSaveBarState() }
-        .onChange(of: isSaving) { _, _ in updateSaveBarState() }
+        .sheet(isPresented: $showAddServerSheet) {
+            AddServerSheet(core: core) {
+                loadServers()
+            }
+        }
+        .sheet(isPresented: $showLogsSheet) {
+            if let serverId = selectedServerId {
+                ServerLogsSheet(core: core, serverId: serverId)
+            }
+        }
+        .alert(L("settings.mcp.delete_confirm_title"), isPresented: $showDeleteConfirmation) {
+            Button(L("common.cancel"), role: .cancel) {}
+            Button(L("common.delete"), role: .destructive) {
+                deleteSelectedServer()
+            }
+        } message: {
+            Text(L("settings.mcp.delete_confirm_message"))
+        }
     }
 
-    // MARK: - View Components
+    // MARK: - Server List View (Sidebar)
 
-    private var globalEnableSection: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-            Toggle(isOn: $mcpEnabled) {
-                HStack {
-                    Image(systemName: "wrench.and.screwdriver")
-                        .foregroundColor(mcpEnabled ? .accentColor : .secondary)
-                    Text(L("settings.mcp.enable"))
-                        .font(DesignTokens.Typography.heading)
+    private var serverListView: some View {
+        VStack(spacing: 0) {
+            List(selection: $selectedServerId) {
+                // Built-in Core section
+                Section(header: Text(L("settings.mcp.server_list.builtin"))) {
+                    ForEach(builtinServers, id: \.id) { server in
+                        ServerListRow(server: server, status: getServerStatus(server.id))
+                            .tag(server.id)
+                    }
+                }
+
+                // Extensions section
+                Section(header: Text(L("settings.mcp.server_list.extensions"))) {
+                    if externalServers.isEmpty {
+                        Text(L("settings.mcp.no_extensions"))
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                            .italic()
+                    } else {
+                        ForEach(externalServers, id: \.id) { server in
+                            ServerListRow(server: server, status: getServerStatus(server.id))
+                                .tag(server.id)
+                        }
+                    }
                 }
             }
-            .toggleStyle(.switch)
+            .listStyle(.sidebar)
+            .onChange(of: selectedServerId) { _, newValue in
+                if let id = newValue {
+                    selectServer(id)
+                }
+            }
 
-            Text(L("settings.mcp.enable_description"))
-                .font(DesignTokens.Typography.caption)
-                .foregroundColor(DesignTokens.Colors.textSecondary)
+            Divider()
+
+            // Bottom toolbar
+            HStack {
+                Button(action: { showAddServerSheet = true }) {
+                    Label(L("settings.mcp.server_list.add"), systemImage: "plus")
+                }
+                .buttonStyle(.borderless)
+
+                Spacer()
+
+                if selectedServerId != nil, isExternalServer(selectedServerId!) {
+                    Button(action: { showDeleteConfirmation = true }) {
+                        Image(systemName: "trash")
+                            .foregroundColor(.red)
+                    }
+                    .buttonStyle(.borderless)
+                    .help(L("settings.mcp.delete_server"))
+                }
+            }
+            .padding(8)
+        }
+        .background(DesignTokens.Colors.sidebarBackground)
+    }
+
+    // MARK: - Server Detail View
+
+    private func serverDetailView(config: McpServerConfig) -> some View {
+        VStack(spacing: 0) {
+            // Header
+            serverHeader(config: config)
+
+            Divider()
+
+            if isJsonMode {
+                // JSON editor mode
+                jsonEditorView(config: config)
+            } else {
+                // GUI form mode
+                ScrollView {
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                        // Command section (external servers only)
+                        if config.serverType == .external {
+                            commandSection(config: config)
+                        }
+
+                        // Environment variables section
+                        envVarsSection(config: config)
+
+                        // Permissions section
+                        permissionsSection(config: config)
+                    }
+                    .padding(DesignTokens.Spacing.lg)
+                }
+            }
+
+            Divider()
+
+            // Action bar
+            actionBar(config: config)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func serverHeader(config: McpServerConfig) -> some View {
+        HStack(spacing: DesignTokens.Spacing.md) {
+            // Icon
+            Image(systemName: config.icon)
+                .font(.system(size: 24))
+                .foregroundColor(Color(hex: config.color))
+                .frame(width: 32, height: 32)
+
+            // Name and trigger
+            VStack(alignment: .leading, spacing: 2) {
+                Text(config.name)
+                    .font(DesignTokens.Typography.heading)
+                if let trigger = config.triggerCommand {
+                    Text(trigger)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+            }
+
+            Spacer()
+
+            // Status indicator
+            McpStatusIndicator(status: getServerStatus(config.id))
+
+            // Enable toggle
+            Toggle("", isOn: Binding(
+                get: { editingConfig?.enabled ?? false },
+                set: { newValue in
+                    editingConfig?.enabled = newValue
+                    updateSaveBarState()
+                }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
+        }
+        .padding(DesignTokens.Spacing.md)
+        .background(DesignTokens.Colors.cardBackground)
+    }
+
+    private func commandSection(config: McpServerConfig) -> some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            Label(L("settings.mcp.detail.command"), systemImage: "terminal")
+                .font(DesignTokens.Typography.heading)
+
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                // Command
+                HStack {
+                    Text(L("settings.mcp.detail.command_path"))
+                        .font(DesignTokens.Typography.body)
+                        .frame(width: 80, alignment: .leading)
+                    TextField("npx", text: Binding(
+                        get: { editingConfig?.command ?? "" },
+                        set: { newValue in
+                            editingConfig?.command = newValue.isEmpty ? nil : newValue
+                            updateSaveBarState()
+                        }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+
+                    Button(L("settings.mcp.detail.browse")) {
+                        browseForCommand()
+                    }
+                }
+
+                // Arguments
+                HStack(alignment: .top) {
+                    Text(L("settings.mcp.detail.args"))
+                        .font(DesignTokens.Typography.body)
+                        .frame(width: 80, alignment: .leading)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array((editingConfig?.args ?? []).enumerated()), id: \.offset) { index, arg in
+                            HStack {
+                                TextField("argument", text: Binding(
+                                    get: { editingConfig?.args[safe: index] ?? "" },
+                                    set: { newValue in
+                                        if index < (editingConfig?.args.count ?? 0) {
+                                            editingConfig?.args[index] = newValue
+                                            updateSaveBarState()
+                                        }
+                                    }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(.body, design: .monospaced))
+
+                                Button(action: {
+                                    editingConfig?.args.remove(at: index)
+                                    updateSaveBarState()
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.secondary)
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
+
+                        Button(action: {
+                            editingConfig?.args.append("")
+                            updateSaveBarState()
+                        }) {
+                            Label(L("settings.mcp.detail.add_arg"), systemImage: "plus")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+
+                // Working directory
+                HStack {
+                    Text(L("settings.mcp.detail.working_dir"))
+                        .font(DesignTokens.Typography.body)
+                        .frame(width: 80, alignment: .leading)
+                    TextField("~/", text: Binding(
+                        get: { editingConfig?.workingDirectory ?? "" },
+                        set: { newValue in
+                            editingConfig?.workingDirectory = newValue.isEmpty ? nil : newValue
+                            updateSaveBarState()
+                        }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                }
+            }
         }
         .padding(DesignTokens.Spacing.md)
         .background(DesignTokens.Colors.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
     }
 
-    private var builtinServicesSection: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.mcp.builtin_services"), systemImage: "cpu")
+    private func envVarsSection(config: McpServerConfig) -> some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            Label(L("settings.mcp.detail.env_vars"), systemImage: "key")
                 .font(DesignTokens.Typography.heading)
-                .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.mcp.builtin_services_description"))
+            Text(L("settings.mcp.detail.env_vars_description"))
                 .font(DesignTokens.Typography.caption)
                 .foregroundColor(DesignTokens.Colors.textSecondary)
 
-            VStack(spacing: DesignTokens.Spacing.sm) {
-                ServiceToggleRow(
-                    icon: "folder",
-                    title: L("settings.mcp.service.fs"),
-                    description: L("settings.mcp.service.fs_description"),
-                    isEnabled: $fsEnabled
-                )
-
-                ServiceToggleRow(
-                    icon: "arrow.triangle.branch",
-                    title: L("settings.mcp.service.git"),
-                    description: L("settings.mcp.service.git_description"),
-                    isEnabled: $gitEnabled
-                )
-
-                ServiceToggleRow(
-                    icon: "terminal",
-                    title: L("settings.mcp.service.shell"),
-                    description: L("settings.mcp.service.shell_description"),
-                    isEnabled: $shellEnabled
-                )
-
-                ServiceToggleRow(
-                    icon: "info.circle",
-                    title: L("settings.mcp.service.system_info"),
-                    description: L("settings.mcp.service.system_info_description"),
-                    isEnabled: $systemInfoEnabled
-                )
+            // Env vars list
+            VStack(spacing: 4) {
+                ForEach(Array((editingConfig?.env ?? []).enumerated()), id: \.offset) { index, envVar in
+                    EnvVarRow(
+                        envVar: envVar,
+                        onUpdate: { key, value in
+                            if index < (editingConfig?.env.count ?? 0) {
+                                editingConfig?.env[index] = McpEnvVar(key: key, value: value)
+                                updateSaveBarState()
+                            }
+                        },
+                        onDelete: {
+                            editingConfig?.env.remove(at: index)
+                            updateSaveBarState()
+                        }
+                    )
+                }
             }
+
+            Button(action: {
+                editingConfig?.env.append(McpEnvVar(key: "", value: ""))
+                updateSaveBarState()
+            }) {
+                Label(L("settings.mcp.detail.add_variable"), systemImage: "plus")
+            }
+            .buttonStyle(.borderless)
         }
+        .padding(DesignTokens.Spacing.md)
+        .background(DesignTokens.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
     }
 
-    private var securitySettingsSection: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.mcp.security"), systemImage: "lock.shield")
+    private func permissionsSection(config: McpServerConfig) -> some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            Label(L("settings.mcp.detail.permissions"), systemImage: "lock.shield")
                 .font(DesignTokens.Typography.heading)
-                .foregroundColor(DesignTokens.Colors.textPrimary)
 
-            Text(L("settings.mcp.security_description"))
-                .font(DesignTokens.Typography.caption)
-                .foregroundColor(DesignTokens.Colors.textSecondary)
-
-            // Allowed filesystem roots
-            if fsEnabled {
-                PathListSection(
-                    title: L("settings.mcp.allowed_roots"),
-                    description: L("settings.mcp.allowed_roots_description"),
-                    paths: $allowedRoots,
-                    newPath: $newRootPath,
-                    placeholder: "~/Documents"
-                )
-            }
-
-            // Allowed git repos
-            if gitEnabled {
-                PathListSection(
-                    title: L("settings.mcp.allowed_repos"),
-                    description: L("settings.mcp.allowed_repos_description"),
-                    paths: $allowedRepos,
-                    newPath: $newRepoPath,
-                    placeholder: "~/Projects/myrepo"
-                )
-            }
-
-            // Allowed shell commands
-            if shellEnabled {
-                CommandListSection(
-                    title: L("settings.mcp.allowed_commands"),
-                    description: L("settings.mcp.allowed_commands_description"),
-                    commands: $allowedCommands,
-                    newCommand: $newCommand,
-                    placeholder: "ls, pwd, git"
-                )
-
-                // Shell timeout
-                HStack {
-                    Text(L("settings.mcp.shell_timeout"))
+            Toggle(isOn: Binding(
+                get: { editingConfig?.permissions.requiresConfirmation ?? true },
+                set: { newValue in
+                    editingConfig?.permissions.requiresConfirmation = newValue
+                    updateSaveBarState()
+                }
+            )) {
+                VStack(alignment: .leading) {
+                    Text(L("settings.mcp.detail.requires_confirmation"))
                         .font(DesignTokens.Typography.body)
-                    Spacer()
-                    TextField("30", value: $shellTimeout, format: .number)
-                        .frame(width: 60)
-                        .textFieldStyle(.roundedBorder)
-                    Text(L("settings.mcp.seconds"))
+                    Text(L("settings.mcp.detail.requires_confirmation_description"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
+            }
+            .toggleStyle(.switch)
+
+            // Allowed paths (for fs/git services)
+            if config.id == "fs" || config.id == "git" || config.serverType == .external {
+                PathsListEditor(
+                    title: L("settings.mcp.detail.allowed_paths"),
+                    paths: Binding(
+                        get: { editingConfig?.permissions.allowedPaths ?? [] },
+                        set: { newValue in
+                            editingConfig?.permissions.allowedPaths = newValue
+                            updateSaveBarState()
+                        }
+                    )
+                )
+            }
+
+            // Allowed commands (for shell service)
+            if config.id == "shell" {
+                CommandsListEditor(
+                    title: L("settings.mcp.detail.allowed_commands"),
+                    commands: Binding(
+                        get: { editingConfig?.permissions.allowedCommands ?? [] },
+                        set: { newValue in
+                            editingConfig?.permissions.allowedCommands = newValue
+                            updateSaveBarState()
+                        }
+                    )
+                )
+            }
+        }
+        .padding(DesignTokens.Spacing.md)
+        .background(DesignTokens.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
+    }
+
+    private func jsonEditorView(config: McpServerConfig) -> some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            Text(L("settings.mcp.detail.json_mode"))
+                .font(DesignTokens.Typography.heading)
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .padding(.top, DesignTokens.Spacing.md)
+
+            TextEditor(text: .constant(serverToJson(config)))
+                .font(.system(.body, design: .monospaced))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(DesignTokens.Spacing.sm)
-                .background(DesignTokens.Colors.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small, style: .continuous))
-            }
         }
     }
 
-    private var availableToolsSection: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            HStack {
-                Label(L("settings.mcp.available_tools"), systemImage: "hammer")
-                    .font(DesignTokens.Typography.heading)
-                    .foregroundColor(DesignTokens.Colors.textPrimary)
-
-                Spacer()
-
-                Button(action: loadServicesAndTools) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 12))
-                }
-                .buttonStyle(.borderless)
-                .help(L("settings.mcp.refresh_tools"))
+    private func actionBar(config: McpServerConfig) -> some View {
+        HStack {
+            Button(action: { showLogsSheet = true }) {
+                Label(L("settings.mcp.detail.show_logs"), systemImage: "doc.text")
             }
+            .buttonStyle(.borderless)
 
-            if tools.isEmpty {
-                Text(L("settings.mcp.no_tools"))
-                    .font(DesignTokens.Typography.caption)
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
-                    .italic()
-                    .padding(DesignTokens.Spacing.md)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(DesignTokens.Colors.cardBackground.opacity(0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
-            } else {
-                VStack(spacing: DesignTokens.Spacing.xs) {
-                    ForEach(tools, id: \.name) { tool in
-                        ToolInfoRow(tool: tool)
-                    }
-                }
+            Spacer()
+
+            // Mode toggle
+            Picker("", selection: $isJsonMode) {
+                Text("GUI").tag(false)
+                Text("JSON").tag(true)
             }
+            .pickerStyle(.segmented)
+            .frame(width: 100)
+
+            Button(action: saveChanges) {
+                Text(L("common.save"))
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!hasUnsavedChanges)
         }
+        .padding(DesignTokens.Spacing.md)
     }
 
-    // MARK: - State Management
+    // MARK: - Empty State
+
+    private var emptyDetailView: some View {
+        VStack {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 48))
+                .foregroundColor(.secondary)
+            Text(L("settings.mcp.select_server"))
+                .font(DesignTokens.Typography.body)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Computed Properties
+
+    private var builtinServers: [McpServerConfig] {
+        servers.filter { $0.serverType == .builtin }
+    }
+
+    private var externalServers: [McpServerConfig] {
+        servers.filter { $0.serverType == .external }
+    }
 
     private var hasUnsavedChanges: Bool {
-        mcpEnabled != savedEnabled ||
-        fsEnabled != savedFsEnabled ||
-        gitEnabled != savedGitEnabled ||
-        shellEnabled != savedShellEnabled ||
-        systemInfoEnabled != savedSystemInfoEnabled ||
-        allowedRoots != savedAllowedRoots ||
-        allowedRepos != savedAllowedRepos ||
-        allowedCommands != savedAllowedCommands ||
-        shellTimeout != savedShellTimeout
+        guard let editing = editingConfig, let original = originalConfig else {
+            return false
+        }
+        return editing.enabled != original.enabled ||
+               editing.command != original.command ||
+               editing.args != original.args ||
+               editing.env.count != original.env.count ||
+               editing.workingDirectory != original.workingDirectory ||
+               editing.permissions.requiresConfirmation != original.permissions.requiresConfirmation ||
+               editing.permissions.allowedPaths != original.permissions.allowedPaths ||
+               editing.permissions.allowedCommands != original.permissions.allowedCommands
     }
 
-    private var statusMessage: String? {
-        if let error = errorMessage {
-            return error
+    // MARK: - Helper Methods
+
+    private func loadServers() {
+        servers = core.listMcpServers()
+    }
+
+    private func selectFirstServer() {
+        if selectedServerId == nil, let first = servers.first {
+            selectedServerId = first.id
+            selectServer(first.id)
         }
-        if hasUnsavedChanges {
-            return L("settings.unsaved_changes.title")
+    }
+
+    private func selectServer(_ id: String) {
+        if let server = servers.first(where: { $0.id == id }) {
+            editingConfig = server
+            originalConfig = server
         }
-        return nil
+    }
+
+    private func getServerStatus(_ id: String) -> McpServerStatus {
+        core.getMcpServerStatus(id: id).status
+    }
+
+    private func isExternalServer(_ id: String) -> Bool {
+        servers.first(where: { $0.id == id })?.serverType == .external
     }
 
     private func updateSaveBarState() {
         saveBarState.update(
             hasUnsavedChanges: hasUnsavedChanges,
             isSaving: isSaving,
-            statusMessage: statusMessage,
-            onSave: saveSettings,
+            statusMessage: errorMessage,
+            onSave: saveChanges,
             onCancel: cancelChanges
         )
     }
 
-    // MARK: - Data Loading
+    private func saveChanges() {
+        guard let config = editingConfig else { return }
 
-    private func loadSettings() {
-        let config = core.getMcpConfig()
-
-        mcpEnabled = config.enabled
-        fsEnabled = config.fsEnabled
-        gitEnabled = config.gitEnabled
-        shellEnabled = config.shellEnabled
-        systemInfoEnabled = config.systemInfoEnabled
-        allowedRoots = config.allowedRoots
-        allowedRepos = config.allowedRepos
-        allowedCommands = config.allowedCommands
-        shellTimeout = config.shellTimeoutSeconds
-
-        // Save initial state
-        savedEnabled = config.enabled
-        savedFsEnabled = config.fsEnabled
-        savedGitEnabled = config.gitEnabled
-        savedShellEnabled = config.shellEnabled
-        savedSystemInfoEnabled = config.systemInfoEnabled
-        savedAllowedRoots = config.allowedRoots
-        savedAllowedRepos = config.allowedRepos
-        savedAllowedCommands = config.allowedCommands
-        savedShellTimeout = config.shellTimeoutSeconds
-    }
-
-    private func loadServicesAndTools() {
-        services = core.listMcpServices()
-        tools = core.listMcpTools()
-    }
-
-    // MARK: - Save/Cancel
-
-    private func saveSettings() {
         isSaving = true
         errorMessage = nil
 
-        let newConfig = McpSettingsConfig(
-            enabled: mcpEnabled,
-            fsEnabled: fsEnabled,
-            gitEnabled: gitEnabled,
-            shellEnabled: shellEnabled,
-            systemInfoEnabled: systemInfoEnabled,
-            allowedRoots: allowedRoots,
-            allowedRepos: allowedRepos,
-            allowedCommands: allowedCommands,
-            shellTimeoutSeconds: shellTimeout
-        )
-
         do {
-            try core.updateMcpConfig(config: newConfig)
-
-            // Update saved state
-            savedEnabled = mcpEnabled
-            savedFsEnabled = fsEnabled
-            savedGitEnabled = gitEnabled
-            savedShellEnabled = shellEnabled
-            savedSystemInfoEnabled = systemInfoEnabled
-            savedAllowedRoots = allowedRoots
-            savedAllowedRepos = allowedRepos
-            savedAllowedCommands = allowedCommands
-            savedShellTimeout = shellTimeout
-
-            // Show restart notice
-            showRestartNotice()
+            try core.updateMcpServer(config: config)
+            originalConfig = config
+            loadServers()
         } catch {
             errorMessage = "Failed to save: \(error.localizedDescription)"
         }
 
         isSaving = false
+        updateSaveBarState()
     }
 
     private func cancelChanges() {
-        // Restore from saved state
-        mcpEnabled = savedEnabled
-        fsEnabled = savedFsEnabled
-        gitEnabled = savedGitEnabled
-        shellEnabled = savedShellEnabled
-        systemInfoEnabled = savedSystemInfoEnabled
-        allowedRoots = savedAllowedRoots
-        allowedRepos = savedAllowedRepos
-        allowedCommands = savedAllowedCommands
-        shellTimeout = savedShellTimeout
-        errorMessage = nil
+        editingConfig = originalConfig
+        updateSaveBarState()
     }
 
-    private func showRestartNotice() {
-        let alert = NSAlert()
-        alert.messageText = L("settings.mcp.restart_title")
-        alert.informativeText = L("settings.mcp.restart_message")
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: L("common.ok"))
-        alert.runModal()
+    private func deleteSelectedServer() {
+        guard let id = selectedServerId else { return }
+
+        do {
+            try core.deleteMcpServer(id: id)
+            selectedServerId = nil
+            editingConfig = nil
+            originalConfig = nil
+            loadServers()
+            selectFirstServer()
+        } catch {
+            errorMessage = "Failed to delete: \(error.localizedDescription)"
+        }
+    }
+
+    private func browseForCommand() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+
+        if panel.runModal() == .OK, let url = panel.url {
+            editingConfig?.command = url.path
+            updateSaveBarState()
+        }
+    }
+
+    private func serverToJson(_ config: McpServerConfig) -> String {
+        var json: [String: Any] = [:]
+        if let command = config.command {
+            json["command"] = command
+        }
+        if !config.args.isEmpty {
+            json["args"] = config.args
+        }
+        if !config.env.isEmpty {
+            json["env"] = Dictionary(uniqueKeysWithValues: config.env.map { ($0.key, $0.value) })
+        }
+        if let cwd = config.workingDirectory {
+            json["cwd"] = cwd
+        }
+
+        if let data = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+        return "{}"
     }
 }
 
 // MARK: - Supporting Views
 
-private struct ServiceToggleRow: View {
-    let icon: String
-    let title: String
-    let description: String
-    @Binding var isEnabled: Bool
+/// Server list row
+private struct ServerListRow: View {
+    let server: McpServerConfig
+    let status: McpServerStatus
 
     var body: some View {
-        HStack(alignment: .top, spacing: DesignTokens.Spacing.md) {
-            Image(systemName: icon)
-                .font(.system(size: 18))
-                .foregroundColor(isEnabled ? .accentColor : .secondary)
-                .frame(width: 24)
+        HStack(spacing: 8) {
+            Image(systemName: server.icon)
+                .foregroundColor(Color(hex: server.color))
+                .frame(width: 20)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(DesignTokens.Typography.body)
-                Text(description)
-                    .font(DesignTokens.Typography.caption)
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
-            }
+            Text(server.name)
+                .lineLimit(1)
 
             Spacer()
 
-            Toggle("", isOn: $isEnabled)
-                .toggleStyle(.switch)
-                .labelsHidden()
+            StatusDot(status: status)
         }
-        .padding(DesignTokens.Spacing.sm)
-        .background(DesignTokens.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small, style: .continuous))
+        .padding(.vertical, 4)
     }
 }
 
-private struct PathListSection: View {
-    let title: String
-    let description: String
-    @Binding var paths: [String]
-    @Binding var newPath: String
-    let placeholder: String
+/// Status dot indicator
+private struct StatusDot: View {
+    let status: McpServerStatus
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+        Circle()
+            .fill(statusColor)
+            .frame(width: 8, height: 8)
+    }
+
+    var statusColor: Color {
+        switch status {
+        case .running: return .green
+        case .stopped: return .gray
+        case .starting: return .yellow
+        case .error: return .red
+        }
+    }
+}
+
+/// MCP server status indicator with label
+private struct McpStatusIndicator: View {
+    let status: McpServerStatus
+
+    var body: some View {
+        HStack(spacing: 4) {
+            StatusDot(status: status)
+            Text(statusText)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.secondary.opacity(0.1))
+        .clipShape(Capsule())
+    }
+
+    var statusText: String {
+        switch status {
+        case .running: return L("settings.mcp.detail.status.running")
+        case .stopped: return L("settings.mcp.detail.status.stopped")
+        case .starting: return L("settings.mcp.detail.status.starting")
+        case .error: return L("settings.mcp.detail.status.error")
+        }
+    }
+}
+
+/// Environment variable row with secure field
+private struct EnvVarRow: View {
+    let envVar: McpEnvVar
+    let onUpdate: (String, String) -> Void
+    let onDelete: () -> Void
+
+    @State private var isValueVisible = false
+    @State private var key: String
+    @State private var value: String
+
+    init(envVar: McpEnvVar, onUpdate: @escaping (String, String) -> Void, onDelete: @escaping () -> Void) {
+        self.envVar = envVar
+        self.onUpdate = onUpdate
+        self.onDelete = onDelete
+        _key = State(initialValue: envVar.key)
+        _value = State(initialValue: envVar.value)
+    }
+
+    var body: some View {
+        HStack {
+            TextField("KEY", text: $key)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 150)
+                .onChange(of: key) { _, newValue in
+                    onUpdate(newValue, value)
+                }
+
+            if isValueVisible {
+                TextField("Value", text: $value)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: value) { _, newValue in
+                        onUpdate(key, newValue)
+                    }
+            } else {
+                SecureField("Value", text: $value)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: value) { _, newValue in
+                        onUpdate(key, newValue)
+                    }
+            }
+
+            Button(action: { isValueVisible.toggle() }) {
+                Image(systemName: isValueVisible ? "eye.slash" : "eye")
+            }
+            .buttonStyle(.borderless)
+
+            Button(action: onDelete) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.borderless)
+        }
+    }
+}
+
+/// Paths list editor
+private struct PathsListEditor: View {
+    let title: String
+    @Binding var paths: [String]
+    @State private var newPath = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
             Text(title)
                 .font(DesignTokens.Typography.body)
                 .fontWeight(.medium)
 
-            Text(description)
-                .font(DesignTokens.Typography.caption)
-                .foregroundColor(DesignTokens.Colors.textSecondary)
-
-            // List of paths
             if !paths.isEmpty {
                 VStack(spacing: 4) {
                     ForEach(paths, id: \.self) { path in
@@ -461,9 +743,8 @@ private struct PathListSection: View {
                 }
             }
 
-            // Add new path
             HStack {
-                TextField(placeholder, text: $newPath)
+                TextField("~/Documents", text: $newPath)
                     .textFieldStyle(.roundedBorder)
                 Button(action: addPath) {
                     Image(systemName: "plus.circle.fill")
@@ -472,38 +753,27 @@ private struct PathListSection: View {
                 .disabled(newPath.isEmpty)
             }
         }
-        .padding(DesignTokens.Spacing.sm)
-        .background(DesignTokens.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small, style: .continuous))
     }
 
     private func addPath() {
-        guard !newPath.isEmpty else { return }
-        if !paths.contains(newPath) {
-            paths.append(newPath)
-        }
+        guard !newPath.isEmpty, !paths.contains(newPath) else { return }
+        paths.append(newPath)
         newPath = ""
     }
 }
 
-private struct CommandListSection: View {
+/// Commands list editor
+private struct CommandsListEditor: View {
     let title: String
-    let description: String
     @Binding var commands: [String]
-    @Binding var newCommand: String
-    let placeholder: String
+    @State private var newCommand = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
             Text(title)
                 .font(DesignTokens.Typography.body)
                 .fontWeight(.medium)
 
-            Text(description)
-                .font(DesignTokens.Typography.caption)
-                .foregroundColor(DesignTokens.Colors.textSecondary)
-
-            // List of commands
             if !commands.isEmpty {
                 FlowLayout(spacing: 6) {
                     ForEach(commands, id: \.self) { command in
@@ -524,9 +794,8 @@ private struct CommandListSection: View {
                 }
             }
 
-            // Add new command
             HStack {
-                TextField(placeholder, text: $newCommand)
+                TextField("ls, pwd, git", text: $newCommand)
                     .textFieldStyle(.roundedBorder)
                 Button(action: addCommand) {
                     Image(systemName: "plus.circle.fill")
@@ -535,14 +804,9 @@ private struct CommandListSection: View {
                 .disabled(newCommand.isEmpty)
             }
         }
-        .padding(DesignTokens.Spacing.sm)
-        .background(DesignTokens.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small, style: .continuous))
     }
 
     private func addCommand() {
-        guard !newCommand.isEmpty else { return }
-        // Support comma-separated commands
         let cmds = newCommand.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         for cmd in cmds {
             if !cmd.isEmpty && !commands.contains(cmd) {
@@ -553,46 +817,138 @@ private struct CommandListSection: View {
     }
 }
 
-private struct ToolInfoRow: View {
-    let tool: McpToolInfo
+/// Add Server Sheet
+private struct AddServerSheet: View {
+    let core: AetherCore
+    let onComplete: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name = ""
+    @State private var command = ""
+    @State private var args = ""
+    @State private var errorMessage: String?
 
     var body: some View {
-        HStack(alignment: .top, spacing: DesignTokens.Spacing.sm) {
-            Image(systemName: tool.requiresConfirmation ? "exclamationmark.triangle" : "wrench")
-                .foregroundColor(tool.requiresConfirmation ? .orange : .accentColor)
-                .frame(width: 16)
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            Text(L("settings.mcp.add_server_title"))
+                .font(DesignTokens.Typography.heading)
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(tool.name)
-                        .font(.system(.body, design: .monospaced))
-                    if tool.requiresConfirmation {
-                        Text(L("settings.mcp.requires_confirmation"))
-                            .font(.system(size: 9))
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Color.orange.opacity(0.2))
-                            .clipShape(Capsule())
-                    }
-                }
-                Text(tool.description)
-                    .font(DesignTokens.Typography.caption)
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
+            Form {
+                TextField(L("settings.mcp.add_server.name"), text: $name)
+                TextField(L("settings.mcp.add_server.command"), text: $command)
+                TextField(L("settings.mcp.add_server.args"), text: $args)
+                    .help(L("settings.mcp.add_server.args_hint"))
             }
 
-            Spacer()
+            if let error = errorMessage {
+                Text(error)
+                    .foregroundColor(.red)
+                    .font(DesignTokens.Typography.caption)
+            }
 
-            Text(tool.serviceName)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.secondary.opacity(0.1))
-                .clipShape(Capsule())
+            HStack {
+                Button(L("common.cancel")) {
+                    dismiss()
+                }
+
+                Spacer()
+
+                Button(L("common.add")) {
+                    addServer()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(name.isEmpty || command.isEmpty)
+            }
         }
-        .padding(DesignTokens.Spacing.sm)
-        .background(DesignTokens.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small, style: .continuous))
+        .padding()
+        .frame(width: 400)
+    }
+
+    private func addServer() {
+        let argsArray = args.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+
+        let config = McpServerConfig(
+            id: name.lowercased().replacingOccurrences(of: " ", with: "-"),
+            name: name,
+            serverType: .external,
+            enabled: true,
+            command: command,
+            args: argsArray,
+            env: [],
+            workingDirectory: nil,
+            triggerCommand: "/mcp/\(name.lowercased())",
+            permissions: McpServerPermissions(
+                requiresConfirmation: true,
+                allowedPaths: [],
+                allowedCommands: []
+            ),
+            icon: "puzzlepiece.extension",
+            color: "#FF9500"
+        )
+
+        do {
+            try core.addMcpServer(config: config)
+            onComplete()
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+/// Server Logs Sheet
+private struct ServerLogsSheet: View {
+    let core: AetherCore
+    let serverId: String
+
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var logs: [String] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            HStack {
+                Text(L("settings.mcp.logs_title"))
+                    .font(DesignTokens.Typography.heading)
+
+                Spacer()
+
+                Button(action: refreshLogs) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+
+                Button(L("common.close")) {
+                    dismiss()
+                }
+            }
+
+            if logs.isEmpty {
+                Text(L("settings.mcp.no_logs"))
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(logs, id: \.self) { log in
+                            Text(log)
+                                .font(.system(.caption, design: .monospaced))
+                        }
+                    }
+                    .padding()
+                }
+            }
+        }
+        .padding()
+        .frame(width: 600, height: 400)
+        .onAppear {
+            refreshLogs()
+        }
+    }
+
+    private func refreshLogs() {
+        logs = core.getMcpServerLogs(id: serverId, maxLines: 100)
     }
 }
 
@@ -642,7 +998,12 @@ private struct FlowLayout: Layout {
     }
 }
 
-// MARK: - Preview
+// MARK: - Helper Extensions
 
-// Preview requires a live AetherCore instance which isn't available in preview mode.
-// Use the app to test this view.
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        return indices.contains(index) ? self[index] : nil
+    }
+}
+
+// Color.init(hex:) extension already defined in DesignTokens.swift

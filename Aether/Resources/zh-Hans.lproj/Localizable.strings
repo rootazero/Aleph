@@ -378,6 +378,43 @@
 "settings.mcp.restart_title" = "需要重启";
 "settings.mcp.restart_message" = "MCP 服务更改将在重启 Aether 后生效。";
 
+// Master-Detail UI (redesign-mcp-settings-ui)
+"settings.mcp.server_list.builtin" = "内置核心";
+"settings.mcp.server_list.extensions" = "扩展服务";
+"settings.mcp.server_list.add" = "添加服务器";
+"settings.mcp.no_extensions" = "尚未安装扩展";
+"settings.mcp.select_server" = "从列表中选择一个服务器";
+"settings.mcp.delete_server" = "删除服务器";
+"settings.mcp.delete_confirm_title" = "删除服务器？";
+"settings.mcp.delete_confirm_message" = "此操作无法撤销。";
+"settings.mcp.add_server_title" = "添加外部服务器";
+"settings.mcp.add_server.name" = "服务器名称";
+"settings.mcp.add_server.command" = "命令";
+"settings.mcp.add_server.args" = "参数（逗号分隔）";
+"settings.mcp.add_server.args_hint" = "输入逗号分隔的参数";
+"settings.mcp.logs_title" = "服务器日志";
+"settings.mcp.no_logs" = "暂无日志";
+"settings.mcp.detail.command" = "命令与参数";
+"settings.mcp.detail.command_path" = "命令";
+"settings.mcp.detail.args" = "参数";
+"settings.mcp.detail.add_arg" = "添加参数";
+"settings.mcp.detail.working_dir" = "工作目录";
+"settings.mcp.detail.browse" = "浏览";
+"settings.mcp.detail.env_vars" = "环境变量";
+"settings.mcp.detail.env_vars_description" = "环境变量默认隐藏以保护敏感值。";
+"settings.mcp.detail.add_variable" = "添加变量";
+"settings.mcp.detail.permissions" = "权限设置";
+"settings.mcp.detail.requires_confirmation" = "执行工具前需要确认";
+"settings.mcp.detail.requires_confirmation_description" = "运行此服务器的任何工具前询问用户确认。";
+"settings.mcp.detail.allowed_paths" = "允许的路径";
+"settings.mcp.detail.allowed_commands" = "允许的命令";
+"settings.mcp.detail.show_logs" = "查看日志";
+"settings.mcp.detail.json_mode" = "JSON 配置";
+"settings.mcp.detail.status.running" = "运行中";
+"settings.mcp.detail.status.stopped" = "已停止";
+"settings.mcp.detail.status.starting" = "启动中";
+"settings.mcp.detail.status.error" = "错误";
+
 // MARK: - Settings Window - Skills Tab
 "settings.skills.title" = "Claude 技能";
 "settings.skills.description" = "安装和管理 Claude Agent 技能。技能注入专业指令以增强 AI 能力。";

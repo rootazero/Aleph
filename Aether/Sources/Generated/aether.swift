@@ -562,6 +562,8 @@ fileprivate struct FfiConverterString: FfiConverter {
 
 public protocol AetherCoreProtocol : AnyObject {
     
+    func addMcpServer(config: McpServerConfig) throws 
+    
     func cleanupOldMemories() throws  -> UInt64
     
     func clearMemories(appBundleId: String?, windowTitle: String?) throws  -> UInt64
@@ -572,11 +574,15 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func conversationTurnCount()  -> UInt32
     
+    func deleteMcpServer(id: String) throws 
+    
     func deleteMemory(id: String) throws 
     
     func deleteProvider(name: String) throws 
     
     func endConversation() 
+    
+    func exportMcpConfigJson()  -> String
     
     func filterCommands(prefix: String)  -> [CommandNode]
     
@@ -594,6 +600,12 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func getMcpConfig()  -> McpSettingsConfig
     
+    func getMcpServer(id: String)  -> McpServerConfig?
+    
+    func getMcpServerLogs(id: String, maxLines: UInt32)  -> [String]
+    
+    func getMcpServerStatus(id: String)  -> McpServerStatusInfo
+    
     func getMemoryAppList() throws  -> [AppMemoryInfo]
     
     func getMemoryConfig()  -> MemoryConfig
@@ -603,6 +615,10 @@ public protocol AetherCoreProtocol : AnyObject {
     func getRootCommands()  -> [CommandNode]
     
     func hasActiveConversation()  -> Bool
+    
+    func importMcpConfigJson(json: String) throws 
+    
+    func listMcpServers()  -> [McpServerConfig]
     
     func listMcpServices()  -> [McpServiceInfo]
     
@@ -649,6 +665,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func updateGeneralConfig(config: GeneralConfig) throws 
     
     func updateMcpConfig(config: McpSettingsConfig) throws 
+    
+    func updateMcpServer(config: McpServerConfig) throws 
     
     func updateMemoryConfig(config: MemoryConfig) throws 
     
@@ -724,6 +742,13 @@ public convenience init(handler: AetherEventHandler)throws  {
     
 
     
+open func addMcpServer(config: McpServerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_add_mcp_server(self.uniffiClonePointer(),
+        FfiConverterTypeMcpServerConfig.lower(config),$0
+    )
+}
+}
+    
 open func cleanupOldMemories()throws  -> UInt64 {
     return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_cleanup_old_memories(self.uniffiClonePointer(),$0
@@ -761,6 +786,13 @@ open func conversationTurnCount() -> UInt32 {
 })
 }
     
+open func deleteMcpServer(id: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_delete_mcp_server(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),$0
+    )
+}
+}
+    
 open func deleteMemory(id: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_delete_memory(self.uniffiClonePointer(),
         FfiConverterString.lower(id),$0
@@ -779,6 +811,13 @@ open func endConversation() {try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_end_conversation(self.uniffiClonePointer(),$0
     )
 }
+}
+    
+open func exportMcpConfigJson() -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_export_mcp_config_json(self.uniffiClonePointer(),$0
+    )
+})
 }
     
 open func filterCommands(prefix: String) -> [CommandNode] {
@@ -839,6 +878,31 @@ open func getMcpConfig() -> McpSettingsConfig {
 })
 }
     
+open func getMcpServer(id: String) -> McpServerConfig? {
+    return try!  FfiConverterOptionTypeMcpServerConfig.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_mcp_server(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),$0
+    )
+})
+}
+    
+open func getMcpServerLogs(id: String, maxLines: UInt32) -> [String] {
+    return try!  FfiConverterSequenceString.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_mcp_server_logs(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),
+        FfiConverterUInt32.lower(maxLines),$0
+    )
+})
+}
+    
+open func getMcpServerStatus(id: String) -> McpServerStatusInfo {
+    return try!  FfiConverterTypeMcpServerStatusInfo.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_mcp_server_status(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),$0
+    )
+})
+}
+    
 open func getMemoryAppList()throws  -> [AppMemoryInfo] {
     return try  FfiConverterSequenceTypeAppMemoryInfo.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_get_memory_app_list(self.uniffiClonePointer(),$0
@@ -870,6 +934,20 @@ open func getRootCommands() -> [CommandNode] {
 open func hasActiveConversation() -> Bool {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_has_active_conversation(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func importMcpConfigJson(json: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_import_mcp_config_json(self.uniffiClonePointer(),
+        FfiConverterString.lower(json),$0
+    )
+}
+}
+    
+open func listMcpServers() -> [McpServerConfig] {
+    return try!  FfiConverterSequenceTypeMcpServerConfig.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_list_mcp_servers(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -1047,6 +1125,13 @@ open func updateGeneralConfig(config: GeneralConfig)throws  {try rustCallWithErr
 open func updateMcpConfig(config: McpSettingsConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_update_mcp_config(self.uniffiClonePointer(),
         FfiConverterTypeMcpSettingsConfig.lower(config),$0
+    )
+}
+}
+    
+open func updateMcpServer(config: McpServerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_update_mcp_server(self.uniffiClonePointer(),
+        FfiConverterTypeMcpServerConfig.lower(config),$0
     )
 }
 }
@@ -2478,6 +2563,366 @@ public func FfiConverterTypeKeywordRuleConfig_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeKeywordRuleConfig_lower(_ value: KeywordRuleConfig) -> RustBuffer {
     return FfiConverterTypeKeywordRuleConfig.lower(value)
+}
+
+
+public struct McpEnvVar {
+    public var key: String
+    public var value: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(key: String, value: String) {
+        self.key = key
+        self.value = value
+    }
+}
+
+
+
+extension McpEnvVar: Equatable, Hashable {
+    public static func ==(lhs: McpEnvVar, rhs: McpEnvVar) -> Bool {
+        if lhs.key != rhs.key {
+            return false
+        }
+        if lhs.value != rhs.value {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(key)
+        hasher.combine(value)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMcpEnvVar: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> McpEnvVar {
+        return
+            try McpEnvVar(
+                key: FfiConverterString.read(from: &buf), 
+                value: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: McpEnvVar, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.key, into: &buf)
+        FfiConverterString.write(value.value, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpEnvVar_lift(_ buf: RustBuffer) throws -> McpEnvVar {
+    return try FfiConverterTypeMcpEnvVar.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpEnvVar_lower(_ value: McpEnvVar) -> RustBuffer {
+    return FfiConverterTypeMcpEnvVar.lower(value)
+}
+
+
+public struct McpServerConfig {
+    public var id: String
+    public var name: String
+    public var serverType: McpServerType
+    public var enabled: Bool
+    public var command: String?
+    public var args: [String]
+    public var env: [McpEnvVar]
+    public var workingDirectory: String?
+    public var triggerCommand: String?
+    public var permissions: McpServerPermissions
+    public var icon: String
+    public var color: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, name: String, serverType: McpServerType, enabled: Bool, command: String?, args: [String], env: [McpEnvVar], workingDirectory: String?, triggerCommand: String?, permissions: McpServerPermissions, icon: String, color: String) {
+        self.id = id
+        self.name = name
+        self.serverType = serverType
+        self.enabled = enabled
+        self.command = command
+        self.args = args
+        self.env = env
+        self.workingDirectory = workingDirectory
+        self.triggerCommand = triggerCommand
+        self.permissions = permissions
+        self.icon = icon
+        self.color = color
+    }
+}
+
+
+
+extension McpServerConfig: Equatable, Hashable {
+    public static func ==(lhs: McpServerConfig, rhs: McpServerConfig) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.serverType != rhs.serverType {
+            return false
+        }
+        if lhs.enabled != rhs.enabled {
+            return false
+        }
+        if lhs.command != rhs.command {
+            return false
+        }
+        if lhs.args != rhs.args {
+            return false
+        }
+        if lhs.env != rhs.env {
+            return false
+        }
+        if lhs.workingDirectory != rhs.workingDirectory {
+            return false
+        }
+        if lhs.triggerCommand != rhs.triggerCommand {
+            return false
+        }
+        if lhs.permissions != rhs.permissions {
+            return false
+        }
+        if lhs.icon != rhs.icon {
+            return false
+        }
+        if lhs.color != rhs.color {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(name)
+        hasher.combine(serverType)
+        hasher.combine(enabled)
+        hasher.combine(command)
+        hasher.combine(args)
+        hasher.combine(env)
+        hasher.combine(workingDirectory)
+        hasher.combine(triggerCommand)
+        hasher.combine(permissions)
+        hasher.combine(icon)
+        hasher.combine(color)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMcpServerConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> McpServerConfig {
+        return
+            try McpServerConfig(
+                id: FfiConverterString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                serverType: FfiConverterTypeMcpServerType.read(from: &buf), 
+                enabled: FfiConverterBool.read(from: &buf), 
+                command: FfiConverterOptionString.read(from: &buf), 
+                args: FfiConverterSequenceString.read(from: &buf), 
+                env: FfiConverterSequenceTypeMcpEnvVar.read(from: &buf), 
+                workingDirectory: FfiConverterOptionString.read(from: &buf), 
+                triggerCommand: FfiConverterOptionString.read(from: &buf), 
+                permissions: FfiConverterTypeMcpServerPermissions.read(from: &buf), 
+                icon: FfiConverterString.read(from: &buf), 
+                color: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: McpServerConfig, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterTypeMcpServerType.write(value.serverType, into: &buf)
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterOptionString.write(value.command, into: &buf)
+        FfiConverterSequenceString.write(value.args, into: &buf)
+        FfiConverterSequenceTypeMcpEnvVar.write(value.env, into: &buf)
+        FfiConverterOptionString.write(value.workingDirectory, into: &buf)
+        FfiConverterOptionString.write(value.triggerCommand, into: &buf)
+        FfiConverterTypeMcpServerPermissions.write(value.permissions, into: &buf)
+        FfiConverterString.write(value.icon, into: &buf)
+        FfiConverterString.write(value.color, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServerConfig_lift(_ buf: RustBuffer) throws -> McpServerConfig {
+    return try FfiConverterTypeMcpServerConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServerConfig_lower(_ value: McpServerConfig) -> RustBuffer {
+    return FfiConverterTypeMcpServerConfig.lower(value)
+}
+
+
+public struct McpServerPermissions {
+    public var requiresConfirmation: Bool
+    public var allowedPaths: [String]
+    public var allowedCommands: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(requiresConfirmation: Bool, allowedPaths: [String], allowedCommands: [String]) {
+        self.requiresConfirmation = requiresConfirmation
+        self.allowedPaths = allowedPaths
+        self.allowedCommands = allowedCommands
+    }
+}
+
+
+
+extension McpServerPermissions: Equatable, Hashable {
+    public static func ==(lhs: McpServerPermissions, rhs: McpServerPermissions) -> Bool {
+        if lhs.requiresConfirmation != rhs.requiresConfirmation {
+            return false
+        }
+        if lhs.allowedPaths != rhs.allowedPaths {
+            return false
+        }
+        if lhs.allowedCommands != rhs.allowedCommands {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(requiresConfirmation)
+        hasher.combine(allowedPaths)
+        hasher.combine(allowedCommands)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMcpServerPermissions: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> McpServerPermissions {
+        return
+            try McpServerPermissions(
+                requiresConfirmation: FfiConverterBool.read(from: &buf), 
+                allowedPaths: FfiConverterSequenceString.read(from: &buf), 
+                allowedCommands: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: McpServerPermissions, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.requiresConfirmation, into: &buf)
+        FfiConverterSequenceString.write(value.allowedPaths, into: &buf)
+        FfiConverterSequenceString.write(value.allowedCommands, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServerPermissions_lift(_ buf: RustBuffer) throws -> McpServerPermissions {
+    return try FfiConverterTypeMcpServerPermissions.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServerPermissions_lower(_ value: McpServerPermissions) -> RustBuffer {
+    return FfiConverterTypeMcpServerPermissions.lower(value)
+}
+
+
+public struct McpServerStatusInfo {
+    public var status: McpServerStatus
+    public var message: String?
+    public var lastError: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(status: McpServerStatus, message: String?, lastError: String?) {
+        self.status = status
+        self.message = message
+        self.lastError = lastError
+    }
+}
+
+
+
+extension McpServerStatusInfo: Equatable, Hashable {
+    public static func ==(lhs: McpServerStatusInfo, rhs: McpServerStatusInfo) -> Bool {
+        if lhs.status != rhs.status {
+            return false
+        }
+        if lhs.message != rhs.message {
+            return false
+        }
+        if lhs.lastError != rhs.lastError {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(status)
+        hasher.combine(message)
+        hasher.combine(lastError)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMcpServerStatusInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> McpServerStatusInfo {
+        return
+            try McpServerStatusInfo(
+                status: FfiConverterTypeMcpServerStatus.read(from: &buf), 
+                message: FfiConverterOptionString.read(from: &buf), 
+                lastError: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: McpServerStatusInfo, into buf: inout [UInt8]) {
+        FfiConverterTypeMcpServerStatus.write(value.status, into: &buf)
+        FfiConverterOptionString.write(value.message, into: &buf)
+        FfiConverterOptionString.write(value.lastError, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServerStatusInfo_lift(_ buf: RustBuffer) throws -> McpServerStatusInfo {
+    return try FfiConverterTypeMcpServerStatusInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServerStatusInfo_lower(_ value: McpServerStatusInfo) -> RustBuffer {
+    return FfiConverterTypeMcpServerStatusInfo.lower(value)
 }
 
 
@@ -5125,6 +5570,148 @@ extension LogLevel: Equatable, Hashable {}
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum McpServerStatus {
+    
+    case stopped
+    case starting
+    case running
+    case error
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMcpServerStatus: FfiConverterRustBuffer {
+    typealias SwiftType = McpServerStatus
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> McpServerStatus {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .stopped
+        
+        case 2: return .starting
+        
+        case 3: return .running
+        
+        case 4: return .error
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: McpServerStatus, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .stopped:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .starting:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .running:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .error:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServerStatus_lift(_ buf: RustBuffer) throws -> McpServerStatus {
+    return try FfiConverterTypeMcpServerStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServerStatus_lower(_ value: McpServerStatus) -> RustBuffer {
+    return FfiConverterTypeMcpServerStatus.lower(value)
+}
+
+
+
+extension McpServerStatus: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum McpServerType {
+    
+    case builtin
+    case external
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMcpServerType: FfiConverterRustBuffer {
+    typealias SwiftType = McpServerType
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> McpServerType {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .builtin
+        
+        case 2: return .external
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: McpServerType, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .builtin:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .external:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServerType_lift(_ buf: RustBuffer) throws -> McpServerType {
+    return try FfiConverterTypeMcpServerType.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServerType_lower(_ value: McpServerType) -> RustBuffer {
+    return FfiConverterTypeMcpServerType.lower(value)
+}
+
+
+
+extension McpServerType: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum ProcessingState {
     
     case idle
@@ -6081,6 +6668,30 @@ fileprivate struct FfiConverterOptionTypeBehaviorConfig: FfiConverterRustBuffer 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeMcpServerConfig: FfiConverterRustBuffer {
+    typealias SwiftType = McpServerConfig?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeMcpServerConfig.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeMcpServerConfig.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypePIIConfig: FfiConverterRustBuffer {
     typealias SwiftType = PiiConfig?
 
@@ -6472,6 +7083,56 @@ fileprivate struct FfiConverterSequenceTypeKeywordRuleConfig: FfiConverterRustBu
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeMcpEnvVar: FfiConverterRustBuffer {
+    typealias SwiftType = [McpEnvVar]
+
+    public static func write(_ value: [McpEnvVar], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeMcpEnvVar.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [McpEnvVar] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [McpEnvVar]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeMcpEnvVar.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeMcpServerConfig: FfiConverterRustBuffer {
+    typealias SwiftType = [McpServerConfig]
+
+    public static func write(_ value: [McpServerConfig], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeMcpServerConfig.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [McpServerConfig] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [McpServerConfig]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeMcpServerConfig.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeMcpServiceInfo: FfiConverterRustBuffer {
     typealias SwiftType = [McpServiceInfo]
 
@@ -6803,6 +7464,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_func_run_first_time_init() != 14662) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_add_mcp_server() != 17845) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_cleanup_old_memories() != 47692) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -6818,6 +7482,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_conversation_turn_count() != 12630) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_delete_mcp_server() != 25905) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_delete_memory() != 18981) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -6825,6 +7492,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_end_conversation() != 48231) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_export_mcp_config_json() != 17811) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_filter_commands() != 53560) {
@@ -6851,6 +7521,15 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_get_mcp_config() != 24168) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_server() != 838) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_server_logs() != 14498) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_server_status() != 46212) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_get_memory_app_list() != 2639) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -6864,6 +7543,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_has_active_conversation() != 19478) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_import_mcp_config_json() != 36470) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_list_mcp_servers() != 29913) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_list_mcp_services() != 51137) {
@@ -6933,6 +7618,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_mcp_config() != 6765) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_update_mcp_server() != 41081) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_memory_config() != 52192) {
