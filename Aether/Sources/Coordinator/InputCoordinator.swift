@@ -60,8 +60,8 @@ final class InputCoordinator {
     ///   - clipboardManager: Clipboard manager for operations
     ///   - clipboardMonitor: Clipboard monitor for context tracking
     init(
-        clipboardManager: any ClipboardManagerProtocol = ClipboardManager.shared,
-        clipboardMonitor: any ClipboardMonitorProtocol = ClipboardMonitor.shared
+        clipboardManager: any ClipboardManagerProtocol = DependencyContainer.shared.clipboardManager,
+        clipboardMonitor: any ClipboardMonitorProtocol = DependencyContainer.shared.clipboardMonitor
     ) {
         self.clipboardManager = clipboardManager
         self.clipboardMonitor = clipboardMonitor

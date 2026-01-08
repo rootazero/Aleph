@@ -17,6 +17,14 @@ class EventHandler: AetherEventHandler {
     // Weak reference to AetherCore for retry functionality
     private weak var core: AetherCore?
 
+    // Managers accessed through DependencyContainer (eliminates direct .shared usage)
+    private var clarificationManager: any ClarificationManagerProtocol {
+        DependencyContainer.shared.clarificationManager
+    }
+    private var conversationManager: any ConversationManagerProtocol {
+        DependencyContainer.shared.conversationManager
+    }
+
     // Accumulated text for streaming responses
     private var accumulatedText: String = ""
 
@@ -243,7 +251,7 @@ class EventHandler: AetherEventHandler {
 
         // Delegate to ClarificationManager which handles UI coordination
         // This blocks the Rust thread until user responds
-        return ClarificationManager.shared.handleRequest(request)
+        return clarificationManager.handleRequest(request)
     }
 
     // MARK: - Conversation (Multi-turn)
@@ -255,7 +263,7 @@ class EventHandler: AetherEventHandler {
         print("[EventHandler] Conversation started: \(sessionId)")
 
         // Delegate to ConversationManager
-        ConversationManager.shared.onConversationStarted(sessionId: sessionId)
+        conversationManager.onConversationStarted(sessionId: sessionId)
     }
 
     /// Called when a conversation turn is completed
@@ -265,7 +273,7 @@ class EventHandler: AetherEventHandler {
         print("[EventHandler] Conversation turn completed: \(turn.turnId)")
 
         // Delegate to ConversationManager
-        ConversationManager.shared.onConversationTurnCompleted(turn: turn)
+        conversationManager.onConversationTurnCompleted(turn: turn)
     }
 
     /// Called when the AI response is ready and continuation input can be shown
@@ -275,7 +283,7 @@ class EventHandler: AetherEventHandler {
         print("[EventHandler] Conversation continuation ready")
 
         // Delegate to ConversationManager which posts notification to HaloWindow
-        ConversationManager.shared.onConversationContinuationReady()
+        conversationManager.onConversationContinuationReady()
     }
 
     /// Called when a conversation session ends
@@ -285,7 +293,7 @@ class EventHandler: AetherEventHandler {
         print("[EventHandler] Conversation ended: \(sessionId), total turns: \(totalTurns)")
 
         // Delegate to ConversationManager
-        ConversationManager.shared.onConversationEnded(sessionId: sessionId, totalTurns: totalTurns)
+        conversationManager.onConversationEnded(sessionId: sessionId, totalTurns: totalTurns)
     }
 
     // MARK: - State Change Handling

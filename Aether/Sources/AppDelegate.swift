@@ -61,6 +61,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Command mode coordinator for slash command completion
     private var commandModeCoordinator: CommandModeCoordinator?
 
+    // MARK: - Managers (via DependencyContainer)
+
+    /// Clipboard monitor accessed through DependencyContainer
+    private var clipboardMonitor: any ClipboardMonitorProtocol {
+        DependencyContainer.shared.clipboardMonitor
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hide from Dock (menu bar only)
         NSApp.setActivationPolicy(.accessory)
@@ -107,7 +114,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         hotkeyMonitor?.stopMonitoring()
 
         // Stop clipboard monitoring
-        ClipboardMonitor.shared.stopMonitoring()
+        clipboardMonitor.stopMonitoring()
 
         // Stop output coordinator (removes ESC key monitor)
         outputCoordinator?.stop()
@@ -735,7 +742,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         conversationCoordinator?.startObserving()
 
         // Start clipboard monitoring for context tracking
-        ClipboardMonitor.shared.startMonitoring()
+        clipboardMonitor.startMonitoring()
         print("[Aether] Clipboard monitoring started for context tracking")
 
         // Initialize Rust core

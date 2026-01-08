@@ -89,8 +89,8 @@ final class OutputCoordinator {
     ///   - clipboardManager: Clipboard manager for paste operations
     ///   - conversationManager: Conversation manager for session tracking
     init(
-        clipboardManager: any ClipboardManagerProtocol = ClipboardManager.shared,
-        conversationManager: any ConversationManagerProtocol = ConversationManager.shared
+        clipboardManager: any ClipboardManagerProtocol = DependencyContainer.shared.clipboardManager,
+        conversationManager: any ConversationManagerProtocol = DependencyContainer.shared.conversationManager
     ) {
         self.clipboardManager = clipboardManager
         self.conversationManager = conversationManager

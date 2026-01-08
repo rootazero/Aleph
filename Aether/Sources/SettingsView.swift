@@ -41,8 +41,8 @@ struct GeneralSettingsView: View {
     @State private var selectedLanguage: String? = nil
     @State private var showCommandHints = true
 
-    // Launch at login manager (singleton)
-    @StateObject private var launchAtLoginManager = LaunchAtLoginManager.shared
+    // Launch at login manager (via DependencyContainer)
+    @ObservedObject private var launchAtLoginManager = DependencyContainer.shared.launchAtLoginManagerConcrete
 
     private var appVersion: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"

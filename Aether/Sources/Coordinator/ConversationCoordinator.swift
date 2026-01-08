@@ -34,6 +34,9 @@ final class ConversationCoordinator {
     /// Clipboard manager for clipboard operations
     private let clipboardManager: any ClipboardManagerProtocol
 
+    /// Conversation manager for session tracking
+    private let conversationManager: any ConversationManagerProtocol
+
     // MARK: - Conversation State
 
     /// Stored text source for multi-turn sessions
@@ -52,9 +55,15 @@ final class ConversationCoordinator {
 
     /// Initialize the conversation coordinator
     ///
-    /// - Parameter clipboardManager: Clipboard manager for operations
-    init(clipboardManager: any ClipboardManagerProtocol = ClipboardManager.shared) {
+    /// - Parameters:
+    ///   - clipboardManager: Clipboard manager for operations
+    ///   - conversationManager: Conversation manager for session tracking
+    init(
+        clipboardManager: any ClipboardManagerProtocol = DependencyContainer.shared.clipboardManager,
+        conversationManager: any ConversationManagerProtocol = DependencyContainer.shared.conversationManager
+    ) {
         self.clipboardManager = clipboardManager
+        self.conversationManager = conversationManager
     }
 
     /// Configure dependencies after initialization
@@ -148,7 +157,7 @@ final class ConversationCoordinator {
             sessionType: .multiTurn,
             originalClipboard: nil,  // Multi-turn restores at conversation end
             turnId: turnId,
-            conversationSessionId: ConversationManager.shared.sessionId
+            conversationSessionId: conversationManager.sessionId
         )
         outputCoordinator?.previousFrontmostApp = previousFrontmostApp
         outputCoordinator?.performOutput(response: response, context: outputContext)

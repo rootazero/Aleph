@@ -16,6 +16,18 @@ class HaloWindow: NSWindow {
     private let themeEngine: ThemeEngine
     private weak var eventHandler: EventHandler?
 
+    // MARK: - Managers (via DependencyContainer)
+
+    /// Clarification manager accessed through DependencyContainer
+    private var clarificationManager: any ClarificationManagerProtocol {
+        DependencyContainer.shared.clarificationManager
+    }
+
+    /// Conversation manager accessed through DependencyContainer
+    private var conversationManager: any ConversationManagerProtocol {
+        DependencyContainer.shared.conversationManager
+    }
+
     /// Public accessor for viewModel (used by AppDelegate for command mode)
     var viewModel: HaloViewModel {
         return haloViewModel
@@ -788,7 +800,7 @@ extension HaloWindow {
 
     /// Handle keyboard events for clarification navigation
     private func handleClarificationKeyEvent(_ event: NSEvent, request: ClarificationRequest) -> Bool {
-        let manager = ClarificationManager.shared
+        let manager = clarificationManager
 
         // For text mode, handle Enter and Escape
         if request.clarificationType == .text {
@@ -885,7 +897,7 @@ extension HaloWindow {
     ///
     /// - Parameter sessionId: The current conversation session ID
     func showConversationInput(sessionId: String) {
-        let turnCount = ConversationManager.shared.turnCount
+        let turnCount = conversationManager.turnCount
         NSLog("[HaloWindow] Showing conversation input: sessionId=%@, turn=%d", sessionId, turnCount)
 
         // Fixed size for conversation input (header + input + hint + padding)
@@ -978,10 +990,11 @@ extension HaloWindow {
 
             // Only handle ESC key globally (other keys need TextField focus)
             if event.keyCode == 53 {  // Escape
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
                     self.removeConversationKeyMonitor()
                     self.haloViewModel.state = .idle
-                    ConversationManager.shared.cancelConversation()
+                    self.conversationManager.cancelConversation()
                     self.forceHide()
                     NSLog("[HaloWindow] Conversation cancelled by user (global monitor)")
                 }
@@ -991,7 +1004,7 @@ extension HaloWindow {
 
     /// Handle keyboard events for conversation input
     private func handleConversationKeyEvent(_ event: NSEvent) -> Bool {
-        let manager = ConversationManager.shared
+        let manager = conversationManager
 
         switch event.keyCode {
         case 36:  // Return/Enter - submit input

@@ -21,7 +21,7 @@ import AppKit
 /// - Native: Uses system-standard interactions (arrow keys, enter, escape)
 struct ClarificationView: View {
     let request: ClarificationRequest
-    @ObservedObject private var manager = ClarificationManager.shared
+    @ObservedObject private var manager = DependencyContainer.shared.clarificationManagerConcrete
 
     /// Accent color from system
     private let accentColor = Color.accentColor

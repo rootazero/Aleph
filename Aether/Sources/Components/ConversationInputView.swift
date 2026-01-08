@@ -28,7 +28,7 @@ import AppKit
 struct ConversationInputView: View {
     let sessionId: String
     let turnCount: UInt32
-    @ObservedObject private var manager = ConversationManager.shared
+    @ObservedObject private var manager = DependencyContainer.shared.conversationManagerConcrete
 
     /// Text color - white for dark background
     private let textColor = Color.white
