@@ -14,6 +14,7 @@
 use crate::clarification::{ClarificationOption, ClarificationRequest};
 use crate::config::{Config, ConfigWatcher, GeneralConfig, MemoryConfig, TestConnectionResult};
 use crate::error::{AetherError, AetherException, Result};
+use crate::utils::pii;
 use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 use crate::memory::cleanup::CleanupService;
 use crate::memory::compression::{
@@ -1163,6 +1164,19 @@ impl AetherCore {
         *current_context = Some(context);
     }
 
+    /// Record a conversation turn for compression scheduling
+    ///
+    /// This increments the pending turns counter in the compression scheduler.
+    /// When the counter reaches the threshold (default: 20), automatic compression
+    /// will be triggered on the next background check.
+    fn record_conversation_turn(&self) {
+        if let Some(ref compression) = self.compression_service {
+            compression.record_turn();
+            compression.record_activity();
+            tracing::trace!("Recorded conversation turn for compression scheduling");
+        }
+    }
+
     /// Manually trigger memory cleanup (for testing or immediate cleanup)
     ///
     /// This runs the cleanup operation immediately in the current thread,
@@ -1794,6 +1808,14 @@ impl AetherCore {
 
         info!("Using AI-first detection mode");
 
+        // SECURITY: Scrub PII (including API keys) from user input before sending to AI
+        // This prevents accidental leakage of sensitive data from clipboard context
+        let input = pii::scrub_pii(&input);
+        debug!(
+            input_length = input.len(),
+            "PII scrubbing applied to user input"
+        );
+
         // Step 1: Get router and configuration
         let router = {
             let router_guard = self.router.read().unwrap_or_else(|e| e.into_inner());
@@ -1928,6 +1950,9 @@ impl AetherCore {
                         }
                     });
                 }
+
+                // Record turn for compression scheduling
+                self.record_conversation_turn();
 
                 Ok(text)
             }
@@ -2133,6 +2158,9 @@ impl AetherCore {
                 }
             });
         }
+
+        // Record turn for compression scheduling
+        self.record_conversation_turn();
 
         self.event_handler
             .on_state_changed(ProcessingState::Success);
@@ -2933,6 +2961,9 @@ impl AetherCore {
         // Notify UI that conversation started
         self.event_handler.on_conversation_started(session_id.clone());
 
+        // Store context for memory operations (required for memory storage)
+        self.set_current_context(context.clone());
+
         // Process the initial input using AI-first mode
         let start_time = std::time::Instant::now();
         let response = match self.process_with_ai_first(initial_input.clone(), context.clone(), start_time) {
@@ -3025,6 +3056,9 @@ impl AetherCore {
             turn_count = turn_count,
             "Continuing conversation"
         );
+
+        // Store context for memory operations (required for memory storage)
+        self.set_current_context(context.clone());
 
         // Build augmented input with conversation history
         let augmented_input = if context_prompt.is_empty() {

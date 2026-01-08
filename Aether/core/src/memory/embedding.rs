@@ -39,8 +39,8 @@ impl EmbeddingModel {
 
     /// Get default model directory path
     ///
-    /// Note: This path is kept for API compatibility. fastembed uses
-    /// ~/.cache/huggingface for actual model storage.
+    /// Returns the path to fastembed cache directory: ~/.config/aether/models/fastembed
+    /// This is where model files will be downloaded and cached.
     pub fn get_default_model_path() -> Result<PathBuf, AetherError> {
         let home_dir = std::env::var("HOME")
             .map_err(|_| AetherError::config("Failed to get HOME environment variable"))?;
@@ -49,16 +49,37 @@ impl EmbeddingModel {
             .join(".config")
             .join("aether")
             .join("models")
-            .join("bge-small-zh-v1.5"))
+            .join("fastembed"))
+    }
+
+    /// Get the fastembed cache directory
+    ///
+    /// Creates the directory if it doesn't exist and returns the path.
+    fn get_cache_dir() -> Result<PathBuf, AetherError> {
+        let cache_dir = Self::get_default_model_path()?;
+
+        // Create directory if it doesn't exist
+        if !cache_dir.exists() {
+            std::fs::create_dir_all(&cache_dir).map_err(|e| {
+                AetherError::config(format!("Failed to create model cache directory: {}", e))
+            })?;
+        }
+
+        Ok(cache_dir)
     }
 
     /// Initialize fastembed model (lazy)
     fn ensure_initialized(&self) -> Result<&TextEmbedding, AetherError> {
         self.model.get_or_try_init(|| {
-            tracing::info!("Initializing bge-small-zh-v1.5 embedding model...");
+            let cache_dir = Self::get_cache_dir()?;
+            tracing::info!(
+                cache_dir = %cache_dir.display(),
+                "Initializing bge-small-zh-v1.5 embedding model..."
+            );
 
             TextEmbedding::try_new(
                 InitOptions::new(FastEmbedModel::BGESmallZHV15)
+                    .with_cache_dir(cache_dir)
                     .with_show_download_progress(true),
             )
             .map_err(|e| {
@@ -138,7 +159,7 @@ mod tests {
     fn test_get_default_model_path() {
         let path = EmbeddingModel::get_default_model_path().unwrap();
         assert!(path.to_string_lossy().contains(".config/aether/models"));
-        assert!(path.to_string_lossy().contains("bge-small-zh-v1.5"));
+        assert!(path.to_string_lossy().contains("fastembed"));
     }
 
     #[test]
