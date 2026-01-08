@@ -358,8 +358,10 @@ final class OutputCoordinator {
             Thread.sleep(forTimeInterval: 0.05)
 
         case (.selectAll, true):
-            // Replace after Cmd+A + Cmd+X: Cursor is already at the right position
-            print("[OutputCoordinator] ➡️ selectAll + replace: No preparation needed")
+            // Replace after Cmd+A + Cmd+C: Selection is still active after input phase
+            // We don't need to do anything - paste/type will automatically replace the selection
+            // This provides better UX: text stays visible during AI thinking, then gets replaced on output
+            print("[OutputCoordinator] ➡️ selectAll + replace: Selection active, will be replaced by paste/type")
 
         case (.selectAll, false):
             // Append after Cmd+A + Cmd+C: Move cursor to end of document

@@ -262,12 +262,11 @@ final class InputCoordinator {
                 KeyboardSimulator.shared.simulateSelectAll()
                 Thread.sleep(forTimeInterval: 0.05)  // 50ms delay
 
-                // Cut/Copy again after selecting all (based on input_mode)
-                if useCutMode {
-                    KeyboardSimulator.shared.simulateCut()
-                } else {
-                    KeyboardSimulator.shared.simulateCopy()
-                }
+                // Always COPY after selecting all (not cut)
+                // This keeps text visible during AI thinking, same as selectedText case.
+                // The selection remains active and will be replaced on output.
+                print("[InputCoordinator] Simulating Cmd+C to copy all text...")
+                KeyboardSimulator.shared.simulateCopy()
                 Thread.sleep(forTimeInterval: 0.1)  // 100ms delay
 
                 let afterSelectAllChangeCount = clipboardManager.changeCount()
@@ -303,11 +302,8 @@ final class InputCoordinator {
                 textSource = .selectAll
                 KeyboardSimulator.shared.simulateSelectAll()
                 Thread.sleep(forTimeInterval: 0.05)
-                if useCutMode {
-                    KeyboardSimulator.shared.simulateCut()
-                } else {
-                    KeyboardSimulator.shared.simulateCopy()
-                }
+                print("[InputCoordinator] Simulating Cmd+C to copy all text...")
+                KeyboardSimulator.shared.simulateCopy()
                 Thread.sleep(forTimeInterval: 0.1)
 
             case .error(let message):
@@ -315,11 +311,8 @@ final class InputCoordinator {
                 textSource = .selectAll
                 KeyboardSimulator.shared.simulateSelectAll()
                 Thread.sleep(forTimeInterval: 0.05)
-                if useCutMode {
-                    KeyboardSimulator.shared.simulateCut()
-                } else {
-                    KeyboardSimulator.shared.simulateCopy()
-                }
+                print("[InputCoordinator] Simulating Cmd+C to copy all text...")
+                KeyboardSimulator.shared.simulateCopy()
                 Thread.sleep(forTimeInterval: 0.1)
             }
         } else {
