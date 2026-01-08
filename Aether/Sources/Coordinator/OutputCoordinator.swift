@@ -358,10 +358,12 @@ final class OutputCoordinator {
             Thread.sleep(forTimeInterval: 0.05)
 
         case (.selectAll, true):
-            // Replace after Cmd+A + Cmd+C: Selection is still active after input phase
-            // We don't need to do anything - paste/type will automatically replace the selection
-            // This provides better UX: text stays visible during AI thinking, then gets replaced on output
-            print("[OutputCoordinator] ➡️ selectAll + replace: Selection active, will be replaced by paste/type")
+            // Replace full window text: Need to select all first, then typing will replace
+            // Selection from input phase may have been lost during AI processing
+            // So we re-select all content before output
+            print("[OutputCoordinator] ➡️ selectAll + replace: Selecting all to replace")
+            KeyboardSimulator.shared.simulateSelectAll()
+            Thread.sleep(forTimeInterval: 0.05)
 
         case (.selectAll, false):
             // Append after Cmd+A + Cmd+C: Move cursor to end of document
