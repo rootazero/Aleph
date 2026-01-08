@@ -564,6 +564,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func addMcpServer(config: McpServerConfig) throws 
     
+    func addUnifiedSkill(config: UnifiedSkillConfig) throws 
+    
     func cleanupOldMemories() throws  -> UInt64
     
     func clearMemories(appBundleId: String?, windowTitle: String?) throws  -> UInt64
@@ -579,6 +581,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func deleteMemory(id: String) throws 
     
     func deleteProvider(name: String) throws 
+    
+    func deleteUnifiedSkill(id: String) throws 
     
     func endConversation() 
     
@@ -614,6 +618,12 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func getRootCommands()  -> [CommandNode]
     
+    func getUnifiedSkill(id: String)  -> UnifiedSkillConfig?
+    
+    func getUnifiedSkillLogs(id: String, maxLines: UInt32)  -> [String]
+    
+    func getUnifiedSkillStatus(id: String)  -> UnifiedSkillStatusInfo
+    
     func hasActiveConversation()  -> Bool
     
     func importMcpConfigJson(json: String) throws 
@@ -623,6 +633,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func listMcpServices()  -> [McpServiceInfo]
     
     func listMcpTools()  -> [McpToolInfo]
+    
+    func listUnifiedSkills()  -> [UnifiedSkillConfig]
     
     func loadConfig() throws  -> FullConfig
     
@@ -658,6 +670,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func testTypedError(errorType: ErrorType, message: String) 
     
+    func toggleUnifiedSkill(id: String, enabled: Bool) throws 
+    
     func triggerCompression() throws  -> CompressionResult
     
     func updateBehavior(behavior: BehaviorConfig) throws 
@@ -679,6 +693,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func updateShortcuts(shortcuts: ShortcutsConfig) throws 
     
     func updateTriggerConfig(trigger: TriggerConfig) throws 
+    
+    func updateUnifiedSkill(config: UnifiedSkillConfig) throws 
     
     func validateRegex(pattern: String) throws  -> Bool
     
@@ -749,6 +765,13 @@ open func addMcpServer(config: McpServerConfig)throws  {try rustCallWithError(Ff
 }
 }
     
+open func addUnifiedSkill(config: UnifiedSkillConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_add_unified_skill(self.uniffiClonePointer(),
+        FfiConverterTypeUnifiedSkillConfig.lower(config),$0
+    )
+}
+}
+    
 open func cleanupOldMemories()throws  -> UInt64 {
     return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_cleanup_old_memories(self.uniffiClonePointer(),$0
@@ -803,6 +826,13 @@ open func deleteMemory(id: String)throws  {try rustCallWithError(FfiConverterTyp
 open func deleteProvider(name: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_delete_provider(self.uniffiClonePointer(),
         FfiConverterString.lower(name),$0
+    )
+}
+}
+    
+open func deleteUnifiedSkill(id: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_delete_unified_skill(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),$0
     )
 }
 }
@@ -931,6 +961,31 @@ open func getRootCommands() -> [CommandNode] {
 })
 }
     
+open func getUnifiedSkill(id: String) -> UnifiedSkillConfig? {
+    return try!  FfiConverterOptionTypeUnifiedSkillConfig.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_unified_skill(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),$0
+    )
+})
+}
+    
+open func getUnifiedSkillLogs(id: String, maxLines: UInt32) -> [String] {
+    return try!  FfiConverterSequenceString.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_unified_skill_logs(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),
+        FfiConverterUInt32.lower(maxLines),$0
+    )
+})
+}
+    
+open func getUnifiedSkillStatus(id: String) -> UnifiedSkillStatusInfo {
+    return try!  FfiConverterTypeUnifiedSkillStatusInfo.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_unified_skill_status(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),$0
+    )
+})
+}
+    
 open func hasActiveConversation() -> Bool {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_has_active_conversation(self.uniffiClonePointer(),$0
@@ -962,6 +1017,13 @@ open func listMcpServices() -> [McpServiceInfo] {
 open func listMcpTools() -> [McpToolInfo] {
     return try!  FfiConverterSequenceTypeMcpToolInfo.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_list_mcp_tools(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func listUnifiedSkills() -> [UnifiedSkillConfig] {
+    return try!  FfiConverterSequenceTypeUnifiedSkillConfig.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_list_unified_skills(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -1101,6 +1163,14 @@ open func testTypedError(errorType: ErrorType, message: String) {try! rustCall()
 }
 }
     
+open func toggleUnifiedSkill(id: String, enabled: Bool)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_toggle_unified_skill(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),
+        FfiConverterBool.lower(enabled),$0
+    )
+}
+}
+    
 open func triggerCompression()throws  -> CompressionResult {
     return try  FfiConverterTypeCompressionResult.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_trigger_compression(self.uniffiClonePointer(),$0
@@ -1175,6 +1245,13 @@ open func updateShortcuts(shortcuts: ShortcutsConfig)throws  {try rustCallWithEr
 open func updateTriggerConfig(trigger: TriggerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_update_trigger_config(self.uniffiClonePointer(),
         FfiConverterTypeTriggerConfig.lower(trigger),$0
+    )
+}
+}
+    
+open func updateUnifiedSkill(config: UnifiedSkillConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_update_unified_skill(self.uniffiClonePointer(),
+        FfiConverterTypeUnifiedSkillConfig.lower(config),$0
     )
 }
 }
@@ -5130,6 +5207,406 @@ public func FfiConverterTypeTriggerConfig_lower(_ value: TriggerConfig) -> RustB
 }
 
 
+public struct UnifiedEnvVar {
+    public var key: String
+    public var value: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(key: String, value: String) {
+        self.key = key
+        self.value = value
+    }
+}
+
+
+
+extension UnifiedEnvVar: Equatable, Hashable {
+    public static func ==(lhs: UnifiedEnvVar, rhs: UnifiedEnvVar) -> Bool {
+        if lhs.key != rhs.key {
+            return false
+        }
+        if lhs.value != rhs.value {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(key)
+        hasher.combine(value)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUnifiedEnvVar: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UnifiedEnvVar {
+        return
+            try UnifiedEnvVar(
+                key: FfiConverterString.read(from: &buf), 
+                value: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: UnifiedEnvVar, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.key, into: &buf)
+        FfiConverterString.write(value.value, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUnifiedEnvVar_lift(_ buf: RustBuffer) throws -> UnifiedEnvVar {
+    return try FfiConverterTypeUnifiedEnvVar.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUnifiedEnvVar_lower(_ value: UnifiedEnvVar) -> RustBuffer {
+    return FfiConverterTypeUnifiedEnvVar.lower(value)
+}
+
+
+public struct UnifiedSkillConfig {
+    public var id: String
+    public var name: String
+    public var description: String
+    public var skillType: UnifiedSkillType
+    public var enabled: Bool
+    public var icon: String
+    public var color: String
+    public var triggerCommand: String?
+    public var transport: McpTransport?
+    public var command: String?
+    public var args: [String]
+    public var env: [UnifiedEnvVar]
+    public var workingDirectory: String?
+    public var permissions: UnifiedSkillPermissions
+    public var skillMdPath: String?
+    public var allowedTools: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, name: String, description: String, skillType: UnifiedSkillType, enabled: Bool, icon: String, color: String, triggerCommand: String?, transport: McpTransport?, command: String?, args: [String], env: [UnifiedEnvVar], workingDirectory: String?, permissions: UnifiedSkillPermissions, skillMdPath: String?, allowedTools: [String]) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.skillType = skillType
+        self.enabled = enabled
+        self.icon = icon
+        self.color = color
+        self.triggerCommand = triggerCommand
+        self.transport = transport
+        self.command = command
+        self.args = args
+        self.env = env
+        self.workingDirectory = workingDirectory
+        self.permissions = permissions
+        self.skillMdPath = skillMdPath
+        self.allowedTools = allowedTools
+    }
+}
+
+
+
+extension UnifiedSkillConfig: Equatable, Hashable {
+    public static func ==(lhs: UnifiedSkillConfig, rhs: UnifiedSkillConfig) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.skillType != rhs.skillType {
+            return false
+        }
+        if lhs.enabled != rhs.enabled {
+            return false
+        }
+        if lhs.icon != rhs.icon {
+            return false
+        }
+        if lhs.color != rhs.color {
+            return false
+        }
+        if lhs.triggerCommand != rhs.triggerCommand {
+            return false
+        }
+        if lhs.transport != rhs.transport {
+            return false
+        }
+        if lhs.command != rhs.command {
+            return false
+        }
+        if lhs.args != rhs.args {
+            return false
+        }
+        if lhs.env != rhs.env {
+            return false
+        }
+        if lhs.workingDirectory != rhs.workingDirectory {
+            return false
+        }
+        if lhs.permissions != rhs.permissions {
+            return false
+        }
+        if lhs.skillMdPath != rhs.skillMdPath {
+            return false
+        }
+        if lhs.allowedTools != rhs.allowedTools {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(name)
+        hasher.combine(description)
+        hasher.combine(skillType)
+        hasher.combine(enabled)
+        hasher.combine(icon)
+        hasher.combine(color)
+        hasher.combine(triggerCommand)
+        hasher.combine(transport)
+        hasher.combine(command)
+        hasher.combine(args)
+        hasher.combine(env)
+        hasher.combine(workingDirectory)
+        hasher.combine(permissions)
+        hasher.combine(skillMdPath)
+        hasher.combine(allowedTools)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUnifiedSkillConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UnifiedSkillConfig {
+        return
+            try UnifiedSkillConfig(
+                id: FfiConverterString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                description: FfiConverterString.read(from: &buf), 
+                skillType: FfiConverterTypeUnifiedSkillType.read(from: &buf), 
+                enabled: FfiConverterBool.read(from: &buf), 
+                icon: FfiConverterString.read(from: &buf), 
+                color: FfiConverterString.read(from: &buf), 
+                triggerCommand: FfiConverterOptionString.read(from: &buf), 
+                transport: FfiConverterOptionTypeMcpTransport.read(from: &buf), 
+                command: FfiConverterOptionString.read(from: &buf), 
+                args: FfiConverterSequenceString.read(from: &buf), 
+                env: FfiConverterSequenceTypeUnifiedEnvVar.read(from: &buf), 
+                workingDirectory: FfiConverterOptionString.read(from: &buf), 
+                permissions: FfiConverterTypeUnifiedSkillPermissions.read(from: &buf), 
+                skillMdPath: FfiConverterOptionString.read(from: &buf), 
+                allowedTools: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: UnifiedSkillConfig, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.description, into: &buf)
+        FfiConverterTypeUnifiedSkillType.write(value.skillType, into: &buf)
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterString.write(value.icon, into: &buf)
+        FfiConverterString.write(value.color, into: &buf)
+        FfiConverterOptionString.write(value.triggerCommand, into: &buf)
+        FfiConverterOptionTypeMcpTransport.write(value.transport, into: &buf)
+        FfiConverterOptionString.write(value.command, into: &buf)
+        FfiConverterSequenceString.write(value.args, into: &buf)
+        FfiConverterSequenceTypeUnifiedEnvVar.write(value.env, into: &buf)
+        FfiConverterOptionString.write(value.workingDirectory, into: &buf)
+        FfiConverterTypeUnifiedSkillPermissions.write(value.permissions, into: &buf)
+        FfiConverterOptionString.write(value.skillMdPath, into: &buf)
+        FfiConverterSequenceString.write(value.allowedTools, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUnifiedSkillConfig_lift(_ buf: RustBuffer) throws -> UnifiedSkillConfig {
+    return try FfiConverterTypeUnifiedSkillConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUnifiedSkillConfig_lower(_ value: UnifiedSkillConfig) -> RustBuffer {
+    return FfiConverterTypeUnifiedSkillConfig.lower(value)
+}
+
+
+public struct UnifiedSkillPermissions {
+    public var requiresConfirmation: Bool
+    public var allowedPaths: [String]
+    public var allowedCommands: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(requiresConfirmation: Bool, allowedPaths: [String], allowedCommands: [String]) {
+        self.requiresConfirmation = requiresConfirmation
+        self.allowedPaths = allowedPaths
+        self.allowedCommands = allowedCommands
+    }
+}
+
+
+
+extension UnifiedSkillPermissions: Equatable, Hashable {
+    public static func ==(lhs: UnifiedSkillPermissions, rhs: UnifiedSkillPermissions) -> Bool {
+        if lhs.requiresConfirmation != rhs.requiresConfirmation {
+            return false
+        }
+        if lhs.allowedPaths != rhs.allowedPaths {
+            return false
+        }
+        if lhs.allowedCommands != rhs.allowedCommands {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(requiresConfirmation)
+        hasher.combine(allowedPaths)
+        hasher.combine(allowedCommands)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUnifiedSkillPermissions: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UnifiedSkillPermissions {
+        return
+            try UnifiedSkillPermissions(
+                requiresConfirmation: FfiConverterBool.read(from: &buf), 
+                allowedPaths: FfiConverterSequenceString.read(from: &buf), 
+                allowedCommands: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: UnifiedSkillPermissions, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.requiresConfirmation, into: &buf)
+        FfiConverterSequenceString.write(value.allowedPaths, into: &buf)
+        FfiConverterSequenceString.write(value.allowedCommands, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUnifiedSkillPermissions_lift(_ buf: RustBuffer) throws -> UnifiedSkillPermissions {
+    return try FfiConverterTypeUnifiedSkillPermissions.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUnifiedSkillPermissions_lower(_ value: UnifiedSkillPermissions) -> RustBuffer {
+    return FfiConverterTypeUnifiedSkillPermissions.lower(value)
+}
+
+
+public struct UnifiedSkillStatusInfo {
+    public var status: UnifiedSkillStatus
+    public var message: String?
+    public var lastError: String?
+    public var pid: UInt64?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(status: UnifiedSkillStatus, message: String?, lastError: String?, pid: UInt64?) {
+        self.status = status
+        self.message = message
+        self.lastError = lastError
+        self.pid = pid
+    }
+}
+
+
+
+extension UnifiedSkillStatusInfo: Equatable, Hashable {
+    public static func ==(lhs: UnifiedSkillStatusInfo, rhs: UnifiedSkillStatusInfo) -> Bool {
+        if lhs.status != rhs.status {
+            return false
+        }
+        if lhs.message != rhs.message {
+            return false
+        }
+        if lhs.lastError != rhs.lastError {
+            return false
+        }
+        if lhs.pid != rhs.pid {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(status)
+        hasher.combine(message)
+        hasher.combine(lastError)
+        hasher.combine(pid)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUnifiedSkillStatusInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UnifiedSkillStatusInfo {
+        return
+            try UnifiedSkillStatusInfo(
+                status: FfiConverterTypeUnifiedSkillStatus.read(from: &buf), 
+                message: FfiConverterOptionString.read(from: &buf), 
+                lastError: FfiConverterOptionString.read(from: &buf), 
+                pid: FfiConverterOptionUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: UnifiedSkillStatusInfo, into buf: inout [UInt8]) {
+        FfiConverterTypeUnifiedSkillStatus.write(value.status, into: &buf)
+        FfiConverterOptionString.write(value.message, into: &buf)
+        FfiConverterOptionString.write(value.lastError, into: &buf)
+        FfiConverterOptionUInt64.write(value.pid, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUnifiedSkillStatusInfo_lift(_ buf: RustBuffer) throws -> UnifiedSkillStatusInfo {
+    return try FfiConverterTypeUnifiedSkillStatusInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUnifiedSkillStatusInfo_lower(_ value: UnifiedSkillStatusInfo) -> RustBuffer {
+    return FfiConverterTypeUnifiedSkillStatusInfo.lower(value)
+}
+
+
 public enum AetherException {
 
     
@@ -5712,6 +6189,70 @@ extension McpServerType: Equatable, Hashable {}
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum McpTransport {
+    
+    case stdio
+    case sse
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMcpTransport: FfiConverterRustBuffer {
+    typealias SwiftType = McpTransport
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> McpTransport {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .stdio
+        
+        case 2: return .sse
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: McpTransport, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .stdio:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .sse:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpTransport_lift(_ buf: RustBuffer) throws -> McpTransport {
+    return try FfiConverterTypeMcpTransport.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpTransport_lower(_ value: McpTransport) -> RustBuffer {
+    return FfiConverterTypeMcpTransport.lower(value)
+}
+
+
+
+extension McpTransport: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum ProcessingState {
     
     case idle
@@ -5812,6 +6353,155 @@ public func FfiConverterTypeProcessingState_lower(_ value: ProcessingState) -> R
 
 
 extension ProcessingState: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum UnifiedSkillStatus {
+    
+    case stopped
+    case starting
+    case running
+    case error
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUnifiedSkillStatus: FfiConverterRustBuffer {
+    typealias SwiftType = UnifiedSkillStatus
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UnifiedSkillStatus {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .stopped
+        
+        case 2: return .starting
+        
+        case 3: return .running
+        
+        case 4: return .error
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: UnifiedSkillStatus, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .stopped:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .starting:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .running:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .error:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUnifiedSkillStatus_lift(_ buf: RustBuffer) throws -> UnifiedSkillStatus {
+    return try FfiConverterTypeUnifiedSkillStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUnifiedSkillStatus_lower(_ value: UnifiedSkillStatus) -> RustBuffer {
+    return FfiConverterTypeUnifiedSkillStatus.lower(value)
+}
+
+
+
+extension UnifiedSkillStatus: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum UnifiedSkillType {
+    
+    case builtinMcp
+    case externalMcp
+    case promptTemplate
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUnifiedSkillType: FfiConverterRustBuffer {
+    typealias SwiftType = UnifiedSkillType
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UnifiedSkillType {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .builtinMcp
+        
+        case 2: return .externalMcp
+        
+        case 3: return .promptTemplate
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: UnifiedSkillType, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .builtinMcp:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .externalMcp:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .promptTemplate:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUnifiedSkillType_lift(_ buf: RustBuffer) throws -> UnifiedSkillType {
+    return try FfiConverterTypeUnifiedSkillType.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUnifiedSkillType_lower(_ value: UnifiedSkillType) -> RustBuffer {
+    return FfiConverterTypeUnifiedSkillType.lower(value)
+}
+
+
+
+extension UnifiedSkillType: Equatable, Hashable {}
 
 
 
@@ -6572,6 +7262,30 @@ fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionFloat: FfiConverterRustBuffer {
     typealias SwiftType = Float?
 
@@ -6804,6 +7518,54 @@ fileprivate struct FfiConverterOptionTypeTriggerConfig: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeTriggerConfig.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeUnifiedSkillConfig: FfiConverterRustBuffer {
+    typealias SwiftType = UnifiedSkillConfig?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeUnifiedSkillConfig.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeUnifiedSkillConfig.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeMcpTransport: FfiConverterRustBuffer {
+    typealias SwiftType = McpTransport?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeMcpTransport.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeMcpTransport.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -7333,6 +8095,56 @@ fileprivate struct FfiConverterSequenceTypeSkillInfo: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeUnifiedEnvVar: FfiConverterRustBuffer {
+    typealias SwiftType = [UnifiedEnvVar]
+
+    public static func write(_ value: [UnifiedEnvVar], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeUnifiedEnvVar.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UnifiedEnvVar] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [UnifiedEnvVar]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeUnifiedEnvVar.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeUnifiedSkillConfig: FfiConverterRustBuffer {
+    typealias SwiftType = [UnifiedSkillConfig]
+
+    public static func write(_ value: [UnifiedSkillConfig], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeUnifiedSkillConfig.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UnifiedSkillConfig] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [UnifiedSkillConfig]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeUnifiedSkillConfig.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterDictionaryStringUInt64: FfiConverterRustBuffer {
     public static func write(_ value: [String: UInt64], into buf: inout [UInt8]) {
         let len = Int32(value.count)
@@ -7467,6 +8279,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_add_mcp_server() != 17845) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_add_unified_skill() != 14258) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_cleanup_old_memories() != 47692) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -7489,6 +8304,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_delete_provider() != 56010) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_delete_unified_skill() != 9973) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_end_conversation() != 48231) {
@@ -7542,6 +8360,15 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_get_root_commands() != 47120) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_get_unified_skill() != 63959) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_unified_skill_logs() != 34053) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_unified_skill_status() != 15873) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_has_active_conversation() != 19478) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -7555,6 +8382,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_list_mcp_tools() != 7193) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_list_unified_skills() != 15697) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_load_config() != 33928) {
@@ -7608,6 +8438,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_test_typed_error() != 18445) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_toggle_unified_skill() != 44032) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_trigger_compression() != 46260) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -7639,6 +8472,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_trigger_config() != 14167) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_update_unified_skill() != 45293) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_validate_regex() != 42285) {
