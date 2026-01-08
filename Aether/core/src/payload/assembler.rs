@@ -306,7 +306,7 @@ impl PromptAssembler {
         let mut lines = vec![
             "**Web Search Results** (Retrieved by your search capability):".to_string(),
             String::new(),
-            "_IMPORTANT: These results were just fetched by YOUR search capability in real-time. You HAVE successfully accessed the internet. Do NOT say \"I cannot access the internet\" or ask the user for more search results. Answer directly based on this data._".to_string(),
+            "_CRITICAL: These results were just fetched by YOUR search capability in real-time. You HAVE successfully accessed the internet. Do NOT say \"I cannot access the internet\" or ask the user for more search results. Answer directly based on this data._".to_string(),
             String::new(),
         ];
 
