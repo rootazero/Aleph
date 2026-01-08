@@ -1,9 +1,10 @@
 # Change: Add Skills Capability (Claude Agent Skills Standard)
 
-**Status**: Draft
+**Status**: Deployed
 **Author**: AI Assistant
 **Created**: 2026-01-07
 **Updated**: 2026-01-08
+**Deployed**: 2026-01-08
 
 ## Why
 

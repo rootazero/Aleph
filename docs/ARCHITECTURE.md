@@ -545,17 +545,39 @@ pub struct McpResource {
 
 ### Skills System
 
-**Status**: Intent classification reserved, not implemented
+**Status**: ✅ Implemented (2026-01-08)
 
-**Planned Architecture**:
-- User-defined multi-step workflows
-- State machine for conversation flow
-- Integration with Memory and MCP
+**Implementation Details**:
+- **Claude Agent Skills standard**: SKILL.md format with YAML frontmatter + Markdown body
+- **Strategy Pattern integration**: `SkillsStrategy` implements `CapabilityStrategy` trait
+- **Installation methods**: GitHub URL, ZIP file upload, manual file placement
+- **Hot reload**: Skills changes take effect immediately
+- **Built-in skills**: refine-text, translate, summarize
 
-**Intent Example**:
+**Architecture**:
+- `Skill` struct for skill data parsing
+- `SkillsRegistry` for skill management and lookup
+- `SkillsInstaller` for GitHub/ZIP installation
+- `SkillsStrategy` (priority 4) for capability execution
+- `PromptAssembler::format_skill_instructions_markdown()` for formatting
+
+**Data Structure**:
 ```rust
-Intent::Skills("code_review".to_string())
+pub struct Skill {
+    pub id: String,
+    pub frontmatter: SkillFrontmatter,  // name, description, allowed_tools
+    pub body: String,                    // Markdown instructions
+}
 ```
+
+**Usage**:
+```
+/skill refine-text Please improve this paragraph...
+/skill translate Convert this to French...
+/skill summarize Give me a summary of...
+```
+
+**Documentation**: See [SKILLS.md](./SKILLS.md)
 
 ---
 
@@ -568,6 +590,6 @@ Intent::Skills("code_review".to_string())
 
 ---
 
-**Last Updated**: 2026-01-04
+**Last Updated**: 2026-01-08
 **Implemented In**: Aether v0.1.0
-**OpenSpec Change**: `implement-structured-context-protocol`
+**OpenSpec Changes**: `implement-structured-context-protocol`, `add-skills-capability`
