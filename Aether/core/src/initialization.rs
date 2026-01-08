@@ -8,6 +8,7 @@
 /// - Initializes memory database
 use crate::config::Config;
 use crate::error::{AetherError, Result};
+use crate::skills::SkillsRegistry;
 use std::fs;
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
@@ -164,6 +165,11 @@ pub fn get_config_dir() -> Result<PathBuf> {
 /// custom model storage.
 pub fn get_model_dir() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("models").join("bge-small-zh-v1.5"))
+}
+
+/// Get the skills directory path
+pub fn get_skills_dir() -> Result<PathBuf> {
+    Ok(get_config_dir()?.join("skills"))
 }
 
 /// Run first-time initialization
@@ -430,6 +436,7 @@ async fn create_directory_structure() -> Result<()> {
     let config_dir = get_config_dir()?;
     let model_dir = get_model_dir()?;
     let logs_dir = config_dir.join("logs");
+    let skills_dir = get_skills_dir()?;
 
     debug!("Creating config directory: {:?}", config_dir);
     fs::create_dir_all(&config_dir)
@@ -442,6 +449,10 @@ async fn create_directory_structure() -> Result<()> {
     debug!("Creating logs directory: {:?}", logs_dir);
     fs::create_dir_all(&logs_dir)
         .map_err(|e| AetherError::config(format!("Failed to create logs directory: {}", e)))?;
+
+    debug!("Creating skills directory: {:?}", skills_dir);
+    fs::create_dir_all(&skills_dir)
+        .map_err(|e| AetherError::config(format!("Failed to create skills directory: {}", e)))?;
 
     info!("✅ Directory structure created");
     Ok(())
@@ -509,6 +520,103 @@ async fn initialize_memory_database() -> Result<()> {
         .map_err(|e| AetherError::config(format!("Failed to initialize memory database: {}", e)))?;
 
     info!("✅ Memory database initialized");
+    Ok(())
+}
+
+/// Initialize built-in skills
+///
+/// Copies built-in skills from Resources/skills to user's skills directory.
+/// Never overwrites existing user skills.
+///
+/// # Arguments
+/// * `bundle_skills_dir` - Path to the bundled skills directory (in app bundle)
+pub fn initialize_builtin_skills(bundle_skills_dir: &PathBuf) -> Result<()> {
+    let skills_dir = get_skills_dir()?;
+
+    // Ensure skills directory exists
+    fs::create_dir_all(&skills_dir)
+        .map_err(|e| AetherError::config(format!("Failed to create skills directory: {}", e)))?;
+
+    // Check if bundle skills directory exists
+    if !bundle_skills_dir.exists() {
+        info!(
+            "Bundle skills directory not found at {:?}, skipping built-in skills",
+            bundle_skills_dir
+        );
+        return Ok(());
+    }
+
+    // Iterate through bundled skills
+    let entries = fs::read_dir(bundle_skills_dir).map_err(|e| {
+        AetherError::config(format!(
+            "Failed to read bundle skills directory: {}",
+            e
+        ))
+    })?;
+
+    let mut copied_count = 0;
+    let mut skipped_count = 0;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        // Only process directories with SKILL.md
+        if path.is_dir() {
+            let skill_md = path.join("SKILL.md");
+            if skill_md.exists() {
+                let skill_id = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown");
+
+                let target_dir = skills_dir.join(skill_id);
+
+                // Never overwrite existing user skills
+                if target_dir.exists() {
+                    debug!(
+                        skill_id = %skill_id,
+                        "Skill already exists, skipping"
+                    );
+                    skipped_count += 1;
+                    continue;
+                }
+
+                // Create skill directory and copy SKILL.md
+                fs::create_dir_all(&target_dir).map_err(|e| {
+                    AetherError::config(format!(
+                        "Failed to create skill directory {}: {}",
+                        target_dir.display(),
+                        e
+                    ))
+                })?;
+
+                let target_skill_md = target_dir.join("SKILL.md");
+                fs::copy(&skill_md, &target_skill_md).map_err(|e| {
+                    AetherError::config(format!(
+                        "Failed to copy SKILL.md for {}: {}",
+                        skill_id,
+                        e
+                    ))
+                })?;
+
+                info!(skill_id = %skill_id, "Installed built-in skill");
+                copied_count += 1;
+            }
+        }
+    }
+
+    info!(
+        copied = copied_count,
+        skipped = skipped_count,
+        "Built-in skills initialization complete"
+    );
+
+    // Reload skills registry if it exists
+    let registry = SkillsRegistry::new(skills_dir);
+    if let Err(e) = registry.load_all() {
+        warn!("Failed to load skills after initialization: {}", e);
+    }
+
     Ok(())
 }
 
