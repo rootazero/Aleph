@@ -27,7 +27,6 @@ struct ProviderEditPanel: View {
     @State private var apiKey: String = ""
     @State private var model: String = ""
     @State private var baseURL: String = ""
-    @State private var color: Color = .blue
     @State private var timeoutSeconds: String = "30"
 
     // Form fields - Common generation parameters
@@ -63,7 +62,6 @@ struct ProviderEditPanel: View {
     @State private var savedApiKey: String = ""
     @State private var savedModel: String = ""
     @State private var savedBaseURL: String = ""
-    @State private var savedColor: Color = .blue
     @State private var savedTimeoutSeconds: String = "30"
     @State private var savedMaxTokens: String = ""
     @State private var savedTemperature: String = ""
@@ -93,16 +91,6 @@ struct ProviderEditPanel: View {
         case success(String)
         case failure(String)
     }
-
-    // MARK: - Constants
-
-    private let defaultColors: [String: Color] = [
-        "openai": Color(hex: "#10a37f") ?? .green,
-        "claude": Color(hex: "#d97757") ?? .orange,
-        "gemini": Color(hex: "#4285F4") ?? .blue,
-        "ollama": .black,
-        "custom": .gray
-    ]
 
     // MARK: - Computed Properties
 
@@ -198,7 +186,6 @@ struct ProviderEditPanel: View {
         .onChange(of: apiKey) { _, _ in updateSaveBarState() }
         .onChange(of: model) { _, _ in updateSaveBarState() }
         .onChange(of: baseURL) { _, _ in updateSaveBarState() }
-        .onChange(of: color) { _, _ in updateSaveBarState() }
         .onChange(of: isProviderActive) { _, _ in updateSaveBarState() }
         .onChange(of: temperature) { _, _ in updateSaveBarState() }
         .onChange(of: maxTokens) { _, _ in updateSaveBarState() }
@@ -574,13 +561,10 @@ struct ProviderEditPanel: View {
 
         // For existing providers, compare directly with saved config (not savedXxx state)
         let config = provider.config
-        // Custom providers use fixed color, so skip color comparison
-        let colorChanged = !isCustomProvider && color.toHex() != config.color
         return providerName != provider.name ||
                apiKey != (config.apiKey ?? "") ||
                model != config.model ||
                baseURL != (config.baseUrl ?? "") ||
-               colorChanged ||
                timeoutSeconds != String(config.timeoutSeconds) ||
                maxTokens != (config.maxTokens.map { String($0) } ?? "") ||
                temperature != (config.temperature.map { String($0) } ?? "") ||
@@ -741,7 +725,6 @@ struct ProviderEditPanel: View {
         providerType = provider.config.providerType ?? "openai"
         model = provider.config.model
         baseURL = provider.config.baseUrl ?? ""
-        color = Color(hex: provider.config.color) ?? .blue
         timeoutSeconds = String(provider.config.timeoutSeconds)
 
         // Common generation parameters
@@ -784,7 +767,6 @@ struct ProviderEditPanel: View {
         savedApiKey = apiKey
         savedModel = model
         savedBaseURL = baseURL
-        savedColor = color
         savedTimeoutSeconds = timeoutSeconds
         savedMaxTokens = maxTokens
         savedTemperature = temperature
@@ -808,14 +790,12 @@ struct ProviderEditPanel: View {
             providerType = preset.providerType
             model = ""
             baseURL = ""
-            color = Color(hex: preset.color) ?? .gray
         } else {
             // Preset provider - use predefined values
             providerName = preset.id
             providerType = preset.providerType
             model = preset.defaultModel
             baseURL = preset.baseUrl ?? ""
-            color = Color(hex: preset.color) ?? .blue
         }
         timeoutSeconds = "30"
         maxTokens = ""
@@ -881,11 +861,6 @@ struct ProviderEditPanel: View {
     }
 
     private func updateDefaultsForProviderType(_ type: String) {
-        // Update default color
-        if let defaultColor = defaultColors[type] {
-            color = defaultColor
-        }
-
         // Set default model
         switch type {
         case "openai":
@@ -909,9 +884,6 @@ struct ProviderEditPanel: View {
         errorMessage = nil
 
         Task {
-            // Custom providers use fixed color (matching gradient icon style)
-            let testColor = isCustomProvider ? "#5E5CE6" : color.toHex()
-
             // Build temporary provider config with actual API key (not keychain reference)
             // This allows testing without persisting the configuration to disk
             let testConfig = ProviderConfig(
@@ -919,7 +891,7 @@ struct ProviderEditPanel: View {
                 apiKey: providerType == "ollama" ? nil : apiKey,  // Use actual API key for testing
                 model: model,
                 baseUrl: baseURL.isEmpty ? nil : baseURL,
-                color: testColor,
+                color: "#5E5CE6",  // Fixed default color (not used in UI)
                 timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
                 enabled: isProviderActive,
                 maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
@@ -994,7 +966,7 @@ struct ProviderEditPanel: View {
                                 id: savedProviderName,
                                 name: savedProviderName,
                                 iconName: "puzzlepiece.extension",
-                                color: color.toHex(),
+                                color: "#5E5CE6",  // Fixed default color
                                 providerType: providerType,
                                 defaultModel: model,
                                 description: baseURL.isEmpty ? "Custom OpenAI-compatible provider" : "OpenAI-compatible API: \(baseURL)",
@@ -1036,16 +1008,13 @@ struct ProviderEditPanel: View {
     }
 
     private func saveProviderConfig(persist: Bool) async throws {
-        // Custom providers use fixed color (matching gradient icon style)
-        let providerColor = isCustomProvider ? "#5E5CE6" : color.toHex()
-
         // Build config with all parameters (API key stored directly in config)
         let config = ProviderConfig(
             providerType: providerType,
             apiKey: providerType == "ollama" ? nil : (apiKey.isEmpty ? nil : apiKey),
             model: model,
             baseUrl: baseURL.isEmpty ? nil : baseURL,
-            color: providerColor,
+            color: "#5E5CE6",  // Fixed default color (not used in UI)
             timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
             enabled: isProviderActive,
             maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
