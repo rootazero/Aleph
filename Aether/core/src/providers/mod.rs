@@ -52,6 +52,14 @@ use crate::config::ProviderConfig;
 use crate::error::AetherError;
 use std::sync::Arc;
 
+/// Create a mock provider for testing
+///
+/// Returns an Arc<dyn AiProvider> wrapping a MockProvider with a default response.
+/// This is useful for testing services that require an AiProvider.
+pub fn create_mock_provider() -> Arc<dyn AiProvider> {
+    Arc::new(MockProvider::new("Mock LLM response for testing"))
+}
+
 /// Create a provider instance from configuration
 ///
 /// This factory function instantiates the appropriate provider based on

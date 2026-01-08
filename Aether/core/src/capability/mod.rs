@@ -151,7 +151,7 @@ impl CapabilityExecutor {
             .join(".config")
             .join("aether")
             .join("models")
-            .join("all-MiniLM-L6-v2"))
+            .join("bge-small-zh-v1.5"))
     }
 
     /// Execute all capabilities in priority order

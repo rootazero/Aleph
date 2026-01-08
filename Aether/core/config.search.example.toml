@@ -11,7 +11,7 @@ language = "zh-Hans"
 
 [memory]
 enabled = true
-embedding_model = "all-MiniLM-L6-v2"
+embedding_model = "bge-small-zh-v1.5"
 max_context_items = 5
 retention_days = 90
 vector_db = "sqlite-vec"

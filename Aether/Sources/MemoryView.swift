@@ -27,6 +27,11 @@ struct MemoryView: View {
     @State private var showModelDownloadWindow = false
     @State private var isCheckingModel = false
 
+    // Compression state
+    @State private var compressionStats: CompressionStats?
+    @State private var isCompressing = false
+    @State private var lastCompressionResult: CompressionResult?
+
     init(core: AetherCore, saveBarState: SettingsSaveBarState) {
         self.core = core
         self._saveBarState = ObservedObject(wrappedValue: saveBarState)
@@ -43,6 +48,11 @@ struct MemoryView: View {
                 // Statistics Card
                 if memoryConfig.enabled {
                     statisticsCard
+
+                    // Compression Card (Dual-Layer Memory Architecture)
+                    if memoryConfig.compressionEnabled {
+                        compressionCard
+                    }
 
                     // Memory Browser Card
                     memoryBrowserCard
@@ -299,6 +309,115 @@ struct MemoryView: View {
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
     }
 
+    // MARK: - Compression Card
+
+    private var compressionCard: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            HStack {
+                Label(L("settings.memory.compression"), systemImage: "archivebox.fill")
+                    .font(DesignTokens.Typography.heading)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                Spacer()
+
+                // Compress Now button
+                ActionButton(
+                    isCompressing ? L("settings.memory.compressing") : L("settings.memory.compress_now"),
+                    icon: isCompressing ? "hourglass" : "arrow.triangle.2.circlepath",
+                    style: .primary
+                ) {
+                    triggerCompression()
+                }
+                .disabled(isCompressing)
+            }
+
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                if let stats = compressionStats {
+                    // Raw Memories (Layer 1)
+                    HStack {
+                        Text(L("settings.memory.raw_memories"))
+                            .font(DesignTokens.Typography.body)
+                            .frame(width: 150, alignment: .leading)
+                        Text("\(stats.totalRawMemories)")
+                            .font(DesignTokens.Typography.body)
+                            .fontWeight(.semibold)
+                        Spacer()
+                    }
+
+                    // Compressed Facts (Layer 2)
+                    HStack {
+                        Text(L("settings.memory.compressed_facts"))
+                            .font(DesignTokens.Typography.body)
+                            .frame(width: 150, alignment: .leading)
+                        Text("\(stats.validFacts) / \(stats.totalFacts)")
+                            .font(DesignTokens.Typography.body)
+                            .fontWeight(.semibold)
+
+                        Text(L("settings.memory.valid_total"))
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                        Spacer()
+                    }
+
+                    // Facts by type breakdown
+                    if !stats.factsByType.isEmpty {
+                        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                            Text(L("settings.memory.facts_by_type"))
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                            HStack(spacing: DesignTokens.Spacing.md) {
+                                ForEach(Array(stats.factsByType.keys.sorted()), id: \.self) { factType in
+                                    if let count = stats.factsByType[factType], count > 0 {
+                                        HStack(spacing: DesignTokens.Spacing.xs) {
+                                            Image(systemName: iconForFactType(factType))
+                                                .font(.caption)
+                                                .foregroundColor(colorForFactType(factType))
+                                            Text("\(factType): \(count)")
+                                                .font(DesignTokens.Typography.caption)
+                                        }
+                                        .padding(.horizontal, DesignTokens.Spacing.sm)
+                                        .padding(.vertical, DesignTokens.Spacing.xs)
+                                        .background(colorForFactType(factType).opacity(0.15))
+                                        .cornerRadius(DesignTokens.CornerRadius.small)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Last compression result
+                    if let result = lastCompressionResult {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(DesignTokens.Colors.success)
+                            Text(String(format: L("settings.memory.compression_result"),
+                                        result.memoriesProcessed,
+                                        result.factsExtracted,
+                                        result.durationMs))
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                        }
+                        .padding(.top, DesignTokens.Spacing.xs)
+                    }
+                } else {
+                    Text(L("settings.memory.loading_compression_stats"))
+                        .font(DesignTokens.Typography.body)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+            }
+
+            // Compression description
+            Text(L("settings.memory.compression_description"))
+                .font(DesignTokens.Typography.caption)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
+                .padding(.top, DesignTokens.Spacing.xs)
+        }
+        .padding(DesignTokens.Spacing.md)
+        .background(DesignTokens.Colors.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
+    }
+
     // MARK: - Memory Browser Card
 
     private var memoryBrowserCard: some View {
@@ -425,8 +544,64 @@ struct MemoryView: View {
 
     private func refreshData() {
         loadStats()
+        loadCompressionStats()
         loadAppList()
         loadMemories()
+    }
+
+    private func loadCompressionStats() {
+        do {
+            compressionStats = try core.getCompressionStats()
+        } catch {
+            print("[MemoryView] Failed to load compression stats: \(error.localizedDescription)")
+            // Not critical - just don't show the stats
+        }
+    }
+
+    private func triggerCompression() {
+        isCompressing = true
+        lastCompressionResult = nil
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let result = try core.triggerCompression()
+
+                DispatchQueue.main.async {
+                    isCompressing = false
+                    lastCompressionResult = result
+                    // Refresh stats after compression
+                    loadCompressionStats()
+                    loadStats()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    isCompressing = false
+                    errorMessage = "Compression failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func iconForFactType(_ factType: String) -> String {
+        switch factType.lowercased() {
+        case "preference": return "heart.fill"
+        case "plan": return "calendar"
+        case "learning": return "book.fill"
+        case "project": return "folder.fill"
+        case "personal": return "person.fill"
+        default: return "doc.text.fill"
+        }
+    }
+
+    private func colorForFactType(_ factType: String) -> Color {
+        switch factType.lowercased() {
+        case "preference": return .pink
+        case "plan": return .blue
+        case "learning": return .green
+        case "project": return .orange
+        case "personal": return .purple
+        default: return .gray
+        }
     }
 
     private func loadStats() {

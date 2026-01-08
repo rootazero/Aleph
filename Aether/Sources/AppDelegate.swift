@@ -1005,9 +1005,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         print("[AppDelegate] Outputting conversation response (turn=\(turnId), \(response.count) chars)")
 
         // Use unified output pipeline with multi-turn session type
+        // Pass conversationTextSource so first turn can prepare output position correctly
         let outputContext = OutputContext(
             useReplaceMode: conversationUseCutMode,  // Use stored trigger mode
-            textSource: nil,  // Multi-turn doesn't use cursor positioning
+            textSource: conversationTextSource,  // Use stored textSource for first turn positioning
             sessionType: .multiTurn,
             originalClipboard: nil,  // Multi-turn restores at conversation end
             turnId: turnId,
@@ -1069,13 +1070,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 // End the conversation on error
                 core.endConversation()
 
-                // Show error via EventHandler
-                DispatchQueue.main.async { [weak self] in
-                    self?.eventHandler?.onError(
-                        message: error.localizedDescription,
-                        suggestion: nil
-                    )
-                }
+                // Note: Rust layer already called on_error callback with detailed error message
+                // via handle_processing_error() before throwing AetherException.
+                // DO NOT call onError again here as it would override the detailed message
+                // with generic "An error occurred" from error.localizedDescription.
             }
         }
     }
@@ -1109,13 +1107,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 // End the conversation on error
                 core.endConversation()
 
-                // Show error via EventHandler
-                DispatchQueue.main.async { [weak self] in
-                    self?.eventHandler?.onError(
-                        message: error.localizedDescription,
-                        suggestion: nil
-                    )
-                }
+                // Note: Rust layer already called on_error callback with detailed error message
+                // via handle_processing_error() before throwing AetherException.
+                // DO NOT call onError again here as it would override the detailed message
+                // with generic "An error occurred" from error.localizedDescription.
             }
         }
     }
@@ -1718,8 +1713,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 Thread.sleep(forTimeInterval: 0.15)
             }
 
-            // Prepare cursor position (single-turn only)
-            if context.sessionType == .singleTurn, let textSource = context.textSource {
+            // Prepare cursor position
+            // - Single-turn: always prepare
+            // - Multi-turn first turn (turnId == 0): prepare for initial output (to handle replace mode correctly)
+            // - Multi-turn subsequent turns: skip (cursor already at correct position after previous output)
+            let shouldPreparePosition = context.sessionType == .singleTurn ||
+                                        (context.sessionType == .multiTurn && context.turnId == 0)
+
+            if shouldPreparePosition, let textSource = context.textSource {
                 self.prepareOutputPosition(textSource: textSource, useCutMode: context.useReplaceMode)
                 Thread.sleep(forTimeInterval: 0.05)
             }

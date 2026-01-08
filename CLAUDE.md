@@ -90,9 +90,9 @@ This is a library-based architecture optimized for performance and native integr
    - HTTP client: `reqwest`
    - **UniFFI**: Generates Swift/Kotlin/C# bindings automatically
    - **Memory Module**:
-     - Vector DB: `lancedb` or `rusqlite` + `sqlite-vec`
-     - Embedding inference: `ort` (ONNX Runtime) or `candle` (HuggingFace)
-     - Embedding model: `all-MiniLM-L6-v2` (lightweight, fast)
+     - Vector DB: `rusqlite` + `sqlite-vec`
+     - Embedding inference: `fastembed` (ONNX-based, bundled models)
+     - Embedding model: `bge-small-zh-v1.5` (Chinese-optimized, 512-dim)
 
 2. **Native UIs (Platform-Specific)**:
    - **macOS**: Swift + SwiftUI (NSWindow for Halo overlay, NSStatusBar for menu)
@@ -428,7 +428,7 @@ typing_speed = 50                  # chars per second
 
 [memory]
 enabled = true                     # Enable/disable memory module
-embedding_model = "all-MiniLM-L6-v2"
+embedding_model = "bge-small-zh-v1.5"
 max_context_items = 5
 retention_days = 90
 vector_db = "sqlite-vec"

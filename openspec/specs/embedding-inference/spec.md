@@ -1,79 +1,68 @@
 # embedding-inference Specification
 
 ## Purpose
-TBD - created by archiving change add-contextual-memory-rag. Update Purpose after archive.
+Local embedding inference for semantic similarity search in the Memory module.
+
 ## Requirements
+
 ### Requirement: Embedding Model Loading
-The system SHALL load a pre-trained sentence embedding model (`all-MiniLM-L6-v2`) from local storage using ONNX Runtime.
+The system SHALL load the `bge-small-zh-v1.5` embedding model using fastembed library.
 
 #### Scenario: Load model on first use (lazy loading)
 - **GIVEN** memory feature is enabled
 - **AND** no embedding model is currently loaded in memory
 - **WHEN** the first text embedding is requested
-- **THEN** the system loads the tokenizer from `~/.config/aether/models/all-MiniLM-L6-v2/tokenizer.json`
-- **AND** loads the ONNX model from `~/.config/aether/models/all-MiniLM-L6-v2/model.onnx`
-- **AND** initializes an ONNX Runtime session
-- **AND** caches the session in memory for subsequent requests
-- **AND** completes model loading within 2 seconds
+- **THEN** the system initializes fastembed with `BGESmallZHV15` model
+- **AND** fastembed manages model download to `~/.cache/huggingface/hub/`
+- **AND** caches the model session in memory for subsequent requests
+- **AND** completes model loading within 5 seconds (includes download if needed)
 
-#### Scenario: Model files missing
-- **WHEN** model files do not exist at expected paths
-- **THEN** the system returns an error: `AetherError::EmbeddingModelNotFound`
-- **AND** logs detailed path information for debugging
-- **AND** provides user-friendly error message: "Embedding model not found. Please download model files."
-- **AND** disables memory functionality for the session
-
-#### Scenario: Model load failure (corrupt files)
-- **WHEN** model files exist but are corrupted or incompatible
-- **THEN** ONNX Runtime throws an error during session initialization
-- **AND** the system catches the error and returns `AetherError::EmbeddingModelLoadFailed`
-- **AND** logs the underlying ONNX error details
-- **AND** disables memory functionality
+#### Scenario: Model download on first use
+- **GIVEN** model files do not exist in fastembed cache
+- **WHEN** first embedding is requested
+- **THEN** fastembed automatically downloads model from HuggingFace Hub
+- **AND** shows download progress if configured
+- **AND** stores model in `~/.cache/huggingface/hub/models--Xenova--bge-small-zh-v1.5/`
 
 #### Scenario: Reuse loaded model
 - **GIVEN** model successfully loaded in previous request
 - **WHEN** subsequent embedding is requested
-- **THEN** the system reuses the cached ONNX session
+- **THEN** the system reuses the cached fastembed session
 - **AND** does NOT reload model files from disk
 - **AND** inference starts immediately
 
 ---
 
 ### Requirement: Text Embedding Generation
-The system SHALL generate 384-dimensional float32 vector embeddings for input text.
+The system SHALL generate 512-dimensional float32 vector embeddings for input text.
 
 #### Scenario: Embed single text string
 - **GIVEN** input text: "What are the key milestones for Phase 2?"
 - **WHEN** `embed_text(text)` is called
-- **THEN** the system tokenizes the text using the model tokenizer
-- **AND** truncates to 256 tokens if longer (model max length)
-- **AND** runs ONNX inference to generate token embeddings
-- **AND** applies mean pooling over token embeddings
-- **AND** L2-normalizes the resulting vector
-- **AND** returns a Vec<f32> of length 384
+- **THEN** fastembed tokenizes and generates embedding
+- **AND** returns a Vec<f32> of length 512
 - **AND** completes within 100ms on modern hardware (Apple Silicon M1+, Intel i7+)
+
+#### Scenario: Embed Chinese text (optimized)
+- **GIVEN** input text: "这个项目的主要里程碑是什么？"
+- **WHEN** `embed_text(text)` is called
+- **THEN** the bge-small-zh-v1.5 model processes Chinese characters natively
+- **AND** returns semantically meaningful 512-dim vector
+- **AND** provides better Chinese similarity matching than general models
 
 #### Scenario: Embed empty string
 - **GIVEN** input text: ""
 - **WHEN** `embed_text("")` is called
-- **THEN** the system returns a zero vector (384 zeros)
+- **THEN** the system returns a zero vector (512 zeros)
 - **OR** returns an error: `AetherError::EmptyInput`
 - **DECISION**: Return zero vector for simplicity (less error handling)
 
 #### Scenario: Embed very long text
-- **GIVEN** input text with 1000 tokens (exceeds 256 token limit)
+- **GIVEN** input text with tokens exceeding model limit
 - **WHEN** `embed_text(text)` is called
-- **THEN** the system truncates to first 256 tokens
-- **AND** logs a warning: "Text truncated to 256 tokens for embedding"
+- **THEN** fastembed truncates to model's max token limit
 - **AND** generates embedding from truncated text
-- **AND** returns 384-dim vector
-
-#### Scenario: Embed text with special characters
-- **GIVEN** input text: "Hello! @user #tag $100 https://example.com"
-- **WHEN** `embed_text(text)` is called
-- **THEN** the tokenizer handles special characters according to model training
-- **AND** generates embedding without errors
-- **AND** returns 384-dim vector
+- **AND** returns 512-dim vector
 
 ---
 
@@ -83,21 +72,27 @@ The system SHALL support configurable embedding model selection (future-proofing
 #### Scenario: Use default model
 - **GIVEN** config does not specify embedding_model
 - **WHEN** EmbeddingModel is initialized
-- **THEN** defaults to "all-MiniLM-L6-v2"
-- **AND** loads from default path
-
-#### Scenario: Use custom model path
-- **GIVEN** config specifies: `embedding_model = "custom-model"`
-- **WHEN** EmbeddingModel is initialized
-- **THEN** the system looks for model at `~/.config/aether/models/custom-model/`
-- **AND** loads `model.onnx` and `tokenizer.json` from that directory
-- **AND** verifies output dimensions match expected (384)
+- **THEN** defaults to "bge-small-zh-v1.5"
+- **AND** uses fastembed's `BGESmallZHV15` variant
 
 #### Scenario: Verify embedding dimensions
 - **WHEN** model is loaded
-- **THEN** the system inspects ONNX model output shape
-- **AND** verifies output dimension is 384
-- **AND** returns error if dimension mismatch
+- **THEN** the system uses EMBEDDING_DIM constant (512)
+- **AND** all vectors are 512-dimensional
+
+---
+
+### Requirement: Embedding Dimension Migration
+The system SHALL handle embedding dimension changes gracefully.
+
+#### Scenario: Detect dimension change
+- **GIVEN** existing memories table with 384-dim vectors
+- **AND** new model produces 512-dim vectors
+- **WHEN** database is opened
+- **THEN** the system detects dimension mismatch
+- **AND** clears the memories table
+- **AND** updates schema_info with new dimension
+- **AND** logs migration details
 
 ---
 
@@ -118,7 +113,7 @@ The system SHALL support concurrent embedding requests from multiple threads.
 #### Scenario: Concurrent embedding requests
 - **GIVEN** 5 threads each calling `embed_text()` simultaneously
 - **WHEN** all requests execute concurrently
-- **THEN** the system uses a Mutex or similar to serialize access to ONNX session
+- **THEN** the system uses Mutex to serialize access to fastembed session
 - **AND** all 5 requests complete successfully
 - **AND** no data races or panics occur
 - **AND** embeddings are correct
@@ -129,15 +124,19 @@ The system SHALL support concurrent embedding requests from multiple threads.
 The system SHALL log embedding inference time for performance debugging.
 
 #### Scenario: Log slow inference
-- **WHEN** embedding inference takes longer than 150ms
+- **WHEN** embedding inference takes longer than 100ms
 - **THEN** the system logs a warning with timing details
-- **AND** includes text length and token count in log
-- **EXAMPLE**: "Slow embedding inference: 200ms for 1500 chars (250 tokens)"
-
-#### Scenario: Track average inference time
-- **WHEN** embedding service is running
-- **THEN** the system maintains a moving average of inference times
-- **AND** exposes this metric via stats API (optional)
+- **AND** includes text length in log
+- **EXAMPLE**: "Slow embedding inference: 150ms for 1500 chars"
 
 ---
 
+### Requirement: SIMD Optimization
+The system SHALL use SIMD-optimized cosine similarity calculation.
+
+#### Scenario: Fast similarity search
+- **GIVEN** query embedding and candidate embeddings
+- **WHEN** similarity search is performed
+- **THEN** the system uses SIMD instructions (AVX2/NEON) if available
+- **AND** falls back to scalar operations otherwise
+- **AND** completes vector comparison within 1ms per 1000 candidates

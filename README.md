@@ -231,8 +231,8 @@ When you add a provider via Settings UI:
 │  └──────────────┘  └────────────┘  └──────────────────┘│
 │                                                           │
 │  ┌─────────────────────────────────────────────────────┐│
-│  │        Memory Module (Local RAG with LanceDB)       ││
-│  │  Embedding: all-MiniLM-L6-v2 (local, no cloud)     ││
+│  │        Memory Module (Local RAG with SQLite-vec)    ││
+│  │  Embedding: bge-small-zh-v1.5 (local, no cloud)    ││
 │  └─────────────────────────────────────────────────────┘│
 │                                                           │
 │  ┌─────────────────────────────────────────────────────┐│

@@ -106,8 +106,10 @@ pub use crate::config::{
     TestConnectionResult, TriggerConfig, VideoConfig,
 };
 pub use crate::core::{
-    AetherCore, AppMemoryInfo, CapturedContext, MediaAttachment, MemoryEntryFFI as MemoryEntry,
+    AetherCore, AppMemoryInfo, CapturedContext, CompressionStats, MediaAttachment,
+    MemoryEntryFFI as MemoryEntry,
 };
+pub use crate::memory::context::CompressionResult;
 pub use crate::error::{AetherError, AetherException, Result};
 pub use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 pub use crate::initialization::{

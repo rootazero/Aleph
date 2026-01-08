@@ -59,6 +59,10 @@ DerivedData/
 # Temporary installation logs and notes
 newinstall*.txt
 install_log*.txt
+log*.md
+
+# ML model cache
+**/.fastembed_cache/
 
 icons/
 agentstructure/

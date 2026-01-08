@@ -79,7 +79,7 @@ Aether requires a long-term memory system to enable context-aware interactions b
 - `timestamp`: UTC time.
 
 **Workflow:**
-1. **Ingestion:** After an AI response is accepted by the user, the interaction (User Input + AI Output) is embedded locally (using a lightweight model like `all-MiniLM-L6-v2` via `ORT` or `candle`) and stored.
+1. **Ingestion:** After an AI response is accepted by the user, the interaction (User Input + AI Output) is embedded locally (using `bge-small-zh-v1.5` via `fastembed`) and stored.
 2. **Retrieval:** When a new request comes in, Aether queries the vector DB filtering by the current `app_bundle_id` and `window_title`.
 3. **Augmentation:** Relevant past interactions are retrieved and injected into the LLM's system prompt as "Context History".
 
@@ -89,7 +89,7 @@ Aether requires a long-term memory system to enable context-aware interactions b
 ### Implementation Tasks
 
 - [ ] Integrate embedded vector database (LanceDB or SQLite + sqlite-vec)
-- [ ] Implement embedding model inference (all-MiniLM-L6-v2 via ORT/candle)
+- [x] Implement embedding model inference (bge-small-zh-v1.5 via fastembed)
 - [ ] Create context capture module (app_bundle_id + window_title via Accessibility API)
 - [ ] Build memory ingestion pipeline (post-interaction embedding + storage)
 - [ ] Implement retrieval logic with metadata filtering

@@ -241,7 +241,7 @@ pub async fn execute_all(&self, mut payload: AgentPayload) -> Result<AgentPayloa
 **Location**: `core/src/memory/`
 
 **How It Works**:
-1. User input is embedded using `all-MiniLM-L6-v2` model
+1. User input is embedded using `bge-small-zh-v1.5` model (512-dim, Chinese-optimized)
 2. Vector DB (`sqlite-vec`) searches for similar past conversations
 3. Top-k entries above threshold are retrieved
 4. Entries include similarity scores and context metadata

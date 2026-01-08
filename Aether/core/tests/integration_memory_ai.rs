@@ -47,7 +47,7 @@ fn create_test_config_with_providers() -> Config {
     // Enable memory
     config.memory = MemoryConfig {
         enabled: true,
-        embedding_model: "all-MiniLM-L6-v2".to_string(),
+        embedding_model: "bge-small-zh-v1.5".to_string(),
         max_context_items: 5,
         retention_days: 90,
         vector_db: "sqlite-vec".to_string(),
@@ -57,6 +57,7 @@ fn create_test_config_with_providers() -> Config {
         ai_retrieval_timeout_ms: 3000,
         ai_retrieval_max_candidates: 20,
         ai_retrieval_fallback_count: 3,
+        ..Default::default()
     };
 
     // Add mock provider (uses openai type for testing)
@@ -324,7 +325,7 @@ fn test_memory_config_validation() {
     // Test valid config
     let valid_config = MemoryConfig {
         enabled: true,
-        embedding_model: "all-MiniLM-L6-v2".to_string(),
+        embedding_model: "bge-small-zh-v1.5".to_string(),
         max_context_items: 10,
         retention_days: 30,
         vector_db: "sqlite-vec".to_string(),
@@ -334,6 +335,7 @@ fn test_memory_config_validation() {
         ai_retrieval_timeout_ms: 3000,
         ai_retrieval_max_candidates: 20,
         ai_retrieval_fallback_count: 3,
+        ..Default::default()
     };
 
     let result = core.update_memory_config(valid_config);

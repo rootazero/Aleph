@@ -388,6 +388,18 @@
 "settings.memory.show_more" = "显示更多";
 "settings.memory.show_less" = "收起";
 
+// 记忆压缩（双层架构）
+"settings.memory.compression" = "记忆压缩";
+"settings.memory.compress_now" = "立即压缩";
+"settings.memory.compressing" = "压缩中...";
+"settings.memory.raw_memories" = "原始记忆：";
+"settings.memory.compressed_facts" = "压缩事实：";
+"settings.memory.valid_total" = "（有效 / 总计）";
+"settings.memory.facts_by_type" = "按类型分布：";
+"settings.memory.loading_compression_stats" = "加载压缩统计中...";
+"settings.memory.compression_result" = "处理了 %d 条记忆，提取了 %d 个事实，耗时 %d 毫秒";
+"settings.memory.compression_description" = "压缩功能从对话中提取关键事实，以实现更高效的检索。后台压缩会自动运行。";
+
 // MARK: - Menu Bar
 "menu.settings" = "设置...";
 "menu.quit" = "退出 Aether";

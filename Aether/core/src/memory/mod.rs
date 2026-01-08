@@ -1,15 +1,23 @@
+//! Memory module for context-aware local RAG
+//!
+//! This module provides functionality for storing and retrieving interaction memories
+//! with context anchors (app_bundle_id + window_title). Supports both embedding-based
+//! vector similarity search and AI-based relevance evaluation.
+//!
+//! ## Dual-Layer Architecture
+//!
+//! - **Layer 1 (Raw Logs)**: Original conversation pairs in `memories` table
+//! - **Layer 2 (Compressed Facts)**: LLM-extracted facts in `memory_facts` table
+
+// Public submodules
 pub mod ai_retrieval;
 pub mod augmentation;
 pub mod cleanup;
-/// Memory module for context-aware local RAG
-///
-/// This module provides functionality for storing and retrieving interaction memories
-/// with context anchors (app_bundle_id + window_title). Supports both embedding-based
-/// vector similarity search and AI-based relevance evaluation.
-// Public submodules
+pub mod compression;
 pub mod context;
 pub mod database;
 pub mod embedding;
+pub mod fact_retrieval;
 pub mod ingestion;
 pub mod retrieval;
 pub mod simd;
@@ -22,8 +30,13 @@ mod integration_tests;
 pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
 pub use augmentation::PromptAugmenter;
 pub use cleanup::CleanupService;
-pub use context::{ContextAnchor, MemoryEntry};
+pub use compression::{CompressionScheduler, CompressionService, CompressionTrigger, FactExtractor};
+pub use context::{
+    CompressionResult, CompressionSession, ContextAnchor, FactStats, FactType, MemoryEntry,
+    MemoryFact,
+};
 pub use database::VectorDatabase;
 pub use embedding::EmbeddingModel;
+pub use fact_retrieval::{FactRetrieval, FactRetrievalConfig, RetrievalResult};
 pub use ingestion::MemoryIngestion;
 pub use retrieval::MemoryRetrieval;

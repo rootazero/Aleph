@@ -386,6 +386,18 @@
 "settings.memory.show_more" = "Show More";
 "settings.memory.show_less" = "Show Less";
 
+// Memory Compression (Dual-Layer Architecture)
+"settings.memory.compression" = "Memory Compression";
+"settings.memory.compress_now" = "Compress Now";
+"settings.memory.compressing" = "Compressing...";
+"settings.memory.raw_memories" = "Raw Memories:";
+"settings.memory.compressed_facts" = "Compressed Facts:";
+"settings.memory.valid_total" = "(valid / total)";
+"settings.memory.facts_by_type" = "Facts by Type:";
+"settings.memory.loading_compression_stats" = "Loading compression statistics...";
+"settings.memory.compression_result" = "Processed %d memories, extracted %d facts in %dms";
+"settings.memory.compression_description" = "Compression extracts key facts from conversations for more efficient retrieval. Background compression runs automatically.";
+
 // MARK: - Menu Bar
 "menu.settings" = "Settings...";
 "menu.quit" = "Quit Aether";

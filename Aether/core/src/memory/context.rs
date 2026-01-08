@@ -93,6 +93,248 @@ impl MemoryEntry {
     }
 }
 
+// ============================================================================
+// Memory Compression: Fact Types and Structures
+// ============================================================================
+
+/// Type classification for memory facts
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum FactType {
+    /// User preferences (likes, habits, style choices)
+    Preference,
+    /// User plans, goals, or intentions
+    Plan,
+    /// Learning or skill-related information
+    Learning,
+    /// Project or work-related information
+    Project,
+    /// Personal information (non-sensitive)
+    Personal,
+    /// Other facts that don't fit above categories
+    Other,
+}
+
+impl FactType {
+    /// Convert to string representation
+    pub fn as_str(&self) -> &str {
+        match self {
+            FactType::Preference => "preference",
+            FactType::Plan => "plan",
+            FactType::Learning => "learning",
+            FactType::Project => "project",
+            FactType::Personal => "personal",
+            FactType::Other => "other",
+        }
+    }
+
+    /// Parse from string
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "preference" => FactType::Preference,
+            "plan" => FactType::Plan,
+            "learning" => FactType::Learning,
+            "project" => FactType::Project,
+            "personal" => FactType::Personal,
+            _ => FactType::Other,
+        }
+    }
+}
+
+impl Default for FactType {
+    fn default() -> Self {
+        FactType::Other
+    }
+}
+
+impl std::fmt::Display for FactType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// A compressed memory fact extracted from conversations by LLM
+///
+/// Facts are third-person statements about the user, such as:
+/// - "The user is learning Rust programming language"
+/// - "The user prefers using Vim for coding"
+/// - "The user plans to travel to Tokyo next week"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryFact {
+    /// Unique identifier (UUID)
+    pub id: String,
+    /// Fact content (third-person statement)
+    pub content: String,
+    /// Type classification
+    pub fact_type: FactType,
+    /// Vector embedding (512-dim for bge-small-zh-v1.5)
+    pub embedding: Option<Vec<f32>>,
+    /// Source memory IDs for traceability
+    pub source_memory_ids: Vec<String>,
+    /// Creation timestamp
+    pub created_at: i64,
+    /// Last update timestamp
+    pub updated_at: i64,
+    /// Confidence score (0.0-1.0) from LLM
+    pub confidence: f32,
+    /// Whether this fact is still valid (soft delete)
+    pub is_valid: bool,
+    /// Reason for invalidation (if is_valid = false)
+    pub invalidation_reason: Option<String>,
+    /// Similarity score (when retrieved from search)
+    #[serde(skip)]
+    pub similarity_score: Option<f32>,
+}
+
+impl MemoryFact {
+    /// Create a new valid memory fact
+    pub fn new(content: String, fact_type: FactType, source_ids: Vec<String>) -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            content,
+            fact_type,
+            embedding: None,
+            source_memory_ids: source_ids,
+            created_at: now,
+            updated_at: now,
+            confidence: 1.0,
+            is_valid: true,
+            invalidation_reason: None,
+            similarity_score: None,
+        }
+    }
+
+    /// Create a new fact with specific ID (for database reconstruction)
+    pub fn with_id(id: String, content: String, fact_type: FactType) -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        Self {
+            id,
+            content,
+            fact_type,
+            embedding: None,
+            source_memory_ids: Vec::new(),
+            created_at: now,
+            updated_at: now,
+            confidence: 1.0,
+            is_valid: true,
+            invalidation_reason: None,
+            similarity_score: None,
+        }
+    }
+
+    /// Add embedding to the fact
+    pub fn with_embedding(mut self, embedding: Vec<f32>) -> Self {
+        self.embedding = Some(embedding);
+        self
+    }
+
+    /// Set confidence score
+    pub fn with_confidence(mut self, confidence: f32) -> Self {
+        self.confidence = confidence.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Set similarity score (used during retrieval)
+    pub fn with_score(mut self, score: f32) -> Self {
+        self.similarity_score = Some(score);
+        self
+    }
+
+    /// Invalidate this fact with a reason
+    pub fn invalidate(mut self, reason: &str) -> Self {
+        self.is_valid = false;
+        self.invalidation_reason = Some(reason.to_string());
+        self.updated_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        self
+    }
+}
+
+/// Record of a compression session for auditing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionSession {
+    /// Session ID (UUID)
+    pub id: String,
+    /// Source memory IDs that were compressed
+    pub source_memory_ids: Vec<String>,
+    /// Extracted fact IDs
+    pub extracted_fact_ids: Vec<String>,
+    /// Compression timestamp
+    pub compressed_at: i64,
+    /// AI provider used for extraction
+    pub provider_used: String,
+    /// Compression duration in milliseconds
+    pub duration_ms: u64,
+}
+
+impl CompressionSession {
+    /// Create a new compression session record
+    pub fn new(
+        source_memory_ids: Vec<String>,
+        extracted_fact_ids: Vec<String>,
+        provider_used: String,
+        duration_ms: u64,
+    ) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            source_memory_ids,
+            extracted_fact_ids,
+            compressed_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64,
+            provider_used,
+            duration_ms,
+        }
+    }
+}
+
+/// Statistics for memory facts
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FactStats {
+    /// Total number of facts
+    pub total_facts: u64,
+    /// Number of valid (non-invalidated) facts
+    pub valid_facts: u64,
+    /// Breakdown by fact type
+    pub facts_by_type: std::collections::HashMap<String, u64>,
+    /// Oldest fact timestamp
+    pub oldest_fact_timestamp: Option<i64>,
+    /// Newest fact timestamp
+    pub newest_fact_timestamp: Option<i64>,
+}
+
+/// Result of a compression operation
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CompressionResult {
+    /// Number of memories processed
+    pub memories_processed: u32,
+    /// Number of facts extracted
+    pub facts_extracted: u32,
+    /// Number of old facts invalidated due to conflicts
+    pub facts_invalidated: u32,
+    /// Duration in milliseconds
+    pub duration_ms: u64,
+}
+
+impl CompressionResult {
+    /// Create an empty result (no work done)
+    pub fn empty() -> Self {
+        Self::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

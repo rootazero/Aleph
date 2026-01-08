@@ -214,6 +214,18 @@ interface AetherCore {
   [Throws=AetherException]
   u64 cleanup_old_memories();
 
+  // MEMORY COMPRESSION METHODS (dual-layer memory architecture)
+
+  // Manually trigger memory compression
+  // Processes uncompressed memories, extracts facts using LLM, stores in memory_facts table
+  [Throws=AetherException]
+  CompressionResult trigger_compression();
+
+  // Get compression statistics
+  // Returns counts for raw memories, facts (total/valid), and breakdown by fact type
+  [Throws=AetherException]
+  CompressionStats get_compression_stats();
+
   // CONFIG MANAGEMENT METHODS (Phase 6 - Settings UI)
 
   // Load configuration from file
@@ -445,6 +457,15 @@ dictionary MemoryConfig {
   u64 ai_retrieval_timeout_ms;
   u32 ai_retrieval_max_candidates;
   u32 ai_retrieval_fallback_count;
+  // Memory compression settings (dual-layer architecture)
+  boolean compression_enabled;
+  u32 compression_idle_timeout_seconds;
+  u32 compression_turn_threshold;
+  u32 compression_interval_seconds;
+  u32 compression_batch_size;
+  f32 conflict_similarity_threshold;
+  u32 max_facts_in_context;
+  u32 raw_memory_fallback_count;
 };
 
 // Provider configuration (Phase 6 - Task 1.5, Extended in refactor-provider-edit-panel)
@@ -677,6 +698,22 @@ dictionary MemoryStats {
   f64 database_size_mb;
   i64 oldest_memory_timestamp;
   i64 newest_memory_timestamp;
+};
+
+// Compression result (returned by trigger_compression)
+dictionary CompressionResult {
+  u32 memories_processed;
+  u32 facts_extracted;
+  u32 facts_invalidated;
+  u64 duration_ms;
+};
+
+// Compression statistics (returned by get_compression_stats)
+dictionary CompressionStats {
+  u64 total_raw_memories;
+  u64 total_facts;
+  u64 valid_facts;
+  record<string, u64> facts_by_type;
 };
 
 // App memory info for UI filtering

@@ -16,6 +16,10 @@ use crate::config::{Config, ConfigWatcher, GeneralConfig, MemoryConfig, TestConn
 use crate::error::{AetherError, AetherException, Result};
 use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
 use crate::memory::cleanup::CleanupService;
+use crate::memory::compression::{
+    CompressionConfig, CompressionService, ConflictConfig, SchedulerConfig,
+};
+use crate::memory::context::CompressionResult;
 use crate::memory::database::{MemoryStats, VectorDatabase};
 use crate::router::Router;
 use std::path::PathBuf;
@@ -50,6 +54,21 @@ pub struct CapturedContext {
     pub attachments: Option<Vec<MediaAttachment>>,  // Multimodal content support
 }
 
+/// Statistics about memory compression state
+///
+/// Used for displaying compression status in Settings UI
+#[derive(Debug, Clone)]
+pub struct CompressionStats {
+    /// Total number of raw memories (Layer 1)
+    pub total_raw_memories: u64,
+    /// Total number of compressed facts (Layer 2)
+    pub total_facts: u64,
+    /// Number of valid (non-invalidated) facts
+    pub valid_facts: u64,
+    /// Breakdown by fact type (preference, plan, learning, etc.)
+    pub facts_by_type: std::collections::HashMap<String, u64>,
+}
+
 /// Main core struct for Aether
 ///
 /// NEW ARCHITECTURE (Phase 2):
@@ -67,6 +86,10 @@ pub struct AetherCore {
     cleanup_service: Option<Arc<CleanupService>>,
     #[allow(dead_code)]
     cleanup_task_handle: Option<tokio::task::JoinHandle<()>>,
+    // Memory compression service (dual-layer architecture)
+    compression_service: Option<Arc<CompressionService>>,
+    #[allow(dead_code)]
+    compression_task_handle: Option<tokio::task::JoinHandle<()>>,
     // AI routing (RwLock allows hot-reload after config changes)
     router: Arc<RwLock<Option<Arc<Router>>>>,
     // Search capability (integrate-search-registry)
@@ -228,6 +251,103 @@ impl AetherCore {
             }
         };
 
+        // Initialize compression service if enabled
+        let (compression_service, compression_task_handle) = {
+            let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
+
+            // Check if compression is enabled and memory_db exists
+            if cfg.memory.compression_enabled {
+                if let Some(ref db) = memory_db {
+                    // Get default provider for compression
+                    let provider_result = if let Some(ref default_provider_name) = cfg.general.default_provider {
+                        if let Some(provider_config) = cfg.providers.get(default_provider_name) {
+                            use crate::providers::create_provider;
+                            create_provider(default_provider_name, provider_config.clone()).ok()
+                        } else {
+                            warn!("Default provider '{}' not found in config, compression disabled", default_provider_name);
+                            None
+                        }
+                    } else {
+                        warn!("No default provider configured, compression disabled");
+                        None
+                    };
+
+                    if let Some(provider) = provider_result {
+                        // Get embedding model directory
+                        match Self::get_embedding_model_dir() {
+                            Ok(model_dir) => {
+                                use crate::memory::EmbeddingModel;
+
+                                match EmbeddingModel::new(model_dir) {
+                                    Ok(embedding_model) => {
+                                        let embedding_arc = Arc::new(embedding_model);
+
+                                        // Build compression config from memory config
+                                        let compression_config = CompressionConfig {
+                                            batch_size: cfg.memory.compression_batch_size,
+                                            scheduler: SchedulerConfig {
+                                                idle_timeout_seconds: cfg.memory.compression_idle_timeout_seconds,
+                                                turn_threshold: cfg.memory.compression_turn_threshold,
+                                                ..Default::default()
+                                            },
+                                            conflict: ConflictConfig {
+                                                similarity_threshold: cfg.memory.conflict_similarity_threshold,
+                                            },
+                                            background_interval_seconds: cfg.memory.compression_interval_seconds,
+                                        };
+
+                                        let service = Arc::new(CompressionService::new(
+                                            Arc::clone(db),
+                                            provider,
+                                            embedding_arc,
+                                            compression_config,
+                                        ));
+
+                                        // Start background compression task (only in non-test environment)
+                                        #[cfg(not(test))]
+                                        let task_handle = {
+                                            match tokio::runtime::Handle::try_current() {
+                                                Ok(_) => {
+                                                    info!("Starting background compression task");
+                                                    Some(Arc::clone(&service).start_background_task())
+                                                }
+                                                Err(_) => {
+                                                    warn!("[Compression] No tokio runtime, skipping background task");
+                                                    None
+                                                }
+                                            }
+                                        };
+
+                                        #[cfg(test)]
+                                        let task_handle = None;
+
+                                        info!("Compression service initialized successfully");
+                                        (Some(service), task_handle)
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to initialize embedding model for compression: {}", e);
+                                        (None, None)
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to get embedding model directory for compression: {}", e);
+                                (None, None)
+                            }
+                        }
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    debug!("Memory database not available, compression disabled");
+                    (None, None)
+                }
+            } else {
+                debug!("Compression disabled in config");
+                (None, None)
+            }
+        };
+
         // Initialize config watcher for hot-reload
         let config_watcher = {
             let handler_clone = Arc::clone(&event_handler);
@@ -339,6 +459,8 @@ impl AetherCore {
             current_context: Arc::new(Mutex::new(None)),
             cleanup_service,
             cleanup_task_handle,
+            compression_service,
+            compression_task_handle,
             router,
             search_registry,
             config_watcher,
@@ -364,7 +486,7 @@ impl AetherCore {
             .join(".config")
             .join("aether")
             .join("models")
-            .join("all-MiniLM-L6-v2");
+            .join("bge-small-zh-v1.5");
 
         // Create directory if it doesn't exist
         std::fs::create_dir_all(&model_dir)
@@ -1057,6 +1179,53 @@ impl AetherCore {
         cleanup
             .cleanup_old_memories()
             .map_err(|e| AetherError::config(format!("Cleanup failed: {}", e)))
+    }
+
+    /// Manually trigger memory compression
+    ///
+    /// This executes the compression pipeline immediately:
+    /// 1. Fetches uncompressed memories
+    /// 2. Extracts facts using LLM
+    /// 3. Detects and resolves conflicts
+    /// 4. Stores facts in memory_facts table
+    ///
+    /// # Returns
+    /// * `Result<CompressionResult>` - Compression statistics
+    pub fn trigger_compression(&self) -> Result<CompressionResult> {
+        let compression = self
+            .compression_service
+            .as_ref()
+            .ok_or_else(|| AetherError::config("Compression service not initialized"))?;
+
+        self.runtime
+            .block_on(compression.compress())
+            .map_err(|e| AetherError::other(format!("Compression failed: {}", e)))
+    }
+
+    /// Get compression statistics
+    ///
+    /// Returns statistics about the memory compression state:
+    /// - Total raw memories count
+    /// - Total facts count (valid and invalid)
+    /// - Facts breakdown by type
+    ///
+    /// # Returns
+    /// * `Result<CompressionStats>` - Compression statistics
+    pub fn get_compression_stats(&self) -> Result<CompressionStats> {
+        let db = self.require_memory_db()?;
+
+        // Get memory stats
+        let memory_stats = self.runtime.block_on(db.get_stats())?;
+
+        // Get fact stats
+        let fact_stats = self.runtime.block_on(db.get_fact_stats())?;
+
+        Ok(CompressionStats {
+            total_raw_memories: memory_stats.total_memories,
+            total_facts: fact_stats.total_facts,
+            valid_facts: fact_stats.valid_facts,
+            facts_by_type: fact_stats.facts_by_type,
+        })
     }
 
     /// Store interaction memory with current context

@@ -582,6 +582,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func getCommandChildren(parentKey: String)  -> [CommandNode]
     
+    func getCompressionStats() throws  -> CompressionStats
+    
     func getDefaultProvider()  -> String?
     
     func getEnabledProviders()  -> [String]
@@ -633,6 +635,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func testStreamingResponse() 
     
     func testTypedError(errorType: ErrorType, message: String) 
+    
+    func triggerCompression() throws  -> CompressionResult
     
     func updateBehavior(behavior: BehaviorConfig) throws 
     
@@ -781,6 +785,13 @@ open func getCommandChildren(parentKey: String) -> [CommandNode] {
     return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_get_command_children(self.uniffiClonePointer(),
         FfiConverterString.lower(parentKey),$0
+    )
+})
+}
+    
+open func getCompressionStats()throws  -> CompressionStats {
+    return try  FfiConverterTypeCompressionStats.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_get_compression_stats(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -981,6 +992,13 @@ open func testTypedError(errorType: ErrorType, message: String) {try! rustCall()
         FfiConverterString.lower(message),$0
     )
 }
+}
+    
+open func triggerCompression()throws  -> CompressionResult {
+    return try  FfiConverterTypeCompressionResult.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_trigger_compression(self.uniffiClonePointer(),$0
+    )
+})
 }
     
 open func updateBehavior(behavior: BehaviorConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
@@ -1693,6 +1711,170 @@ public func FfiConverterTypeCommandNode_lower(_ value: CommandNode) -> RustBuffe
 }
 
 
+public struct CompressionResult {
+    public var memoriesProcessed: UInt32
+    public var factsExtracted: UInt32
+    public var factsInvalidated: UInt32
+    public var durationMs: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(memoriesProcessed: UInt32, factsExtracted: UInt32, factsInvalidated: UInt32, durationMs: UInt64) {
+        self.memoriesProcessed = memoriesProcessed
+        self.factsExtracted = factsExtracted
+        self.factsInvalidated = factsInvalidated
+        self.durationMs = durationMs
+    }
+}
+
+
+
+extension CompressionResult: Equatable, Hashable {
+    public static func ==(lhs: CompressionResult, rhs: CompressionResult) -> Bool {
+        if lhs.memoriesProcessed != rhs.memoriesProcessed {
+            return false
+        }
+        if lhs.factsExtracted != rhs.factsExtracted {
+            return false
+        }
+        if lhs.factsInvalidated != rhs.factsInvalidated {
+            return false
+        }
+        if lhs.durationMs != rhs.durationMs {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(memoriesProcessed)
+        hasher.combine(factsExtracted)
+        hasher.combine(factsInvalidated)
+        hasher.combine(durationMs)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCompressionResult: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CompressionResult {
+        return
+            try CompressionResult(
+                memoriesProcessed: FfiConverterUInt32.read(from: &buf), 
+                factsExtracted: FfiConverterUInt32.read(from: &buf), 
+                factsInvalidated: FfiConverterUInt32.read(from: &buf), 
+                durationMs: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CompressionResult, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.memoriesProcessed, into: &buf)
+        FfiConverterUInt32.write(value.factsExtracted, into: &buf)
+        FfiConverterUInt32.write(value.factsInvalidated, into: &buf)
+        FfiConverterUInt64.write(value.durationMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCompressionResult_lift(_ buf: RustBuffer) throws -> CompressionResult {
+    return try FfiConverterTypeCompressionResult.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCompressionResult_lower(_ value: CompressionResult) -> RustBuffer {
+    return FfiConverterTypeCompressionResult.lower(value)
+}
+
+
+public struct CompressionStats {
+    public var totalRawMemories: UInt64
+    public var totalFacts: UInt64
+    public var validFacts: UInt64
+    public var factsByType: [String: UInt64]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(totalRawMemories: UInt64, totalFacts: UInt64, validFacts: UInt64, factsByType: [String: UInt64]) {
+        self.totalRawMemories = totalRawMemories
+        self.totalFacts = totalFacts
+        self.validFacts = validFacts
+        self.factsByType = factsByType
+    }
+}
+
+
+
+extension CompressionStats: Equatable, Hashable {
+    public static func ==(lhs: CompressionStats, rhs: CompressionStats) -> Bool {
+        if lhs.totalRawMemories != rhs.totalRawMemories {
+            return false
+        }
+        if lhs.totalFacts != rhs.totalFacts {
+            return false
+        }
+        if lhs.validFacts != rhs.validFacts {
+            return false
+        }
+        if lhs.factsByType != rhs.factsByType {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(totalRawMemories)
+        hasher.combine(totalFacts)
+        hasher.combine(validFacts)
+        hasher.combine(factsByType)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCompressionStats: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CompressionStats {
+        return
+            try CompressionStats(
+                totalRawMemories: FfiConverterUInt64.read(from: &buf), 
+                totalFacts: FfiConverterUInt64.read(from: &buf), 
+                validFacts: FfiConverterUInt64.read(from: &buf), 
+                factsByType: FfiConverterDictionaryStringUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CompressionStats, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.totalRawMemories, into: &buf)
+        FfiConverterUInt64.write(value.totalFacts, into: &buf)
+        FfiConverterUInt64.write(value.validFacts, into: &buf)
+        FfiConverterDictionaryStringUInt64.write(value.factsByType, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCompressionStats_lift(_ buf: RustBuffer) throws -> CompressionStats {
+    return try FfiConverterTypeCompressionStats.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCompressionStats_lower(_ value: CompressionStats) -> RustBuffer {
+    return FfiConverterTypeCompressionStats.lower(value)
+}
+
+
 public struct ContextRuleConfig {
     public var id: String
     public var conditionType: String
@@ -2357,10 +2539,18 @@ public struct MemoryConfig {
     public var aiRetrievalTimeoutMs: UInt64
     public var aiRetrievalMaxCandidates: UInt32
     public var aiRetrievalFallbackCount: UInt32
+    public var compressionEnabled: Bool
+    public var compressionIdleTimeoutSeconds: UInt32
+    public var compressionTurnThreshold: UInt32
+    public var compressionIntervalSeconds: UInt32
+    public var compressionBatchSize: UInt32
+    public var conflictSimilarityThreshold: Float
+    public var maxFactsInContext: UInt32
+    public var rawMemoryFallbackCount: UInt32
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(enabled: Bool, embeddingModel: String, maxContextItems: UInt32, retentionDays: UInt32, vectorDb: String, similarityThreshold: Float, excludedApps: [String], aiRetrievalEnabled: Bool, aiRetrievalTimeoutMs: UInt64, aiRetrievalMaxCandidates: UInt32, aiRetrievalFallbackCount: UInt32) {
+    public init(enabled: Bool, embeddingModel: String, maxContextItems: UInt32, retentionDays: UInt32, vectorDb: String, similarityThreshold: Float, excludedApps: [String], aiRetrievalEnabled: Bool, aiRetrievalTimeoutMs: UInt64, aiRetrievalMaxCandidates: UInt32, aiRetrievalFallbackCount: UInt32, compressionEnabled: Bool, compressionIdleTimeoutSeconds: UInt32, compressionTurnThreshold: UInt32, compressionIntervalSeconds: UInt32, compressionBatchSize: UInt32, conflictSimilarityThreshold: Float, maxFactsInContext: UInt32, rawMemoryFallbackCount: UInt32) {
         self.enabled = enabled
         self.embeddingModel = embeddingModel
         self.maxContextItems = maxContextItems
@@ -2372,6 +2562,14 @@ public struct MemoryConfig {
         self.aiRetrievalTimeoutMs = aiRetrievalTimeoutMs
         self.aiRetrievalMaxCandidates = aiRetrievalMaxCandidates
         self.aiRetrievalFallbackCount = aiRetrievalFallbackCount
+        self.compressionEnabled = compressionEnabled
+        self.compressionIdleTimeoutSeconds = compressionIdleTimeoutSeconds
+        self.compressionTurnThreshold = compressionTurnThreshold
+        self.compressionIntervalSeconds = compressionIntervalSeconds
+        self.compressionBatchSize = compressionBatchSize
+        self.conflictSimilarityThreshold = conflictSimilarityThreshold
+        self.maxFactsInContext = maxFactsInContext
+        self.rawMemoryFallbackCount = rawMemoryFallbackCount
     }
 }
 
@@ -2412,6 +2610,30 @@ extension MemoryConfig: Equatable, Hashable {
         if lhs.aiRetrievalFallbackCount != rhs.aiRetrievalFallbackCount {
             return false
         }
+        if lhs.compressionEnabled != rhs.compressionEnabled {
+            return false
+        }
+        if lhs.compressionIdleTimeoutSeconds != rhs.compressionIdleTimeoutSeconds {
+            return false
+        }
+        if lhs.compressionTurnThreshold != rhs.compressionTurnThreshold {
+            return false
+        }
+        if lhs.compressionIntervalSeconds != rhs.compressionIntervalSeconds {
+            return false
+        }
+        if lhs.compressionBatchSize != rhs.compressionBatchSize {
+            return false
+        }
+        if lhs.conflictSimilarityThreshold != rhs.conflictSimilarityThreshold {
+            return false
+        }
+        if lhs.maxFactsInContext != rhs.maxFactsInContext {
+            return false
+        }
+        if lhs.rawMemoryFallbackCount != rhs.rawMemoryFallbackCount {
+            return false
+        }
         return true
     }
 
@@ -2427,6 +2649,14 @@ extension MemoryConfig: Equatable, Hashable {
         hasher.combine(aiRetrievalTimeoutMs)
         hasher.combine(aiRetrievalMaxCandidates)
         hasher.combine(aiRetrievalFallbackCount)
+        hasher.combine(compressionEnabled)
+        hasher.combine(compressionIdleTimeoutSeconds)
+        hasher.combine(compressionTurnThreshold)
+        hasher.combine(compressionIntervalSeconds)
+        hasher.combine(compressionBatchSize)
+        hasher.combine(conflictSimilarityThreshold)
+        hasher.combine(maxFactsInContext)
+        hasher.combine(rawMemoryFallbackCount)
     }
 }
 
@@ -2448,7 +2678,15 @@ public struct FfiConverterTypeMemoryConfig: FfiConverterRustBuffer {
                 aiRetrievalEnabled: FfiConverterBool.read(from: &buf), 
                 aiRetrievalTimeoutMs: FfiConverterUInt64.read(from: &buf), 
                 aiRetrievalMaxCandidates: FfiConverterUInt32.read(from: &buf), 
-                aiRetrievalFallbackCount: FfiConverterUInt32.read(from: &buf)
+                aiRetrievalFallbackCount: FfiConverterUInt32.read(from: &buf), 
+                compressionEnabled: FfiConverterBool.read(from: &buf), 
+                compressionIdleTimeoutSeconds: FfiConverterUInt32.read(from: &buf), 
+                compressionTurnThreshold: FfiConverterUInt32.read(from: &buf), 
+                compressionIntervalSeconds: FfiConverterUInt32.read(from: &buf), 
+                compressionBatchSize: FfiConverterUInt32.read(from: &buf), 
+                conflictSimilarityThreshold: FfiConverterFloat.read(from: &buf), 
+                maxFactsInContext: FfiConverterUInt32.read(from: &buf), 
+                rawMemoryFallbackCount: FfiConverterUInt32.read(from: &buf)
         )
     }
 
@@ -2464,6 +2702,14 @@ public struct FfiConverterTypeMemoryConfig: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.aiRetrievalTimeoutMs, into: &buf)
         FfiConverterUInt32.write(value.aiRetrievalMaxCandidates, into: &buf)
         FfiConverterUInt32.write(value.aiRetrievalFallbackCount, into: &buf)
+        FfiConverterBool.write(value.compressionEnabled, into: &buf)
+        FfiConverterUInt32.write(value.compressionIdleTimeoutSeconds, into: &buf)
+        FfiConverterUInt32.write(value.compressionTurnThreshold, into: &buf)
+        FfiConverterUInt32.write(value.compressionIntervalSeconds, into: &buf)
+        FfiConverterUInt32.write(value.compressionBatchSize, into: &buf)
+        FfiConverterFloat.write(value.conflictSimilarityThreshold, into: &buf)
+        FfiConverterUInt32.write(value.maxFactsInContext, into: &buf)
+        FfiConverterUInt32.write(value.rawMemoryFallbackCount, into: &buf)
     }
 }
 
@@ -5829,6 +6075,32 @@ fileprivate struct FfiConverterSequenceTypeSearchBackendEntry: FfiConverterRustB
         return seq
     }
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterDictionaryStringUInt64: FfiConverterRustBuffer {
+    public static func write(_ value: [String: UInt64], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for (key, value) in value {
+            FfiConverterString.write(key, into: &buf)
+            FfiConverterUInt64.write(value, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String: UInt64] {
+        let len: Int32 = try readInt(&buf)
+        var dict = [String: UInt64]()
+        dict.reserveCapacity(Int(len))
+        for _ in 0..<len {
+            let key = try FfiConverterString.read(from: &buf)
+            let value = try FfiConverterUInt64.read(from: &buf)
+            dict[key] = value
+        }
+        return dict
+    }
+}
 public func checkEmbeddingModelExists()throws  -> Bool {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_func_check_embedding_model_exists($0
@@ -5912,6 +6184,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_get_command_children() != 60196) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_get_compression_stats() != 49852) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_get_default_provider() != 56435) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -5988,6 +6263,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_test_typed_error() != 18445) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_trigger_compression() != 46260) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_behavior() != 46183) {
