@@ -241,16 +241,8 @@ struct ProviderEditPanel: View {
                     HStack(spacing: DesignTokens.Spacing.md) {
                         // Provider icon with brand logo
                         if isCustomProvider {
-                            // Custom provider - use color circle with SF Symbol
-                            ZStack {
-                                Circle()
-                                    .fill(color)
-                                    .frame(width: 48, height: 48)
-
-                                Image(systemName: "puzzlepiece.extension")
-                                    .font(.system(size: 24))
-                                    .foregroundColor(.white)
-                            }
+                            // Custom provider - use consistent gradient style with ProviderIcon
+                            ProviderIcon(providerType: "custom", size: 48)
                         } else {
                             // Preset provider - use brand SVG icon (use preset.id for correct icon)
                             ProviderIcon(
@@ -361,24 +353,6 @@ struct ProviderEditPanel: View {
                     Text(L("provider.help.provider_name"))
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.textSecondary)
-                }
-            }
-
-            // Theme Color (only for custom providers)
-            if isCustomProvider {
-                FormField(title: L("provider.field.theme_color")) {
-                    HStack(spacing: DesignTokens.Spacing.sm) {
-                        ColorPicker("", selection: $color, supportsOpacity: false)
-                            .labelsHidden()
-
-                        Circle()
-                            .fill(color)
-                            .frame(width: 32, height: 32)
-
-                        Text(L("provider.help.theme_color"))
-                            .font(DesignTokens.Typography.caption)
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
-                    }
                 }
             }
 
@@ -600,11 +574,13 @@ struct ProviderEditPanel: View {
 
         // For existing providers, compare directly with saved config (not savedXxx state)
         let config = provider.config
+        // Custom providers use fixed color, so skip color comparison
+        let colorChanged = !isCustomProvider && color.toHex() != config.color
         return providerName != provider.name ||
                apiKey != (config.apiKey ?? "") ||
                model != config.model ||
                baseURL != (config.baseUrl ?? "") ||
-               color.toHex() != config.color ||  // Use hex string for reliable comparison
+               colorChanged ||
                timeoutSeconds != String(config.timeoutSeconds) ||
                maxTokens != (config.maxTokens.map { String($0) } ?? "") ||
                temperature != (config.temperature.map { String($0) } ?? "") ||
@@ -933,6 +909,9 @@ struct ProviderEditPanel: View {
         errorMessage = nil
 
         Task {
+            // Custom providers use fixed color (matching gradient icon style)
+            let testColor = isCustomProvider ? "#5E5CE6" : color.toHex()
+
             // Build temporary provider config with actual API key (not keychain reference)
             // This allows testing without persisting the configuration to disk
             let testConfig = ProviderConfig(
@@ -940,7 +919,7 @@ struct ProviderEditPanel: View {
                 apiKey: providerType == "ollama" ? nil : apiKey,  // Use actual API key for testing
                 model: model,
                 baseUrl: baseURL.isEmpty ? nil : baseURL,
-                color: color.toHex(),
+                color: testColor,
                 timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
                 enabled: isProviderActive,
                 maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
@@ -1057,13 +1036,16 @@ struct ProviderEditPanel: View {
     }
 
     private func saveProviderConfig(persist: Bool) async throws {
+        // Custom providers use fixed color (matching gradient icon style)
+        let providerColor = isCustomProvider ? "#5E5CE6" : color.toHex()
+
         // Build config with all parameters (API key stored directly in config)
         let config = ProviderConfig(
             providerType: providerType,
             apiKey: providerType == "ollama" ? nil : (apiKey.isEmpty ? nil : apiKey),
             model: model,
             baseUrl: baseURL.isEmpty ? nil : baseURL,
-            color: color.toHex(),
+            color: providerColor,
             timeoutSeconds: UInt64(timeoutSeconds) ?? 30,
             enabled: isProviderActive,
             maxTokens: maxTokens.isEmpty ? nil : UInt32(maxTokens),
