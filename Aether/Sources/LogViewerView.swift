@@ -156,9 +156,16 @@ struct LogViewerView: View {
 
     private var filteredLogContent: AttributedString {
         let lines = logContent.components(separatedBy: .newlines)
+
+        // Filter by log level first
+        let levelFiltered = lines.filter { line in
+            filterByLogLevel(line)
+        }
+
+        // Then filter by search text
         let filtered = searchText.isEmpty
-            ? lines
-            : lines.filter { $0.localizedCaseInsensitiveContains(searchText) }
+            ? levelFiltered
+            : levelFiltered.filter { $0.localizedCaseInsensitiveContains(searchText) }
 
         // Apply syntax highlighting
         var result = AttributedString()
@@ -185,6 +192,39 @@ struct LogViewerView: View {
         }
 
         return result
+    }
+
+    /// Filter log line based on current log level selection
+    /// Log levels hierarchy: error > warn > info > debug
+    /// When selecting a level, show that level and all levels above it
+    private func filterByLogLevel(_ line: String) -> Bool {
+        // Determine the log level of this line
+        let lineLevel: Int
+        if line.contains("ERROR") {
+            lineLevel = 3  // error
+        } else if line.contains("WARN") {
+            lineLevel = 2  // warn
+        } else if line.contains("DEBUG") || line.contains("TRACE") {
+            lineLevel = 0  // debug
+        } else if line.contains("INFO") {
+            lineLevel = 1  // info
+        } else {
+            // Lines without level marker (e.g., continuation lines) - show based on context
+            // Default to showing them
+            return true
+        }
+
+        // Determine the minimum level to show based on current selection
+        let minLevel: Int
+        switch logLevel {
+        case "error": minLevel = 3
+        case "warn": minLevel = 2
+        case "info": minLevel = 1
+        case "debug": minLevel = 0
+        default: minLevel = 1
+        }
+
+        return lineLevel >= minLevel
     }
 
     // MARK: - Actions
