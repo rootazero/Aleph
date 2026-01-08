@@ -563,7 +563,7 @@
 "settings.routing.preset.mcp.sub.list" = "List available MCP tools";
 "settings.routing.preset.mcp.sub.tool" = "Execute specific MCP tool";
 
-"settings.routing.preset.skills.description" = "Claude Code Skills - Execute custom workflows and automations";
+"settings.routing.preset.skills.description" = "Claude Skills - Execute custom workflows and automations";
 "settings.routing.preset.skills.usage" = "/skill <name>";
 "settings.routing.preset.skills.sub.list" = "List available skills";
 "settings.routing.preset.skills.sub.skill" = "Execute specific skill";

@@ -565,7 +565,7 @@
 "settings.routing.preset.mcp.sub.list" = "列出可用的 MCP 工具";
 "settings.routing.preset.mcp.sub.tool" = "执行指定的 MCP 工具";
 
-"settings.routing.preset.skills.description" = "Claude Code 技能 - 执行自定义工作流和自动化";
+"settings.routing.preset.skills.description" = "Claude 技能 - 执行自定义工作流和自动化";
 "settings.routing.preset.skills.usage" = "/skill <技能名>";
 "settings.routing.preset.skills.sub.list" = "列出可用的技能";
 "settings.routing.preset.skills.sub.skill" = "执行指定的技能";
