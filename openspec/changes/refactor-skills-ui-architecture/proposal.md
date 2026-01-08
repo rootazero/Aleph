@@ -2,12 +2,29 @@
 
 ## Status
 
-**Status**: Draft
+**Status**: Abandoned
 **Created**: 2026-01-08
-**Updated**: 2026-01-08
+**Updated**: 2026-01-09
+**Abandoned**: 2026-01-09
 **Author**: AI Assistant
 
-## Why
+### Abandonment Reason
+
+设计前提已变更。原提案基于"统一 MCP + Skills 为单一 Skill 概念"的假设，但经澄清：
+
+- **MCP** 是 MCP（提供可执行的 tools/函数调用）
+- **Skills** 是 Skills（Prompt Templates，提供指令注入）
+- 二者都"使用" Tools，但概念上应保持分离
+- Tools 还包括其他内置命令（search, video, chat）和用户自定义命令
+
+**决定**：保持 `McpSettingsView` 和 `SkillsSettingsView` 独立，不进行统一。
+
+### Completed Work (Before Abandonment)
+
+- Phase 1: 统一数据模型（Rust）- 已完成但不再需要
+- Phase 2: Swift 组件库 - 已完成后删除（与现有 MCP 组件重复）
+
+## Why (Original)
 
 当前 Aether 存在两个独立的设置界面来管理"后台能力"：
 
