@@ -1882,8 +1882,12 @@ impl AetherCore {
         // completely ignore system role messages. Instead, we let the provider's
         // configured system_prompt_mode handle it (prepend or standard).
         // The capability instructions are designed to work in both modes.
+        //
+        // CRITICAL: Use process_with_attachments to pass multimodal content (images, etc.)
+        // to the AI provider. Without this, attachments in context would be ignored.
+        let attachments = context.attachments.as_ref().map(|a| a.as_slice());
         let response = self.runtime.block_on(
-            provider.process(&input, Some(&system_prompt))
+            provider.process_with_attachments(&input, attachments, Some(&system_prompt))
         )?;
 
         // Step 6: Parse response for capability requests
@@ -2100,9 +2104,11 @@ impl AetherCore {
         );
 
         // Make second AI call with enriched context
+        // Pass attachments for multimodal content support
+        let attachments = context.attachments.as_ref().map(|a| a.as_slice());
         let response = self
             .runtime
-            .block_on(provider.process(&request.query, Some(&enriched_prompt)))?;
+            .block_on(provider.process_with_attachments(&request.query, attachments, Some(&enriched_prompt)))?;
 
         info!(
             response_length = response.len(),
