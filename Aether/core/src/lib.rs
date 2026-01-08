@@ -90,6 +90,7 @@ pub mod providers;
 pub mod router;
 pub mod search; // NEW: Search capability with multiple provider support
 pub mod semantic; // NEW: Unified semantic detection system
+pub mod coordination; // NEW: Conversation-aware routing coordination layer
 pub mod suggestion; // NEW: AI response suggestion parsing
 pub mod utils; // NEW: Capability executor for enriching payloads
 pub mod video; // NEW: Video transcript extraction (YouTube)
@@ -128,6 +129,7 @@ pub use crate::clarification::{
 };
 pub use crate::conversation::{ConversationManager, ConversationSession, ConversationTurn};
 pub use crate::intent::{AiIntentDetector, AiIntentResult};
+pub use crate::coordination::{ConversationAwareRouter, RoutingContext, RoutingResult};
 pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
 pub use crate::utils::pii;
 
