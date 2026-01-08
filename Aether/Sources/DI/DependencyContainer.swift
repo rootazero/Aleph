@@ -269,10 +269,7 @@ class InputCoordinator {
     // TODO: Implement in Step 1.5
 }
 
-/// Placeholder for OutputCoordinator (to be extracted from AppDelegate)
-class OutputCoordinator {
-    // TODO: Implement in Step 1.4
-}
+// OutputCoordinator - Implemented in Coordinator/OutputCoordinator.swift
 
 /// Placeholder for ConversationCoordinator (to be extracted from AppDelegate)
 class ConversationCoordinator {

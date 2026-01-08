@@ -10,39 +10,7 @@ import SwiftUI
 import Combine
 import Carbon.HIToolbox
 
-/// Tracks where the input text came from, used to determine output strategy
-enum TextSource {
-    case selectedText      // User had text selected, Cmd+X/C captured it
-    case accessibilityAPI  // No selection, read full window text via Accessibility API (text NOT deleted)
-    case selectAll         // Accessibility failed, used Cmd+A then Cmd+X/C
-}
-
-/// Output session type - determines post-output behavior
-enum OutputSessionType {
-    case singleTurn   // Single-turn: restore clipboard after output, show success state
-    case multiTurn    // Multi-turn: don't restore clipboard, post continuation notification
-}
-
-/// Unified output context for both single-turn and multi-turn modes
-struct OutputContext {
-    /// Whether to use replace mode (true) or append mode (false)
-    let useReplaceMode: Bool
-
-    /// Text source for cursor positioning (only used in single-turn)
-    let textSource: TextSource?
-
-    /// Session type determines post-output behavior
-    let sessionType: OutputSessionType
-
-    /// Original clipboard content for restoration (single-turn only)
-    let originalClipboard: String?
-
-    /// Turn ID for multi-turn conversations (nil for single-turn)
-    let turnId: UInt32?
-
-    /// Session ID for multi-turn conversations (nil for single-turn)
-    let conversationSessionId: String?
-}
+// TextSource, OutputSessionType, OutputContext moved to OutputCoordinator.swift
 
 class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Menu bar status item
@@ -63,6 +31,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     // Halo window controller (new architecture - will replace direct haloWindow access)
     private var haloWindowController: HaloWindowController?
+
+    // Output coordinator for managing AI response output
+    private var outputCoordinator: OutputCoordinator?
 
     // Settings window (used by legacy Settings scene and WindowGroup)
     private var settingsWindow: NSWindow?
@@ -90,11 +61,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Command mode input listener (captures keyboard input while command mode is active)
     private var commandModeInputMonitor: Any?
 
-    // Typewriter cancellation token
-    private var typewriterCancellation: CancellationToken?
-
-    // ESC key monitor for cancelling typewriter
-    private var escapeKeyMonitor: Any?
+    // Note: typewriterCancellation and escapeKeyMonitor moved to OutputCoordinator
 
     // Store the frontmost app when hotkey is pressed
     // Used to reactivate the correct app after Halo input mode selection
@@ -148,8 +115,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Stop clipboard monitoring
         ClipboardMonitor.shared.stopMonitoring()
 
-        // Remove ESC key monitor
-        removeEscapeKeyMonitor()
+        // Stop output coordinator (removes ESC key monitor)
+        outputCoordinator?.stop()
 
         // Remove command mode hotkey monitor
         removeCommandModeHotkey()
@@ -647,8 +614,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // Configure command completion manager with core reference
             if let core = core {
                 haloWindowController?.configureCore(core)
+                // Configure output coordinator with core and halo window controller
+                outputCoordinator?.configure(core: core, haloWindowController: haloWindowController)
             }
-            print("[Aether] CommandCompletionManager configured")
+            print("[Aether] CommandCompletionManager and OutputCoordinator configured")
 
             // Set up command mode hotkey (Cmd+Opt+/)
             setupCommandModeHotkey()
@@ -929,8 +898,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Connect event handler to halo window for error action callbacks
         haloWindowController?.setEventHandler(eventHandler!)
 
-        // Setup ESC key monitor for cancelling typewriter
-        setupEscapeKeyMonitor()
+        // Initialize output coordinator (will configure with core after Rust core init)
+        outputCoordinator = OutputCoordinator()
+        outputCoordinator?.start()
 
         // Start clipboard monitoring for context tracking
         ClipboardMonitor.shared.startMonitoring()
@@ -1013,7 +983,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func outputConversationResponse(_ response: String, turnId: UInt32 = 0) {
         print("[AppDelegate] Outputting conversation response (turn=\(turnId), \(response.count) chars)")
 
-        // Use unified output pipeline with multi-turn session type
+        // Use unified output pipeline with multi-turn session type via OutputCoordinator
         // Pass conversationTextSource so first turn can prepare output position correctly
         let outputContext = OutputContext(
             useReplaceMode: conversationUseCutMode,  // Use stored trigger mode
@@ -1023,7 +993,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             turnId: turnId,
             conversationSessionId: ConversationManager.shared.sessionId
         )
-        performOutput(response: response, context: outputContext)
+        outputCoordinator?.previousFrontmostApp = previousFrontmostApp
+        outputCoordinator?.performOutput(response: response, context: outputContext)
     }
 
     /// Handle conversation ended - clean up and restore clipboard
@@ -1599,7 +1570,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
                 print("[AppDelegate] Received AI response (\(response.count) chars)")
 
-                // Use unified output pipeline
+                // Use unified output pipeline via OutputCoordinator
                 let outputContext = OutputContext(
                     useReplaceMode: useCutMode,
                     textSource: textSource,
@@ -1608,7 +1579,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     turnId: nil,
                     conversationSessionId: nil
                 )
-                self.performOutput(response: response, context: outputContext)
+                self.outputCoordinator?.previousFrontmostApp = self.previousFrontmostApp
+                self.outputCoordinator?.performOutput(response: response, context: outputContext)
             } catch {
                 print("[AppDelegate] ❌ Error processing input: \(error)")
 
@@ -1647,301 +1619,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
 
-    // MARK: - Unified Output Pipeline
-
-    /// Unified output function for both single-turn and multi-turn modes
-    ///
-    /// This function consolidates all output logic:
-    /// 1. Load output config (outputMode, typingSpeed)
-    /// 2. Reactivate target app
-    /// 3. Prepare cursor position (single-turn only, based on textSource)
-    /// 4. Add newline for append mode
-    /// 5. Execute output (typewriter or instant)
-    /// 6. Post-output actions (based on sessionType)
-    ///
-    /// - Parameters:
-    ///   - response: The AI response text to output
-    ///   - context: Output context containing mode and session configuration
-    private func performOutput(response: String, context: OutputContext) {
-        guard let core = core else {
-            print("[AppDelegate] ⚠️ Core not available for output")
-            return
-        }
-
-        // Truncate response if needed
-        let maxResponseLength = 5000
-        let truncatedResponse: String
-        if response.count > maxResponseLength {
-            print("[AppDelegate] ⚠️ Response too long (\(response.count) chars), truncating to \(maxResponseLength)")
-            truncatedResponse = String(response.prefix(maxResponseLength)) + "\n\n[... response truncated due to length limit ...]"
-        } else {
-            truncatedResponse = response
-        }
-
-        // Load output config
-        var outputMode = "instant"
-        var typingSpeed: Int = 50
-        do {
-            let config = try core.loadConfig()
-            if let behavior = config.behavior {
-                outputMode = behavior.outputMode
-                typingSpeed = Int(behavior.typingSpeed)
-            }
-            print("[AppDelegate] 📋 Output config: mode=\(outputMode), speed=\(typingSpeed) chars/sec")
-        } catch {
-            print("[AppDelegate] ⚠️ Failed to load config, using defaults: \(error)")
-        }
-
-        // Determine append mode based on context
-        let useAppendMode: Bool
-        if let turnId = context.turnId {
-            // Multi-turn: first turn uses trigger mode, subsequent turns always append
-            if turnId == 0 {
-                useAppendMode = !context.useReplaceMode
-                print("[AppDelegate] 🎯 Multi-turn first turn: useReplaceMode=\(context.useReplaceMode), useAppendMode=\(useAppendMode)")
-            } else {
-                useAppendMode = true
-                print("[AppDelegate] 🎯 Multi-turn subsequent turn: always append mode")
-            }
-        } else {
-            // Single-turn: directly use the mode from context
-            useAppendMode = !context.useReplaceMode
-            print("[AppDelegate] 🎯 Single-turn: useReplaceMode=\(context.useReplaceMode), useAppendMode=\(useAppendMode)")
-        }
-
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-
-            print("[AppDelegate] 🎯 Starting unified output phase...")
-
-            // Reactivate target app
-            if let previousApp = self.previousFrontmostApp,
-               previousApp.bundleIdentifier != Bundle.main.bundleIdentifier {
-                print("[AppDelegate] 🔄 Reactivating target app: \(previousApp.localizedName ?? "Unknown")")
-                previousApp.activate(options: [])
-                Thread.sleep(forTimeInterval: 0.15)
-            }
-
-            // Prepare cursor position
-            // - Single-turn: always prepare
-            // - Multi-turn first turn (turnId == 0): prepare for initial output (to handle replace mode correctly)
-            // - Multi-turn subsequent turns: skip (cursor already at correct position after previous output)
-            let shouldPreparePosition = context.sessionType == .singleTurn ||
-                                        (context.sessionType == .multiTurn && context.turnId == 0)
-
-            if shouldPreparePosition, let textSource = context.textSource {
-                self.prepareOutputPosition(textSource: textSource, useCutMode: context.useReplaceMode)
-                Thread.sleep(forTimeInterval: 0.05)
-            }
-
-            // Add newline for append mode
-            if useAppendMode {
-                print("[AppDelegate] ⏎ Adding newline before response (append mode)")
-                // Use typeTextInstant which calls typeSpecialKey with privateState
-                // This properly isolates modifier key state and clears flags
-                // More reliable than simulateKeyPress across different apps (e.g., Notes)
-                KeyboardSimulator.shared.typeTextInstant("\n")
-                Thread.sleep(forTimeInterval: 0.05)
-            } else {
-                print("[AppDelegate] ✂️ No newline - replacing original text")
-            }
-
-            // Execute output
-            if outputMode == "typewriter" {
-                self.executeTypewriterOutput(
-                    text: truncatedResponse,
-                    speed: typingSpeed,
-                    context: context
-                )
-            } else {
-                self.executeInstantOutput(
-                    text: truncatedResponse,
-                    context: context
-                )
-            }
-        }
-    }
-
-    /// Execute typewriter output with proper post-output handling
-    private func executeTypewriterOutput(text: String, speed: Int, context: OutputContext) {
-        print("[AppDelegate] ⌨️ Using typewriter mode at \(speed) chars/sec")
-
-        typewriterCancellation = CancellationToken()
-        haloWindow?.hide()
-
-        Task {
-            let typedCount = await KeyboardSimulator.shared.typeText(
-                text,
-                speed: speed,
-                cancellationToken: typewriterCancellation
-            )
-            print("[AppDelegate] ⌨️ Typed \(typedCount)/\(text.count) characters")
-
-            typewriterCancellation = nil
-
-            await MainActor.run {
-                self.handlePostOutput(context: context, responsePreview: String(text.prefix(100)))
-            }
-        }
-    }
-
-    /// Execute instant (paste) output with proper post-output handling
-    private func executeInstantOutput(text: String, context: OutputContext) {
-        print("[AppDelegate] 📋 Using instant mode (paste)")
-
-        ClipboardManager.shared.setText(text)
-        Thread.sleep(forTimeInterval: 0.05)
-
-        print("[AppDelegate] 📋 Simulating Cmd+V to paste response")
-        let pasteSuccess = KeyboardSimulator.shared.simulatePaste()
-        print("[AppDelegate] 📋 Paste result: \(pasteSuccess ? "success" : "failed")")
-
-        // Small delay for paste completion
-        Thread.sleep(forTimeInterval: 0.3)
-
-        handlePostOutput(context: context, responsePreview: String(text.prefix(100)))
-    }
-
-    /// Handle post-output actions based on session type
-    private func handlePostOutput(context: OutputContext, responsePreview: String) {
-        switch context.sessionType {
-        case .singleTurn:
-            // Restore clipboard after delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                if let original = context.originalClipboard {
-                    ClipboardManager.shared.setText(original)
-                    print("[AppDelegate] ♻️ Restored original clipboard content")
-                } else {
-                    ClipboardManager.shared.clear()
-                    print("[AppDelegate] ♻️ Cleared clipboard (original was empty)")
-                }
-            }
-
-            // Show success state and auto-hide
-            print("[AppDelegate] ✅ Output complete, showing success state")
-            haloWindow?.showAtCurrentPosition()
-            haloWindow?.updateState(.success(finalText: responsePreview))
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                self?.haloWindow?.hide()
-            }
-
-        case .multiTurn:
-            // Post continuation notification
-            let sessionId = context.conversationSessionId ?? ConversationManager.shared.sessionId
-            if let sessionId = sessionId {
-                print("[AppDelegate] 🎯 Triggering conversation input display")
-                NotificationCenter.default.post(
-                    name: .conversationContinuationReady,
-                    object: sessionId
-                )
-            }
-        }
-    }
-
-    // MARK: - Output Preparation
-
-    /// Prepare cursor position before outputting AI response
-    ///
-    /// This method ensures the cursor is in the correct position based on:
-    /// - Text source: Where the input text came from
-    /// - Input mode: Whether user wants to replace or append
-    ///
-    /// | Text Source      | Replace Mode      | Append Mode             |
-    /// |------------------|-------------------|-------------------------|
-    /// | selectedText     | No action needed  | Move to selection end   |
-    /// | accessibilityAPI | Cmd+A to select   | Cmd+Down to move to end |
-    /// | selectAll        | No action needed  | Cmd+Down to move to end |
-    private func prepareOutputPosition(textSource: TextSource, useCutMode: Bool) {
-        print("[AppDelegate] 🎯 Preparing output position: source=\(textSource), replace=\(useCutMode)")
-
-        switch (textSource, useCutMode) {
-        case (.selectedText, true):
-            // Replace selected text: Cursor is already at the right position after Cmd+X
-            print("[AppDelegate] ➡️ selectedText + replace: No preparation needed")
-
-        case (.selectedText, false):
-            // Append after selected text: Move cursor to end of selection
-            // After Cmd+C, the selection is still active, pressing Right arrow moves to end
-            print("[AppDelegate] ➡️ selectedText + append: Moving to end of selection")
-            KeyboardSimulator.shared.simulateKeyPress(.rightArrow)
-            Thread.sleep(forTimeInterval: 0.05)
-
-        case (.accessibilityAPI, true):
-            // Replace full window text: Need to select all first, then typing will replace
-            // Because Accessibility API only read the text, didn't delete it
-            print("[AppDelegate] ➡️ accessibilityAPI + replace: Selecting all to replace")
-            KeyboardSimulator.shared.simulateSelectAll()
-            Thread.sleep(forTimeInterval: 0.05)
-
-        case (.accessibilityAPI, false):
-            // Append to full window text: Move cursor to end of document
-            print("[AppDelegate] ➡️ accessibilityAPI + append: Moving to end of document")
-            KeyboardSimulator.shared.simulateMoveToEnd()
-            Thread.sleep(forTimeInterval: 0.05)
-
-        case (.selectAll, true):
-            // Replace after Cmd+A + Cmd+X: Cursor is already at the right position
-            print("[AppDelegate] ➡️ selectAll + replace: No preparation needed")
-
-        case (.selectAll, false):
-            // Append after Cmd+A + Cmd+C: Move cursor to end of document
-            print("[AppDelegate] ➡️ selectAll + append: Moving to end of document")
-            KeyboardSimulator.shared.simulateMoveToEnd()
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-    }
-
-    // MARK: - ESC Key Monitoring for Typewriter Cancellation
-
-    /// Setup global ESC key monitor to cancel typewriter animation
-    private func setupEscapeKeyMonitor() {
-        escapeKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            // Check if ESC key was pressed (keyCode 53)
-            if event.keyCode == 53 {
-                self?.handleEscapeKey()
-            }
-        }
-        print("[AppDelegate] ESC key monitor installed for typewriter cancellation")
-    }
-
-    /// Remove ESC key monitor
-    private func removeEscapeKeyMonitor() {
-        if let monitor = escapeKeyMonitor {
-            NSEvent.removeMonitor(monitor)
-            escapeKeyMonitor = nil
-            print("[AppDelegate] ESC key monitor removed")
-        }
-    }
-
-    /// Handle ESC key press - cancel typewriter animation
-    private func handleEscapeKey() {
-        guard let cancellation = typewriterCancellation else {
-            // Check if in command mode - ESC should dismiss it
-            if let haloWindow = haloWindow, case .commandMode = haloWindow.viewModel.state {
-                print("[AppDelegate] ESC pressed - dismissing command mode")
-                haloWindow.viewModel.commandManager.deactivateCommandMode()
-                haloWindow.updateState(.idle)
-                haloWindow.hide()
-                return
-            }
-            print("[AppDelegate] ESC pressed but no typewriter is running")
-            return
-        }
-
-        print("[AppDelegate] ESC pressed - cancelling typewriter animation")
-        cancellation.cancel()
-
-        // Clear the cancellation token immediately
-        typewriterCancellation = nil
-
-        // Show brief feedback
-        DispatchQueue.main.async { [weak self] in
-            self?.haloWindow?.updateState(.success(finalText: "⏸ Typewriter cancelled"))
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                self?.haloWindow?.hide()
-            }
-        }
-    }
+    // NOTE: Output pipeline (performOutput, executeTypewriterOutput, executeInstantOutput,
+    // handlePostOutput, prepareOutputPosition) moved to OutputCoordinator.swift
+    // NOTE: ESC key monitoring (setupEscapeKeyMonitor, removeEscapeKeyMonitor, handleEscapeKey)
+    // moved to OutputCoordinator.swift
 
     // MARK: - Command Mode Hotkey (add-command-completion-system)
 
