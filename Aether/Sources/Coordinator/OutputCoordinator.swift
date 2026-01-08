@@ -332,8 +332,10 @@ final class OutputCoordinator {
 
         switch (textSource, useCutMode) {
         case (.selectedText, true):
-            // Replace selected text: Cursor is already at the right position after Cmd+X
-            print("[OutputCoordinator] ➡️ selectedText + replace: No preparation needed")
+            // Replace selected text: Selection is still active after input phase (Cmd+C only)
+            // We don't need to do anything - paste/type will automatically replace the selection
+            // This provides better UX: text stays visible during AI thinking, then gets replaced on output
+            print("[OutputCoordinator] ➡️ selectedText + replace: Selection active, will be replaced by paste/type")
 
         case (.selectedText, false):
             // Append after selected text: Move cursor to end of selection

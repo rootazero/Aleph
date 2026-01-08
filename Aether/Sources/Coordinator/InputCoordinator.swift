@@ -202,6 +202,16 @@ final class InputCoordinator {
         let originalChangeCount = clipboardManager.changeCount()
         print("[InputCoordinator] 💾 Saved original clipboard state (changeCount: \(originalChangeCount))")
 
+        // CRITICAL: Get recent clipboard content BEFORE Cut/Copy operation
+        // This must happen before Cut/Copy because:
+        // 1. Cut/Copy will change the clipboard
+        // 2. ClipboardMonitor's timer might update timestamp after Cut/Copy
+        // 3. We need to capture the "recent" content before it gets overwritten
+        let recentClipboardContentBeforeCut = clipboardMonitor.getRecentClipboardContent()
+        if let recent = recentClipboardContentBeforeCut {
+            print("[InputCoordinator] 📋 Captured recent clipboard content BEFORE cut (\(recent.count) chars)")
+        }
+
         // CRITICAL: Save original clipboard media attachments BEFORE Cut/Copy
         // This preserves images/files that user manually copied to clipboard
         // Without this, simulateCut()/simulateCopy() would overwrite the clipboard
@@ -214,14 +224,13 @@ final class InputCoordinator {
             }
         }
 
-        // Step 1: Try to cut/copy selected text based on input_mode
-        if useCutMode {
-            print("[InputCoordinator] Simulating Cmd+X to cut selected text...")
-            KeyboardSimulator.shared.simulateCut()
-        } else {
-            print("[InputCoordinator] Simulating Cmd+C to copy selected text...")
-            KeyboardSimulator.shared.simulateCopy()
-        }
+        // Step 1: Always COPY selected text first (not cut)
+        // This provides better UX: original text stays visible during AI thinking.
+        // The actual replacement happens at output time - paste/type will replace the selection.
+        // For append mode (useCutMode=false), this is the expected behavior anyway.
+        // For replace mode (useCutMode=true), the selection remains active and will be replaced on output.
+        print("[InputCoordinator] Simulating Cmd+C to copy selected text...")
+        KeyboardSimulator.shared.simulateCopy()
 
         // Wait for clipboard to update (macOS needs a small delay)
         Thread.sleep(forTimeInterval: 0.1)  // 100ms delay
@@ -362,37 +371,38 @@ final class InputCoordinator {
             }
         }
 
-        // CRITICAL FIX: Merge attachments in correct order
-        // Data order rule: Window text + Clipboard text/attachment + Window attachment
-        var finalMediaAttachments: [MediaAttachment] = []
-
-        // 1. Add clipboard attachments first (user's copied context)
-        if !originalMediaAttachments.isEmpty {
-            finalMediaAttachments.append(contentsOf: originalMediaAttachments)
-            print("[InputCoordinator] 📎 Added \(originalMediaAttachments.count) clipboard attachment(s)")
-        }
-
-        // 2. Add window attachments (from Cut/Copy of window content)
-        if !mediaAttachments.isEmpty {
-            finalMediaAttachments.append(contentsOf: mediaAttachments)
-            print("[InputCoordinator] 📎 Added \(mediaAttachments.count) window attachment(s)")
-        }
-
-        if !finalMediaAttachments.isEmpty {
-            print("[InputCoordinator] 📎 Total: \(finalMediaAttachments.count) attachment(s)")
-        }
-
-        // IMPORTANT: Check for recent clipboard content (within 10 seconds)
-        // This allows us to use previous clipboard as additional context
-        let recentClipboardContent = clipboardMonitor.getRecentClipboardContent()
+        // IMPORTANT: Use the recent clipboard content captured BEFORE Cut/Copy
+        // This ensures we use the correct 10-second threshold
+        // (ClipboardMonitor's timer might have updated after Cut/Copy)
         let clipboardContext: String? = {
-            guard let recentContent = recentClipboardContent,
+            guard let recentContent = recentClipboardContentBeforeCut,
                   !recentContent.isEmpty,
                   recentContent != clipboardText else {
                 return nil
             }
             return recentContent
         }()
+
+        // Use AttachmentMerger for centralized attachment merging logic
+        // Data order rule: Window text + Clipboard text context + Clipboard attachments + Window attachments
+        let mergeContext = AttachmentMerger.MergeContext(
+            clipboardAttachments: originalMediaAttachments,
+            windowAttachments: mediaAttachments,
+            clipboardTextContext: clipboardContext,
+            windowText: clipboardText
+        )
+        let mergeResult = AttachmentMerger.merge(mergeContext)
+
+        // Log merge result
+        if mergeResult.clipboardAttachmentCount > 0 {
+            print("[InputCoordinator] 📎 Added \(mergeResult.clipboardAttachmentCount) clipboard attachment(s)")
+        }
+        if mergeResult.windowAttachmentCount > 0 {
+            print("[InputCoordinator] 📎 Added \(mergeResult.windowAttachmentCount) window attachment(s)")
+        }
+        if mergeResult.totalAttachmentCount > 0 {
+            print("[InputCoordinator] 📎 Total: \(mergeResult.totalAttachmentCount) attachment(s)")
+        }
 
         if let context = clipboardContext {
             print("[InputCoordinator] 📋 Found clipboard context (\(context.count) chars, within 10s)")
@@ -414,20 +424,18 @@ final class InputCoordinator {
             guard let self = self else { return }
 
             do {
-                // Create captured context for Rust
+                // Create captured context for Rust using merged attachments
                 let capturedContext = CapturedContext(
                     appBundleId: windowContext.bundleId ?? "unknown",
                     windowTitle: windowContext.windowTitle,
-                    attachments: finalMediaAttachments.isEmpty ? nil : finalMediaAttachments
+                    attachments: mergeResult.finalAttachments.isEmpty ? nil : mergeResult.finalAttachments
                 )
 
-                // Construct user input - clipboard content appended after window content
-                let userInput: String
-                if let clipContext = clipboardContext {
-                    userInput = "\(clipboardText)\n\n\(clipContext)"
-                    print("[InputCoordinator] 🤖 Sending to AI: window (\(clipboardText.count) chars) + clipboard (\(clipContext.count) chars)")
+                // Use merged text from AttachmentMerger
+                let userInput = mergeResult.finalText
+                if mergeResult.hasClipboardContext {
+                    print("[InputCoordinator] 🤖 Sending to AI: window (\(clipboardText.count) chars) + clipboard context")
                 } else {
-                    userInput = clipboardText
                     print("[InputCoordinator] 🤖 Sending to AI: window text only (\(clipboardText.count) chars)")
                 }
 
