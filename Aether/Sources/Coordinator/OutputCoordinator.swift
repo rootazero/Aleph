@@ -345,12 +345,10 @@ final class OutputCoordinator {
             Thread.sleep(forTimeInterval: 0.05)
 
         case (.accessibilityAPI, true):
-            // Replace full window text: Select all and delete before output
-            // Some apps (e.g., Sublime Text) don't replace selection on paste, so we delete first
-            print("[OutputCoordinator] ➡️ accessibilityAPI + replace: Selecting all and deleting")
+            // Replace full window text: Need to select all first, then typing will replace
+            // Because Accessibility API only read the text, didn't delete it
+            print("[OutputCoordinator] ➡️ accessibilityAPI + replace: Selecting all to replace")
             KeyboardSimulator.shared.simulateSelectAll()
-            Thread.sleep(forTimeInterval: 0.05)
-            KeyboardSimulator.shared.simulateDelete()
             Thread.sleep(forTimeInterval: 0.05)
 
         case (.accessibilityAPI, false):
@@ -360,12 +358,11 @@ final class OutputCoordinator {
             Thread.sleep(forTimeInterval: 0.05)
 
         case (.selectAll, true):
-            // Replace full window text: Select all and delete before output
-            // Some apps (e.g., Sublime Text) don't replace selection on paste, so we delete first
-            print("[OutputCoordinator] ➡️ selectAll + replace: Selecting all and deleting")
+            // Replace full window text: Need to select all first, then typing will replace
+            // Selection from input phase may have been lost during AI processing
+            // So we re-select all content before output
+            print("[OutputCoordinator] ➡️ selectAll + replace: Selecting all to replace")
             KeyboardSimulator.shared.simulateSelectAll()
-            Thread.sleep(forTimeInterval: 0.05)
-            KeyboardSimulator.shared.simulateDelete()
             Thread.sleep(forTimeInterval: 0.05)
 
         case (.selectAll, false):

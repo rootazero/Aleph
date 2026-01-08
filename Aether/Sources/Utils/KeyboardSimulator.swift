@@ -70,39 +70,6 @@ class KeyboardSimulator {
         return simulateShortcut(key: CGKeyCode(kVK_ANSI_Z))
     }
 
-    /// Simulate Delete key (Backspace)
-    ///
-    /// Deletes selected text or character before cursor.
-    /// - Returns: True if successful, false otherwise
-    @discardableResult
-    func simulateDelete() -> Bool {
-        let keyCode = CGKeyCode(kVK_Delete)
-
-        guard let keyDown = CGEvent(
-            keyboardEventSource: nil,
-            virtualKey: keyCode,
-            keyDown: true
-        ) else {
-            print("[KeyboardSimulator] ERROR: Failed to create Delete key down event")
-            return false
-        }
-        keyDown.post(tap: .cghidEventTap)
-
-        usleep(10_000) // 10ms
-
-        guard let keyUp = CGEvent(
-            keyboardEventSource: nil,
-            virtualKey: keyCode,
-            keyDown: false
-        ) else {
-            print("[KeyboardSimulator] ERROR: Failed to create Delete key up event")
-            return false
-        }
-        keyUp.post(tap: .cghidEventTap)
-
-        return true
-    }
-
     /// Simulate Cmd+Down Arrow (Move to end of document)
     ///
     /// On macOS, Cmd+End doesn't work reliably. Use Cmd+Down Arrow instead.
