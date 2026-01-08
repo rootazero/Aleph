@@ -1,51 +1,48 @@
 //! MCP (Model Context Protocol) Integration Module
 //!
-//! This module provides MCP capability for Aether, including:
-//! - Builtin services (fs, git, system_info, shell)
-//! - External server management via stdio transport
-//! - Tool routing and execution
+//! This module handles external MCP servers (Tier 2 Extensions).
+//! System tools (fs, git, shell, sys) are now in `services::tools`.
+//!
+//! # Two-Tier Tool Architecture
+//!
+//! - **Tier 1 (System Tools)**: Native Rust, always available, top-level commands
+//!   - Located in `services::tools` module
+//!   - Commands: `/fs`, `/git`, `/shell`, `/sys`
+//!
+//! - **Tier 2 (MCP Extensions)**: External processes, user-installed
+//!   - Located in this `mcp` module
+//!   - Commands: `/mcp/<server-name>`
 //!
 //! # Architecture
-//!
-//! The MCP module wraps the shared foundation services (`services::*`) with:
-//! - MCP protocol adaptation (JSON-RPC style interface)
-//! - Security controls (path validation, command whitelisting)
-//! - Tool discovery and routing
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────────┐
 //! │                         McpClient                                │
 //! │  (Service Registry + Tool Router)                               │
 //! ├─────────────────────────────────────────────────────────────────┤
-//! │  Builtin Services              │  External Servers              │
-//! │  ├── FsService                 │  ├── StdioTransport            │
-//! │  │   └── services::fs::LocalFs │  │   └── JSON-RPC over stdio   │
-//! │  ├── GitService                │  └── Runtime Detection         │
-//! │  │   └── services::git::GitRepo│      (node, python, bun)       │
-//! │  ├── SystemInfoService         │                                │
-//! │  │   └── services::system_info │                                │
-//! │  └── ShellService              │                                │
-//! │      └── (standalone impl)     │                                │
+//! │  System Tools (Tier 1)          │  MCP Extensions (Tier 2)      │
+//! │  (see services::tools)          │  External Servers              │
+//! │  ├── FsService     → /fs        │  ├── StdioTransport            │
+//! │  ├── GitService    → /git       │  │   └── JSON-RPC over stdio   │
+//! │  ├── SysService    → /sys       │  └── Runtime Detection         │
+//! │  └── ShellService  → /shell     │      (node, python, bun)       │
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
-//!
-//! # Zero External Dependency Guarantee
-//!
-//! All builtin services work without Node.js, Python, or git CLI:
-//! - File operations: Pure Rust (tokio::fs)
-//! - Git operations: git2-rs library
-//! - System info: Rust std + platform APIs
 
-pub mod builtin;
 mod client;
 pub mod external;
 pub mod jsonrpc;
 pub mod transport;
-mod types;
+pub mod types;
 
-pub use builtin::{
-    BuiltinMcpService, FsService, GitService, ShellService, SystemInfoService,
+// Re-export system tools from services::tools for backward compatibility
+pub use crate::services::tools::{
+    FsService, FsServiceConfig, GitService, GitServiceConfig, ShellService, ShellServiceConfig,
+    SystemInfoService, SystemTool,
 };
+// Backward compatibility alias
+pub use crate::services::tools::BuiltinMcpService;
+
 pub use client::{ExternalServerConfig, McpClient, McpClientBuilder};
 pub use external::{check_runtime, McpServerConnection, RuntimeKind};
 pub use jsonrpc::{IdGenerator, JsonRpcError, JsonRpcRequest, JsonRpcResponse};

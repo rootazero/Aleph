@@ -1,4 +1,4 @@
-//! System Info MCP Service
+//! System Info Tool
 //!
 //! Wraps `services::system_info::MacOsSystemInfo` with MCP protocol adaptation.
 
@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-use super::BuiltinMcpService;
+use super::SystemTool;
 use crate::error::Result;
 use crate::mcp::types::{McpResource, McpTool, McpToolResult};
 use crate::services::system_info::{MacOsSystemInfo, SystemInfoProvider};
@@ -39,7 +39,7 @@ impl Default for SystemInfoService {
 }
 
 #[async_trait]
-impl BuiltinMcpService for SystemInfoService {
+impl SystemTool for SystemInfoService {
     fn name(&self) -> &str {
         "builtin:system"
     }

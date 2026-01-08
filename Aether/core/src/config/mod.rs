@@ -51,7 +51,10 @@ pub struct Config {
     /// Skills configuration (Claude Agent Skills standard)
     #[serde(default)]
     pub skills: SkillsConfig,
-    /// MCP (Model Context Protocol) configuration
+    /// System Tools configuration (Tier 1: native Rust tools)
+    #[serde(default)]
+    pub tools: ToolsConfig,
+    /// MCP (Model Context Protocol) configuration (Tier 2: external servers)
     #[serde(default)]
     pub mcp: McpConfig,
     /// Trigger configuration (hotkey system refactor)
@@ -1485,25 +1488,24 @@ impl Default for VideoConfig {
 
 /// MCP (Model Context Protocol) configuration
 ///
-/// Controls builtin services and external server connections
+/// Controls external MCP server connections (Tier 2 Extensions)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpConfig {
     /// Enable MCP capability
     #[serde(default = "default_mcp_enabled")]
     pub enabled: bool,
 
-    /// Builtin services configuration
-    #[serde(default)]
-    pub builtin: McpBuiltinConfig,
-
-    /// External servers configuration (advanced)
+    /// External servers configuration
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub external_servers: Vec<McpExternalServerConfig>,
 }
 
-/// Configuration for MCP builtin services
+/// Configuration for System Tools (Tier 1: native Rust tools)
+///
+/// System Tools are always available and run as native Rust code.
+/// They provide file system, git, shell, and system info capabilities.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpBuiltinConfig {
+pub struct ToolsConfig {
     /// Enable filesystem service
     #[serde(default = "default_true")]
     pub fs_enabled: bool,
@@ -1583,13 +1585,12 @@ impl Default for McpConfig {
     fn default() -> Self {
         Self {
             enabled: default_mcp_enabled(),
-            builtin: McpBuiltinConfig::default(),
             external_servers: Vec::new(),
         }
     }
 }
 
-impl Default for McpBuiltinConfig {
+impl Default for ToolsConfig {
     fn default() -> Self {
         Self {
             fs_enabled: true,
@@ -1682,6 +1683,7 @@ impl Default for Config {
             search: None,
             video: Some(VideoConfig::default()),
             skills: SkillsConfig::default(),
+            tools: ToolsConfig::default(),
             mcp: McpConfig::default(),
             trigger: Some(TriggerConfig::default()),
             smart_flow: SmartFlowConfig::default(),
@@ -1751,6 +1753,9 @@ impl Config {
             size_bytes = contents.len(),
             "Config file read successfully, parsing TOML"
         );
+
+        // Pre-process TOML: Migrate [mcp.builtin] to [tools] if needed
+        let contents = Self::migrate_mcp_builtin_in_toml(&contents)?;
 
         // Parse TOML
         let mut config: Config = toml::from_str(&contents).map_err(|e| {
@@ -2700,6 +2705,67 @@ impl Config {
         });
 
         true
+    }
+
+    /// Migrate [mcp.builtin] to [tools] in raw TOML
+    ///
+    /// This is a pre-parsing migration that handles the rename-builtin-to-system-tools
+    /// proposal. If the old [mcp.builtin] section exists but [tools] doesn't,
+    /// the old section is copied to [tools].
+    ///
+    /// # Arguments
+    /// * `contents` - Raw TOML string
+    ///
+    /// # Returns
+    /// * Modified TOML string with migration applied
+    fn migrate_mcp_builtin_in_toml(contents: &str) -> Result<String> {
+        // Parse as raw TOML value
+        let mut value: toml::Value = toml::from_str(contents).map_err(|e| {
+            AetherError::invalid_config(format!("Failed to parse TOML for migration: {}", e))
+        })?;
+
+        // Check if migration is needed
+        let needs_migration = {
+            let has_mcp_builtin = value
+                .get("mcp")
+                .and_then(|mcp| mcp.get("builtin"))
+                .is_some();
+            let has_tools = value.get("tools").is_some();
+
+            has_mcp_builtin && !has_tools
+        };
+
+        if !needs_migration {
+            return Ok(contents.to_string());
+        }
+
+        // Perform migration
+        warn!("Migrating deprecated [mcp.builtin] section to [tools]");
+
+        // Extract mcp.builtin
+        let builtin = value
+            .get("mcp")
+            .and_then(|mcp| mcp.get("builtin"))
+            .cloned();
+
+        if let Some(builtin_value) = builtin {
+            // Add as [tools]
+            if let toml::Value::Table(ref mut table) = value {
+                table.insert("tools".to_string(), builtin_value);
+
+                // Remove [mcp.builtin]
+                if let Some(toml::Value::Table(ref mut mcp)) = table.get_mut("mcp") {
+                    mcp.remove("builtin");
+                }
+            }
+
+            info!("Successfully migrated [mcp.builtin] to [tools]");
+        }
+
+        // Serialize back to TOML
+        toml::to_string_pretty(&value).map_err(|e| {
+            AetherError::invalid_config(format!("Failed to serialize migrated TOML: {}", e))
+        })
     }
 
     /// Get the default provider if it exists and is enabled

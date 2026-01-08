@@ -1,6 +1,6 @@
 //! MCP Client - Service Registry and Tool Router
 //!
-//! Manages builtin and external MCP services, providing:
+//! Manages system tools and external MCP services, providing:
 //! - Service registration
 //! - Tool discovery and aggregation
 //! - Tool call routing
@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 
 use crate::error::{AetherError, Result};
-use crate::mcp::builtin::BuiltinMcpService;
+use crate::services::tools::SystemTool;
 use crate::mcp::external::{check_runtime, McpServerConnection, RuntimeKind};
 use crate::mcp::types::{McpTool, McpToolResult};
 
@@ -39,7 +39,7 @@ pub struct ExternalServerConfig {
 /// Tool location - where a tool comes from
 #[derive(Debug, Clone)]
 enum ToolLocation {
-    /// Builtin service (index in builtin_services)
+    /// Builtin service (index in system_tools)
     Builtin(usize),
     /// External server (name)
     External(String),
@@ -48,7 +48,7 @@ enum ToolLocation {
 /// MCP Client - the central registry for MCP services
 pub struct McpClient {
     /// Registered builtin services
-    builtin_services: Vec<Arc<dyn BuiltinMcpService>>,
+    system_tools: Vec<Arc<dyn SystemTool>>,
     /// Tool name to location mapping
     tool_location_map: HashMap<String, ToolLocation>,
     /// External server connections
@@ -59,26 +59,26 @@ impl McpClient {
     /// Create a new empty MCP client
     pub fn new() -> Self {
         Self {
-            builtin_services: Vec::new(),
+            system_tools: Vec::new(),
             tool_location_map: HashMap::new(),
             external_servers: RwLock::new(HashMap::new()),
         }
     }
 
     /// Register a builtin service
-    pub fn register_builtin(&mut self, service: Arc<dyn BuiltinMcpService>) {
-        let service_idx = self.builtin_services.len();
+    pub fn register_system_tool(&mut self, service: Arc<dyn SystemTool>) {
+        let service_idx = self.system_tools.len();
 
         // Map all tools from this service
         for tool in service.list_tools() {
             self.tool_location_map.insert(tool.name.clone(), ToolLocation::Builtin(service_idx));
         }
 
-        self.builtin_services.push(service);
+        self.system_tools.push(service);
 
         tracing::info!(
-            service = %self.builtin_services[service_idx].name(),
-            tools = self.builtin_services[service_idx].list_tools().len(),
+            service = %self.system_tools[service_idx].name(),
+            tools = self.system_tools[service_idx].list_tools().len(),
             "Registered MCP builtin service"
         );
     }
@@ -171,7 +171,7 @@ impl McpClient {
         let mut tools = Vec::new();
 
         // Builtin tools
-        for service in &self.builtin_services {
+        for service in &self.system_tools {
             tools.extend(service.list_tools());
         }
 
@@ -187,7 +187,7 @@ impl McpClient {
     /// List builtin tools only (sync version)
     pub fn list_builtin_tools(&self) -> Vec<McpTool> {
         let mut tools = Vec::new();
-        for service in &self.builtin_services {
+        for service in &self.system_tools {
             tools.extend(service.list_tools());
         }
         tools
@@ -207,7 +207,7 @@ impl McpClient {
         if let Some(location) = self.tool_location_map.get(tool_name) {
             match location {
                 ToolLocation::Builtin(idx) => {
-                    return self.builtin_services[*idx].requires_confirmation(tool_name);
+                    return self.system_tools[*idx].requires_confirmation(tool_name);
                 }
                 ToolLocation::External(_) => {
                     // External tools don't require confirmation by default
@@ -227,7 +227,7 @@ impl McpClient {
         args: serde_json::Value,
     ) -> Result<McpToolResult> {
         // Check builtin services first (by tool name)
-        for service in &self.builtin_services {
+        for service in &self.system_tools {
             let tools = service.list_tools();
             if tools.iter().any(|t| t.name == name) {
                 return service.call_tool(name, args).await;
@@ -261,7 +261,7 @@ impl McpClient {
 
     /// Get list of registered service names
     pub async fn service_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.builtin_services
+        let mut names: Vec<String> = self.system_tools
             .iter()
             .map(|s| s.name().to_string())
             .collect();
@@ -274,12 +274,12 @@ impl McpClient {
 
     /// Get list of builtin service names (sync version)
     pub fn builtin_service_names(&self) -> Vec<&str> {
-        self.builtin_services.iter().map(|s| s.name()).collect()
+        self.system_tools.iter().map(|s| s.name()).collect()
     }
 
     /// Check if any services are registered
     pub async fn has_services(&self) -> bool {
-        if !self.builtin_services.is_empty() {
+        if !self.system_tools.is_empty() {
             return true;
         }
         let servers = self.external_servers.read().await;
@@ -287,8 +287,8 @@ impl McpClient {
     }
 
     /// Check if any builtin services are registered (sync version)
-    pub fn has_builtin_services(&self) -> bool {
-        !self.builtin_services.is_empty()
+    pub fn has_system_tools(&self) -> bool {
+        !self.system_tools.is_empty()
     }
 
     /// Get total number of available tools
@@ -298,7 +298,7 @@ impl McpClient {
 
     /// Get builtin tool count (sync version)
     pub fn builtin_tool_count(&self) -> usize {
-        self.builtin_services
+        self.system_tools
             .iter()
             .map(|s| s.list_tools().len())
             .sum()
@@ -362,8 +362,8 @@ impl McpClientBuilder {
     }
 
     /// Add a builtin service
-    pub fn with_builtin(mut self, service: Arc<dyn BuiltinMcpService>) -> Self {
-        self.client.register_builtin(service);
+    pub fn with_system_tool(mut self, service: Arc<dyn SystemTool>) -> Self {
+        self.client.register_system_tool(service);
         self
     }
 
@@ -419,7 +419,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl BuiltinMcpService for MockService {
+    impl SystemTool for MockService {
         fn name(&self) -> &str {
             self.name
         }
@@ -452,8 +452,8 @@ mod tests {
     #[tokio::test]
     async fn test_register_and_list_tools() {
         let mut client = McpClient::new();
-        client.register_builtin(Arc::new(MockService::new("service1")));
-        client.register_builtin(Arc::new(MockService::new("service2")));
+        client.register_system_tool(Arc::new(MockService::new("service1")));
+        client.register_system_tool(Arc::new(MockService::new("service2")));
 
         let tools = client.list_tools().await;
         assert_eq!(tools.len(), 2);
@@ -466,7 +466,7 @@ mod tests {
     #[tokio::test]
     async fn test_call_tool() {
         let mut client = McpClient::new();
-        client.register_builtin(Arc::new(MockService::new("test")));
+        client.register_system_tool(Arc::new(MockService::new("test")));
 
         let result = client.call_tool("test_tool", json!({})).await.unwrap();
         assert!(result.success);
@@ -491,10 +491,10 @@ mod tests {
     #[tokio::test]
     async fn test_builder() {
         let client = McpClientBuilder::new()
-            .with_builtin(Arc::new(MockService::new("builder_test")))
+            .with_system_tool(Arc::new(MockService::new("builder_test")))
             .build();
 
-        assert!(client.has_builtin_services());
+        assert!(client.has_system_tools());
         assert_eq!(client.builtin_tool_count(), 1);
     }
 

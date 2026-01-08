@@ -126,7 +126,7 @@ pub struct McpServerConfig {
     pub env: Vec<McpEnvVar>,
     /// Working directory (external servers only)
     pub working_directory: Option<String>,
-    /// Trigger command in Halo (e.g., /mcp/git)
+    /// Trigger command in Halo (e.g., /git for System Tools, /mcp/server for External)
     pub trigger_command: Option<String>,
     /// Server permissions
     pub permissions: McpServerPermissions,

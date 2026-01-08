@@ -379,7 +379,7 @@
 "settings.mcp.restart_message" = "MCP 服务更改将在重启 Aether 后生效。";
 
 // Master-Detail UI (redesign-mcp-settings-ui)
-"settings.mcp.server_list.builtin" = "内置核心";
+"settings.mcp.server_list.builtin" = "系统工具";
 "settings.mcp.server_list.extensions" = "扩展服务";
 "settings.mcp.server_list.add" = "添加服务器";
 "settings.mcp.no_extensions" = "尚未安装扩展";

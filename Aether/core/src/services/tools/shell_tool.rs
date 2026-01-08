@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use super::BuiltinMcpService;
+use super::SystemTool;
 use crate::error::{AetherError, Result};
 use crate::mcp::types::{McpResource, McpTool, McpToolResult};
 
@@ -68,9 +68,9 @@ impl ShellService {
 }
 
 #[async_trait]
-impl BuiltinMcpService for ShellService {
+impl SystemTool for ShellService {
     fn name(&self) -> &str {
-        "builtin:shell"
+        "shell"
     }
 
     fn description(&self) -> &str {

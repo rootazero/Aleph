@@ -1,13 +1,14 @@
-//! File System MCP Service
+//! File System Tool
 //!
-//! Wraps `services::fs::LocalFs` with MCP protocol adaptation and path security.
+//! Wraps `services::fs::LocalFs` with JSON interface for LLM tool invocation.
+//! This is a Tier 1 System Tool, exposed at `/fs`.
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::BuiltinMcpService;
+use super::SystemTool;
 use crate::error::{AetherError, Result};
 use crate::mcp::types::{McpResource, McpTool, McpToolResult};
 use crate::services::fs::{FileOps, LocalFs};
@@ -107,9 +108,9 @@ impl FsService {
 }
 
 #[async_trait]
-impl BuiltinMcpService for FsService {
+impl SystemTool for FsService {
     fn name(&self) -> &str {
-        "builtin:fs"
+        "fs"
     }
 
     fn description(&self) -> &str {

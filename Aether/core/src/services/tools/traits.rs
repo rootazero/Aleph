@@ -1,52 +1,61 @@
-//! Builtin MCP Service Trait
+//! System Tool Trait
 //!
-//! Defines the interface for builtin MCP services.
+//! Defines the interface for system tools (Tier 1 built-in tools).
+//! These are native Rust implementations exposed via MCP-like JSON interface.
 
 use async_trait::async_trait;
 
 use crate::error::Result;
 use crate::mcp::types::{McpResource, McpTool, McpToolResult};
 
-/// Trait for builtin MCP services
+/// Trait for system tools (Tier 1 built-in tools)
 ///
-/// All builtin services implement this trait to provide a consistent interface
+/// All system tools implement this trait to provide a consistent interface
 /// for tool discovery, execution, and resource management.
+///
+/// System tools are:
+/// - Native Rust code (not external processes)
+/// - Always available (no installation required)
+/// - Top-level commands (/fs, /git, /sys, /shell)
 #[async_trait]
-pub trait BuiltinMcpService: Send + Sync {
-    /// Get the service identifier (e.g., "builtin:fs", "builtin:git")
+pub trait SystemTool: Send + Sync {
+    /// Get the tool identifier (e.g., "fs", "git", "sys", "shell")
     fn name(&self) -> &str;
 
-    /// Get human-readable description of the service
+    /// Get human-readable description of the tool
     fn description(&self) -> &str;
 
-    /// List available resources provided by this service
+    /// List available resources provided by this tool
     async fn list_resources(&self) -> Result<Vec<McpResource>>;
 
     /// Read a resource by URI
     async fn read_resource(&self, uri: &str) -> Result<String>;
 
-    /// List available tools provided by this service
+    /// List available sub-tools provided by this tool
     fn list_tools(&self) -> Vec<McpTool>;
 
-    /// Execute a tool with the given arguments
+    /// Execute a sub-tool with the given arguments
     ///
     /// # Arguments
-    /// * `name` - Tool name (without service prefix)
+    /// * `name` - Sub-tool name (e.g., "read", "status")
     /// * `args` - JSON arguments for the tool
     ///
     /// # Returns
     /// Tool execution result
     async fn call_tool(&self, name: &str, args: serde_json::Value) -> Result<McpToolResult>;
 
-    /// Check if a tool requires user confirmation before execution
+    /// Check if a sub-tool requires user confirmation before execution
     ///
     /// # Arguments
-    /// * `tool_name` - Name of the tool to check
+    /// * `tool_name` - Name of the sub-tool to check
     ///
     /// # Returns
     /// true if the tool requires confirmation
     fn requires_confirmation(&self, tool_name: &str) -> bool;
 }
+
+// Type alias for backward compatibility
+pub type BuiltinMcpService = dyn SystemTool;
 
 #[cfg(test)]
 mod tests {
@@ -54,17 +63,17 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
 
-    /// Mock service for testing
-    struct MockService;
+    /// Mock tool for testing
+    struct MockTool;
 
     #[async_trait]
-    impl BuiltinMcpService for MockService {
+    impl SystemTool for MockTool {
         fn name(&self) -> &str {
-            "builtin:mock"
+            "mock"
         }
 
         fn description(&self) -> &str {
-            "Mock service for testing"
+            "Mock tool for testing"
         }
 
         async fn list_resources(&self) -> Result<Vec<McpResource>> {
@@ -77,8 +86,8 @@ mod tests {
 
         fn list_tools(&self) -> Vec<McpTool> {
             vec![McpTool {
-                name: "mock_tool".to_string(),
-                description: "A mock tool".to_string(),
+                name: "mock_action".to_string(),
+                description: "A mock action".to_string(),
                 input_schema: json!({"type": "object"}),
                 requires_confirmation: false,
             }]
@@ -97,13 +106,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mock_service() {
-        let service: Arc<dyn BuiltinMcpService> = Arc::new(MockService);
+    async fn test_mock_tool() {
+        let tool: Arc<dyn SystemTool> = Arc::new(MockTool);
 
-        assert_eq!(service.name(), "builtin:mock");
-        assert_eq!(service.list_tools().len(), 1);
+        assert_eq!(tool.name(), "mock");
+        assert_eq!(tool.list_tools().len(), 1);
 
-        let result = service.call_tool("mock_tool", json!({})).await.unwrap();
+        let result = tool.call_tool("mock_action", json!({})).await.unwrap();
         assert!(result.success);
     }
 }

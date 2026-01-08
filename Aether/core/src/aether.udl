@@ -915,7 +915,7 @@ dictionary McpServerConfig {
   sequence<string> args;              // Command arguments
   sequence<McpEnvVar> env;            // Environment variables
   string? working_directory;          // Working directory
-  string? trigger_command;            // Trigger command in Halo (e.g., /mcp/git)
+  string? trigger_command;            // Trigger command in Halo (e.g., /git for System Tools, /mcp/server for External)
   McpServerPermissions permissions;   // Server permissions
   string icon;                        // SF Symbol icon name
   string color;                       // Theme color (hex)

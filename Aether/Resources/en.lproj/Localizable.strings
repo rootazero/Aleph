@@ -377,7 +377,7 @@
 "settings.mcp.restart_message" = "MCP service changes will take effect after restarting Aether.";
 
 // Master-Detail UI (redesign-mcp-settings-ui)
-"settings.mcp.server_list.builtin" = "BUILT-IN CORE";
+"settings.mcp.server_list.builtin" = "SYSTEM TOOLS";
 "settings.mcp.server_list.extensions" = "EXTENSIONS";
 "settings.mcp.server_list.add" = "Add Server";
 "settings.mcp.no_extensions" = "No extensions installed";

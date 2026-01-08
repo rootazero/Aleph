@@ -1,13 +1,14 @@
-//! Git MCP Service
+//! Git Tool
 //!
-//! Wraps `services::git::GitRepository` with MCP protocol adaptation.
+//! Wraps `services::git::GitRepository` with JSON interface for LLM tool invocation.
+//! This is a Tier 1 System Tool, exposed at `/git`.
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::BuiltinMcpService;
+use super::SystemTool;
 use crate::error::{AetherError, Result};
 use crate::mcp::types::{McpResource, McpTool, McpToolResult};
 use crate::services::git::{GitOps, GitRepository};
@@ -94,9 +95,9 @@ impl GitService {
 }
 
 #[async_trait]
-impl BuiltinMcpService for GitService {
+impl SystemTool for GitService {
     fn name(&self) -> &str {
-        "builtin:git"
+        "git"
     }
 
     fn description(&self) -> &str {

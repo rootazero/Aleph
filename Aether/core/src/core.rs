@@ -351,9 +351,9 @@ impl AetherCore {
             }
         };
 
-        // Initialize MCP client with builtin services (implement-mcp-capability)
+        // Initialize MCP client with system tools (implement-mcp-capability)
         let mcp_client = {
-            use crate::mcp::builtin::{
+            use crate::services::tools::{
                 FsServiceConfig, GitServiceConfig, ShellServiceConfig,
             };
 
@@ -361,8 +361,8 @@ impl AetherCore {
             if cfg.mcp.enabled {
                 let mut client = crate::mcp::McpClient::new();
 
-                // Register builtin services based on config
-                let builtin = &cfg.mcp.builtin;
+                // Register system tools based on config
+                let tools = &cfg.tools;
 
                 // Helper to expand ~ in paths
                 let expand_path = |s: &str| -> PathBuf {
@@ -375,48 +375,48 @@ impl AetherCore {
                 };
 
                 // Register filesystem service
-                if builtin.fs_enabled {
-                    let allowed_roots: Vec<PathBuf> = builtin
+                if tools.fs_enabled {
+                    let allowed_roots: Vec<PathBuf> = tools
                         .allowed_roots
                         .iter()
                         .map(|s| expand_path(s))
                         .collect();
                     let fs_config = FsServiceConfig { allowed_roots };
                     let fs_service = crate::mcp::FsService::new(fs_config);
-                    client.register_builtin(Arc::new(fs_service));
-                    info!("Registered MCP FsService");
+                    client.register_system_tool(Arc::new(fs_service));
+                    info!("Registered System Tool: FsService");
                 }
 
                 // Register git service
-                if builtin.git_enabled {
-                    let allowed_repos: Vec<PathBuf> = builtin
+                if tools.git_enabled {
+                    let allowed_repos: Vec<PathBuf> = tools
                         .allowed_repos
                         .iter()
                         .map(|s| expand_path(s))
                         .collect();
                     let git_config = GitServiceConfig { allowed_repos };
                     let git_service = crate::mcp::GitService::new(git_config);
-                    client.register_builtin(Arc::new(git_service));
-                    info!("Registered MCP GitService");
+                    client.register_system_tool(Arc::new(git_service));
+                    info!("Registered System Tool: GitService");
                 }
 
                 // Register shell service
-                if builtin.shell_enabled {
+                if tools.shell_enabled {
                     let shell_config = ShellServiceConfig {
                         enabled: true,
-                        timeout_seconds: builtin.shell_timeout_seconds,
-                        allowed_commands: builtin.allowed_commands.clone(),
+                        timeout_seconds: tools.shell_timeout_seconds,
+                        allowed_commands: tools.allowed_commands.clone(),
                     };
                     let shell_service = crate::mcp::ShellService::new(shell_config);
-                    client.register_builtin(Arc::new(shell_service));
-                    info!("Registered MCP ShellService");
+                    client.register_system_tool(Arc::new(shell_service));
+                    info!("Registered System Tool: ShellService");
                 }
 
                 // Register system info service
-                if builtin.system_info_enabled {
+                if tools.system_info_enabled {
                     let sys_info_service = crate::mcp::SystemInfoService::new();
-                    client.register_builtin(Arc::new(sys_info_service));
-                    info!("Registered MCP SystemInfoService");
+                    client.register_system_tool(Arc::new(sys_info_service));
+                    info!("Registered System Tool: SystemInfoService");
                 }
 
                 info!(
@@ -3259,14 +3259,14 @@ impl AetherCore {
         let config = self.lock_config();
         crate::mcp::McpSettingsConfig {
             enabled: config.mcp.enabled,
-            fs_enabled: config.mcp.builtin.fs_enabled,
-            git_enabled: config.mcp.builtin.git_enabled,
-            shell_enabled: config.mcp.builtin.shell_enabled,
-            system_info_enabled: config.mcp.builtin.system_info_enabled,
-            allowed_roots: config.mcp.builtin.allowed_roots.clone(),
-            allowed_repos: config.mcp.builtin.allowed_repos.clone(),
-            allowed_commands: config.mcp.builtin.allowed_commands.clone(),
-            shell_timeout_seconds: config.mcp.builtin.shell_timeout_seconds,
+            fs_enabled: config.tools.fs_enabled,
+            git_enabled: config.tools.git_enabled,
+            shell_enabled: config.tools.shell_enabled,
+            system_info_enabled: config.tools.system_info_enabled,
+            allowed_roots: config.tools.allowed_roots.clone(),
+            allowed_repos: config.tools.allowed_repos.clone(),
+            allowed_commands: config.tools.allowed_commands.clone(),
+            shell_timeout_seconds: config.tools.shell_timeout_seconds,
         }
     }
 
@@ -3285,14 +3285,14 @@ impl AetherCore {
 
         // Update config
         config.mcp.enabled = new_config.enabled;
-        config.mcp.builtin.fs_enabled = new_config.fs_enabled;
-        config.mcp.builtin.git_enabled = new_config.git_enabled;
-        config.mcp.builtin.shell_enabled = new_config.shell_enabled;
-        config.mcp.builtin.system_info_enabled = new_config.system_info_enabled;
-        config.mcp.builtin.allowed_roots = new_config.allowed_roots;
-        config.mcp.builtin.allowed_repos = new_config.allowed_repos;
-        config.mcp.builtin.allowed_commands = new_config.allowed_commands;
-        config.mcp.builtin.shell_timeout_seconds = new_config.shell_timeout_seconds;
+        config.tools.fs_enabled = new_config.fs_enabled;
+        config.tools.git_enabled = new_config.git_enabled;
+        config.tools.shell_enabled = new_config.shell_enabled;
+        config.tools.system_info_enabled = new_config.system_info_enabled;
+        config.tools.allowed_roots = new_config.allowed_roots;
+        config.tools.allowed_repos = new_config.allowed_repos;
+        config.tools.allowed_commands = new_config.allowed_commands;
+        config.tools.shell_timeout_seconds = new_config.shell_timeout_seconds;
 
         // Persist to disk
         config.save()?;
@@ -3399,20 +3399,20 @@ impl AetherCore {
         let config = self.lock_config();
         let mut servers = Vec::new();
 
-        // Add builtin servers
-        let builtin = &config.mcp.builtin;
+        // Add system tools (Tier 1)
+        let tools = &config.tools;
 
         // System Info service
         servers.push(crate::mcp::McpServerConfig {
             id: "system_info".to_string(),
             name: "System Info".to_string(),
             server_type: crate::mcp::McpServerType::Builtin,
-            enabled: builtin.system_info_enabled,
+            enabled: tools.system_info_enabled,
             command: None,
             args: Vec::new(),
             env: Vec::new(),
             working_directory: None,
-            trigger_command: Some("/mcp/system".to_string()),
+            trigger_command: Some("/sys".to_string()),
             permissions: crate::mcp::McpServerPermissions {
                 requires_confirmation: false,
                 allowed_paths: Vec::new(),
@@ -3427,15 +3427,15 @@ impl AetherCore {
             id: "fs".to_string(),
             name: "File System".to_string(),
             server_type: crate::mcp::McpServerType::Builtin,
-            enabled: builtin.fs_enabled,
+            enabled: tools.fs_enabled,
             command: None,
             args: Vec::new(),
             env: Vec::new(),
             working_directory: None,
-            trigger_command: Some("/mcp/fs".to_string()),
+            trigger_command: Some("/fs".to_string()),
             permissions: crate::mcp::McpServerPermissions {
                 requires_confirmation: true,
-                allowed_paths: builtin.allowed_roots.clone(),
+                allowed_paths: tools.allowed_roots.clone(),
                 allowed_commands: Vec::new(),
             },
             icon: "folder".to_string(),
@@ -3447,15 +3447,15 @@ impl AetherCore {
             id: "git".to_string(),
             name: "Git".to_string(),
             server_type: crate::mcp::McpServerType::Builtin,
-            enabled: builtin.git_enabled,
+            enabled: tools.git_enabled,
             command: None,
             args: Vec::new(),
             env: Vec::new(),
             working_directory: None,
-            trigger_command: Some("/mcp/git".to_string()),
+            trigger_command: Some("/git".to_string()),
             permissions: crate::mcp::McpServerPermissions {
                 requires_confirmation: true,
-                allowed_paths: builtin.allowed_repos.clone(),
+                allowed_paths: tools.allowed_repos.clone(),
                 allowed_commands: Vec::new(),
             },
             icon: "arrow.triangle.branch".to_string(),
@@ -3467,16 +3467,16 @@ impl AetherCore {
             id: "shell".to_string(),
             name: "Shell".to_string(),
             server_type: crate::mcp::McpServerType::Builtin,
-            enabled: builtin.shell_enabled,
+            enabled: tools.shell_enabled,
             command: None,
             args: Vec::new(),
             env: Vec::new(),
             working_directory: None,
-            trigger_command: Some("/mcp/shell".to_string()),
+            trigger_command: Some("/shell".to_string()),
             permissions: crate::mcp::McpServerPermissions {
                 requires_confirmation: true,
                 allowed_paths: Vec::new(),
-                allowed_commands: builtin.allowed_commands.clone(),
+                allowed_commands: tools.allowed_commands.clone(),
             },
             icon: "terminal".to_string(),
             color: "#5856D6".to_string(),
@@ -3610,19 +3610,19 @@ impl AetherCore {
 
                 match config.id.as_str() {
                     "system_info" => {
-                        cfg.mcp.builtin.system_info_enabled = config.enabled;
+                        cfg.tools.system_info_enabled = config.enabled;
                     }
                     "fs" => {
-                        cfg.mcp.builtin.fs_enabled = config.enabled;
-                        cfg.mcp.builtin.allowed_roots = config.permissions.allowed_paths;
+                        cfg.tools.fs_enabled = config.enabled;
+                        cfg.tools.allowed_roots = config.permissions.allowed_paths;
                     }
                     "git" => {
-                        cfg.mcp.builtin.git_enabled = config.enabled;
-                        cfg.mcp.builtin.allowed_repos = config.permissions.allowed_paths;
+                        cfg.tools.git_enabled = config.enabled;
+                        cfg.tools.allowed_repos = config.permissions.allowed_paths;
                     }
                     "shell" => {
-                        cfg.mcp.builtin.shell_enabled = config.enabled;
-                        cfg.mcp.builtin.allowed_commands = config.permissions.allowed_commands;
+                        cfg.tools.shell_enabled = config.enabled;
+                        cfg.tools.allowed_commands = config.permissions.allowed_commands;
                     }
                     _ => {
                         return Err(AetherError::config(format!(

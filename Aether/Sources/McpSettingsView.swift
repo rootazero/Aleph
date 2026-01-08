@@ -75,7 +75,7 @@ struct McpSettingsView: View {
     private var serverListView: some View {
         VStack(spacing: 0) {
             List(selection: $selectedServerId) {
-                // Built-in Core section
+                // System Tools section (Tier 1: native Rust tools)
                 Section(header: Text(L("settings.mcp.server_list.builtin"))) {
                     ForEach(builtinServers, id: \.id) { server in
                         ServerListRow(server: server, status: getServerStatus(server.id))
@@ -83,7 +83,7 @@ struct McpSettingsView: View {
                     }
                 }
 
-                // Extensions section
+                // MCP Extensions section (Tier 2: external MCP servers)
                 Section(header: Text(L("settings.mcp.server_list.extensions"))) {
                     if externalServers.isEmpty {
                         Text(L("settings.mcp.no_extensions"))
