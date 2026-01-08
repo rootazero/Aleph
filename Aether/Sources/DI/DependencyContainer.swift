@@ -156,8 +156,24 @@ final class DependencyContainer: ObservableObject {
 
         print("[DependencyContainer] Initializing coordinators...")
 
-        // TODO: Create coordinators as they are extracted from AppDelegate
-        // _haloWindowController = HaloWindowController(...)
+        // Create HaloWindowController
+        if let themeEngine = themeEngine {
+            _haloWindowController = HaloWindowController(themeEngine: themeEngine)
+            _haloWindowController?.createWindow()
+
+            // Connect event handler to Halo window
+            if let eventHandler = eventHandler {
+                _haloWindowController?.setEventHandler(eventHandler)
+                eventHandler.setHaloWindow(_haloWindowController?.window)
+            }
+
+            // Configure command manager with core
+            if let core = core {
+                _haloWindowController?.configureCore(core)
+            }
+        }
+
+        // TODO: Create other coordinators as they are extracted from AppDelegate
         // _inputCoordinator = InputCoordinator(...)
         // _outputCoordinator = OutputCoordinator(...)
         // _conversationCoordinator = ConversationCoordinator(...)
@@ -246,10 +262,7 @@ enum DependencyError: LocalizedError {
 
 // MARK: - Placeholder Types (to be created)
 
-/// Placeholder for HaloWindowController (to be extracted from AppDelegate)
-class HaloWindowController {
-    // TODO: Implement in Step 1.3
-}
+// HaloWindowController - Implemented in Controllers/HaloWindowController.swift
 
 /// Placeholder for InputCoordinator (to be extracted from AppDelegate)
 class InputCoordinator {

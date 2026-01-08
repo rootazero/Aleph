@@ -61,6 +61,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Halo overlay window
     private var haloWindow: HaloWindow?
 
+    // Halo window controller (new architecture - will replace direct haloWindow access)
+    private var haloWindowController: HaloWindowController?
+
     // Settings window (used by legacy Settings scene and WindowGroup)
     private var settingsWindow: NSWindow?
 
@@ -642,7 +645,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             coreInitRetryCount = 0
 
             // Configure command completion manager with core reference
-            haloWindow?.viewModel.commandManager.configure(core: core)
+            if let core = core {
+                haloWindowController?.configureCore(core)
+            }
             print("[Aether] CommandCompletionManager configured")
 
             // Set up command mode hotkey (Cmd+Opt+/)
@@ -911,14 +916,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Initialize theme engine
         themeEngine = ThemeEngine()
 
-        // Create Halo window with theme engine
-        haloWindow = HaloWindow(themeEngine: themeEngine!)
+        // Create Halo window controller (new architecture)
+        haloWindowController = HaloWindowController(themeEngine: themeEngine!)
+        haloWindowController?.createWindow()
+
+        // Keep reference to raw haloWindow for gradual migration
+        haloWindow = haloWindowController?.window
 
         // Initialize event handler
         eventHandler = EventHandler(haloWindow: haloWindow)
 
         // Connect event handler to halo window for error action callbacks
-        haloWindow?.setEventHandler(eventHandler!)
+        haloWindowController?.setEventHandler(eventHandler!)
 
         // Setup ESC key monitor for cancelling typewriter
         setupEscapeKeyMonitor()
