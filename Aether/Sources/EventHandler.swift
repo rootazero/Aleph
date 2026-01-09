@@ -177,7 +177,7 @@ class EventHandler: AetherEventHandler {
         DispatchQueue.main.async {
             // Post notification to notify all observers
             NotificationCenter.default.post(
-                name: NSNotification.Name("AetherConfigDidChange"),
+                name: .aetherConfigDidChange,
                 object: nil
             )
 
@@ -294,6 +294,105 @@ class EventHandler: AetherEventHandler {
 
         // Delegate to ConversationManager
         conversationManager.onConversationEnded(sessionId: sessionId, totalTurns: totalTurns)
+    }
+
+    // MARK: - Async Tool Confirmation (Phase 6)
+
+    /// Called when a tool execution needs user confirmation (async flow)
+    ///
+    /// This is a NON-BLOCKING callback - the Rust core returns immediately.
+    /// The UI shows a confirmation dialog and calls confirmAction() when user decides.
+    ///
+    /// NOTE: This method is called from a background thread by Rust/UniFFI.
+    func onConfirmationNeeded(confirmation: PendingConfirmationInfo) {
+        print("[EventHandler] Confirmation needed: \(confirmation.id) - \(confirmation.toolName)")
+        print("[EventHandler]   Tool: \(confirmation.toolDisplayName)")
+        print("[EventHandler]   Reason: \(confirmation.reason)")
+        print("[EventHandler]   Confidence: \(confirmation.confidence)")
+
+        DispatchQueue.main.async { [weak self] in
+            self?.showToolConfirmation(confirmation)
+        }
+    }
+
+    /// Called when a pending confirmation expires
+    ///
+    /// NOTE: This method is called from a background thread by Rust/UniFFI.
+    func onConfirmationExpired(confirmationId: String) {
+        print("[EventHandler] Confirmation expired: \(confirmationId)")
+
+        DispatchQueue.main.async { [weak self] in
+            self?.handleConfirmationExpired(confirmationId)
+        }
+    }
+
+    // MARK: - Tool Confirmation UI
+
+    /// Show tool confirmation dialog in Halo
+    private func showToolConfirmation(_ confirmation: PendingConfirmationInfo) {
+        // Build confirmation message
+        let title = L("confirmation.tool_execution")
+        let message = """
+        \(confirmation.toolDisplayName)
+
+        \(confirmation.reason)
+
+        \(L("confirmation.confidence")): \(Int(confirmation.confidence * 100))%
+        """
+
+        // Show confirmation in Halo with action buttons
+        haloWindow?.showToolConfirmation(
+            confirmationId: confirmation.id,
+            toolName: confirmation.toolDisplayName,
+            toolDescription: confirmation.toolDescription,
+            reason: confirmation.reason,
+            confidence: confirmation.confidence,
+            onExecute: { [weak self] in
+                self?.handleUserConfirmation(confirmationId: confirmation.id, decision: .execute)
+            },
+            onCancel: { [weak self] in
+                self?.handleUserConfirmation(confirmationId: confirmation.id, decision: .cancel)
+            }
+        )
+    }
+
+    /// Handle user's confirmation decision
+    private func handleUserConfirmation(confirmationId: String, decision: UserConfirmationDecision) {
+        print("[EventHandler] User confirmation decision: \(confirmationId) -> \(decision)")
+
+        guard let core = core else {
+            print("[EventHandler] Error: No AetherCore reference for confirmation")
+            return
+        }
+
+        do {
+            let success = try core.confirmAction(confirmationId: confirmationId, decision: decision)
+            print("[EventHandler] Confirmation action result: \(success)")
+
+            if decision == .cancel {
+                // Hide Halo on cancel
+                haloWindow?.hide()
+            }
+        } catch {
+            print("[EventHandler] Confirmation action failed: \(error)")
+            showToast(type: .error, title: L("error.aether"), message: error.localizedDescription, autoDismiss: false)
+        }
+    }
+
+    /// Handle expired confirmation
+    private func handleConfirmationExpired(_ confirmationId: String) {
+        print("[EventHandler] Handling expired confirmation: \(confirmationId)")
+
+        // Show timeout notification
+        showToast(
+            type: .warning,
+            title: L("confirmation.expired"),
+            message: L("confirmation.expired_message"),
+            autoDismiss: true
+        )
+
+        // Hide Halo
+        haloWindow?.hide()
     }
 
     // MARK: - State Change Handling
@@ -578,7 +677,7 @@ class EventHandler: AetherEventHandler {
     /// Setup observer for internal config save notifications
     private func setupInternalConfigSaveObserver() {
         NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("AetherConfigSavedInternally"),
+            forName: .aetherConfigSavedInternally,
             object: nil,
             queue: .main
         ) { [weak self] _ in

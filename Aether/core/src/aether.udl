@@ -439,6 +439,28 @@ interface AetherCore {
   // Refresh tool registry (reload from all sources)
   [Throws=AetherException]
   void refresh_tools();
+
+  // ASYNC CONFIRMATION FLOW METHODS (async-confirmation-flow)
+
+  // Confirm or cancel a pending confirmation
+  // Called by Swift when user makes a decision on pending confirmation
+  // Returns true if confirmation was found and processed, false if not found/expired
+  [Throws=AetherException]
+  boolean confirm_action(string confirmation_id, UserConfirmationDecision decision);
+
+  // Cancel a pending confirmation by ID
+  // Returns true if confirmation was found and cancelled
+  boolean cancel_confirmation(string confirmation_id);
+
+  // Get pending confirmation by ID (if still valid)
+  PendingConfirmationInfo? get_pending_confirmation(string confirmation_id);
+
+  // Get count of pending confirmations
+  u32 get_pending_confirmation_count();
+
+  // Cleanup expired confirmations
+  // Returns count of cleaned confirmations
+  u32 cleanup_expired_confirmations();
 };
 
 // Callback interface for events from Rust to client
@@ -486,7 +508,17 @@ callback interface AetherEventHandler {
   // Called when clarification is needed from user
   // This is a blocking call - implementation must return result
   // Swift layer should show Halo clarification UI and wait for user response
+  // DEPRECATED: Use on_confirmation_needed for new confirmation flows
   ClarificationResult on_clarification_needed(ClarificationRequest request);
+
+  // ASYNC CONFIRMATION CALLBACKS (async-confirmation-flow)
+  // Called when tool execution confirmation is needed from user
+  // This is a NON-BLOCKING call - Swift should show UI and call confirm_action() when user decides
+  // This replaces the blocking on_clarification_needed pattern for tool confirmations
+  void on_confirmation_needed(PendingConfirmationInfo confirmation);
+
+  // Called when a pending confirmation expires (timeout)
+  void on_confirmation_expired(string confirmation_id);
 
   // MULTI-TURN CONVERSATION CALLBACKS (add-multi-turn-conversation)
 
@@ -967,4 +999,28 @@ dictionary McpServerStatusInfo {
   McpServerStatus status;  // Current status
   string? message;         // Status message
   string? last_error;      // Last error message
+};
+
+// ===== Async Confirmation Flow Types (async-confirmation-flow) =====
+
+// User's decision on a pending confirmation
+// This is sent from Swift when user interacts with confirmation UI
+enum UserConfirmationDecision {
+  "Execute",          // Execute the tool as proposed
+  "Cancel",           // Cancel and fall back to general chat
+  "EditParameters",   // Edit parameters before execution (reserved for future)
+};
+
+// Pending confirmation information (FFI-safe)
+// Contains all info needed for Swift to display confirmation UI
+dictionary PendingConfirmationInfo {
+  string id;                    // Unique confirmation ID (for resumption via confirm_action)
+  string tool_id;               // Tool unique identifier (e.g., "native:search")
+  string tool_name;             // Tool name/command (e.g., "search")
+  string tool_display_name;     // Human-readable tool name
+  string tool_description;      // Tool description
+  string parameters_json;       // Parameters as JSON string
+  f32 confidence;               // Confidence score (0.0-1.0)
+  string reason;                // Reason for tool selection (from L3 routing)
+  u64 timeout_ms;               // Timeout in milliseconds
 };

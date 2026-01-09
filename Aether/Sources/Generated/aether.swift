@@ -564,11 +564,17 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func addMcpServer(config: McpServerConfig) throws 
     
+    func cancelConfirmation(confirmationId: String)  -> Bool
+    
+    func cleanupExpiredConfirmations()  -> UInt32
+    
     func cleanupOldMemories() throws  -> UInt64
     
     func clearMemories(appBundleId: String?, windowTitle: String?) throws  -> UInt64
     
     func clearRequestContext() 
+    
+    func confirmAction(confirmationId: String, decision: UserConfirmationDecision) throws  -> Bool
     
     func continueConversation(followUpInput: String) throws  -> String
     
@@ -611,6 +617,10 @@ public protocol AetherCoreProtocol : AnyObject {
     func getMemoryConfig()  -> MemoryConfig
     
     func getMemoryStats() throws  -> MemoryStats
+    
+    func getPendingConfirmation(confirmationId: String)  -> PendingConfirmationInfo?
+    
+    func getPendingConfirmationCount()  -> UInt32
     
     func getRootCommands()  -> [CommandNode]
     
@@ -757,6 +767,21 @@ open func addMcpServer(config: McpServerConfig)throws  {try rustCallWithError(Ff
 }
 }
     
+open func cancelConfirmation(confirmationId: String) -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cancel_confirmation(self.uniffiClonePointer(),
+        FfiConverterString.lower(confirmationId),$0
+    )
+})
+}
+    
+open func cleanupExpiredConfirmations() -> UInt32 {
+    return try!  FfiConverterUInt32.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cleanup_expired_confirmations(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func cleanupOldMemories()throws  -> UInt64 {
     return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_cleanup_old_memories(self.uniffiClonePointer(),$0
@@ -777,6 +802,15 @@ open func clearRequestContext() {try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_clear_request_context(self.uniffiClonePointer(),$0
     )
 }
+}
+    
+open func confirmAction(confirmationId: String, decision: UserConfirmationDecision)throws  -> Bool {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_confirm_action(self.uniffiClonePointer(),
+        FfiConverterString.lower(confirmationId),
+        FfiConverterTypeUserConfirmationDecision.lower(decision),$0
+    )
+})
 }
     
 open func continueConversation(followUpInput: String)throws  -> String {
@@ -928,6 +962,21 @@ open func getMemoryConfig() -> MemoryConfig {
 open func getMemoryStats()throws  -> MemoryStats {
     return try  FfiConverterTypeMemoryStats.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_get_memory_stats(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getPendingConfirmation(confirmationId: String) -> PendingConfirmationInfo? {
+    return try!  FfiConverterOptionTypePendingConfirmationInfo.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_pending_confirmation(self.uniffiClonePointer(),
+        FfiConverterString.lower(confirmationId),$0
+    )
+})
+}
+    
+open func getPendingConfirmationCount() -> UInt32 {
+    return try!  FfiConverterUInt32.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_pending_confirmation_count(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -3835,6 +3884,128 @@ public func FfiConverterTypePIIConfig_lower(_ value: PiiConfig) -> RustBuffer {
 }
 
 
+public struct PendingConfirmationInfo {
+    public var id: String
+    public var toolId: String
+    public var toolName: String
+    public var toolDisplayName: String
+    public var toolDescription: String
+    public var parametersJson: String
+    public var confidence: Float
+    public var reason: String
+    public var timeoutMs: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, toolId: String, toolName: String, toolDisplayName: String, toolDescription: String, parametersJson: String, confidence: Float, reason: String, timeoutMs: UInt64) {
+        self.id = id
+        self.toolId = toolId
+        self.toolName = toolName
+        self.toolDisplayName = toolDisplayName
+        self.toolDescription = toolDescription
+        self.parametersJson = parametersJson
+        self.confidence = confidence
+        self.reason = reason
+        self.timeoutMs = timeoutMs
+    }
+}
+
+
+
+extension PendingConfirmationInfo: Equatable, Hashable {
+    public static func ==(lhs: PendingConfirmationInfo, rhs: PendingConfirmationInfo) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.toolId != rhs.toolId {
+            return false
+        }
+        if lhs.toolName != rhs.toolName {
+            return false
+        }
+        if lhs.toolDisplayName != rhs.toolDisplayName {
+            return false
+        }
+        if lhs.toolDescription != rhs.toolDescription {
+            return false
+        }
+        if lhs.parametersJson != rhs.parametersJson {
+            return false
+        }
+        if lhs.confidence != rhs.confidence {
+            return false
+        }
+        if lhs.reason != rhs.reason {
+            return false
+        }
+        if lhs.timeoutMs != rhs.timeoutMs {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(toolId)
+        hasher.combine(toolName)
+        hasher.combine(toolDisplayName)
+        hasher.combine(toolDescription)
+        hasher.combine(parametersJson)
+        hasher.combine(confidence)
+        hasher.combine(reason)
+        hasher.combine(timeoutMs)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePendingConfirmationInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PendingConfirmationInfo {
+        return
+            try PendingConfirmationInfo(
+                id: FfiConverterString.read(from: &buf), 
+                toolId: FfiConverterString.read(from: &buf), 
+                toolName: FfiConverterString.read(from: &buf), 
+                toolDisplayName: FfiConverterString.read(from: &buf), 
+                toolDescription: FfiConverterString.read(from: &buf), 
+                parametersJson: FfiConverterString.read(from: &buf), 
+                confidence: FfiConverterFloat.read(from: &buf), 
+                reason: FfiConverterString.read(from: &buf), 
+                timeoutMs: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PendingConfirmationInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.toolId, into: &buf)
+        FfiConverterString.write(value.toolName, into: &buf)
+        FfiConverterString.write(value.toolDisplayName, into: &buf)
+        FfiConverterString.write(value.toolDescription, into: &buf)
+        FfiConverterString.write(value.parametersJson, into: &buf)
+        FfiConverterFloat.write(value.confidence, into: &buf)
+        FfiConverterString.write(value.reason, into: &buf)
+        FfiConverterUInt64.write(value.timeoutMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePendingConfirmationInfo_lift(_ buf: RustBuffer) throws -> PendingConfirmationInfo {
+    return try FfiConverterTypePendingConfirmationInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePendingConfirmationInfo_lower(_ value: PendingConfirmationInfo) -> RustBuffer {
+    return FfiConverterTypePendingConfirmationInfo.lower(value)
+}
+
+
 public struct ProviderConfig {
     public var providerType: String?
     public var apiKey: String?
@@ -6060,6 +6231,77 @@ extension ToolSourceType: Equatable, Hashable {}
 
 
 
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum UserConfirmationDecision {
+    
+    case execute
+    case cancel
+    case editParameters
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUserConfirmationDecision: FfiConverterRustBuffer {
+    typealias SwiftType = UserConfirmationDecision
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UserConfirmationDecision {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .execute
+        
+        case 2: return .cancel
+        
+        case 3: return .editParameters
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: UserConfirmationDecision, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .execute:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .cancel:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .editParameters:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUserConfirmationDecision_lift(_ buf: RustBuffer) throws -> UserConfirmationDecision {
+    return try FfiConverterTypeUserConfirmationDecision.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUserConfirmationDecision_lower(_ value: UserConfirmationDecision) -> RustBuffer {
+    return FfiConverterTypeUserConfirmationDecision.lower(value)
+}
+
+
+
+extension UserConfirmationDecision: Equatable, Hashable {}
+
+
+
 
 
 
@@ -6088,6 +6330,10 @@ public protocol AetherEventHandler : AnyObject {
     func onTypewriterCancelled() 
     
     func onClarificationNeeded(request: ClarificationRequest)  -> ClarificationResult
+    
+    func onConfirmationNeeded(confirmation: PendingConfirmationInfo) 
+    
+    func onConfirmationExpired(confirmationId: String) 
     
     func onConversationStarted(sessionId: String) 
     
@@ -6399,6 +6645,54 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
 
             
             let writeReturn = { uniffiOutReturn.pointee = FfiConverterTypeClarificationResult.lower($0) }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onConfirmationNeeded: { (
+            uniffiHandle: UInt64,
+            confirmation: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onConfirmationNeeded(
+                     confirmation: try FfiConverterTypePendingConfirmationInfo.lift(confirmation)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onConfirmationExpired: { (
+            uniffiHandle: UInt64,
+            confirmationId: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onConfirmationExpired(
+                     confirmationId: try FfiConverterString.lift(confirmationId)
+                )
+            }
+
+            
+            let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
                 makeCall: makeCall,
@@ -6953,6 +7247,30 @@ fileprivate struct FfiConverterOptionTypePIIConfig: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypePIIConfig.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypePendingConfirmationInfo: FfiConverterRustBuffer {
+    typealias SwiftType = PendingConfirmationInfo?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypePendingConfirmationInfo.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypePendingConfirmationInfo.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -7737,6 +8055,12 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_add_mcp_server() != 17845) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_cancel_confirmation() != 3832) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cleanup_expired_confirmations() != 8982) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_cleanup_old_memories() != 47692) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -7744,6 +8068,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_clear_request_context() != 2809) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_confirm_action() != 20248) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_continue_conversation() != 43013) {
@@ -7807,6 +8134,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_get_memory_stats() != 10285) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_pending_confirmation() != 15387) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_pending_confirmation_count() != 3222) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_get_root_commands() != 47120) {
@@ -7963,6 +8296,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_clarification_needed() != 36496) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_confirmation_needed() != 36613) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_confirmation_expired() != 10341) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_started() != 36209) {

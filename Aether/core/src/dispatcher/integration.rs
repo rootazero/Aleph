@@ -65,13 +65,18 @@
 
 use crate::clarification::ClarificationResult;
 use crate::dispatcher::{
-    ConfirmationAction, ConfirmationConfig, L3Router, L3RoutingOptions, L3RoutingResponse,
-    RoutingLayer, ToolConfirmation, UnifiedTool,
+    AsyncConfirmationConfig, AsyncConfirmationHandler, ConfirmationAction, ConfirmationConfig,
+    ConfirmationState, L3Router, L3RoutingOptions, L3RoutingResponse, PendingConfirmationInfo,
+    RoutingLayer, ToolConfirmation, UnifiedTool, UserConfirmationDecision,
 };
 use crate::error::Result;
 use crate::event_handler::AetherEventHandler;
 use crate::providers::AiProvider;
+use crate::routing::{
+    RoutingConfig, RoutingContext, RoutingLayerType, RoutingMatch, RoutingResult, UnifiedRouter,
+};
 use crate::semantic::context::ConversationContext;
+use crate::semantic::SemanticMatcher;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -131,7 +136,7 @@ impl DispatcherConfig {
 // =============================================================================
 
 /// Action to take after dispatcher routing
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DispatcherAction {
     /// Execute a tool with the given parameters
     ExecuteTool,
@@ -141,6 +146,10 @@ pub enum DispatcherAction {
 
     /// User cancelled tool execution - fall back to chat
     Cancelled,
+
+    /// Waiting for user confirmation (async flow)
+    /// Contains the confirmation_id to track the pending confirmation
+    PendingConfirmation(String),
 
     /// Error occurred during routing/confirmation
     Error(String),
@@ -163,6 +172,19 @@ impl DispatcherAction {
     /// Check if this action is an error
     pub fn is_error(&self) -> bool {
         matches!(self, DispatcherAction::Error(_))
+    }
+
+    /// Check if this action is pending confirmation
+    pub fn is_pending(&self) -> bool {
+        matches!(self, DispatcherAction::PendingConfirmation(_))
+    }
+
+    /// Get the confirmation ID if this is a pending confirmation
+    pub fn confirmation_id(&self) -> Option<&str> {
+        match self {
+            DispatcherAction::PendingConfirmation(id) => Some(id),
+            _ => None,
+        }
     }
 }
 
@@ -253,6 +275,25 @@ impl DispatcherResult {
         }
     }
 
+    /// Create a pending confirmation result (async flow)
+    pub fn pending(
+        confirmation_id: String,
+        tool: UnifiedTool,
+        parameters: serde_json::Value,
+        layer: RoutingLayer,
+        confidence: f32,
+    ) -> Self {
+        Self {
+            action: DispatcherAction::PendingConfirmation(confirmation_id),
+            tool: Some(tool),
+            parameters: Some(parameters),
+            routing_layer: layer,
+            confidence,
+            reason: Some("Awaiting user confirmation".to_string()),
+            confirmation_shown: true,
+        }
+    }
+
     /// Set the reason
     pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
         self.reason = Some(reason.into());
@@ -278,8 +319,14 @@ pub struct DispatcherIntegration {
     /// L3 Router (optional, created lazily)
     l3_router: Option<L3Router>,
 
-    /// Tool confirmation handler
+    /// Unified Router for L1 → L2 → L3 → Default cascade
+    unified_router: Option<Arc<UnifiedRouter>>,
+
+    /// Tool confirmation handler (legacy blocking)
     confirmation: ToolConfirmation,
+
+    /// Async confirmation handler (non-blocking)
+    async_confirmation: Arc<AsyncConfirmationHandler>,
 }
 
 impl DispatcherIntegration {
@@ -297,16 +344,90 @@ impl DispatcherIntegration {
 
         let confirmation = ToolConfirmation::new(config.confirmation.clone());
 
+        // Create async confirmation handler with config from ConfirmationConfig
+        let async_config = AsyncConfirmationConfig {
+            enabled: config.confirmation.enabled,
+            timeout_ms: config.confirmation.timeout_ms,
+            threshold: config.confirmation.threshold,
+            skip_native_tools: config.confirmation.skip_native_tools,
+        };
+        let async_confirmation = Arc::new(AsyncConfirmationHandler::with_config(async_config));
+
         Self {
             config,
             l3_router,
+            unified_router: None,
             confirmation,
+            async_confirmation,
+        }
+    }
+
+    /// Create a new dispatcher integration with unified router
+    pub fn with_unified_router(
+        config: DispatcherConfig,
+        provider: Option<Arc<dyn AiProvider>>,
+        semantic_matcher: Arc<SemanticMatcher>,
+    ) -> Self {
+        let routing_config = RoutingConfig {
+            enabled: config.enabled,
+            l1_enabled: true,
+            l2_enabled: true,
+            l3_enabled: config.l3_enabled,
+            l3_timeout_ms: config.l3_timeout_ms,
+            l2_min_confidence: 0.5,
+            l3_min_confidence: config.l3_confidence_threshold,
+            l3_minimal_prompts: false,
+        };
+
+        let unified_router = Arc::new(UnifiedRouter::new(
+            routing_config,
+            provider.clone(),
+            semantic_matcher,
+        ));
+
+        let l3_router = if config.l3_enabled {
+            provider.map(|p| {
+                L3Router::new(p)
+                    .with_timeout(Duration::from_millis(config.l3_timeout_ms))
+                    .with_confidence_threshold(config.l3_confidence_threshold)
+            })
+        } else {
+            None
+        };
+
+        let confirmation = ToolConfirmation::new(config.confirmation.clone());
+
+        // Create async confirmation handler with config from ConfirmationConfig
+        let async_config = AsyncConfirmationConfig {
+            enabled: config.confirmation.enabled,
+            timeout_ms: config.confirmation.timeout_ms,
+            threshold: config.confirmation.threshold,
+            skip_native_tools: config.confirmation.skip_native_tools,
+        };
+        let async_confirmation = Arc::new(AsyncConfirmationHandler::with_config(async_config));
+
+        Self {
+            config,
+            l3_router,
+            unified_router: Some(unified_router),
+            confirmation,
+            async_confirmation,
         }
     }
 
     /// Create with default configuration
     pub fn with_defaults(provider: Arc<dyn AiProvider>) -> Self {
         Self::new(DispatcherConfig::default(), Some(provider))
+    }
+
+    /// Set the unified router
+    pub fn set_unified_router(&mut self, router: Arc<UnifiedRouter>) {
+        self.unified_router = Some(router);
+    }
+
+    /// Check if unified routing is enabled
+    pub fn has_unified_router(&self) -> bool {
+        self.unified_router.is_some()
     }
 
     /// Check if the dispatcher is enabled
@@ -491,6 +612,403 @@ impl DispatcherIntegration {
     /// Get the dispatcher configuration
     pub fn config(&self) -> &DispatcherConfig {
         &self.config
+    }
+
+    // =========================================================================
+    // Unified Routing (L1 → L2 → L3 → Default cascade)
+    // =========================================================================
+
+    /// Route input using the unified router (L1 → L2 → L3 cascade)
+    ///
+    /// This method uses the `UnifiedRouter` for proper layer cascade routing.
+    /// If the unified router is not configured, falls back to L3-only routing.
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - User input to route
+    /// * `tools` - Available tools
+    /// * `event_handler` - Event handler for confirmation callbacks
+    /// * `conversation` - Optional conversation context
+    ///
+    /// # Returns
+    ///
+    /// A `DispatcherResult` indicating the action to take
+    pub async fn route_unified(
+        &self,
+        input: &str,
+        tools: &[UnifiedTool],
+        event_handler: &dyn AetherEventHandler,
+        conversation: Option<&ConversationContext>,
+    ) -> Result<DispatcherResult> {
+        // Use unified router if available
+        if let Some(ref router) = self.unified_router {
+            // Update tools in the router cache
+            router.update_tools(tools.to_vec()).await;
+
+            // Build routing context
+            let mut ctx = RoutingContext::new(input);
+            if let Some(conv) = conversation {
+                ctx = ctx.with_conversation(conv.clone());
+            }
+
+            // Route through unified router
+            let result = router.route(&ctx).await;
+
+            // Convert result to DispatcherResult
+            self.convert_routing_result(result, event_handler)
+        } else {
+            // Fall back to L3-only routing
+            self.route_with_confirmation(input, tools, event_handler, conversation)
+                .await
+        }
+    }
+
+    /// Convert UnifiedRouter result to DispatcherResult
+    fn convert_routing_result(
+        &self,
+        result: RoutingResult,
+        event_handler: &dyn AetherEventHandler,
+    ) -> Result<DispatcherResult> {
+        match result {
+            RoutingResult::Matched(routing_match) => {
+                self.process_routing_match(routing_match, event_handler)
+            }
+            RoutingResult::NoMatch { reason, .. } => {
+                debug!(reason = %reason, "Unified routing: No match");
+                Ok(DispatcherResult::general_chat().with_reason(reason))
+            }
+            RoutingResult::Skipped { reason } => {
+                debug!(reason = %reason, "Unified routing: Skipped");
+                Ok(DispatcherResult::general_chat().with_reason(reason))
+            }
+        }
+    }
+
+    /// Process a successful routing match with optional confirmation
+    fn process_routing_match(
+        &self,
+        routing_match: RoutingMatch,
+        event_handler: &dyn AetherEventHandler,
+    ) -> Result<DispatcherResult> {
+        let RoutingMatch {
+            tool,
+            confidence,
+            layer,
+            parameters,
+            reason,
+            ..
+        } = routing_match;
+
+        let routing_layer = layer.to_dispatcher_layer();
+
+        info!(
+            tool = %tool.name,
+            confidence = confidence,
+            layer = ?routing_layer,
+            "Unified routing matched tool"
+        );
+
+        // L1 matches are high confidence - skip confirmation
+        if layer == RoutingLayerType::L1Regex {
+            return Ok(DispatcherResult::execute(
+                tool,
+                parameters.unwrap_or_default(),
+                routing_layer,
+                confidence,
+            )
+            .with_reason(reason.unwrap_or_else(|| "L1 regex match".to_string())));
+        }
+
+        // Check if confirmation is needed for L2/L3 matches
+        let needs_confirmation = self.confirmation.should_confirm(confidence)
+            && !self.confirmation.should_skip_for_tool(&tool);
+
+        if needs_confirmation {
+            self.handle_unified_confirmation(tool, confidence, parameters, reason, event_handler)
+        } else {
+            Ok(DispatcherResult::execute(
+                tool,
+                parameters.unwrap_or_default(),
+                routing_layer,
+                confidence,
+            )
+            .with_reason(reason.unwrap_or_default()))
+        }
+    }
+
+    /// Handle confirmation for unified routing matches
+    fn handle_unified_confirmation(
+        &self,
+        tool: UnifiedTool,
+        confidence: f32,
+        parameters: Option<serde_json::Value>,
+        reason: Option<String>,
+        event_handler: &dyn AetherEventHandler,
+    ) -> Result<DispatcherResult> {
+        info!(
+            tool = %tool.name,
+            confidence = confidence,
+            threshold = self.confirmation.threshold(),
+            "Showing confirmation for unified routing match"
+        );
+
+        // Build and show confirmation request
+        let request = self.confirmation.build_request(
+            &tool,
+            parameters.as_ref(),
+            reason.as_ref().map(|s| s.as_str()),
+        );
+
+        // This is a blocking call - waits for user response
+        let result: ClarificationResult = event_handler.on_clarification_needed(request);
+
+        // Handle the result
+        let action = self.confirmation.handle_result(result);
+
+        match action {
+            ConfirmationAction::Execute => {
+                info!("User confirmed tool execution");
+                Ok(DispatcherResult::execute(
+                    tool,
+                    parameters.unwrap_or_default(),
+                    RoutingLayer::L3Inference, // Use L3 as default for confirmed
+                    confidence,
+                )
+                .with_confirmation()
+                .with_reason("User confirmed execution"))
+            }
+            ConfirmationAction::Cancel => {
+                info!("User cancelled tool execution");
+                Ok(DispatcherResult::cancelled())
+            }
+            ConfirmationAction::Timeout => {
+                warn!("Confirmation timed out");
+                Ok(DispatcherResult::error("Confirmation timed out"))
+            }
+            ConfirmationAction::EditParameters => {
+                info!("User requested parameter edit (not implemented, treating as cancel)");
+                Ok(DispatcherResult::cancelled()
+                    .with_reason("Parameter editing not yet implemented"))
+            }
+        }
+    }
+
+    // =========================================================================
+    // Async Confirmation Flow (Non-blocking)
+    // =========================================================================
+
+    /// Get the async confirmation handler
+    pub fn async_confirmation(&self) -> &Arc<AsyncConfirmationHandler> {
+        &self.async_confirmation
+    }
+
+    /// Handle confirmation asynchronously (non-blocking)
+    ///
+    /// Instead of blocking for user response, this method:
+    /// 1. Creates a pending confirmation entry
+    /// 2. Notifies Swift via `on_confirmation_needed` callback
+    /// 3. Returns `DispatcherResult` with `PendingConfirmation` action
+    ///
+    /// The caller should:
+    /// 1. Check if `result.action.is_pending()`
+    /// 2. If pending, wait for user decision via `confirm_action()` / `cancel_confirmation()`
+    /// 3. Then call `resume_with_decision()` to complete the flow
+    pub fn handle_confirmation_async(
+        &self,
+        tool: UnifiedTool,
+        response: L3RoutingResponse,
+        event_handler: &dyn AetherEventHandler,
+    ) -> Result<DispatcherResult> {
+        info!(
+            tool = %tool.name,
+            confidence = response.confidence,
+            threshold = self.confirmation.threshold(),
+            "Creating async confirmation for low-confidence match"
+        );
+
+        // Create pending confirmation state
+        let state = self.async_confirmation.create_pending(
+            tool.clone(),
+            response.parameters.clone(),
+            response.confidence,
+            response.reason.clone(),
+            RoutingLayer::L3Inference,
+        );
+
+        // Extract pending confirmation and notify Swift
+        match state {
+            ConfirmationState::Pending(ref pending) => {
+                let confirmation_id = pending.id.clone();
+                let info = pending.to_ffi();
+                event_handler.on_confirmation_needed(info);
+
+                // Return pending result - caller should wait for user decision
+                Ok(DispatcherResult::pending(
+                    confirmation_id,
+                    tool,
+                    response.parameters,
+                    RoutingLayer::L3Inference,
+                    response.confidence,
+                ))
+            }
+            ConfirmationState::Cancelled { reason } => {
+                // Store is full or other issue
+                warn!(reason = %reason, "Failed to create pending confirmation");
+                Ok(DispatcherResult::cancelled().with_reason(reason))
+            }
+            _ => {
+                // Unexpected state
+                warn!("Unexpected state from create_pending");
+                Ok(DispatcherResult::general_chat())
+            }
+        }
+    }
+
+    /// Handle unified confirmation asynchronously (non-blocking)
+    pub fn handle_unified_confirmation_async(
+        &self,
+        tool: UnifiedTool,
+        confidence: f32,
+        parameters: Option<serde_json::Value>,
+        reason: Option<String>,
+        routing_layer: RoutingLayer,
+        event_handler: &dyn AetherEventHandler,
+    ) -> Result<DispatcherResult> {
+        info!(
+            tool = %tool.name,
+            confidence = confidence,
+            threshold = self.confirmation.threshold(),
+            "Creating async confirmation for unified routing match"
+        );
+
+        let params = parameters.clone().unwrap_or_default();
+        let reason_str = reason.clone().unwrap_or_else(|| "Low confidence match".to_string());
+
+        // Create pending confirmation state
+        let state = self.async_confirmation.create_pending(
+            tool.clone(),
+            params.clone(),
+            confidence,
+            reason_str,
+            routing_layer.clone(),
+        );
+
+        // Extract pending confirmation and notify Swift
+        match state {
+            ConfirmationState::Pending(ref pending) => {
+                let confirmation_id = pending.id.clone();
+                let info = pending.to_ffi();
+                event_handler.on_confirmation_needed(info);
+
+                // Return pending result
+                Ok(DispatcherResult::pending(
+                    confirmation_id,
+                    tool,
+                    params,
+                    routing_layer,
+                    confidence,
+                ))
+            }
+            ConfirmationState::Cancelled { reason } => {
+                warn!(reason = %reason, "Failed to create pending confirmation");
+                Ok(DispatcherResult::cancelled().with_reason(reason))
+            }
+            _ => {
+                warn!("Unexpected state from create_pending");
+                Ok(DispatcherResult::general_chat())
+            }
+        }
+    }
+
+    /// Resume processing after user confirmation decision
+    ///
+    /// This method is called after Swift receives user input and calls
+    /// `confirm_action()` or `cancel_confirmation()`.
+    ///
+    /// # Arguments
+    ///
+    /// * `confirmation_id` - The confirmation ID from the pending result
+    /// * `decision` - User's decision (Execute, Cancel, EditParameters)
+    ///
+    /// # Returns
+    ///
+    /// A `DispatcherResult` based on user's decision
+    pub fn resume_with_decision(
+        &self,
+        confirmation_id: &str,
+        decision: UserConfirmationDecision,
+    ) -> Result<DispatcherResult> {
+        // Process the decision via async confirmation handler
+        let state = self.async_confirmation.resume_with_decision(confirmation_id, decision);
+
+        match state {
+            ConfirmationState::Confirmed {
+                tool,
+                parameters,
+                routing_layer,
+                confidence,
+            } => {
+                info!(tool = %tool.name, "User confirmed tool execution (async)");
+                Ok(DispatcherResult::execute(tool, parameters, routing_layer, confidence)
+                    .with_confirmation()
+                    .with_reason("User confirmed execution"))
+            }
+            ConfirmationState::Cancelled { reason } => {
+                info!(reason = %reason, "User cancelled tool execution (async)");
+                Ok(DispatcherResult::cancelled().with_reason(reason))
+            }
+            ConfirmationState::TimedOut { confirmation_id: id } => {
+                warn!(id = %id, "Confirmation timed out (async)");
+                Ok(DispatcherResult::error("Confirmation timed out"))
+            }
+            ConfirmationState::NotRequired => {
+                // This shouldn't happen if called correctly
+                warn!("resume_with_decision called but confirmation not found or not required");
+                Ok(DispatcherResult::general_chat()
+                    .with_reason("Confirmation not found"))
+            }
+            ConfirmationState::Pending(_) => {
+                // This shouldn't happen after resume_with_decision
+                warn!("Confirmation still pending after resume_with_decision");
+                Ok(DispatcherResult::error("Confirmation processing error"))
+            }
+        }
+    }
+
+    /// Get a pending confirmation by ID
+    pub fn get_pending_confirmation(&self, confirmation_id: &str) -> Option<PendingConfirmationInfo> {
+        self.async_confirmation
+            .get_pending(confirmation_id)
+            .map(|p| p.to_ffi())
+    }
+
+    /// Check if a confirmation is still pending
+    pub fn is_confirmation_pending(&self, confirmation_id: &str) -> bool {
+        self.async_confirmation.get_pending(confirmation_id).is_some()
+    }
+
+    /// Get the count of pending confirmations
+    pub fn pending_confirmation_count(&self) -> usize {
+        self.async_confirmation.pending_count()
+    }
+
+    /// Cleanup expired confirmations and notify via callback
+    ///
+    /// Returns the number of expired confirmations that were cleaned up
+    pub fn cleanup_expired_confirmations(
+        &self,
+        event_handler: &dyn AetherEventHandler,
+    ) -> usize {
+        // Cleanup expired and get their IDs
+        let expired_ids = self.async_confirmation.cleanup_expired();
+        let count = expired_ids.len();
+
+        // Notify Swift for each expired confirmation
+        for id in expired_ids {
+            event_handler.on_confirmation_expired(id);
+        }
+
+        count
     }
 }
 
@@ -823,5 +1341,99 @@ mod tests {
         assert!(l3_result.confirmation_shown);
         assert_eq!(l3_result.confidence, 0.6);
         assert_eq!(l3_result.routing_layer, RoutingLayer::L3Inference);
+    }
+
+    // ==========================================================================
+    // Phase 6: Async Confirmation Tests
+    // ==========================================================================
+
+    /// Test DispatcherAction::PendingConfirmation variant
+    #[test]
+    fn test_dispatcher_action_pending() {
+        let pending = DispatcherAction::PendingConfirmation("test-id-123".to_string());
+
+        assert!(pending.is_pending());
+        assert!(!pending.should_execute_tool());
+        assert!(!pending.should_chat());
+        assert!(!pending.is_error());
+        assert_eq!(pending.confirmation_id(), Some("test-id-123"));
+    }
+
+    /// Test DispatcherResult::pending constructor
+    #[test]
+    fn test_dispatcher_result_pending() {
+        let tool = create_test_tools().remove(0);
+        let result = DispatcherResult::pending(
+            "conf-123".to_string(),
+            tool,
+            json!({"query": "test search"}),
+            RoutingLayer::L3Inference,
+            0.6,
+        );
+
+        assert!(result.action.is_pending());
+        assert_eq!(result.action.confirmation_id(), Some("conf-123"));
+        assert!(result.tool.is_some());
+        assert_eq!(result.tool.unwrap().name, "search");
+        assert!(result.parameters.is_some());
+        assert_eq!(result.confidence, 0.6);
+        assert_eq!(result.routing_layer, RoutingLayer::L3Inference);
+        assert!(result.confirmation_shown);
+    }
+
+    /// Test async confirmation handler integration
+    #[test]
+    fn test_async_confirmation_handler_integration() {
+        use crate::dispatcher::ConfirmationConfig;
+
+        let config = DispatcherConfig {
+            enabled: true,
+            l3_enabled: true,
+            l3_timeout_ms: 5000,
+            l3_confidence_threshold: 0.3,
+            confirmation: ConfirmationConfig {
+                enabled: true,
+                threshold: 0.7,
+                timeout_ms: 30000,
+                show_parameters: true,
+                skip_native_tools: false,
+            },
+        };
+        let integration = DispatcherIntegration::new(config, None);
+
+        // Verify async confirmation handler is initialized
+        assert!(integration.async_confirmation().threshold() > 0.0);
+        assert_eq!(integration.pending_confirmation_count(), 0);
+    }
+
+    /// Test resume_with_decision flow
+    #[test]
+    fn test_resume_with_decision_not_found() {
+        let integration = DispatcherIntegration::default();
+
+        // Try to resume with non-existent confirmation
+        let result = integration.resume_with_decision("non-existent-id", UserConfirmationDecision::Execute);
+
+        assert!(result.is_ok());
+        let dispatcher_result = result.unwrap();
+        // Should return cancelled/general_chat since confirmation not found
+        assert!(!dispatcher_result.action.should_execute_tool());
+    }
+
+    /// Test get_pending_confirmation with non-existent ID
+    #[test]
+    fn test_get_pending_confirmation_not_found() {
+        let integration = DispatcherIntegration::default();
+
+        let pending = integration.get_pending_confirmation("non-existent");
+        assert!(pending.is_none());
+    }
+
+    /// Test is_confirmation_pending
+    #[test]
+    fn test_is_confirmation_pending() {
+        let integration = DispatcherIntegration::default();
+
+        assert!(!integration.is_confirmation_pending("non-existent"));
     }
 }

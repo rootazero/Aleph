@@ -105,6 +105,8 @@ pub struct AetherCore {
     conversation_manager: Arc<Mutex<crate::conversation::ConversationManager>>,
     // Unified tool registry (implement-dispatcher-layer)
     tool_registry: Arc<crate::dispatcher::ToolRegistry>,
+    // Async confirmation handler (async-confirmation-flow)
+    async_confirmation: Arc<crate::dispatcher::AsyncConfirmationHandler>,
 }
 
 impl AetherCore {
@@ -360,11 +362,19 @@ impl AetherCore {
             };
 
             let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
-            if cfg.mcp.enabled {
+
+            // Use unified tools configuration (supports both legacy and new format)
+            let unified_tools = cfg.get_effective_tools_config();
+
+            if unified_tools.enabled {
                 let mut client = crate::mcp::McpClient::new();
 
-                // Register system tools based on config
-                let tools = &cfg.tools;
+                // Log which config format is being used
+                if cfg.is_using_unified_tools() {
+                    info!("Using unified tools configuration [unified_tools]");
+                } else {
+                    debug!("Using legacy tools configuration [tools] + [mcp]");
+                }
 
                 // Helper to expand ~ in paths
                 let expand_path = |s: &str| -> PathBuf {
@@ -377,9 +387,9 @@ impl AetherCore {
                 };
 
                 // Register filesystem service
-                if tools.fs_enabled {
-                    let allowed_roots: Vec<PathBuf> = tools
-                        .allowed_roots
+                if unified_tools.is_fs_enabled() {
+                    let allowed_roots: Vec<PathBuf> = unified_tools
+                        .fs_allowed_roots()
                         .iter()
                         .map(|s| expand_path(s))
                         .collect();
@@ -390,9 +400,9 @@ impl AetherCore {
                 }
 
                 // Register git service
-                if tools.git_enabled {
-                    let allowed_repos: Vec<PathBuf> = tools
-                        .allowed_repos
+                if unified_tools.is_git_enabled() {
+                    let allowed_repos: Vec<PathBuf> = unified_tools
+                        .git_allowed_repos()
                         .iter()
                         .map(|s| expand_path(s))
                         .collect();
@@ -403,11 +413,12 @@ impl AetherCore {
                 }
 
                 // Register shell service
-                if tools.shell_enabled {
+                if unified_tools.is_shell_enabled() {
+                    let shell_config_data = unified_tools.shell_config();
                     let shell_config = ShellServiceConfig {
                         enabled: true,
-                        timeout_seconds: tools.shell_timeout_seconds,
-                        allowed_commands: tools.allowed_commands.clone(),
+                        timeout_seconds: shell_config_data.timeout_seconds,
+                        allowed_commands: shell_config_data.allowed_commands,
                     };
                     let shell_service = crate::mcp::ShellService::new(shell_config);
                     client.register_system_tool(Arc::new(shell_service));
@@ -415,21 +426,31 @@ impl AetherCore {
                 }
 
                 // Register system info service
-                if tools.system_info_enabled {
+                if unified_tools.is_system_info_enabled() {
                     let sys_info_service = crate::mcp::SystemInfoService::new();
                     client.register_system_tool(Arc::new(sys_info_service));
                     info!("Registered System Tool: SystemInfoService");
                 }
 
+                // Register MCP external servers from unified config
+                for (server_name, server_config) in unified_tools.enabled_mcp_servers() {
+                    debug!(
+                        server = %server_name,
+                        command = %server_config.command,
+                        "MCP external server configured (will be started on demand)"
+                    );
+                }
+
                 info!(
                     services = client.builtin_service_names().len(),
                     tools = client.builtin_tool_count(),
-                    "MCP client initialized"
+                    mcp_servers = unified_tools.enabled_mcp_servers().len(),
+                    "MCP client initialized with unified tools config"
                 );
 
                 Some(Arc::new(client))
             } else {
-                debug!("MCP capability disabled in config");
+                debug!("Tools capability disabled in unified config");
                 None
             }
         };
@@ -539,6 +560,9 @@ impl AetherCore {
         // Initialize unified tool registry (implement-dispatcher-layer)
         let tool_registry = Arc::new(crate::dispatcher::ToolRegistry::new());
 
+        // Initialize async confirmation handler (async-confirmation-flow)
+        let async_confirmation = Arc::new(crate::dispatcher::AsyncConfirmationHandler::new());
+
         Ok(Self {
             event_handler,
             runtime: Arc::new(runtime),
@@ -556,6 +580,7 @@ impl AetherCore {
             config_watcher,
             conversation_manager: Arc::new(Mutex::new(crate::conversation::ConversationManager::new())),
             tool_registry,
+            async_confirmation,
         })
     }
 
@@ -3976,6 +4001,82 @@ impl AetherCore {
     pub fn refresh_tools(&self) -> Result<()> {
         self.refresh_tool_registry();
         Ok(())
+    }
+
+    // =========================================================================
+    // ASYNC CONFIRMATION METHODS (async-confirmation-flow)
+    // =========================================================================
+
+    /// Confirm or cancel a pending confirmation
+    ///
+    /// Called by Swift when user makes a decision on pending confirmation.
+    /// Returns true if confirmation was found and processed, false if not found/expired.
+    pub fn confirm_action(
+        &self,
+        confirmation_id: String,
+        decision: crate::dispatcher::UserConfirmationDecision,
+    ) -> Result<bool> {
+        use crate::dispatcher::ConfirmationState;
+
+        let state = self
+            .async_confirmation
+            .resume_with_decision(&confirmation_id, decision);
+
+        match state {
+            ConfirmationState::Confirmed { tool, parameters: _, routing_layer, confidence } => {
+                info!(
+                    tool = %tool.name,
+                    confidence = confidence,
+                    layer = ?routing_layer,
+                    "Confirmation confirmed, executing tool"
+                );
+                // TODO: Execute the tool asynchronously
+                // For now, just log and return success
+                Ok(true)
+            }
+            ConfirmationState::Cancelled { reason } => {
+                info!(reason = %reason, "Confirmation cancelled");
+                Ok(true)
+            }
+            ConfirmationState::TimedOut { confirmation_id } => {
+                warn!(id = %confirmation_id, "Confirmation timed out");
+                self.event_handler.on_confirmation_expired(confirmation_id);
+                Ok(false)
+            }
+            ConfirmationState::NotRequired | ConfirmationState::Pending(_) => {
+                // Should not happen in resume_with_decision
+                Ok(false)
+            }
+        }
+    }
+
+    /// Cancel a pending confirmation by ID
+    ///
+    /// Returns true if confirmation was found and cancelled.
+    pub fn cancel_confirmation(&self, confirmation_id: String) -> bool {
+        self.async_confirmation.cancel(&confirmation_id)
+    }
+
+    /// Get pending confirmation by ID (if still valid)
+    pub fn get_pending_confirmation(
+        &self,
+        confirmation_id: String,
+    ) -> Option<crate::dispatcher::PendingConfirmationInfo> {
+        self.async_confirmation
+            .get_pending(&confirmation_id)
+            .map(|p| p.to_ffi())
+    }
+
+    /// Get count of pending confirmations
+    pub fn get_pending_confirmation_count(&self) -> u32 {
+        self.async_confirmation.pending_count() as u32
+    }
+
+    /// Cleanup expired confirmations
+    ///
+    /// Returns count of cleaned confirmations.
+    pub fn cleanup_expired_confirmations(&self) -> u32 {
+        self.async_confirmation.cleanup_expired().len() as u32
     }
 }
 

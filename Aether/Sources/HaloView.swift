@@ -104,6 +104,18 @@ struct HaloView: View {
             case .conversationInput(let sessionId, let turnCount):
                 ConversationInputView(sessionId: sessionId, turnCount: turnCount)
                     .transition(.scale.combined(with: .opacity))
+
+            case .toolConfirmation(let id, let name, let desc, let reason, let conf, let onExec, let onCancel):
+                ToolConfirmationView(
+                    confirmationId: id,
+                    toolName: name,
+                    toolDescription: desc,
+                    reason: reason,
+                    confidence: conf,
+                    onExecute: onExec,
+                    onCancel: onCancel
+                )
+                .transition(.scale.combined(with: .opacity))
             }
         }
         .frame(width: dynamicWidth, height: dynamicHeight)
@@ -161,6 +173,8 @@ struct HaloView: View {
             return "Clarification: \(request.prompt)"
         case .conversationInput(_, let turnCount):
             return "Conversation input, turn \(turnCount + 1)"
+        case .toolConfirmation(_, let name, _, _, _, _, _):
+            return "Tool confirmation: \(name)"
         }
     }
 
@@ -182,6 +196,8 @@ struct HaloView: View {
             return "Text input required"
         case .conversationInput(_, let turnCount):
             return "Turn \(turnCount + 1), text input required"
+        case .toolConfirmation(_, _, let desc, let reason, let conf, _, _):
+            return "\(desc). \(reason). Confidence: \(Int(conf * 100))%"
         default:
             return nil
         }
@@ -199,6 +215,8 @@ struct HaloView: View {
         case .clarification:
             return [.allowsDirectInteraction]
         case .conversationInput:
+            return [.allowsDirectInteraction]
+        case .toolConfirmation:
             return [.allowsDirectInteraction]
         default:
             return []
@@ -228,6 +246,8 @@ struct HaloView: View {
             return 320  // Width for clarification options
         case .conversationInput:
             return 320  // Width for conversation input
+        case .toolConfirmation:
+            return 380  // Width for tool confirmation
         default:
             return 120
         }
@@ -264,6 +284,8 @@ struct HaloView: View {
             return 140  // Height for text input
         case .conversationInput:
             return 130  // Height for conversation input (header + input + hint + padding)
+        case .toolConfirmation:
+            return 220  // Height for tool confirmation (header + confidence + reason + buttons + hints)
         default:
             return 120
         }

@@ -5,6 +5,7 @@
 //! generate a protocol/interface for each target language.
 
 use crate::clarification::{ClarificationRequest, ClarificationResult};
+use crate::dispatcher::PendingConfirmationInfo;
 
 /// Processing states for the Aether system
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +118,26 @@ pub trait AetherEventHandler: Send + Sync {
     /// * `session_id` - The ID of the ended session
     /// * `total_turns` - Total number of turns in the conversation
     fn on_conversation_ended(&self, session_id: String, total_turns: u32);
+
+    // ========================================================================
+    // Async Confirmation Callbacks (async-confirmation-flow)
+    // ========================================================================
+
+    /// Called when tool execution confirmation is needed from user.
+    ///
+    /// This is a NON-BLOCKING callback - Swift should show UI and call
+    /// `confirm_action()` when user makes a decision. This replaces the
+    /// blocking `on_clarification_needed` pattern for tool confirmations.
+    ///
+    /// # Arguments
+    /// * `confirmation` - Pending confirmation info with tool details
+    fn on_confirmation_needed(&self, confirmation: PendingConfirmationInfo);
+
+    /// Called when a pending confirmation expires (timeout).
+    ///
+    /// # Arguments
+    /// * `confirmation_id` - ID of the expired confirmation
+    fn on_confirmation_expired(&self, confirmation_id: String);
 }
 
 /// Mock event handler for testing
@@ -143,6 +164,9 @@ pub struct MockEventHandler {
     pub conversation_turns: std::sync::Arc<std::sync::Mutex<Vec<crate::conversation::ConversationTurn>>>,
     pub conversation_continuation_ready_count: std::sync::Arc<std::sync::Mutex<u32>>,
     pub conversation_ended: std::sync::Arc<std::sync::Mutex<Vec<(String, u32)>>>, // (session_id, total_turns)
+    // Async confirmation tracking
+    pub confirmations_needed: std::sync::Arc<std::sync::Mutex<Vec<PendingConfirmationInfo>>>,
+    pub confirmations_expired: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 #[cfg(test)]
@@ -167,6 +191,8 @@ impl MockEventHandler {
             conversation_turns: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             conversation_continuation_ready_count: std::sync::Arc::new(std::sync::Mutex::new(0)),
             conversation_ended: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            confirmations_needed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            confirmations_expired: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -418,6 +444,20 @@ impl AetherEventHandler for MockEventHandler {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push((session_id, total_turns));
+    }
+
+    fn on_confirmation_needed(&self, confirmation: PendingConfirmationInfo) {
+        self.confirmations_needed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(confirmation);
+    }
+
+    fn on_confirmation_expired(&self, confirmation_id: String) {
+        self.confirmations_expired
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(confirmation_id);
     }
 }
 

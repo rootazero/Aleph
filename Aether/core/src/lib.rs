@@ -98,6 +98,7 @@ pub mod video; // NEW: Video transcript extraction (YouTube)
 pub mod services; // NEW: Shared foundation services (FileOps, GitOps, SystemInfo)
 pub mod mcp; // NEW: MCP (Model Context Protocol) capability
 pub mod dispatcher; // NEW: Intelligent tool routing (Dispatcher Layer)
+pub mod routing; // NEW: Unified multi-layer routing framework
 
 // Re-export public types
 // NOTE: ImageData/ImageFormat still exported for AI provider image encoding
@@ -143,11 +144,16 @@ pub use crate::mcp::{
     McpServerType, McpServiceInfo, McpSettingsConfig, McpToolInfo,
 };
 pub use crate::dispatcher::{
-    ConfirmationAction, ConfirmationConfig, ConfirmationDecision, DispatcherAction,
-    DispatcherConfig, DispatcherIntegration, DispatcherResult, L3RoutingOptions,
-    L3RoutingResponse, L3RoutingResult, L3Router, PromptBuilder, PromptFormat, RoutingLayer,
-    ToolConfirmation, ToolFilter, ToolRegistry, ToolSource, ToolSourceType, UnifiedTool,
-    UnifiedToolInfo,
+    AsyncConfirmationConfig, AsyncConfirmationHandler, ConfirmationAction, ConfirmationConfig,
+    ConfirmationDecision, ConfirmationState, DispatcherAction, DispatcherConfig,
+    DispatcherIntegration, DispatcherResult, L3RoutingOptions, L3RoutingResponse, L3RoutingResult,
+    L3Router, PendingConfirmation, PendingConfirmationInfo, PendingConfirmationStore,
+    PromptBuilder, PromptFormat, RoutingLayer, ToolConfirmation, ToolFilter, ToolRegistry,
+    ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo, UserConfirmationDecision,
+};
+pub use crate::routing::{
+    RoutingConfig, RoutingContext as UnifiedRoutingContext, RoutingLayerType, RoutingMatch,
+    RoutingResult as UnifiedRoutingResult, UnifiedRouter,
 };
 pub use crate::utils::pii;
 

@@ -351,14 +351,28 @@ typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod13)(uint64_t, Rust
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD14
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD14
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod14)(uint64_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod14)(uint64_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD15
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD15
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod15)(uint64_t, RustBuffer, uint32_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod15)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD16
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD16
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod16)(uint64_t, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD17
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD17
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod17)(uint64_t, RustBuffer, uint32_t, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
@@ -420,10 +434,12 @@ typedef struct UniffiVTableCallbackInterfaceAetherEventHandler {
     UniffiCallbackInterfaceAetherEventHandlerMethod9 _Nonnull onTypewriterProgress;
     UniffiCallbackInterfaceAetherEventHandlerMethod10 _Nonnull onTypewriterCancelled;
     UniffiCallbackInterfaceAetherEventHandlerMethod11 _Nonnull onClarificationNeeded;
-    UniffiCallbackInterfaceAetherEventHandlerMethod12 _Nonnull onConversationStarted;
-    UniffiCallbackInterfaceAetherEventHandlerMethod13 _Nonnull onConversationTurnCompleted;
-    UniffiCallbackInterfaceAetherEventHandlerMethod14 _Nonnull onConversationContinuationReady;
-    UniffiCallbackInterfaceAetherEventHandlerMethod15 _Nonnull onConversationEnded;
+    UniffiCallbackInterfaceAetherEventHandlerMethod12 _Nonnull onConfirmationNeeded;
+    UniffiCallbackInterfaceAetherEventHandlerMethod13 _Nonnull onConfirmationExpired;
+    UniffiCallbackInterfaceAetherEventHandlerMethod14 _Nonnull onConversationStarted;
+    UniffiCallbackInterfaceAetherEventHandlerMethod15 _Nonnull onConversationTurnCompleted;
+    UniffiCallbackInterfaceAetherEventHandlerMethod16 _Nonnull onConversationContinuationReady;
+    UniffiCallbackInterfaceAetherEventHandlerMethod17 _Nonnull onConversationEnded;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceAetherEventHandler;
 
@@ -461,6 +477,16 @@ void*_Nonnull uniffi_aethecore_fn_constructor_aethercore_new(uint64_t handler, R
 void uniffi_aethecore_fn_method_aethercore_add_mcp_server(void*_Nonnull ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CANCEL_CONFIRMATION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CANCEL_CONFIRMATION
+int8_t uniffi_aethecore_fn_method_aethercore_cancel_confirmation(void*_Nonnull ptr, RustBuffer confirmation_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEANUP_EXPIRED_CONFIRMATIONS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEANUP_EXPIRED_CONFIRMATIONS
+uint32_t uniffi_aethecore_fn_method_aethercore_cleanup_expired_confirmations(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEANUP_OLD_MEMORIES
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEANUP_OLD_MEMORIES
 uint64_t uniffi_aethecore_fn_method_aethercore_cleanup_old_memories(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -474,6 +500,11 @@ uint64_t uniffi_aethecore_fn_method_aethercore_clear_memories(void*_Nonnull ptr,
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_REQUEST_CONTEXT
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_REQUEST_CONTEXT
 void uniffi_aethecore_fn_method_aethercore_clear_request_context(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CONFIRM_ACTION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CONFIRM_ACTION
+int8_t uniffi_aethecore_fn_method_aethercore_confirm_action(void*_Nonnull ptr, RustBuffer confirmation_id, RustBuffer decision, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CONTINUE_CONVERSATION
@@ -579,6 +610,16 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_config(void*_Nonnull
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MEMORY_STATS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_MEMORY_STATS
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_stats(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PENDING_CONFIRMATION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PENDING_CONFIRMATION
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_pending_confirmation(void*_Nonnull ptr, RustBuffer confirmation_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PENDING_CONFIRMATION_COUNT
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PENDING_CONFIRMATION_COUNT
+uint32_t uniffi_aethecore_fn_method_aethercore_get_pending_confirmation_count(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_ROOT_COMMANDS
@@ -1186,6 +1227,18 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_add_mcp_server(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CANCEL_CONFIRMATION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CANCEL_CONFIRMATION
+uint16_t uniffi_aethecore_checksum_method_aethercore_cancel_confirmation(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEANUP_EXPIRED_CONFIRMATIONS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEANUP_EXPIRED_CONFIRMATIONS
+uint16_t uniffi_aethecore_checksum_method_aethercore_cleanup_expired_confirmations(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEANUP_OLD_MEMORIES
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEANUP_OLD_MEMORIES
 uint16_t uniffi_aethecore_checksum_method_aethercore_cleanup_old_memories(void
@@ -1201,6 +1254,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_clear_memories(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEAR_REQUEST_CONTEXT
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEAR_REQUEST_CONTEXT
 uint16_t uniffi_aethecore_checksum_method_aethercore_clear_request_context(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CONFIRM_ACTION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CONFIRM_ACTION
+uint16_t uniffi_aethecore_checksum_method_aethercore_confirm_action(void
     
 );
 #endif
@@ -1327,6 +1386,18 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_get_memory_config(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_MEMORY_STATS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_MEMORY_STATS
 uint16_t uniffi_aethecore_checksum_method_aethercore_get_memory_stats(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PENDING_CONFIRMATION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PENDING_CONFIRMATION
+uint16_t uniffi_aethecore_checksum_method_aethercore_get_pending_confirmation(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PENDING_CONFIRMATION_COUNT
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PENDING_CONFIRMATION_COUNT
+uint16_t uniffi_aethecore_checksum_method_aethercore_get_pending_confirmation_count(void
     
 );
 #endif
@@ -1639,6 +1710,18 @@ uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_typewriter_cance
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CLARIFICATION_NEEDED
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CLARIFICATION_NEEDED
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_clarification_needed(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CONFIRMATION_NEEDED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CONFIRMATION_NEEDED
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_confirmation_needed(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CONFIRMATION_EXPIRED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CONFIRMATION_EXPIRED
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_confirmation_expired(void
     
 );
 #endif

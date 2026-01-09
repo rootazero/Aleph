@@ -64,6 +64,15 @@ enum HaloState: Equatable {
     case toast(type: ToastType, title: String, message: String, autoDismiss: Bool, onDismiss: (() -> Void)?)  // Toast notification
     case clarification(request: ClarificationRequest)  // Phantom Flow clarification (add-phantom-flow-interaction)
     case conversationInput(sessionId: String, turnCount: UInt32)  // Multi-turn conversation input (add-multi-turn-conversation)
+    case toolConfirmation(  // Async tool confirmation (Phase 6)
+        confirmationId: String,
+        toolName: String,
+        toolDescription: String,
+        reason: String,
+        confidence: Float,
+        onExecute: () -> Void,
+        onCancel: () -> Void
+    )
 
     // Equatable conformance
     static func == (lhs: HaloState, rhs: HaloState) -> Bool {
@@ -95,6 +104,10 @@ enum HaloState: Equatable {
             return req1 == req2
         case (.conversationInput(let sid1, let tc1), .conversationInput(let sid2, let tc2)):
             return sid1 == sid2 && tc1 == tc2
+        case (.toolConfirmation(let id1, let name1, let desc1, let reason1, let conf1, _, _),
+              .toolConfirmation(let id2, let name2, let desc2, let reason2, let conf2, _, _)):
+            // Closures can't be compared, so we compare other fields
+            return id1 == id2 && name1 == name2 && desc1 == desc2 && reason1 == reason2 && conf1 == conf2
         default:
             return false
         }

@@ -61,6 +61,7 @@
 //! let prompt = PromptBuilder::build_l3_routing_prompt(&tools, None);
 //! ```
 
+mod async_confirmation;
 mod confirmation;
 mod integration;
 mod l3_router;
@@ -68,6 +69,10 @@ mod prompt_builder;
 mod registry;
 mod types;
 
+pub use async_confirmation::{
+    AsyncConfirmationConfig, AsyncConfirmationHandler, ConfirmationState, PendingConfirmation,
+    PendingConfirmationInfo, PendingConfirmationStore, UserConfirmationDecision,
+};
 pub use confirmation::{
     ConfirmationAction, ConfirmationConfig, ConfirmationDecision, ToolConfirmation,
     OPTION_CANCEL, OPTION_EDIT, OPTION_EXECUTE,
