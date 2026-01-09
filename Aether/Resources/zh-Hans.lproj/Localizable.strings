@@ -482,6 +482,8 @@
 "settings.memory.delete_memory_help" = "删除此记忆";
 "settings.memory.clear_all_title" = "清除所有记忆";
 "settings.memory.clear_all_message" = "您确定要删除所有记忆吗？此操作无法撤销。";
+"settings.memory.clear_facts_title" = "清除压缩数据";
+"settings.memory.clear_facts_message" = "您确定要删除所有压缩事实吗？原始记忆将被保留。";
 "settings.memory.user_prefix" = "用户：%@";
 "settings.memory.ai_prefix" = "AI：%@";
 "settings.memory.show_more" = "显示更多";

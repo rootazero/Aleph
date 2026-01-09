@@ -492,6 +492,11 @@ uint32_t uniffi_aethecore_fn_method_aethercore_cleanup_expired_confirmations(voi
 uint64_t uniffi_aethecore_fn_method_aethercore_cleanup_old_memories(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_FACTS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_FACTS
+uint64_t uniffi_aethecore_fn_method_aethercore_clear_facts(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_MEMORIES
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_MEMORIES
 uint64_t uniffi_aethecore_fn_method_aethercore_clear_memories(void*_Nonnull ptr, RustBuffer app_bundle_id, RustBuffer window_title, RustCallStatus *_Nonnull out_status
@@ -1242,6 +1247,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_cleanup_expired_confirmatio
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEANUP_OLD_MEMORIES
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEANUP_OLD_MEMORIES
 uint16_t uniffi_aethecore_checksum_method_aethercore_cleanup_old_memories(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEAR_FACTS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEAR_FACTS
+uint16_t uniffi_aethecore_checksum_method_aethercore_clear_facts(void
     
 );
 #endif

@@ -24,6 +24,7 @@ struct MemoryView: View {
     @State private var showDeleteConfirmation = false
     @State private var memoryToDelete: MemoryEntry?
     @State private var showClearAllConfirmation = false
+    @State private var showClearFactsConfirmation = false
     @State private var showModelDownloadWindow = false
     @State private var isCheckingModel = false
 
@@ -101,6 +102,14 @@ struct MemoryView: View {
             }
         } message: {
             Text(L("settings.memory.clear_all_message"))
+        }
+        .alert(L("settings.memory.clear_facts_title"), isPresented: $showClearFactsConfirmation) {
+            Button(L("common.cancel"), role: .cancel) {}
+            Button(L("settings.memory.clear_all_button"), role: .destructive) {
+                clearAllFacts()
+            }
+        } message: {
+            Text(L("settings.memory.clear_facts_message"))
         }
         .sheet(isPresented: $showModelDownloadWindow) {
             ModelDownloadView(
@@ -330,9 +339,9 @@ struct MemoryView: View {
                 }
                 .disabled(isCompressing)
 
-                // Clear all button (same as memory browser)
+                // Clear all compressed facts button
                 ActionButton(L("settings.memory.clear_all_button"), icon: "trash.fill", style: .danger) {
-                    showClearAllConfirmation = true
+                    showClearFactsConfirmation = true
                 }
             }
 
@@ -684,6 +693,17 @@ struct MemoryView: View {
             refreshData()
         } catch {
             errorMessage = "Failed to clear memories: \(error.localizedDescription)"
+        }
+    }
+
+    private func clearAllFacts() {
+        do {
+            let deletedCount = try core.clearFacts()
+            print("[MemoryView] Cleared \(deletedCount) compressed facts")
+            // Refresh compression stats
+            loadCompressionStats()
+        } catch {
+            errorMessage = "Failed to clear facts: \(error.localizedDescription)"
         }
     }
 

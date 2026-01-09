@@ -570,6 +570,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func cleanupOldMemories() throws  -> UInt64
     
+    func clearFacts() throws  -> UInt64
+    
     func clearMemories(appBundleId: String?, windowTitle: String?) throws  -> UInt64
     
     func clearRequestContext() 
@@ -785,6 +787,13 @@ open func cleanupExpiredConfirmations() -> UInt32 {
 open func cleanupOldMemories()throws  -> UInt64 {
     return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_cleanup_old_memories(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func clearFacts()throws  -> UInt64 {
+    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_clear_facts(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -8070,6 +8079,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_cleanup_old_memories() != 47692) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_clear_facts() != 35773) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_clear_memories() != 37085) {

@@ -480,6 +480,8 @@
 "settings.memory.delete_memory_help" = "Delete this memory";
 "settings.memory.clear_all_title" = "Clear All Memories";
 "settings.memory.clear_all_message" = "Are you sure you want to delete ALL memories? This action cannot be undone.";
+"settings.memory.clear_facts_title" = "Clear Compressed Data";
+"settings.memory.clear_facts_message" = "Are you sure you want to delete all compressed facts? Raw memories will be preserved.";
 "settings.memory.user_prefix" = "User: %@";
 "settings.memory.ai_prefix" = "AI: %@";
 "settings.memory.show_more" = "Show More";

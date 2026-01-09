@@ -92,6 +92,18 @@ impl AetherCore {
             .block_on(db.clear_memories(app_bundle_id.as_deref(), window_title.as_deref()))
     }
 
+    /// Clear all compressed facts (Layer 2 data)
+    ///
+    /// This clears the memory_facts table which stores compressed/extracted
+    /// facts from raw memories. The raw memories (Layer 1) are preserved.
+    ///
+    /// # Returns
+    /// * `Result<u64>` - Number of deleted facts
+    pub fn clear_facts(&self) -> Result<u64> {
+        let db = self.require_memory_db()?;
+        self.runtime.block_on(db.clear_facts())
+    }
+
     /// Get memory configuration
     pub fn get_memory_config(&self) -> MemoryConfig {
         let config = self.lock_config();
