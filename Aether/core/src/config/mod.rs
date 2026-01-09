@@ -57,6 +57,10 @@ pub struct Config {
     /// MCP (Model Context Protocol) configuration (Tier 2: external servers)
     #[serde(default)]
     pub mcp: McpConfig,
+    /// Unified tools configuration (Phase 1 refactor: combines tools + mcp)
+    /// If present, takes precedence over legacy [tools] and [mcp] sections
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unified_tools: Option<UnifiedToolsConfig>,
     /// Trigger configuration (hotkey system refactor)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger: Option<TriggerConfig>,
@@ -1613,6 +1617,320 @@ impl Default for ToolsConfig {
     }
 }
 
+// =============================================================================
+// Unified Tools Configuration (Phase 1 Refactor: Low-coupling Architecture)
+// =============================================================================
+//
+// This unified configuration structure combines:
+// - System Tools (Tier 1: native Rust tools)
+// - MCP External Servers (Tier 2: external process tools)
+//
+// Benefits:
+// - Single source of truth for all tools configuration
+// - Cleaner TOML structure with nested tables
+// - Easier to extend with new tool types
+// - Better configuration validation
+//
+// Migration path:
+// - Old [tools] + [mcp] sections are still supported for backward compatibility
+// - New [unified_tools] section takes precedence if present
+// - Config::get_effective_tools_config() merges both formats
+
+/// Unified tools configuration (combines System Tools + MCP External Servers)
+///
+/// New TOML format:
+/// ```toml
+/// [unified_tools]
+/// enabled = true
+///
+/// [unified_tools.native.fs]
+/// enabled = true
+/// allowed_roots = ["~", "/tmp"]
+///
+/// [unified_tools.native.git]
+/// enabled = true
+/// allowed_repos = ["~/projects"]
+///
+/// [unified_tools.native.shell]
+/// enabled = false
+/// timeout_seconds = 30
+/// allowed_commands = ["ls", "cat"]
+///
+/// [unified_tools.native.system_info]
+/// enabled = true
+///
+/// [unified_tools.mcp.github]
+/// command = "node"
+/// args = ["~/.mcp/github/index.js"]
+/// requires_runtime = "node"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnifiedToolsConfig {
+    /// Master switch for all tools (both native and MCP)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Native system tools configuration
+    #[serde(default)]
+    pub native: NativeToolsConfig,
+
+    /// MCP external servers configuration (keyed by server name)
+    #[serde(default)]
+    pub mcp: HashMap<String, McpServerConfig>,
+}
+
+/// Configuration for native system tools (Tier 1)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NativeToolsConfig {
+    /// Filesystem service configuration
+    #[serde(default)]
+    pub fs: Option<FsToolConfig>,
+
+    /// Git service configuration
+    #[serde(default)]
+    pub git: Option<GitToolConfig>,
+
+    /// Shell service configuration
+    #[serde(default)]
+    pub shell: Option<ShellToolConfig>,
+
+    /// System info service configuration
+    #[serde(default)]
+    pub system_info: Option<SystemInfoToolConfig>,
+}
+
+/// Filesystem tool configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FsToolConfig {
+    /// Enable filesystem service
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Allowed filesystem roots (paths the fs service can access)
+    /// Empty means current directory only
+    #[serde(default)]
+    pub allowed_roots: Vec<String>,
+}
+
+impl Default for FsToolConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            allowed_roots: Vec::new(),
+        }
+    }
+}
+
+/// Git tool configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitToolConfig {
+    /// Enable git service
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Allowed git repositories (paths the git service can access)
+    /// Empty means current directory only
+    #[serde(default)]
+    pub allowed_repos: Vec<String>,
+}
+
+impl Default for GitToolConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            allowed_repos: Vec::new(),
+        }
+    }
+}
+
+/// Shell tool configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShellToolConfig {
+    /// Enable shell service (disabled by default for security)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Shell command timeout in seconds
+    #[serde(default = "default_shell_timeout")]
+    pub timeout_seconds: u64,
+
+    /// Allowed shell commands (whitelist for security)
+    #[serde(default = "default_shell_commands")]
+    pub allowed_commands: Vec<String>,
+}
+
+fn default_shell_commands() -> Vec<String> {
+    vec![
+        "ls".to_string(),
+        "cat".to_string(),
+        "echo".to_string(),
+        "pwd".to_string(),
+    ]
+}
+
+impl Default for ShellToolConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            timeout_seconds: default_shell_timeout(),
+            allowed_commands: default_shell_commands(),
+        }
+    }
+}
+
+/// System info tool configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemInfoToolConfig {
+    /// Enable system info service
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for SystemInfoToolConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+/// MCP external server configuration (unified format)
+///
+/// This is similar to McpExternalServerConfig but with a cleaner structure
+/// where the server name is the TOML table key instead of a field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    /// Command to execute
+    pub command: String,
+
+    /// Command arguments
+    #[serde(default)]
+    pub args: Vec<String>,
+
+    /// Environment variables
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+
+    /// Working directory
+    #[serde(default)]
+    pub cwd: Option<String>,
+
+    /// Required runtime (node, python, bun, deno)
+    #[serde(default)]
+    pub requires_runtime: Option<String>,
+
+    /// Request timeout in seconds
+    #[serde(default = "default_mcp_timeout")]
+    pub timeout_seconds: u64,
+
+    /// Enable this server (allows disabling without removing config)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for UnifiedToolsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            native: NativeToolsConfig::default(),
+            mcp: HashMap::new(),
+        }
+    }
+}
+
+impl UnifiedToolsConfig {
+    /// Create from legacy ToolsConfig and McpConfig (migration helper)
+    pub fn from_legacy(tools: &ToolsConfig, mcp: &McpConfig) -> Self {
+        let mut unified = Self {
+            enabled: mcp.enabled,
+            native: NativeToolsConfig {
+                fs: Some(FsToolConfig {
+                    enabled: tools.fs_enabled,
+                    allowed_roots: tools.allowed_roots.clone(),
+                }),
+                git: Some(GitToolConfig {
+                    enabled: tools.git_enabled,
+                    allowed_repos: tools.allowed_repos.clone(),
+                }),
+                shell: Some(ShellToolConfig {
+                    enabled: tools.shell_enabled,
+                    timeout_seconds: tools.shell_timeout_seconds,
+                    allowed_commands: tools.allowed_commands.clone(),
+                }),
+                system_info: Some(SystemInfoToolConfig {
+                    enabled: tools.system_info_enabled,
+                }),
+            },
+            mcp: HashMap::new(),
+        };
+
+        // Convert external servers to new format
+        for server in &mcp.external_servers {
+            unified.mcp.insert(
+                server.name.clone(),
+                McpServerConfig {
+                    command: server.command.clone(),
+                    args: server.args.clone(),
+                    env: server.env.clone(),
+                    cwd: server.cwd.clone(),
+                    requires_runtime: server.requires_runtime.clone(),
+                    timeout_seconds: server.timeout_seconds,
+                    enabled: true,
+                },
+            );
+        }
+
+        unified
+    }
+
+    /// Check if filesystem service is enabled
+    pub fn is_fs_enabled(&self) -> bool {
+        self.enabled && self.native.fs.as_ref().map_or(true, |c| c.enabled)
+    }
+
+    /// Check if git service is enabled
+    pub fn is_git_enabled(&self) -> bool {
+        self.enabled && self.native.git.as_ref().map_or(true, |c| c.enabled)
+    }
+
+    /// Check if shell service is enabled
+    pub fn is_shell_enabled(&self) -> bool {
+        self.enabled && self.native.shell.as_ref().map_or(false, |c| c.enabled)
+    }
+
+    /// Check if system info service is enabled
+    pub fn is_system_info_enabled(&self) -> bool {
+        self.enabled && self.native.system_info.as_ref().map_or(true, |c| c.enabled)
+    }
+
+    /// Get filesystem allowed roots
+    pub fn fs_allowed_roots(&self) -> Vec<String> {
+        self.native
+            .fs
+            .as_ref()
+            .map_or(Vec::new(), |c| c.allowed_roots.clone())
+    }
+
+    /// Get git allowed repos
+    pub fn git_allowed_repos(&self) -> Vec<String> {
+        self.native
+            .git
+            .as_ref()
+            .map_or(Vec::new(), |c| c.allowed_repos.clone())
+    }
+
+    /// Get shell configuration
+    pub fn shell_config(&self) -> ShellToolConfig {
+        self.native.shell.clone().unwrap_or_default()
+    }
+
+    /// Get all enabled MCP servers
+    pub fn enabled_mcp_servers(&self) -> Vec<(&String, &McpServerConfig)> {
+        self.mcp
+            .iter()
+            .filter(|(_, config)| config.enabled)
+            .collect()
+    }
+}
+
 /// Skills configuration (Claude Agent Skills standard)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillsConfig {
@@ -1834,6 +2152,7 @@ impl Default for Config {
             skills: SkillsConfig::default(),
             tools: ToolsConfig::default(),
             mcp: McpConfig::default(),
+            unified_tools: None, // Use legacy tools + mcp by default for backward compatibility
             trigger: Some(TriggerConfig::default()),
             smart_flow: SmartFlowConfig::default(),
             smart_matching: SmartMatchingConfig::default(),
@@ -1846,6 +2165,26 @@ impl Config {
     /// Create a new config with default values
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Get effective tools configuration (unified format)
+    ///
+    /// This method provides a unified view of tools configuration:
+    /// - If `unified_tools` is present, it takes precedence
+    /// - Otherwise, creates unified config from legacy `tools` + `mcp` sections
+    ///
+    /// This enables gradual migration from legacy config format to unified format.
+    pub fn get_effective_tools_config(&self) -> UnifiedToolsConfig {
+        if let Some(unified) = &self.unified_tools {
+            unified.clone()
+        } else {
+            UnifiedToolsConfig::from_legacy(&self.tools, &self.mcp)
+        }
+    }
+
+    /// Check if using new unified tools configuration
+    pub fn is_using_unified_tools(&self) -> bool {
+        self.unified_tools.is_some()
     }
 
     /// Get the default config path: ~/.config/aether/config.toml
@@ -3858,5 +4197,269 @@ confirmation_threshold = 0.9
         assert_eq!(config.dispatcher.l3_timeout_ms, 5000);
         assert_eq!(config.dispatcher.confirmation_timeout_ms, 30000);
         assert!(config.dispatcher.confirmation_enabled);
+    }
+
+    // =========================================================================
+    // UnifiedToolsConfig Tests (Phase 1: MCP Configuration Unification)
+    // =========================================================================
+
+    #[test]
+    fn test_unified_tools_config_defaults() {
+        let config = UnifiedToolsConfig::default();
+
+        // Default enabled is true
+        assert!(config.enabled);
+
+        // Native tools should have empty defaults
+        assert!(config.native.fs.is_none());
+        assert!(config.native.git.is_none());
+        assert!(config.native.shell.is_none());
+        assert!(config.native.system_info.is_none());
+
+        // MCP servers should be empty
+        assert!(config.mcp.is_empty());
+    }
+
+    #[test]
+    fn test_unified_tools_config_helper_methods() {
+        let mut config = UnifiedToolsConfig::default();
+
+        // By default (None), native tools fall back to defaults:
+        // fs, git, system_info default to true when not specified
+        // shell defaults to false when not specified (for security)
+        assert!(config.is_fs_enabled()); // defaults to true
+        assert!(config.is_git_enabled()); // defaults to true
+        assert!(!config.is_shell_enabled()); // defaults to false (security)
+        assert!(config.is_system_info_enabled()); // defaults to true
+
+        // Explicitly disable fs tool
+        config.native.fs = Some(FsToolConfig {
+            enabled: false,
+            allowed_roots: vec![],
+        });
+        assert!(!config.is_fs_enabled());
+
+        // Re-enable fs tool
+        config.native.fs = Some(FsToolConfig {
+            enabled: true,
+            allowed_roots: vec!["~".to_string()],
+        });
+        assert!(config.is_fs_enabled());
+
+        // Explicitly enable shell tool (disabled by default)
+        config.native.shell = Some(ShellToolConfig {
+            enabled: true,
+            timeout_seconds: 30,
+            allowed_commands: vec![],
+        });
+        assert!(config.is_shell_enabled());
+
+        // Test master switch - disable all
+        config.enabled = false;
+        assert!(!config.is_fs_enabled()); // master switch off
+        assert!(!config.is_shell_enabled()); // master switch off
+
+        // Re-enable master switch
+        config.enabled = true;
+        assert!(config.is_fs_enabled());
+        assert!(config.is_shell_enabled());
+    }
+
+    #[test]
+    fn test_unified_tools_config_from_legacy() {
+        // Create legacy ToolsConfig
+        let tools = ToolsConfig {
+            fs_enabled: true,
+            allowed_roots: vec![],
+            git_enabled: false,
+            allowed_repos: vec![],
+            shell_enabled: true,
+            allowed_commands: vec![],
+            shell_timeout_seconds: 30,
+            system_info_enabled: false,
+        };
+
+        // Create legacy McpConfig with some servers
+        let mut mcp = McpConfig::default();
+        mcp.enabled = true;
+        mcp.external_servers.push(McpExternalServerConfig {
+            name: "github".to_string(),
+            command: "node".to_string(),
+            args: vec!["~/.mcp/github/index.js".to_string()],
+            env: HashMap::new(),
+            cwd: None,
+            requires_runtime: Some("node".to_string()),
+            timeout_seconds: 30,
+        });
+
+        // Convert to unified config
+        let unified = UnifiedToolsConfig::from_legacy(&tools, &mcp);
+
+        // Verify enabled is inherited from MCP
+        assert!(unified.enabled);
+
+        // Verify native tools are converted correctly
+        assert!(unified.is_fs_enabled());
+        assert!(!unified.is_git_enabled());
+        assert!(unified.is_shell_enabled());
+        assert!(!unified.is_system_info_enabled());
+
+        // Verify MCP servers are copied
+        assert_eq!(unified.mcp.len(), 1);
+        assert!(unified.mcp.contains_key("github"));
+    }
+
+    #[test]
+    fn test_unified_tools_config_toml_parsing() {
+        let toml_str = r#"
+[unified_tools]
+enabled = true
+
+[unified_tools.native.fs]
+enabled = true
+allowed_roots = ["~", "/tmp"]
+
+[unified_tools.native.git]
+enabled = false
+allowed_repos = []
+
+[unified_tools.native.shell]
+enabled = true
+timeout_seconds = 60
+allowed_commands = []
+
+[unified_tools.mcp.github]
+command = "node"
+args = ["~/.mcp/github/index.js"]
+"#;
+
+        let config: Config = toml::from_str(toml_str).expect("Should parse");
+
+        let unified = config.unified_tools.expect("Should have unified_tools");
+        assert!(unified.enabled);
+
+        // Native tools
+        let fs = unified.native.fs.expect("Should have fs config");
+        assert!(fs.enabled);
+        assert_eq!(fs.allowed_roots, vec!["~", "/tmp"]);
+
+        let git = unified.native.git.expect("Should have git config");
+        assert!(!git.enabled);
+
+        let shell = unified.native.shell.expect("Should have shell config");
+        assert!(shell.enabled);
+        assert_eq!(shell.timeout_seconds, 60);
+
+        // MCP servers
+        assert_eq!(unified.mcp.len(), 1);
+        let github = unified.mcp.get("github").expect("Should have github server");
+        assert_eq!(github.command, "node");
+        assert_eq!(github.args, vec!["~/.mcp/github/index.js"]);
+    }
+
+    #[test]
+    fn test_get_effective_tools_config_uses_unified_when_present() {
+        let toml_str = r#"
+[tools]
+fs_enabled = false
+git_enabled = false
+
+[unified_tools]
+enabled = true
+
+[unified_tools.native.fs]
+enabled = true
+allowed_roots = ["~"]
+"#;
+
+        let config: Config = toml::from_str(toml_str).expect("Should parse");
+        let effective = config.get_effective_tools_config();
+
+        // Should use unified_tools (fs enabled), not legacy tools (fs disabled)
+        assert!(effective.enabled);
+        assert!(effective.is_fs_enabled());
+    }
+
+    #[test]
+    fn test_get_effective_tools_config_falls_back_to_legacy() {
+        let toml_str = r#"
+[tools]
+fs_enabled = true
+git_enabled = false
+shell_enabled = true
+system_info_enabled = false
+
+[mcp]
+enabled = true
+
+[[mcp.external_servers]]
+name = "github"
+command = "node"
+args = ["~/.mcp/github/index.js"]
+"#;
+
+        let config: Config = toml::from_str(toml_str).expect("Should parse");
+
+        // No unified_tools section, should fall back to legacy
+        assert!(config.unified_tools.is_none());
+
+        let effective = config.get_effective_tools_config();
+
+        // Should convert legacy to unified format
+        assert!(effective.enabled);
+        assert!(effective.is_fs_enabled());
+        assert!(!effective.is_git_enabled());
+        assert!(effective.is_shell_enabled());
+        assert!(!effective.is_system_info_enabled());
+
+        // MCP servers should be copied
+        assert_eq!(effective.mcp.len(), 1);
+        assert!(effective.mcp.contains_key("github"));
+    }
+
+    #[test]
+    fn test_unified_tools_config_serialization_round_trip() {
+        let mut config = UnifiedToolsConfig::default();
+        config.enabled = true;
+        config.native.fs = Some(FsToolConfig {
+            enabled: true,
+            allowed_roots: vec!["~".to_string(), "/home".to_string()],
+        });
+        config.native.shell = Some(ShellToolConfig {
+            enabled: true,
+            timeout_seconds: 45,
+            allowed_commands: vec![],
+        });
+        config.mcp.insert(
+            "test-server".to_string(),
+            McpServerConfig {
+                command: "/usr/local/bin/test".to_string(),
+                args: vec![],
+                env: HashMap::new(),
+                cwd: None,
+                requires_runtime: None,
+                timeout_seconds: 30,
+                enabled: true,
+            },
+        );
+
+        // Serialize to TOML
+        let toml_str = toml::to_string_pretty(&config).expect("Should serialize");
+
+        // Deserialize back
+        let deserialized: UnifiedToolsConfig =
+            toml::from_str(&toml_str).expect("Should deserialize");
+
+        // Verify round-trip
+        assert_eq!(deserialized.enabled, config.enabled);
+        assert!(deserialized.is_fs_enabled());
+        assert!(deserialized.is_shell_enabled());
+        assert_eq!(deserialized.mcp.len(), 1);
+
+        let fs = deserialized.native.fs.expect("Should have fs");
+        assert_eq!(fs.allowed_roots, vec!["~", "/home"]);
+
+        let shell = deserialized.native.shell.expect("Should have shell");
+        assert_eq!(shell.timeout_seconds, 45);
     }
 }

@@ -752,7 +752,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(onConfigChanged),
-            name: NSNotification.Name("AetherConfigSavedInternally"),
+            name: .aetherConfigSavedInternally,
             object: nil
         )
 

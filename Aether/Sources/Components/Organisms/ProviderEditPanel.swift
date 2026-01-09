@@ -984,7 +984,7 @@ struct ProviderEditPanel: View {
                     // Notify that configuration was saved internally
                     // This prevents ConfigWatcher from triggering a full view rebuild
                     NotificationCenter.default.post(
-                        name: NSNotification.Name("AetherConfigSavedInternally"),
+                        name: .aetherConfigSavedInternally,
                         object: savedProviderName  // Pass the saved provider name
                     )
                 }

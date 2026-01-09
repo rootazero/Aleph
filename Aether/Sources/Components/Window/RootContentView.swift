@@ -102,10 +102,10 @@ struct RootContentView: View {
                 loadProviders()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("AetherConfigDidChange"))) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .aetherConfigDidChange)) { _ in
             handleExternalConfigChange()
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("AetherConfigSavedInternally"))) { notification in
+        .onReceive(NotificationCenter.default.publisher(for: .aetherConfigSavedInternally)) { notification in
             handleInternalConfigSave(providerName: notification.object as? String)
         }
     }

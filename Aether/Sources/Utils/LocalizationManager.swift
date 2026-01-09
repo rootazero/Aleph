@@ -107,7 +107,7 @@ final class LocalizationManager {
 
             // Post notification for UI refresh
             NotificationCenter.default.post(
-                name: NSNotification.Name("LocalizationDidChange"),
+                name: .localizationDidChange,
                 object: nil
             )
         }

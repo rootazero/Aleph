@@ -13,11 +13,6 @@
 import Foundation
 import AppKit
 
-/// Notification posted when FPS drops below threshold
-extension Notification.Name {
-    static let performanceDropDetected = Notification.Name("AetherPerformanceDropDetected")
-}
-
 /// Monitors rendering performance (simplified version for macOS 15+)
 class PerformanceMonitor {
     // MARK: - Properties

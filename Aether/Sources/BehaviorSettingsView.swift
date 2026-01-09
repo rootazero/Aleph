@@ -409,7 +409,7 @@ struct BehaviorSettingsView: View {
 
                 // Post notification for other components
                 NotificationCenter.default.post(
-                    name: NSNotification.Name("AetherConfigSavedInternally"),
+                    name: .aetherConfigSavedInternally,
                     object: nil
                 )
             }
