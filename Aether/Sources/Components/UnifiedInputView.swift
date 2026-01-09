@@ -53,7 +53,7 @@ struct UnifiedInputView: View {
         (NSApplication.shared.delegate as? AppDelegate)?.core
     }
 
-    // MARK: - Colors
+    // MARK: - Colors & Appearance
 
     /// Text color - white for dark background
     private let textColor = Color.white
@@ -63,6 +63,12 @@ struct UnifiedInputView: View {
 
     /// Accent color for input field border
     private let accentColor = Color.accentColor
+
+    /// Outer glow color (subtle cyan/blue tint)
+    private let glowColor = Color(red: 0.4, green: 0.6, blue: 0.9)
+
+    /// Inner highlight color for 3D effect
+    private let innerHighlightColor = Color.white
 
     // MARK: - Body
 
@@ -86,9 +92,58 @@ struct UnifiedInputView: View {
             }
         }
         .frame(width: 480)
-        .background(backgroundColor.opacity(0.95))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 6)
+        // Background with subtle gradient for 3D depth effect
+        .background(
+            ZStack {
+                // Base background
+                backgroundColor.opacity(0.95)
+
+                // Top inner highlight for raised effect
+                LinearGradient(
+                    colors: [
+                        innerHighlightColor.opacity(0.08),
+                        innerHighlightColor.opacity(0.02),
+                        Color.clear
+                    ],
+                    startPoint: .top,
+                    endPoint: .center
+                )
+
+                // Bottom shadow gradient for depth
+                LinearGradient(
+                    colors: [
+                        Color.clear,
+                        Color.black.opacity(0.1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        // Subtle border for definition
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            innerHighlightColor.opacity(0.15),
+                            innerHighlightColor.opacity(0.05),
+                            Color.clear
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 1
+                )
+        )
+        // Multi-layer shadow for depth and glow
+        // Layer 1: Outer glow (subtle halo effect)
+        .shadow(color: glowColor.opacity(0.12), radius: 20, x: 0, y: 0)
+        // Layer 2: Ambient shadow
+        .shadow(color: .black.opacity(0.2), radius: 16, x: 0, y: 4)
+        // Layer 3: Strong bottom shadow for grounding
+        .shadow(color: .black.opacity(0.35), radius: 12, x: 0, y: 8)
         .onChange(of: inputText) { _, newValue in
             print("[UnifiedInputView] onChange triggered: '\(newValue)'")
             handleTextChange(newValue)

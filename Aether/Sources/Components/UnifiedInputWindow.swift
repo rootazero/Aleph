@@ -35,6 +35,20 @@ final class UnifiedInputWindow: NSWindow {
     /// Base height (header + input + hints + padding)
     private static let baseHeight: CGFloat = 100
 
+    // MARK: - Animation Constants
+
+    /// Duration for show animation
+    private static let showAnimationDuration: TimeInterval = 0.25
+
+    /// Duration for hide animation
+    private static let hideAnimationDuration: TimeInterval = 0.2
+
+    /// Initial scale for show animation (starts smaller, scales up)
+    private static let initialScale: CGFloat = 0.92
+
+    /// Initial Y offset for show animation (starts below, moves up)
+    private static let initialYOffset: CGFloat = 12
+
     // MARK: - State
 
     /// SubPanel state for dynamic content
@@ -149,17 +163,33 @@ final class UnifiedInputWindow: NSWindow {
         // Center on screen
         centerOnScreen()
 
-        // Show with fade-in
+        // Store final position for animation
+        let finalFrame = frame
+
+        // Setup initial state for animation (scaled down, offset, transparent)
+        let scaleFactor = Self.initialScale
+        let scaledWidth = finalFrame.width * scaleFactor
+        let scaledHeight = finalFrame.height * scaleFactor
+        let initialFrame = NSRect(
+            x: finalFrame.midX - scaledWidth / 2,
+            y: finalFrame.midY - scaledHeight / 2 - Self.initialYOffset,
+            width: scaledWidth,
+            height: scaledHeight
+        )
+
         alphaValue = 0
+        setFrame(initialFrame, display: false)
         orderFrontRegardless()
 
+        // Animate to final state with smooth spring-like timing
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.duration = Self.showAnimationDuration
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.34, 1.56, 0.64, 1)
             self.animator().alphaValue = 1
+            self.animator().setFrame(finalFrame, display: true)
         }
 
-        // Activate window for text input after a short delay
+        // Activate window for text input after animation starts
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             NSApp.activate(ignoringOtherApps: true)
             self?.makeKeyAndOrderFront(nil)
@@ -174,16 +204,29 @@ final class UnifiedInputWindow: NSWindow {
         setupContentView()
     }
 
-    /// Hide the window with fade-out animation
+    /// Hide the window with smooth fade-out and scale animation
     func hideWindow() {
         NSLog("[UnifiedInputWindow] hide")
 
         removeKeyMonitors()
 
+        // Calculate scaled-down frame for exit animation
+        let currentFrame = frame
+        let scaleFactor = Self.initialScale
+        let scaledWidth = currentFrame.width * scaleFactor
+        let scaledHeight = currentFrame.height * scaleFactor
+        let exitFrame = NSRect(
+            x: currentFrame.midX - scaledWidth / 2,
+            y: currentFrame.midY - scaledHeight / 2 - Self.initialYOffset / 2,
+            width: scaledWidth,
+            height: scaledHeight
+        )
+
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.15
-            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            context.duration = Self.hideAnimationDuration
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 1, 1)
             self.animator().alphaValue = 0
+            self.animator().setFrame(exitFrame, display: true)
         }, completionHandler: { [weak self] in
             self?.orderOut(nil)
         })
