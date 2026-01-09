@@ -147,12 +147,18 @@ final class UnifiedInputCoordinator {
 
     // MARK: - Notification Handlers
 
-    /// Handle conversation turn completion - hide SubPanel and processing indicator
+    /// Handle conversation turn completion - hide SubPanel, processing indicator, and update turn count
     @objc private func onConversationTurnCompleted(_ notification: Notification) {
-        print("[UnifiedInputCoordinator] Conversation turn completed, hiding SubPanel and processing indicator")
+        print("[UnifiedInputCoordinator] Conversation turn completed (turn \(currentTurnCount)), hiding SubPanel and processing indicator")
         DispatchQueue.main.async { [weak self] in
-            self?.subPanelState.hide()
-            self?.haloWindowController?.hide()
+            guard let self = self else { return }
+            self.subPanelState.hide()
+            self.haloWindowController?.hide()
+
+            // Update window to show next turn number
+            if let sessionId = self.currentSessionId {
+                self.unifiedInputWindow.updateSession(sessionId: sessionId, turnCount: self.currentTurnCount)
+            }
         }
     }
 
