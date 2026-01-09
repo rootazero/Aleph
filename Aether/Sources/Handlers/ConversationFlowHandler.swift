@@ -19,6 +19,12 @@ import AppKit
 @MainActor
 final class ConversationFlowHandler: KeyboardFlowHandler {
 
+    // MARK: - Static Properties
+
+    /// Whether unified input mode is currently active
+    /// When true, this handler skips notification handling to avoid window overlap
+    nonisolated(unsafe) static var isUnifiedInputModeActive: Bool = false
+
     // MARK: - Properties
 
     /// Whether this handler is currently active
@@ -113,6 +119,12 @@ final class ConversationFlowHandler: KeyboardFlowHandler {
 
     /// Show conversation input UI at screen center
     func showConversationInput(sessionId: String) {
+        // Skip if unified input mode is handling conversation
+        if Self.isUnifiedInputModeActive {
+            NSLog("[ConversationFlowHandler] Skipped - UnifiedInputMode is active")
+            return
+        }
+
         guard let window = window else { return }
 
         let turnCount = conversationManager.turnCount

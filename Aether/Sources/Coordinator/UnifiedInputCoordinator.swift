@@ -88,6 +88,9 @@ final class UnifiedInputCoordinator {
     /// Used when keepWindowVisibleDuringProcessing setting is false
     private var windowHiddenForProcessing: Bool = false
 
+    /// Stored cursor position when unified input started (for processing indicator position in Mode B)
+    private var storedCursorPosition: NSPoint?
+
     /// Unified input window (independent from HaloWindow)
     /// Can coexist with HaloWindow's processing indicator
     private lazy var unifiedInputWindow: UnifiedInputWindow = {
@@ -271,6 +274,7 @@ final class UnifiedInputCoordinator {
             // Cursor is in an input field - show unified input at caret position
             print("[UnifiedInputCoordinator] ✅ Cursor focused in: \(info.bundleId)")
             targetAppInfo = info
+            storedCursorPosition = info.caretPosition  // Store for processing indicator
             showUnifiedInput(at: info.caretPosition)
 
         case .notFocused:
@@ -283,12 +287,14 @@ final class UnifiedInputCoordinator {
             print("[UnifiedInputCoordinator] ⚠️ Accessibility permission denied, using mouse position")
             showAccessibilityWarningToast()
             let mousePosition = NSEvent.mouseLocation
+            storedCursorPosition = mousePosition  // Store for processing indicator
             showUnifiedInput(at: mousePosition)
 
         case .unknownError(let error):
             // Error during detection - fall back to mouse position
             print("[UnifiedInputCoordinator] ⚠️ Focus detection error: \(error.localizedDescription), using mouse position")
             let mousePosition = NSEvent.mouseLocation
+            storedCursorPosition = mousePosition  // Store for processing indicator
             showUnifiedInput(at: mousePosition)
         }
     }
@@ -323,6 +329,9 @@ final class UnifiedInputCoordinator {
     /// - Parameter position: Screen position (not used - window is centered)
     private func showUnifiedInput(at position: NSPoint) {
         print("[UnifiedInputCoordinator] Showing unified input")
+
+        // Disable ConversationFlowHandler during unified input to prevent window overlap
+        ConversationFlowHandler.isUnifiedInputModeActive = true
 
         // Generate a new session ID for this conversation
         currentSessionId = UUID().uuidString
@@ -549,10 +558,14 @@ final class UnifiedInputCoordinator {
     func exitUnifiedInput() {
         print("[UnifiedInputCoordinator] Exiting unified input mode")
 
+        // Re-enable ConversationFlowHandler
+        ConversationFlowHandler.isUnifiedInputModeActive = false
+
         // Clear state
         currentSessionId = nil
         currentTurnCount = 0
         targetAppInfo = nil
+        storedCursorPosition = nil
 
         // Hide unified input window
         unifiedInputWindow.hideWindow()
@@ -629,21 +642,24 @@ final class UnifiedInputCoordinator {
     /// Show processing indicator using HaloWindow's .processing state
     ///
     /// Behavior depends on `keepWindowVisibleDuringProcessing` setting:
-    /// - Mode A (true): Keep UnifiedInputWindow visible, show HaloWindow near it
-    /// - Mode B (false): Hide UnifiedInputWindow, show HaloWindow at screen center
+    /// - Mode A (true): Keep UnifiedInputWindow visible, hide SubPanel, show HaloWindow near it
+    /// - Mode B (false): Hide UnifiedInputWindow, show HaloWindow at stored cursor position
     private func showProcessingIndicator() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
             let keepVisible = self.getKeepWindowVisibleSetting()
 
-            if !keepVisible {
+            if keepVisible {
+                // Mode A: Window stays visible, but hide SubPanel to clear "发送请求" status
+                self.subPanelState.hide()
+            } else {
                 // Mode B: Hide UnifiedInputWindow during processing
                 self.windowHiddenForProcessing = true
                 self.unifiedInputWindow.hideWindow()
             }
 
-            // Position HaloWindow: near unified input window (Mode A) or screen center (Mode B)
+            // Position HaloWindow based on mode
             let position: NSPoint
             if keepVisible, let windowFrame = self.unifiedInputWindow.frame as NSRect? {
                 // Mode A: Position near the unified input window
@@ -652,8 +668,10 @@ final class UnifiedInputCoordinator {
                     y: windowFrame.maxY - 80   // Top of unified input
                 )
             } else {
-                // Mode B: Use screen center when window is hidden
-                if let screenFrame = NSScreen.main?.visibleFrame {
+                // Mode B: Use stored cursor position (not screen center)
+                if let stored = self.storedCursorPosition {
+                    position = stored
+                } else if let screenFrame = NSScreen.main?.visibleFrame {
                     position = NSPoint(x: screenFrame.midX, y: screenFrame.midY)
                 } else {
                     position = NSEvent.mouseLocation
