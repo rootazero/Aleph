@@ -168,6 +168,7 @@ struct ProviderCard: View {
             contextMenuItems
         }
         .help(provider.name)
+        .accessibilityIdentifier("ProviderCard")
     }
 
     // MARK: - View Builders

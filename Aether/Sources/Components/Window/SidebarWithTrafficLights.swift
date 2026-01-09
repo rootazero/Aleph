@@ -90,6 +90,7 @@ struct SidebarWithTrafficLights: View {
                             iconName: item.iconName,
                             title: item.title,
                             isSelected: selectedTab == item.tab,
+                            accessibilityId: item.accessibilityId,
                             action: { selectedTab = item.tab }
                         )
                     }
@@ -112,6 +113,7 @@ struct SidebarWithTrafficLights: View {
             .padding(.top, 8)          // Top padding 8pt to match background
         }
         .frame(width: 220)
+        .accessibilityIdentifier("ModernSidebar")
     }
 
     // MARK: - Helpers
@@ -211,6 +213,21 @@ private struct NavigationItemConfig {
     var title: String {
         L(titleKey)
     }
+
+    /// Accessibility identifier for UI testing
+    var accessibilityId: String {
+        switch tab {
+        case .general: return "General"
+        case .providers: return "Providers"
+        case .routing: return "Routing"
+        case .shortcuts: return "Shortcuts"
+        case .behavior: return "Behavior"
+        case .memory: return "Memory"
+        case .search: return "Search"
+        case .mcp: return "MCP"
+        case .skills: return "Skills"
+        }
+    }
 }
 
 // MARK: - Sidebar Navigation Item
@@ -222,6 +239,7 @@ private struct SidebarNavigationItem: View {
     let iconName: String
     let title: String
     let isSelected: Bool
+    let accessibilityId: String
     let action: () -> Void
 
     @State private var isHovered = false
@@ -247,6 +265,8 @@ private struct SidebarNavigationItem: View {
             .foregroundColor(foregroundColor)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier(accessibilityId)
+        .accessibilityAddTraits(.isButton)
         .onHover { hovering in
             isHovered = hovering
         }

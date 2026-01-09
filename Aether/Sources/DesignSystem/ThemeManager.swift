@@ -32,6 +32,18 @@ enum ThemeMode: String, CaseIterable {
         }
     }
 
+    /// Accessibility identifier for UI testing
+    var accessibilityId: String {
+        switch self {
+        case .light:
+            return "LightModeButton"
+        case .dark:
+            return "DarkModeButton"
+        case .auto:
+            return "AutoModeButton"
+        }
+    }
+
     /// Convert to NSAppearance
     var appearance: NSAppearance? {
         switch self {

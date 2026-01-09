@@ -68,6 +68,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         DependencyContainer.shared.clipboardMonitor
     }
 
+    /// Check if running in UI testing mode
+    private var isUITesting: Bool {
+        CommandLine.arguments.contains("--uitesting")
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hide from Dock (menu bar only)
         NSApp.setActivationPolicy(.accessory)
@@ -81,6 +86,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Set up menu bar
         setupMenuBar()
+
+        // UI Testing mode: Skip permission gate and open settings directly
+        if isUITesting {
+            print("[Aether] UI Testing mode detected, skipping permission gate")
+            DispatchQueue.mainAsyncAfter(delay: 0.3, weakRef: self) { slf in
+                slf.initializeRustCore()
+                // Open settings window for UI tests
+                DispatchQueue.mainAsyncAfter(delay: 0.5, weakRef: slf) { s in
+                    s.showSettings()
+                }
+            }
+            return
+        }
 
         // CRITICAL FIX: Delay permission check to allow macOS to sync permission state
         // macOS needs time to update permission status after app launch
@@ -275,22 +293,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     @objc private func showSettings() {
-        // Block settings access if permission gate is active
-        if isPermissionGateActive {
-            print("[Aether] Settings blocked - permission gate is active")
-            return
-        }
+        // Skip checks in UI testing mode
+        if !isUITesting {
+            // Block settings access if permission gate is active
+            if isPermissionGateActive {
+                print("[Aether] Settings blocked - permission gate is active")
+                return
+            }
 
-        // CRITICAL: Check if core is initialized before opening settings
-        guard let core = core else {
-            print("[Aether] ERROR: Core not initialized, cannot open settings")
-            eventHandler?.showToast(
-                type: .warning,
-                title: L("error.core_not_initialized"),
-                message: L("error.core_not_initialized.suggestion"),
-                autoDismiss: false
-            )
-            return
+            // CRITICAL: Check if core is initialized before opening settings
+            guard core != nil else {
+                print("[Aether] ERROR: Core not initialized, cannot open settings")
+                eventHandler?.showToast(
+                    type: .warning,
+                    title: L("error.core_not_initialized"),
+                    message: L("error.core_not_initialized.suggestion"),
+                    autoDismiss: false
+                )
+                return
+            }
         }
 
         // GHOST MODE: Stay in accessory mode (no Dock icon)
@@ -323,6 +344,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         let hostingController = NSHostingController(rootView: settingsView)
         hostingController.sizingOptions = []  // Disable auto-sizing
 
+        // UI Testing Mode: Use standard NSWindow for XCTest accessibility detection
+        // NSPanel with nonactivatingPanel style is invisible to XCTest
+        if isUITesting {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 980, height: 750),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                backing: .buffered,
+                defer: false
+            )
+
+            window.title = "Settings"
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.contentViewController = hostingController
+            window.identifier = NSUserInterfaceItemIdentifier("SettingsWindow")
+            window.minSize = NSSize(width: 980, height: 750)
+            window.center()
+            window.isReleasedWhenClosed = false
+            window.delegate = self
+
+            settingsWindow = window
+
+            // Show window and activate app for XCTest
+            NSApp.setActivationPolicy(.regular)
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
         // GHOST MODE: Use NSPanel instead of NSWindow
         // NSPanel can receive keyboard events even when app is in accessory mode
         // This allows Cmd+V/C/X to work without showing Dock icon
@@ -337,6 +387,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         panel.titlebarAppearsTransparent = true
         panel.titleVisibility = .hidden
         panel.contentViewController = hostingController
+
+        // Accessibility identifier for UI testing
+        panel.identifier = NSUserInterfaceItemIdentifier("SettingsWindow")
 
         // Set size constraints
         panel.minSize = NSSize(width: 980, height: 750)

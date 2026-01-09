@@ -23,6 +23,7 @@ struct ThemeSwitcher: View {
             RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small)
                 .stroke(DesignTokens.Colors.border, lineWidth: 1)
         )
+        .accessibilityIdentifier("ThemeSwitcher")
     }
 
     // MARK: - View Builders
@@ -54,6 +55,8 @@ struct ThemeSwitcher: View {
         }
         .buttonStyle(.plain)
         .help(mode.displayName)
+        .accessibilityIdentifier(mode.accessibilityId)
+        .accessibilityAddTraits(.isButton)
     }
 }
 
