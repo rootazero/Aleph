@@ -196,6 +196,9 @@ final class SubPanelState: ObservableObject {
         }
     }
 
+    /// Whether AI is currently processing (shows theme indicator)
+    @Published var isProcessing: Bool = false
+
     // MARK: - Height Calculation
 
     /// Maximum height for the SubPanel
@@ -343,6 +346,18 @@ final class SubPanelState: ObservableObject {
     func getSelectedOptions() -> [SelectorOption] {
         guard case .selector(let options, _, _) = mode else { return [] }
         return options.filter { $0.isSelected }
+    }
+
+    // MARK: - Processing State
+
+    /// Start processing (shows theme indicator)
+    func startProcessing() {
+        isProcessing = true
+    }
+
+    /// Stop processing (hides theme indicator)
+    func stopProcessing() {
+        isProcessing = false
     }
 
     // MARK: - CLI Output

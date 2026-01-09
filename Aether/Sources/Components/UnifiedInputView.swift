@@ -72,6 +72,12 @@ struct UnifiedInputView: View {
             mainInputArea
                 .padding(12)
 
+            // Processing indicator (shown when AI is thinking)
+            if subPanelState.isProcessing {
+                processingIndicator
+                    .padding(.vertical, 8)
+            }
+
             // SubPanel (conditionally shown)
             if subPanelState.mode.isVisible {
                 SubPanelView(
@@ -164,6 +170,24 @@ struct UnifiedInputView: View {
         }
     }
 
+    // MARK: - Processing Indicator
+
+    /// Processing indicator view (theme icon animation)
+    private var processingIndicator: some View {
+        HStack(spacing: 12) {
+            // Spinning circle animation
+            ProcessingSpinner()
+                .frame(width: 24, height: 24)
+
+            Text(L("unified.processing"))
+                .font(.system(size: 12))
+                .foregroundColor(textColor.opacity(0.7))
+
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+    }
+
     // MARK: - Actions
 
     private func handleSubmit() {
@@ -244,7 +268,30 @@ private func fallbackString(for key: String) -> String {
     case "unified.placeholder": return "输入对话或命令..."
     case "unified.enter_to_send": return "Enter 发送"
     case "unified.command_mode": return "命令模式"
+    case "unified.processing": return "AI 思考中..."
     default: return key
+    }
+}
+
+// MARK: - Processing Spinner
+
+/// Spinning indicator for processing state
+private struct ProcessingSpinner: View {
+    @State private var rotation: Double = 0
+
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: 0.7)
+            .stroke(
+                Color.accentColor,
+                style: StrokeStyle(lineWidth: 2.5, lineCap: .round)
+            )
+            .rotationEffect(.degrees(rotation))
+            .onAppear {
+                withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
+                    rotation = 360
+                }
+            }
     }
 }
 

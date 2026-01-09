@@ -394,8 +394,9 @@ final class UnifiedInputCoordinator {
             return
         }
 
-        // Start CLI output in SubPanel (keep unified input window visible)
+        // Start processing indicator and CLI output in SubPanel
         DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.haloWindowController?.window?.viewModel.subPanelState.startProcessing()
             slf.startCLIOutput()
             slf.appendCLIOutput(L("subpanel.cli.sending"), type: .command)
         }
@@ -442,8 +443,9 @@ final class UnifiedInputCoordinator {
         // Build the full input for routing
         let fullInput = "/\(commandKey) \(content)"
 
-        // Start CLI output in SubPanel (keep unified input window visible)
+        // Start processing indicator and CLI output in SubPanel
         DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.haloWindowController?.window?.viewModel.subPanelState.startProcessing()
             slf.startCLIOutput()
             slf.appendCLIOutput("/\(commandKey)", type: .command)
             slf.appendThinkingOutput(L("subpanel.cli.routing"))
@@ -481,16 +483,11 @@ final class UnifiedInputCoordinator {
             } catch {
                 print("[UnifiedInputCoordinator] ❌ Error processing command: \(error)")
 
-                // Show error in CLI
-                self.showCLIError(error.localizedDescription)
-
+                // Stop processing indicator and show error in CLI
                 DispatchQueue.mainAsync(weakRef: self) { slf in
-                    slf.haloWindowController?.updateState(.error(
-                        type: .unknown,
-                        message: error.localizedDescription,
-                        suggestion: nil
-                    ))
+                    slf.haloWindowController?.window?.viewModel.subPanelState.stopProcessing()
                 }
+                self.showCLIError(error.localizedDescription)
             }
         }
     }
@@ -499,6 +496,11 @@ final class UnifiedInputCoordinator {
     ///
     /// - Parameter response: The AI response to output
     private func outputResponse(_ response: String) {
+        // Stop processing indicator
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.haloWindowController?.window?.viewModel.subPanelState.stopProcessing()
+        }
+
         // Update CLI output status
         appendCLIOutput(L("subpanel.cli.outputting"), type: .info)
         completeCLIOutput()
