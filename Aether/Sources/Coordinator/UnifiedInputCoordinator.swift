@@ -84,11 +84,6 @@ final class UnifiedInputCoordinator {
     /// Set to true when cursor is not in an input field
     private var useCLIOutputMode: Bool = false
 
-    /// Processing indicator window (shown at cursor during AI thinking)
-    private lazy var processingIndicatorWindow: ProcessingIndicatorWindow = {
-        ProcessingIndicatorWindow()
-    }()
-
     // MARK: - SubPanel Access
 
     /// Access SubPanelState for CLI output
@@ -399,9 +394,8 @@ final class UnifiedInputCoordinator {
             return
         }
 
-        // Show processing indicator at cursor and start CLI output
+        // Start CLI output in SubPanel
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.processingIndicatorWindow.showAtCursor()
             slf.startCLIOutput()
             slf.appendCLIOutput(L("subpanel.cli.sending"), type: .command)
         }
@@ -448,9 +442,8 @@ final class UnifiedInputCoordinator {
         // Build the full input for routing
         let fullInput = "/\(commandKey) \(content)"
 
-        // Show processing indicator at cursor and start CLI output
+        // Start CLI output in SubPanel
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.processingIndicatorWindow.showAtCursor()
             slf.startCLIOutput()
             slf.appendCLIOutput("/\(commandKey)", type: .command)
             slf.appendThinkingOutput(L("subpanel.cli.routing"))
@@ -487,11 +480,6 @@ final class UnifiedInputCoordinator {
 
             } catch {
                 print("[UnifiedInputCoordinator] ❌ Error processing command: \(error)")
-
-                // Hide processing indicator and show error in CLI
-                DispatchQueue.mainAsync(weakRef: self) { slf in
-                    slf.processingIndicatorWindow.hideIndicator()
-                }
                 self.showCLIError(error.localizedDescription)
             }
         }
@@ -501,11 +489,6 @@ final class UnifiedInputCoordinator {
     ///
     /// - Parameter response: The AI response to output
     private func outputResponse(_ response: String) {
-        // Hide processing indicator
-        DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.processingIndicatorWindow.hideIndicator()
-        }
-
         // Update CLI output status
         appendCLIOutput(L("subpanel.cli.outputting"), type: .info)
         completeCLIOutput()

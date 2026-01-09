@@ -72,9 +72,6 @@ struct UnifiedInputView: View {
             mainInputArea
                 .padding(12)
 
-            // Note: Processing indicator is now shown in a separate window at cursor position
-            // See ProcessingIndicatorWindow.swift
-
             // SubPanel (conditionally shown)
             if subPanelState.mode.isVisible {
                 SubPanelView(
