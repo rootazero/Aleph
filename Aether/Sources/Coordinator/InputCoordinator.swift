@@ -52,6 +52,11 @@ final class InputCoordinator {
     /// Whether permission gate is active (blocks input)
     var isPermissionGateActive: Bool = false
 
+    /// Processing indicator window for visual feedback during single-turn
+    private lazy var processingIndicatorWindow: ProcessingIndicatorWindow = {
+        ProcessingIndicatorWindow()
+    }()
+
     // MARK: - Initialization
 
     /// Initialize the input coordinator
@@ -412,6 +417,9 @@ final class InputCoordinator {
             slf.haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
         }
 
+        // Show processing indicator at cursor/mouse position
+        showProcessingIndicator()
+
         // Process input asynchronously to avoid blocking UI
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
@@ -447,6 +455,9 @@ final class InputCoordinator {
 
                 print("[InputCoordinator] Received AI response (\(response.count) chars)")
 
+                // Hide processing indicator
+                self.hideProcessingIndicator()
+
                 // Use unified output pipeline via OutputCoordinator
                 let outputContext = OutputContext(
                     useReplaceMode: useCutMode,
@@ -460,6 +471,9 @@ final class InputCoordinator {
                 self.outputCoordinator?.performOutput(response: response, context: outputContext)
             } catch {
                 print("[InputCoordinator] ❌ Error processing input: \(error)")
+
+                // Hide processing indicator
+                self.hideProcessingIndicator()
 
                 // CRITICAL: Clear clipboard monitor history to prevent error messages from being used as context
                 self.clipboardMonitor.clearHistory()
@@ -490,6 +504,26 @@ final class InputCoordinator {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - Processing Indicator
+
+    /// Show processing indicator for single-turn mode
+    private func showProcessingIndicator() {
+        // Get position based on single-turn mode (falls back to mouse)
+        let position = ProcessingIndicatorWindow.getPosition(mode: .singleTurn, windowFrame: nil)
+
+        // Show indicator
+        DispatchQueue.main.async { [weak self] in
+            self?.processingIndicatorWindow.show(at: position)
+        }
+    }
+
+    /// Hide processing indicator
+    private func hideProcessingIndicator() {
+        DispatchQueue.main.async { [weak self] in
+            self?.processingIndicatorWindow.hideIndicator()
         }
     }
 

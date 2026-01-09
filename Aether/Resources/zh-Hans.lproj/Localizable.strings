@@ -293,6 +293,9 @@
 "settings.behavior.multi_turn" = "对话模式";
 "settings.behavior.multi_turn_enabled" = "默认开启多轮对话";
 "settings.behavior.multi_turn_description" = "开启后，每次对话自动支持追问。关闭后，可使用 /chat 命令手动开启多轮对话。";
+"settings.behavior.window_visibility" = "窗口显示";
+"settings.behavior.keep_window_visible" = "处理时保持窗口可见";
+"settings.behavior.keep_window_visible_description" = "开启后，AI处理时对话窗口保持可见；关闭后窗口会暂时隐藏，显示处理指示器。";
 
 // MARK: - Settings Window - Trigger System (Hotkey Configuration)
 "settings.trigger.title" = "触发热键";

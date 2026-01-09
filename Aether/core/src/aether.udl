@@ -698,6 +698,7 @@ dictionary BehaviorConfig {
   u32 typing_speed;
   boolean pii_scrubbing_enabled;
   boolean multi_turn_enabled;
+  boolean keep_window_visible_during_processing;
 };
 
 // Trigger configuration (hotkey-system-refactor)

@@ -156,6 +156,11 @@ pub struct BehaviorConfig {
     /// When false, use /chat command to start multi-turn mode
     #[serde(default)]
     pub multi_turn_enabled: bool,
+    /// Keep multi-turn window visible during AI processing
+    /// When true, window stays visible and SubPanel shows processing status
+    /// When false, window hides during processing and shows indicator instead
+    #[serde(default = "default_keep_window_visible")]
+    pub keep_window_visible_during_processing: bool,
 }
 
 fn default_input_mode() -> String {
@@ -170,6 +175,10 @@ fn default_typing_speed() -> u32 {
     50 // 50 characters per second
 }
 
+fn default_keep_window_visible() -> bool {
+    true // Window stays visible by default
+}
+
 impl Default for BehaviorConfig {
     fn default() -> Self {
         Self {
@@ -178,6 +187,7 @@ impl Default for BehaviorConfig {
             typing_speed: default_typing_speed(),
             pii_scrubbing_enabled: false,
             multi_turn_enabled: false,
+            keep_window_visible_during_processing: default_keep_window_visible(),
         }
     }
 }

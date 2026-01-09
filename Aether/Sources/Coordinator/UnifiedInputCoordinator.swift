@@ -84,6 +84,11 @@ final class UnifiedInputCoordinator {
     /// Set to true when cursor is not in an input field
     private var useCLIOutputMode: Bool = false
 
+    /// Processing indicator window for visual feedback
+    private lazy var processingIndicatorWindow: ProcessingIndicatorWindow = {
+        ProcessingIndicatorWindow()
+    }()
+
     // MARK: - SubPanel Access
 
     /// Access SubPanelState for CLI output
@@ -400,6 +405,9 @@ final class UnifiedInputCoordinator {
             slf.appendCLIOutput(L("subpanel.cli.sending"), type: .command)
         }
 
+        // Show processing indicator
+        showProcessingIndicator()
+
         // Capture context
         let windowContext = ContextCapture.captureContext()
         let capturedContext = CapturedContext(
@@ -449,6 +457,9 @@ final class UnifiedInputCoordinator {
             slf.appendThinkingOutput(L("subpanel.cli.routing"))
         }
 
+        // Show processing indicator
+        showProcessingIndicator()
+
         // Capture context
         let windowContext = ContextCapture.captureContext()
         let capturedContext = CapturedContext(
@@ -480,6 +491,7 @@ final class UnifiedInputCoordinator {
 
             } catch {
                 print("[UnifiedInputCoordinator] ❌ Error processing command: \(error)")
+                self.hideProcessingIndicator()
                 self.showCLIError(error.localizedDescription)
             }
         }
@@ -489,6 +501,9 @@ final class UnifiedInputCoordinator {
     ///
     /// - Parameter response: The AI response to output
     private func outputResponse(_ response: String) {
+        // Hide processing indicator
+        hideProcessingIndicator()
+
         // Update CLI output status
         appendCLIOutput(L("subpanel.cli.outputting"), type: .info)
         completeCLIOutput()
@@ -600,6 +615,45 @@ final class UnifiedInputCoordinator {
     private func showCLIError(_ message: String) {
         appendCLIOutput(message, type: .error)
         completeCLIOutput()
+    }
+
+    // MARK: - Processing Indicator
+
+    /// Show processing indicator at appropriate position
+    private func showProcessingIndicator() {
+        // Check if we should keep window visible (from config)
+        let keepWindowVisible = getKeepWindowVisibleSetting()
+
+        // Determine position mode based on setting
+        let mode: IndicatorPositionMode = keepWindowVisible ? .multiTurnWindowVisible : .multiTurnWindowHidden
+
+        // Get window frame for fallback positioning
+        let windowFrame = haloWindowController?.window?.frame
+
+        // Get position based on mode
+        let position = ProcessingIndicatorWindow.getPosition(mode: mode, windowFrame: windowFrame)
+
+        // Show indicator
+        DispatchQueue.main.async { [weak self] in
+            self?.processingIndicatorWindow.show(at: position)
+        }
+    }
+
+    /// Hide processing indicator
+    private func hideProcessingIndicator() {
+        DispatchQueue.main.async { [weak self] in
+            self?.processingIndicatorWindow.hideIndicator()
+        }
+    }
+
+    /// Get keep window visible setting from config
+    private func getKeepWindowVisibleSetting() -> Bool {
+        guard let core = core,
+              let config = try? core.loadConfig(),
+              let behavior = config.behavior else {
+            return true  // Default to visible
+        }
+        return behavior.keepWindowVisibleDuringProcessing
     }
 
     // MARK: - Cleanup

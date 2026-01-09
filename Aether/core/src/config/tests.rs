@@ -327,6 +327,7 @@ fn test_behavior_config_defaults() {
     assert_eq!(behavior.output_mode, "typewriter");
     assert_eq!(behavior.typing_speed, 50);
     assert!(!behavior.pii_scrubbing_enabled);
+    assert!(behavior.keep_window_visible_during_processing);
 }
 
 #[test]
@@ -337,6 +338,7 @@ fn test_behavior_config_serialization() {
         typing_speed: 100,
         pii_scrubbing_enabled: true,
         multi_turn_enabled: false,
+        keep_window_visible_during_processing: true,
     };
     let json = serde_json::to_string(&behavior).unwrap();
     assert!(json.contains("copy"));
@@ -486,6 +488,7 @@ fn test_config_toml_round_trip() {
         typing_speed: 100,
         pii_scrubbing_enabled: true,
         multi_turn_enabled: false,
+        keep_window_visible_during_processing: true,
     });
 
     let provider = ProviderConfig::test_config("gpt-4o");
@@ -547,6 +550,7 @@ default_provider = "openai"
     assert_eq!(behavior.typing_speed, 50);
     assert!(!behavior.pii_scrubbing_enabled);
     assert!(!behavior.multi_turn_enabled);
+    assert!(behavior.keep_window_visible_during_processing);
 
     // SmartFlowConfig defaults
     assert!(config.smart_flow.enabled);
