@@ -35,14 +35,6 @@ final class UnifiedInputWindow: NSWindow {
     /// Base height (header + input + hints + padding)
     private static let baseHeight: CGFloat = 100
 
-    // MARK: - Animation Constants
-
-    /// Duration for fade-in animation
-    private static let fadeInDuration: TimeInterval = 0.2
-
-    /// Duration for fade-out animation
-    private static let fadeOutDuration: TimeInterval = 0.15
-
     // MARK: - State
 
     /// SubPanel state for dynamic content
@@ -151,23 +143,23 @@ final class UnifiedInputWindow: NSWindow {
         // Create/update content view
         setupContentView()
 
-        // Calculate initial size (no animation on first show)
-        updateWindowSize(animated: false)
+        // Calculate initial size
+        updateWindowSize()
 
         // Center on screen
         centerOnScreen()
 
-        // Simple fade-in animation
+        // Show with fade-in
         alphaValue = 0
         orderFrontRegardless()
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = Self.fadeInDuration
+            context.duration = 0.2
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             self.animator().alphaValue = 1
         }
 
-        // Activate window for text input after animation starts
+        // Activate window for text input after a short delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
             NSApp.activate(ignoringOtherApps: true)
             self?.makeKeyAndOrderFront(nil)
@@ -182,14 +174,14 @@ final class UnifiedInputWindow: NSWindow {
         setupContentView()
     }
 
-    /// Hide the window with simple fade-out animation
+    /// Hide the window with fade-out animation
     func hideWindow() {
         NSLog("[UnifiedInputWindow] hide")
 
         removeKeyMonitors()
 
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = Self.fadeOutDuration
+            context.duration = 0.15
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             self.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
@@ -226,32 +218,26 @@ final class UnifiedInputWindow: NSWindow {
         subPanelSizeCancellable = subPanelState.$mode
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                guard let self = self else { return }
-                // Only animate if window is fully visible (not during fade-in)
-                self.updateWindowSize(animated: self.alphaValue > 0.5)
+                self?.updateWindowSize()
             }
     }
 
-    private func updateWindowSize(animated: Bool = true) {
+    private func updateWindowSize() {
         let subPanelHeight = subPanelState.calculatedHeight
         let totalHeight = Self.baseHeight + subPanelHeight
         let newSize = NSSize(width: Self.windowWidth, height: totalHeight)
 
-        // Calculate new frame while keeping top-left fixed
+        // Animate size change while keeping top-left fixed
         let currentFrame = frame
         let heightDiff = newSize.height - currentFrame.height
         var newFrame = currentFrame
         newFrame.size = newSize
         newFrame.origin.y -= heightDiff  // Keep top edge fixed
 
-        if animated {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.2
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                self.animator().setFrame(newFrame, display: true)
-            }
-        } else {
-            setFrame(newFrame, display: true)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            self.animator().setFrame(newFrame, display: true)
         }
     }
 

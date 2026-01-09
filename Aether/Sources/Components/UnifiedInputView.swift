@@ -53,10 +53,13 @@ struct UnifiedInputView: View {
         (NSApplication.shared.delegate as? AppDelegate)?.core
     }
 
-    // MARK: - Colors & Appearance
+    // MARK: - Colors
 
     /// Text color - white for dark background
     private let textColor = Color.white
+
+    /// Background color (dark gray)
+    private let backgroundColor = Color(white: 0.1)
 
     /// Accent color for input field border
     private let accentColor = Color.accentColor
@@ -83,25 +86,9 @@ struct UnifiedInputView: View {
             }
         }
         .frame(width: 480)
-        // Gradient background: lighter at top/bottom, darker in center for 3D depth
-        .background(
-            LinearGradient(
-                stops: [
-                    .init(color: Color(white: 0.18), location: 0),
-                    .init(color: Color(white: 0.08), location: 0.5),
-                    .init(color: Color(white: 0.14), location: 1)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .opacity(0.95)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        // Subtle border for definition
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.white.opacity(0.1), lineWidth: 1)
-        )
+        .background(backgroundColor.opacity(0.95))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 6)
         .onChange(of: inputText) { _, newValue in
             print("[UnifiedInputView] onChange triggered: '\(newValue)'")
             handleTextChange(newValue)
