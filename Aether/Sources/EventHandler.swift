@@ -403,24 +403,21 @@ class EventHandler: AetherEventHandler {
             accumulatedText = ""
 
         case .listening:
-            // Use processing animation for listening state (same as processingWithAI)
-            // This unifies the visual feedback: processing icon → (hidden) → success
-            haloWindow?.updateState(.processing(providerColor: .blue, streamingText: nil))
+            // Processing indicator is now handled by ProcessingIndicatorWindow
             // Reset accumulated text when starting new interaction
             accumulatedText = ""
             announceToVoiceOver("Listening for input")
 
         case .retrievingMemory:
-            haloWindow?.updateState(.retrievingMemory)
+            // Processing indicator is now handled by ProcessingIndicatorWindow
             announceToVoiceOver("Retrieving memories")
 
         case .processingWithAi:
-            // This state will be updated with provider details via onAiProcessingStarted callback
-            haloWindow?.updateState(.processing(providerColor: .blue, streamingText: nil))
+            // Processing indicator is now handled by ProcessingIndicatorWindow
             announceToVoiceOver("Processing with AI")
 
         case .processing:
-            haloWindow?.updateState(.processing(providerColor: .green, streamingText: nil))
+            // Processing indicator is now handled by ProcessingIndicatorWindow
             announceToVoiceOver("Processing request")
 
         case .success:
@@ -451,11 +448,11 @@ class EventHandler: AetherEventHandler {
     // MARK: - Streaming Response Handling
 
     private func handleResponseChunk(text: String) {
-        // Accumulate text
+        // Accumulate text for potential future use
         accumulatedText = text
 
-        // Update Halo with streaming text
-        haloWindow?.updateState(.processing(providerColor: .green, streamingText: text))
+        // Processing indicator is now handled by ProcessingIndicatorWindow
+        // HaloWindow .processing state with streaming text is disabled
 
         // Update timestamp
         lastUpdateTime = Date()
@@ -464,19 +461,17 @@ class EventHandler: AetherEventHandler {
     // MARK: - AI Processing Handling
 
     private func handleAiProcessingStarted(providerName: String, providerColor: String) {
-        // Parse provider color from hex string (e.g., "#10a37f")
-        let color = Color(hex: providerColor) ?? .green
-
-        // Update Halo to show AI processing with provider info
-        haloWindow?.updateState(.processingWithAI(providerColor: color, providerName: providerName))
+        // Processing indicator is now handled by ProcessingIndicatorWindow
+        // HaloWindow .processingWithAI state is disabled
+        print("[EventHandler] AI processing started: \(providerName)")
     }
 
     private func handleAiResponseReceived(responsePreview: String) {
-        // Store the response preview
+        // Store the response preview for potential future use
         accumulatedText = responsePreview
 
-        // Update Halo with the response preview
-        haloWindow?.updateState(.processing(providerColor: .green, streamingText: responsePreview))
+        // Processing indicator is now handled by ProcessingIndicatorWindow
+        // HaloWindow .processing state with preview is disabled
     }
 
     // MARK: - Typed Error Handling
