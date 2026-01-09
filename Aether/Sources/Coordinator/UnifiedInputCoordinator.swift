@@ -135,6 +135,25 @@ final class UnifiedInputCoordinator {
         self.eventHandler = eventHandler
         self.outputCoordinator = outputCoordinator
         self.conversationCoordinator = conversationCoordinator
+
+        // Observe conversation turn completion to hide SubPanel and processing indicator
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(onConversationTurnCompleted(_:)),
+            name: .conversationTurnCompleted,
+            object: nil
+        )
+    }
+
+    // MARK: - Notification Handlers
+
+    /// Handle conversation turn completion - hide SubPanel and processing indicator
+    @objc private func onConversationTurnCompleted(_ notification: Notification) {
+        print("[UnifiedInputCoordinator] Conversation turn completed, hiding SubPanel and processing indicator")
+        DispatchQueue.main.async { [weak self] in
+            self?.subPanelState.hide()
+            self?.haloWindowController?.hide()
+        }
     }
 
     // MARK: - Hotkey Setup
@@ -611,12 +630,11 @@ final class UnifiedInputCoordinator {
     /// Position priority:
     /// 1. Saved cursor position from target app (targetAppInfo.caretPosition)
     /// 2. Fallback: Top-left corner of unified input window
+    ///
+    /// Note: SubPanel remains visible to show status messages (e.g., "发送请求")
     private func showProcessingIndicator() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-
-            // Hide SubPanel to clear status messages
-            self.subPanelState.hide()
 
             // Position priority:
             // 1. Saved cursor position from target app
@@ -657,6 +675,7 @@ final class UnifiedInputCoordinator {
     func cleanup() {
         removeUnifiedHotkey()
         exitUnifiedInput()
+        NotificationCenter.default.removeObserver(self)
     }
 }
 
