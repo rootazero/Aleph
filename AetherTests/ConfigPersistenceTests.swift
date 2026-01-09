@@ -324,4 +324,33 @@ class TestEventHandler: AetherEventHandler {
     func onTypewriterCancelled() {
         // No-op for tests
     }
+
+    func onClarificationNeeded(request: ClarificationRequest) -> ClarificationResult {
+        // Return cancelled response for tests
+        return ClarificationResult(resultType: .cancelled, selectedIndex: nil, value: nil)
+    }
+
+    func onConfirmationNeeded(confirmation: PendingConfirmationInfo) {
+        // No-op for tests
+    }
+
+    func onConfirmationExpired(confirmationId: String) {
+        // No-op for tests
+    }
+
+    func onConversationStarted(sessionId: String) {
+        // No-op for tests
+    }
+
+    func onConversationTurnCompleted(turn: ConversationTurn) {
+        // No-op for tests
+    }
+
+    func onConversationContinuationReady() {
+        // No-op for tests
+    }
+
+    func onConversationEnded(sessionId: String, totalTurns: UInt32) {
+        // No-op for tests
+    }
 }
