@@ -514,7 +514,7 @@ int8_t uniffi_aethecore_fn_method_aethercore_confirm_action(void*_Nonnull ptr, R
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CONTINUE_CONVERSATION
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CONTINUE_CONVERSATION
-RustBuffer uniffi_aethecore_fn_method_aethercore_continue_conversation(void*_Nonnull ptr, RustBuffer follow_up_input, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_aethecore_fn_method_aethercore_continue_conversation(void*_Nonnull ptr, RustBuffer follow_up_input, RustBuffer context, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CONVERSATION_TURN_COUNT

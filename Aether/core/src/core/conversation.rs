@@ -102,18 +102,20 @@ impl AetherCore {
     ///
     /// This method:
     /// 1. Builds context from conversation history
-    /// 2. Processes the follow-up with AI
+    /// 2. Processes the follow-up with AI (including any new attachments)
     /// 3. Adds the turn to history
     /// 4. Returns the AI response (for printing to target window)
     ///
     /// # Arguments
     /// * `follow_up_input` - The user's follow-up message
+    /// * `context` - Optional context with new attachments for this turn
     ///
     /// # Returns
     /// * `Result<String>` - The AI's response, or an error
     pub fn continue_conversation(
         &self,
         follow_up_input: String,
+        context: Option<CapturedContext>,
     ) -> std::result::Result<String, AetherException> {
         // Check if there's an active session first
         {
@@ -132,7 +134,7 @@ impl AetherCore {
         }
 
         // Get conversation context (session exists, checked above)
-        let (context_prompt, context, turn_count) = {
+        let (context_prompt, session_context, turn_count) = {
             let manager = self
                 .conversation_manager
                 .lock()
@@ -145,14 +147,40 @@ impl AetherCore {
             )
         };
 
+        // Use new context if provided (with attachments), otherwise use session context
+        // This allows subsequent turns to include new attachments (e.g., copied files)
+        let effective_context = if let Some(new_ctx) = context {
+            // Log attachment info for debugging
+            let attachment_count = new_ctx.attachments.as_ref().map_or(0, |a| a.len());
+            if attachment_count > 0 {
+                info!(
+                    attachment_count = attachment_count,
+                    "Continuation includes new attachments"
+                );
+            }
+            // Use new context but preserve session's app/window info if not provided
+            CapturedContext {
+                app_bundle_id: if new_ctx.app_bundle_id.is_empty() {
+                    session_context.app_bundle_id.clone()
+                } else {
+                    new_ctx.app_bundle_id
+                },
+                window_title: new_ctx.window_title.or(session_context.window_title.clone()),
+                attachments: new_ctx.attachments,
+            }
+        } else {
+            session_context.clone()
+        };
+
         info!(
             input_preview = %follow_up_input.chars().take(50).collect::<String>(),
             turn_count = turn_count,
+            has_attachments = effective_context.attachments.is_some(),
             "Continuing conversation"
         );
 
         // Store context for memory operations (required for memory storage)
-        self.set_current_context(context.clone());
+        self.set_current_context(effective_context.clone());
 
         // Build augmented input with conversation history
         let augmented_input = if context_prompt.is_empty() {
@@ -161,10 +189,10 @@ impl AetherCore {
             format!("{}\n\n当前问题: {}", context_prompt, follow_up_input)
         };
 
-        // Process with AI using AI-first mode
+        // Process with AI using AI-first mode (with effective context including new attachments)
         let start_time = std::time::Instant::now();
         let response =
-            match self.process_with_ai_first(augmented_input.clone(), context.clone(), start_time)
+            match self.process_with_ai_first(augmented_input.clone(), effective_context.clone(), start_time)
             {
                 Ok(r) => r,
                 Err(e) => {

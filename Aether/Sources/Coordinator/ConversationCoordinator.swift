@@ -256,14 +256,17 @@ final class ConversationCoordinator {
 
     /// Continue an existing conversation with follow-up input
     ///
-    /// - Parameter followUpInput: The user's follow-up input
-    func continueConversation(followUpInput: String) {
+    /// - Parameters:
+    ///   - followUpInput: The user's follow-up input
+    ///   - context: Optional context with new attachments for this turn
+    func continueConversation(followUpInput: String, context: CapturedContext? = nil) {
         guard let core = core else {
             print("[ConversationCoordinator] ⚠️ Core not available for conversation continuation")
             return
         }
 
-        print("[ConversationCoordinator] 🎭 Continuing conversation with: \(followUpInput.prefix(50))...")
+        let attachmentCount = context?.attachments?.count ?? 0
+        print("[ConversationCoordinator] 🎭 Continuing conversation with: \(followUpInput.prefix(50))... + \(attachmentCount) attachment(s)")
 
         // Show processing state in HaloWindow
         // Note: UnifiedInputWindow is now independent and coexists with HaloWindow
@@ -274,7 +277,7 @@ final class ConversationCoordinator {
 
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let response = try core.continueConversation(followUpInput: followUpInput)
+                let response = try core.continueConversation(followUpInput: followUpInput, context: context)
 
                 print("[ConversationCoordinator] Conversation continued, response: \(response.prefix(50))...")
 

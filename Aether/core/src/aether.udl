@@ -368,8 +368,9 @@ interface AetherCore {
 
   // Continue an existing conversation with follow-up input
   // Returns the AI's response to the follow-up input
+  // context: Optional context with new attachments for this turn
   [Throws=AetherException]
-  string continue_conversation(string follow_up_input);
+  string continue_conversation(string follow_up_input, CapturedContext? context);
 
   // End the current conversation session
   void end_conversation();

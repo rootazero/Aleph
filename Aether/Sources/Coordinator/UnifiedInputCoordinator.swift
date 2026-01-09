@@ -494,11 +494,9 @@ final class UnifiedInputCoordinator {
             print("[UnifiedInputCoordinator] 🤖 Starting conversation with: \(finalUserInput.prefix(50))... + \(mergeResult.totalAttachmentCount) attachment(s)")
             conversationCoordinator?.startConversation(userInput: finalUserInput, context: capturedContext)
         } else {
-            // Continuation - continue existing conversation
-            // Note: For continuation, we still read clipboard but pass text only
-            // Attachments are only sent with the user input text
-            print("[UnifiedInputCoordinator] 🤖 Continuing conversation with: \(finalUserInput.prefix(50))...")
-            conversationCoordinator?.continueConversation(followUpInput: finalUserInput)
+            // Continuation - continue existing conversation with new attachments if any
+            print("[UnifiedInputCoordinator] 🤖 Continuing conversation with: \(finalUserInput.prefix(50))... + \(mergeResult.totalAttachmentCount) attachment(s)")
+            conversationCoordinator?.continueConversation(followUpInput: finalUserInput, context: capturedContext)
         }
 
         currentTurnCount += 1

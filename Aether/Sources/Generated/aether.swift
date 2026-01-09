@@ -578,7 +578,7 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func confirmAction(confirmationId: String, decision: UserConfirmationDecision) throws  -> Bool
     
-    func continueConversation(followUpInput: String) throws  -> String
+    func continueConversation(followUpInput: String, context: CapturedContext?) throws  -> String
     
     func conversationTurnCount()  -> UInt32
     
@@ -822,10 +822,11 @@ open func confirmAction(confirmationId: String, decision: UserConfirmationDecisi
 })
 }
     
-open func continueConversation(followUpInput: String)throws  -> String {
+open func continueConversation(followUpInput: String, context: CapturedContext?)throws  -> String {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_method_aethercore_continue_conversation(self.uniffiClonePointer(),
-        FfiConverterString.lower(followUpInput),$0
+        FfiConverterString.lower(followUpInput),
+        FfiConverterOptionTypeCapturedContext.lower(context),$0
     )
 })
 }
@@ -7224,6 +7225,30 @@ fileprivate struct FfiConverterOptionTypeBehaviorConfig: FfiConverterRustBuffer 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeCapturedContext: FfiConverterRustBuffer {
+    typealias SwiftType = CapturedContext?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeCapturedContext.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeCapturedContext.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeMcpServerConfig: FfiConverterRustBuffer {
     typealias SwiftType = McpServerConfig?
 
@@ -8093,7 +8118,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_confirm_action() != 20248) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_continue_conversation() != 43013) {
+    if (uniffi_aethecore_checksum_method_aethercore_continue_conversation() != 60415) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_conversation_turn_count() != 12630) {
