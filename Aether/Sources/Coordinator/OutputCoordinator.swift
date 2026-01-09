@@ -205,13 +205,13 @@ final class OutputCoordinator {
                 Thread.sleep(forTimeInterval: 0.05)
             }
 
-            // Add newline for append mode
+            // Add double newline for append mode (visual separation between original and response)
             if useAppendMode {
-                print("[OutputCoordinator] ⏎ Adding newline before response (append mode)")
+                print("[OutputCoordinator] ⏎ Adding double newline before response (append mode)")
                 // Use typeTextInstant which calls typeSpecialKey with privateState
                 // This properly isolates modifier key state and clears flags
                 // More reliable than simulateKeyPress across different apps (e.g., Notes)
-                KeyboardSimulator.shared.typeTextInstant("\n")
+                KeyboardSimulator.shared.typeTextInstant("\n\n")
                 Thread.sleep(forTimeInterval: 0.05)
             } else {
                 print("[OutputCoordinator] ✂️ No newline - replacing original text")
