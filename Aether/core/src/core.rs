@@ -110,6 +110,24 @@ pub struct AetherCore {
 }
 
 impl AetherCore {
+    // MARK: - Lock Helper Methods (Occam's Razor Refactoring)
+
+    /// Get router with poison-safe read lock
+    fn get_router(&self) -> Option<Arc<Router>> {
+        let guard = self.router.read().unwrap_or_else(|e| e.into_inner());
+        guard.as_ref().map(Arc::clone)
+    }
+
+    /// Get search registry with poison-safe read lock
+    fn get_search_registry(&self) -> Option<Arc<crate::search::SearchRegistry>> {
+        let guard = self.search_registry.read().unwrap_or_else(|e| e.into_inner());
+        guard.as_ref().map(Arc::clone)
+    }
+
+    // NOTE: lock_config() already exists in this impl block (around line ~941)
+
+    // MARK: - Initialization
+
     /// Create a new AetherCore instance with the provided event handler
     ///
     /// # Arguments

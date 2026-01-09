@@ -215,13 +215,13 @@ class GlobalHotkeyMonitor {
         // Check configured Replace/Append keys
         if keyCode == replaceKey.keyCode {
             print("[GlobalHotkeyMonitor] Double-tap \(replaceKey.displayName) - REPLACE")
-            DispatchQueue.main.async { [weak self] in
-                self?.onReplaceTriggered?()
+            DispatchQueue.mainAsync(weakRef: self) { slf in
+                slf.onReplaceTriggered?()
             }
         } else if keyCode == appendKey.keyCode {
             print("[GlobalHotkeyMonitor] Double-tap \(appendKey.displayName) - APPEND")
-            DispatchQueue.main.async { [weak self] in
-                self?.onAppendTriggered?()
+            DispatchQueue.mainAsync(weakRef: self) { slf in
+                slf.onAppendTriggered?()
             }
         }
     }

@@ -86,9 +86,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // macOS needs time to update permission status after app launch
         // Without this delay, AXIsProcessTrusted() and IOHIDRequestAccess() may return
         // cached/stale values, causing false negatives even when permissions are granted
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self = self else { return }
-
+        DispatchQueue.mainAsyncAfter(delay: 0.5, weakRef: self) { slf in
             print("[Aether] Checking permissions after startup delay...")
 
             // Check all required permissions (Accessibility + Input Monitoring)
@@ -99,12 +97,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
             if !hasAccessibility || !hasInputMonitoring {
                 // Show mandatory permission gate if any permission is missing
-                self.showPermissionGate()
+                slf.showPermissionGate()
             } else {
                 print("[Aether] ✅ All permissions granted, checking if first-run initialization needed...")
 
                 // Check if this is a fresh installation
-                self.checkAndRunFirstTimeInit()
+                slf.checkAndRunFirstTimeInit()
             }
         }
     }
@@ -460,8 +458,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
 
             // Show permission gate again
-            DispatchQueue.main.async { [weak self] in
-                self?.showPermissionGate()
+            DispatchQueue.mainAsync(weakRef: self) { slf in
+                slf.showPermissionGate()
             }
             return
         }
@@ -486,8 +484,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             guard hotkeyMonitor != nil else {
                 print("[Aether] ❌ Failed to initialize trigger system")
                 // Fall back to showing permission gate
-                DispatchQueue.main.async { [weak self] in
-                    self?.showPermissionGate()
+                DispatchQueue.mainAsync(weakRef: self) { slf in
+                    slf.showPermissionGate()
                 }
                 return
             }
@@ -542,8 +540,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
                 print("[Aether] Retrying initialization in \(retryDelay)s (attempt \(coreInitRetryCount)/\(maxRetryAttempts))")
 
-                DispatchQueue.main.asyncAfter(deadline: .now() + retryDelay) { [weak self] in
-                    self?.initializeRustCore()
+                DispatchQueue.mainAsyncAfter(delay: retryDelay, weakRef: self) { slf in
+                    slf.initializeRustCore()
                 }
             } else {
                 // Max retries exceeded - show error
@@ -553,9 +551,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
                 // Halo is already showing (from start of initializeRustCore)
                 // After 0.8s animation, show error toast
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                DispatchQueue.mainAsyncAfter(delay: 0.8, weakRef: self) { slf in
                     // Try toast first, fallback to NSAlert if eventHandler not available
-                    if let handler = self?.eventHandler {
+                    if let handler = slf.eventHandler {
                         handler.showToast(
                             type: .error,
                             title: L("error.aether"),

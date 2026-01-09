@@ -80,20 +80,18 @@ class ClarificationManager: ObservableObject {
         lock.unlock()
 
         // Update UI state on main thread
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-
-            self.resetState()
-            self.currentRequest = request
-            self.isActive = true
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.resetState()
+            slf.currentRequest = request
+            slf.isActive = true
 
             // Set default value if provided
             if let defaultValue = request.defaultValue {
                 if request.clarificationType == .select,
                    let index = Int(defaultValue) {
-                    self.selectedIndex = index
+                    slf.selectedIndex = index
                 } else if request.clarificationType == .text {
-                    self.textInput = defaultValue
+                    slf.textInput = defaultValue
                 }
             }
 
@@ -131,9 +129,9 @@ class ClarificationManager: ObservableObject {
         lock.unlock()
 
         // Cleanup UI on main thread
-        DispatchQueue.main.async { [weak self] in
-            self?.isActive = false
-            self?.currentRequest = nil
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.isActive = false
+            slf.currentRequest = nil
         }
 
         print("[ClarificationManager] Returning result: \(response.resultType)")

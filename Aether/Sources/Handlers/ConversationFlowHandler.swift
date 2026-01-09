@@ -148,8 +148,8 @@ final class ConversationFlowHandler: KeyboardFlowHandler {
         })
 
         // Activate window after a short delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            guard let self = self, let window = self.window else { return }
+        DispatchQueue.mainAsyncAfter(delay: 0.1, weakRef: self) { slf in
+            guard let window = slf.window else { return }
 
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
@@ -158,11 +158,11 @@ final class ConversationFlowHandler: KeyboardFlowHandler {
                   window.isKeyWindow ? "YES" : "NO",
                   window.canBecomeKey ? "YES" : "NO")
 
-            self.setupKeyMonitors()
+            slf.setupKeyMonitors()
 
             // Retry activation if needed
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                guard let self = self, let window = self.window, !window.isKeyWindow else { return }
+            DispatchQueue.mainAsyncAfter(delay: 0.2, weakRef: slf) { innerSlf in
+                guard let window = innerSlf.window, !window.isKeyWindow else { return }
                 NSLog("[ConversationFlowHandler] Retrying window activation...")
                 NSApp.activate(ignoringOtherApps: true)
                 window.makeKeyAndOrderFront(nil)
@@ -191,8 +191,8 @@ final class ConversationFlowHandler: KeyboardFlowHandler {
 
             // Only handle ESC key globally
             if event.keyCode == 53 {  // Escape
-                DispatchQueue.main.async { [weak self] in
-                    self?.cancelConversation()
+                DispatchQueue.mainAsync(weakRef: self) { slf in
+                    slf.cancelConversation()
                     NSLog("[ConversationFlowHandler] Conversation cancelled (global monitor)")
                 }
             }

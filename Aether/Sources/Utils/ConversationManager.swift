@@ -73,15 +73,13 @@ class ConversationManager: ObservableObject {
     func onConversationStarted(sessionId: String) {
         print("[ConversationManager] Conversation started: \(sessionId)")
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-
-            self.sessionId = sessionId
-            self.turnCount = 0
-            self.isActive = true
-            self.conversationHistory = []
-            self.lastAiResponse = nil
-            self.isCancelled = false
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.sessionId = sessionId
+            slf.turnCount = 0
+            slf.isActive = true
+            slf.conversationHistory = []
+            slf.lastAiResponse = nil
+            slf.isCancelled = false
 
             // Post notification for UI to potentially update
             NotificationCenter.default.post(
@@ -97,12 +95,10 @@ class ConversationManager: ObservableObject {
     func onConversationTurnCompleted(turn: ConversationTurn) {
         print("[ConversationManager] Turn completed: \(turn.turnId) - response preview: \(turn.aiResponse.prefix(50))...")
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-
-            self.turnCount = turn.turnId + 1  // turnId is 0-indexed
-            self.lastAiResponse = turn.aiResponse
-            self.conversationHistory.append(turn)
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.turnCount = turn.turnId + 1  // turnId is 0-indexed
+            slf.lastAiResponse = turn.aiResponse
+            slf.conversationHistory.append(turn)
 
             // Post notification for UI to potentially update
             NotificationCenter.default.post(
@@ -120,11 +116,9 @@ class ConversationManager: ObservableObject {
     func onConversationContinuationReady() {
         print("[ConversationManager] Continuation ready (notification deferred to after paste)")
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-
+        DispatchQueue.mainAsync(weakRef: self) { slf in
             // Reset input state - prepare for continuation
-            self.textInput = ""
+            slf.textInput = ""
 
             // NOTE: Do NOT post notification here!
             // AppDelegate.outputConversationResponse will post the notification
@@ -140,12 +134,10 @@ class ConversationManager: ObservableObject {
     func onConversationEnded(sessionId: String, totalTurns: UInt32) {
         print("[ConversationManager] Conversation ended: \(sessionId), total turns: \(totalTurns)")
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-
-            self.sessionId = nil
-            self.isActive = false
-            self.turnCount = 0
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.sessionId = nil
+            slf.isActive = false
+            slf.turnCount = 0
 
             // Post notification for UI to update
             NotificationCenter.default.post(
@@ -165,8 +157,8 @@ class ConversationManager: ObservableObject {
     func submitContinuationInput(_ text: String) {
         // Ensure we're on main thread
         guard Thread.isMainThread else {
-            DispatchQueue.main.async { [weak self] in
-                self?.submitContinuationInput(text)
+            DispatchQueue.mainAsync(weakRef: self) { slf in
+                slf.submitContinuationInput(text)
             }
             return
         }
@@ -194,8 +186,8 @@ class ConversationManager: ObservableObject {
     func cancelConversation() {
         // Ensure we're on main thread
         guard Thread.isMainThread else {
-            DispatchQueue.main.async { [weak self] in
-                self?.cancelConversation()
+            DispatchQueue.mainAsync(weakRef: self) { slf in
+                slf.cancelConversation()
             }
             return
         }

@@ -68,8 +68,8 @@ class EventHandler: AetherEventHandler {
         print("[EventHandler] State changed: \(state)")
 
         // All UI updates must happen on main thread
-        DispatchQueue.main.async { [weak self] in
-            self?.handleStateChange(state)
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.handleStateChange(state)
         }
     }
 
@@ -83,34 +83,32 @@ class EventHandler: AetherEventHandler {
             print("[EventHandler] Suggestion: \(sug)")
         }
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-
+        DispatchQueue.mainAsync(weakRef: self) { slf in
             // Calculate delay to ensure Halo displays for at least minHaloDisplayTime
             // showTime is tracked by HaloWindow when show() is called
             let delay: TimeInterval
-            if let showTime = self.haloWindow?.showTime {
+            if let showTime = slf.haloWindow?.showTime {
                 let elapsed = Date().timeIntervalSince(showTime)
-                delay = max(0, self.minHaloDisplayTime - elapsed)
+                delay = max(0, slf.minHaloDisplayTime - elapsed)
                 print("[EventHandler] Halo displayed for \(String(format: "%.2f", elapsed))s, delaying toast by \(String(format: "%.2f", delay))s")
             } else {
                 // Halo not showing - use minimum display time as delay
                 // This ensures user sees the Halo animation before error
-                delay = self.minHaloDisplayTime
-                print("[EventHandler] No Halo show time recorded, using minimum delay: \(self.minHaloDisplayTime)s")
+                delay = slf.minHaloDisplayTime
+                print("[EventHandler] No Halo show time recorded, using minimum delay: \(slf.minHaloDisplayTime)s")
 
                 // CRITICAL: Show Halo animation first if not already visible
                 // This handles the race condition where error fires before Halo shows
                 // Use .processing state with purple to show the theme's processing animation
                 // (purple + 3 arcs for Zen theme)
-                self.haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
-                self.haloWindow?.showCentered()
+                slf.haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
+                slf.haloWindow?.showCentered()
                 print("[EventHandler] Showing Halo animation before error toast")
             }
 
             // Show error toast after delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.showErrorNotification(message: message, suggestion: suggestion)
+            DispatchQueue.mainAsyncAfter(delay: delay, weakRef: slf) { innerSlf in
+                innerSlf.showErrorNotification(message: message, suggestion: suggestion)
             }
         }
     }
@@ -119,8 +117,8 @@ class EventHandler: AetherEventHandler {
     func onResponseChunk(text: String) {
         print("[EventHandler] Response chunk: \(text.prefix(50))...")
 
-        DispatchQueue.main.async { [weak self] in
-            self?.handleResponseChunk(text: text)
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.handleResponseChunk(text: text)
         }
     }
 
@@ -128,8 +126,8 @@ class EventHandler: AetherEventHandler {
     func onErrorTyped(errorType: ErrorType, message: String) {
         print("[EventHandler] Typed error (\(errorType)): \(message)")
 
-        DispatchQueue.main.async { [weak self] in
-            self?.handleTypedError(errorType: errorType, message: message)
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.handleTypedError(errorType: errorType, message: message)
         }
     }
 
@@ -145,16 +143,16 @@ class EventHandler: AetherEventHandler {
     func onAiProcessingStarted(providerName: String, providerColor: String) {
         print("[EventHandler] AI processing started: provider=\(providerName), color=\(providerColor)")
 
-        DispatchQueue.main.async { [weak self] in
-            self?.handleAiProcessingStarted(providerName: providerName, providerColor: providerColor)
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.handleAiProcessingStarted(providerName: providerName, providerColor: providerColor)
         }
     }
 
     func onAiResponseReceived(responsePreview: String) {
         print("[EventHandler] AI response received: \(responsePreview.prefix(100))...")
 
-        DispatchQueue.main.async { [weak self] in
-            self?.handleAiResponseReceived(responsePreview: responsePreview)
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.handleAiResponseReceived(responsePreview: responsePreview)
         }
     }
 
@@ -210,14 +208,14 @@ class EventHandler: AetherEventHandler {
     func onTypewriterProgress(percent: Float) {
         print("[EventHandler] Typewriter progress: \(Int(percent * 100))%")
 
-        DispatchQueue.main.async { [weak self] in
+        DispatchQueue.mainAsync(weakRef: self) { slf in
             // Update Halo with typewriter progress
-            self?.haloWindow?.updateTypewriterProgress(percent)
+            slf.haloWindow?.updateTypewriterProgress(percent)
 
             // Announce progress milestones to VoiceOver (every 25%)
             let progress = Int(percent * 100)
             if progress % 25 == 0 && progress > 0 {
-                self?.announceToVoiceOver("Typewriter \(progress) percent complete")
+                slf.announceToVoiceOver("Typewriter \(progress) percent complete")
             }
         }
     }
@@ -226,13 +224,13 @@ class EventHandler: AetherEventHandler {
     func onTypewriterCancelled() {
         print("[EventHandler] Typewriter cancelled by user")
 
-        DispatchQueue.main.async { [weak self] in
+        DispatchQueue.mainAsync(weakRef: self) { slf in
             // Show brief notification or just hide progress
-            self?.haloWindow?.updateState(.success(finalText: nil))
+            slf.haloWindow?.updateState(.success(finalText: nil))
 
             // Auto-hide after 1 second
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                self?.haloWindow?.hide()
+            DispatchQueue.mainAsyncAfter(delay: 1.0, weakRef: slf) { innerSlf in
+                innerSlf.haloWindow?.hide()
             }
         }
     }
@@ -310,8 +308,8 @@ class EventHandler: AetherEventHandler {
         print("[EventHandler]   Reason: \(confirmation.reason)")
         print("[EventHandler]   Confidence: \(confirmation.confidence)")
 
-        DispatchQueue.main.async { [weak self] in
-            self?.showToolConfirmation(confirmation)
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.showToolConfirmation(confirmation)
         }
     }
 
@@ -321,8 +319,8 @@ class EventHandler: AetherEventHandler {
     func onConfirmationExpired(confirmationId: String) {
         print("[EventHandler] Confirmation expired: \(confirmationId)")
 
-        DispatchQueue.main.async { [weak self] in
-            self?.handleConfirmationExpired(confirmationId)
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.handleConfirmationExpired(confirmationId)
         }
     }
 
@@ -542,17 +540,15 @@ class EventHandler: AetherEventHandler {
         toastDismissTimer?.invalidate()
         toastDismissTimer = nil
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-
+        DispatchQueue.mainAsync(weakRef: self) { slf in
             // Create dismiss closure
-            let dismissAction: () -> Void = { [weak self] in
-                self?.dismissToast()
+            let dismissAction: () -> Void = { [weak slf] in
+                slf?.dismissToast()
             }
 
             // Update Halo state to toast
             let shouldAutoDismiss = autoDismiss && type == .info
-            self.haloWindow?.updateState(.toast(
+            slf.haloWindow?.updateState(.toast(
                 type: type,
                 title: title,
                 message: message,
@@ -561,12 +557,12 @@ class EventHandler: AetherEventHandler {
             ))
 
             // Show at screen center
-            self.haloWindow?.showToastCentered()
+            slf.haloWindow?.showToastCentered()
 
             // Setup auto-dismiss timer for info toasts
             if shouldAutoDismiss {
-                self.toastDismissTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
-                    self?.dismissToast()
+                slf.toastDismissTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak slf] _ in
+                    slf?.dismissToast()
                 }
             }
         }
@@ -579,8 +575,8 @@ class EventHandler: AetherEventHandler {
         toastDismissTimer?.invalidate()
         toastDismissTimer = nil
 
-        DispatchQueue.main.async { [weak self] in
-            self?.haloWindow?.hide()
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.haloWindow?.hide()
         }
     }
 
@@ -667,8 +663,8 @@ class EventHandler: AetherEventHandler {
         print("[EventHandler] Escape pressed (typewriter cancellation not yet implemented)")
 
         // Temporary workaround: hide halo window
-        DispatchQueue.main.async { [weak self] in
-            self?.haloWindow?.hide()
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.haloWindow?.hide()
         }
     }
 
