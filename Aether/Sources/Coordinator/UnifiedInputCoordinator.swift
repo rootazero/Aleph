@@ -80,6 +80,10 @@ final class UnifiedInputCoordinator {
     /// Current turn count
     private var currentTurnCount: UInt32 = 0
 
+    /// Whether to display output in SubPanel CLI mode (vs target app)
+    /// Set to true when cursor is not in an input field
+    private var useCLIOutputMode: Bool = false
+
     /// Unified input window (independent from HaloWindow)
     /// Can coexist with HaloWindow's processing indicator
     private lazy var unifiedInputWindow: UnifiedInputWindow = {
@@ -385,8 +389,13 @@ final class UnifiedInputCoordinator {
             return
         }
 
+        // Start CLI output in SubPanel
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.startCLIOutput()
+            slf.appendCLIOutput(L("subpanel.cli.sending"), type: .command)
+        }
+
         // Show processing indicator at cursor position
-        // This also hides SubPanel to avoid status message remnants
         showProcessingIndicator()
 
         // Capture context
@@ -431,10 +440,14 @@ final class UnifiedInputCoordinator {
         // Build the full input for routing
         let fullInput = "/\(commandKey) \(content)"
 
-        print("[UnifiedInputCoordinator] Processing command: /\(commandKey)")
+        // Start CLI output in SubPanel
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.startCLIOutput()
+            slf.appendCLIOutput("/\(commandKey)", type: .command)
+            slf.appendThinkingOutput(L("subpanel.cli.routing"))
+        }
 
         // Show processing indicator at cursor position
-        // This also hides SubPanel to avoid status message remnants
         showProcessingIndicator()
 
         // Capture context
@@ -449,6 +462,9 @@ final class UnifiedInputCoordinator {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
+            // Update CLI: connecting to AI
+            self.appendThinkingOutput(L("subpanel.cli.connecting"))
+
             do {
                 let response = try core.processInput(
                     userInput: fullInput,
@@ -457,20 +473,16 @@ final class UnifiedInputCoordinator {
 
                 print("[UnifiedInputCoordinator] Command response received (\(response.count) chars)")
 
+                // Update CLI: response received
+                self.appendCLIOutput(L("subpanel.cli.response_received"), type: .success)
+
                 // Output the response
                 self.outputResponse(response)
 
             } catch {
                 print("[UnifiedInputCoordinator] ❌ Error processing command: \(error)")
                 self.hideProcessingIndicator()
-                // Show error in HaloWindow (SubPanel is hidden during processing)
-                DispatchQueue.mainAsync(weakRef: self) { slf in
-                    slf.haloWindowController?.updateState(.error(
-                        type: .unknown,
-                        message: error.localizedDescription,
-                        suggestion: nil
-                    ))
-                }
+                self.showCLIError(error.localizedDescription)
             }
         }
     }
@@ -481,6 +493,18 @@ final class UnifiedInputCoordinator {
     private func outputResponse(_ response: String) {
         // Hide processing indicator
         hideProcessingIndicator()
+
+        // Update CLI output status
+        appendCLIOutput(L("subpanel.cli.outputting"), type: .info)
+        completeCLIOutput()
+
+        // If useCLIOutputMode is true, display in SubPanel instead of target app
+        if useCLIOutputMode {
+            // Show full response in CLI mode
+            appendStreamingOutput(response)
+            showCLISuccess(L("subpanel.cli.completed"))
+            return
+        }
 
         // Output to target application
         let outputContext = OutputContext(
@@ -531,6 +555,53 @@ final class UnifiedInputCoordinator {
 
         // Also hide any processing indicator from HaloWindow
         haloWindowController?.hide()
+    }
+
+    // MARK: - CLI Output
+
+    /// Start CLI output mode in SubPanel
+    private func startCLIOutput() {
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.subPanelState.showCLIOutput(initialLines: [
+                CLIOutputLine(type: .info, content: L("subpanel.cli.processing"))
+            ])
+        }
+    }
+
+    /// Append a line to CLI output
+    private func appendCLIOutput(_ text: String, type: CLIOutputType = .info) {
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.subPanelState.appendCLIText(text, type: type)
+        }
+    }
+
+    /// Append thinking indicator to CLI output
+    private func appendThinkingOutput(_ text: String) {
+        appendCLIOutput(text, type: .thinking)
+    }
+
+    /// Append streaming response to CLI output
+    private func appendStreamingOutput(_ text: String) {
+        appendCLIOutput(text, type: .info)
+    }
+
+    /// Complete CLI output (stop streaming indicator)
+    private func completeCLIOutput() {
+        DispatchQueue.main.async { [weak self] in
+            self?.subPanelState.completeCLIOutput()
+        }
+    }
+
+    /// Show success message in CLI output
+    private func showCLISuccess(_ message: String) {
+        appendCLIOutput(message, type: .success)
+        completeCLIOutput()
+    }
+
+    /// Show error message in CLI output
+    private func showCLIError(_ message: String) {
+        appendCLIOutput(message, type: .error)
+        completeCLIOutput()
     }
 
     // MARK: - Processing Indicator (via HaloWindow)
@@ -602,6 +673,14 @@ private func fallbackString(for key: String) -> String {
     case "unified.focus_warning.message": return "将光标移动到输入框后再呼出 Aether"
     case "unified.accessibility_warning.title": return "需要辅助功能权限"
     case "unified.accessibility_warning.message": return "请在系统设置中授予辅助功能权限以获得更好的体验"
+    // CLI output strings
+    case "subpanel.cli.processing": return "处理中..."
+    case "subpanel.cli.sending": return "发送请求..."
+    case "subpanel.cli.routing": return "路由到 AI..."
+    case "subpanel.cli.connecting": return "连接中..."
+    case "subpanel.cli.response_received": return "✓ 收到响应"
+    case "subpanel.cli.outputting": return "输出中..."
+    case "subpanel.cli.completed": return "✓ 完成"
     default: return key
     }
 }
