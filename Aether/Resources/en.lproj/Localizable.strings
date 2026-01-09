@@ -714,5 +714,11 @@
 "subpanel.selector.confirm" = "Confirm";
 "subpanel.selector.cancel" = "Cancel";
 "subpanel.cli.processing" = "Processing...";
+"subpanel.cli.sending" = "Sending request...";
+"subpanel.cli.routing" = "Routing to AI...";
+"subpanel.cli.connecting" = "Connecting...";
+"subpanel.cli.response_received" = "✓ Response received";
+"subpanel.cli.outputting" = "Outputting...";
+"subpanel.cli.completed" = "✓ Completed";
 "subpanel.confirmation.confirm" = "Confirm";
 "subpanel.confirmation.cancel" = "Cancel";

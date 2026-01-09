@@ -716,5 +716,11 @@
 "subpanel.selector.confirm" = "确认";
 "subpanel.selector.cancel" = "取消";
 "subpanel.cli.processing" = "处理中...";
+"subpanel.cli.sending" = "发送请求...";
+"subpanel.cli.routing" = "路由到 AI...";
+"subpanel.cli.connecting" = "连接中...";
+"subpanel.cli.response_received" = "✓ 收到响应";
+"subpanel.cli.outputting" = "输出中...";
+"subpanel.cli.completed" = "✓ 完成";
 "subpanel.confirmation.confirm" = "确认";
 "subpanel.confirmation.cancel" = "取消";
