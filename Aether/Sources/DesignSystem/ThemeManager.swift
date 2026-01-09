@@ -85,14 +85,12 @@ final class ThemeManager: ObservableObject {
 
     /// Apply the current theme to the application
     func applyTheme() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-
+        DispatchQueue.mainAsync(weakRef: self) { slf in
             // Set application-wide appearance first
-            if self.currentTheme == .auto {
+            if slf.currentTheme == .auto {
                 NSApp.appearance = nil
             } else {
-                NSApp.appearance = self.currentTheme.appearance
+                NSApp.appearance = slf.currentTheme.appearance
             }
 
             // Get all windows and apply appearance
@@ -100,12 +98,12 @@ final class ThemeManager: ObservableObject {
 
             // Apply appearance to each window
             for window in windows {
-                if self.currentTheme == .auto {
+                if slf.currentTheme == .auto {
                     // Remove custom appearance to follow system
                     window.appearance = nil
                 } else {
                     // Set specific appearance
-                    window.appearance = self.currentTheme.appearance
+                    window.appearance = slf.currentTheme.appearance
                 }
 
                 // Force window to update its appearance
@@ -114,7 +112,7 @@ final class ThemeManager: ObservableObject {
             }
 
             // Notify that the theme has changed
-            self.objectWillChange.send()
+            slf.objectWillChange.send()
         }
     }
 

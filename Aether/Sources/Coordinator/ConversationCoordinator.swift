@@ -184,8 +184,8 @@ final class ConversationCoordinator {
         conversationOriginalClipboard = nil
 
         // Force hide Halo (bypasses conversation mode protection)
-        DispatchQueue.main.async { [weak self] in
-            self?.haloWindowController?.forceHide()
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.haloWindowController?.forceHide()
         }
     }
 
@@ -210,8 +210,8 @@ final class ConversationCoordinator {
         core?.endConversation()
 
         // Force hide Halo (bypasses conversation mode protection)
-        DispatchQueue.main.async { [weak self] in
-            self?.haloWindowController?.forceHide()
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.haloWindowController?.forceHide()
         }
     }
 
@@ -266,9 +266,9 @@ final class ConversationCoordinator {
         print("[ConversationCoordinator] 🎭 Continuing conversation with: \(followUpInput.prefix(50))...")
 
         // Update Halo to processing state
-        DispatchQueue.main.async { [weak self] in
-            self?.haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
-            self?.haloWindowController?.showCentered()
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
+            slf.haloWindowController?.showCentered()
         }
 
         DispatchQueue.global(qos: .userInitiated).async {

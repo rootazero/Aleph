@@ -73,44 +73,44 @@ final class DefaultHaloStateCoordinator: HaloStateCoordinatorProtocol {
     // MARK: - HaloStateCoordinatorProtocol Implementation
 
     func updateState(_ state: HaloState) {
-        DispatchQueue.main.async { [weak self] in
-            self?.windowController?.updateState(state)
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.windowController?.updateState(state)
         }
     }
 
     func showCentered() {
-        DispatchQueue.main.async { [weak self] in
-            self?.windowController?.showCentered()
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.windowController?.showCentered()
         }
     }
 
     func showAtCurrentPosition() {
-        DispatchQueue.main.async { [weak self] in
-            self?.windowController?.showAtCurrentPosition()
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.windowController?.showAtCurrentPosition()
         }
     }
 
     func show(at position: NSPoint) {
-        DispatchQueue.main.async { [weak self] in
-            self?.windowController?.show(at: position)
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.windowController?.show(at: position)
         }
     }
 
     func showBelow(at position: NSPoint) {
-        DispatchQueue.main.async { [weak self] in
-            self?.windowController?.showBelow(at: position)
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.windowController?.showBelow(at: position)
         }
     }
 
     func hide() {
-        DispatchQueue.main.async { [weak self] in
-            self?.windowController?.hide()
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.windowController?.hide()
         }
     }
 
     func forceHide() {
-        DispatchQueue.main.async { [weak self] in
-            self?.windowController?.forceHide()
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.windowController?.forceHide()
         }
     }
 
@@ -119,8 +119,8 @@ final class DefaultHaloStateCoordinator: HaloStateCoordinatorProtocol {
     }
 
     func updateTypewriterProgress(_ percent: Float) {
-        DispatchQueue.main.async { [weak self] in
-            self?.windowController?.window?.updateTypewriterProgress(percent)
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.windowController?.window?.updateTypewriterProgress(percent)
         }
     }
 }

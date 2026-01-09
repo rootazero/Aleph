@@ -130,8 +130,8 @@ final class MenuBarManager {
     ///
     /// - Parameter state: The current processing state
     func updateIcon(for state: ProcessingState) {
-        DispatchQueue.main.async { [weak self] in
-            guard let button = self?.statusItem?.button else { return }
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            guard let button = slf.statusItem?.button else { return }
 
             switch state {
             case .processing:
@@ -150,8 +150,8 @@ final class MenuBarManager {
     ///
     /// - Parameter systemSymbol: SF Symbol name
     func updateIcon(systemSymbol: String) {
-        DispatchQueue.main.async { [weak self] in
-            guard let button = self?.statusItem?.button else { return }
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            guard let button = slf.statusItem?.button else { return }
             button.image = NSImage(systemSymbolName: systemSymbol, accessibilityDescription: "Aether")
             button.image?.isTemplate = true
         }
@@ -159,8 +159,8 @@ final class MenuBarManager {
 
     /// Reset menu bar icon to default
     func resetIcon() {
-        DispatchQueue.main.async { [weak self] in
-            guard let button = self?.statusItem?.button else { return }
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            guard let button = slf.statusItem?.button else { return }
             if let menuBarIcon = NSImage(named: "MenuBarIcon") {
                 menuBarIcon.isTemplate = true
                 button.image = menuBarIcon

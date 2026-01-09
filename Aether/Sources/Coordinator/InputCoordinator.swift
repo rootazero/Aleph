@@ -172,8 +172,8 @@ final class InputCoordinator {
         guard core != nil else {
             print("[InputCoordinator] ⚠️ Core not initialized")
             // Show error in Halo
-            DispatchQueue.main.async { [weak self] in
-                self?.haloWindowController?.updateState(.error(
+            DispatchQueue.mainAsync(weakRef: self) { slf in
+                slf.haloWindowController?.updateState(.error(
                     type: .unknown,
                     message: L("error.core_not_initialized"),
                     suggestion: L("error.core_not_initialized.suggestion")
@@ -279,16 +279,16 @@ final class InputCoordinator {
 
                     // Show error
                     let errorPosition = CaretPositionHelper.getBestPosition()
-                    DispatchQueue.main.async { [weak self] in
-                        self?.haloWindowController?.show(at: errorPosition)
-                        self?.haloWindowController?.updateState(.error(
+                    DispatchQueue.mainAsync(weakRef: self) { slf in
+                        slf.haloWindowController?.show(at: errorPosition)
+                        slf.haloWindowController?.updateState(.error(
                             type: .unknown,
                             message: L("error.no_text_in_window"),
                             suggestion: L("error.no_text_in_window.suggestion")
                         ))
                         // Auto-hide after 2 seconds
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                            self?.haloWindowController?.hide()
+                        DispatchQueue.mainAsyncAfter(delay: 2.0, weakRef: slf) { innerSlf in
+                            innerSlf.haloWindowController?.hide()
                         }
                     }
                     return
@@ -333,9 +333,9 @@ final class InputCoordinator {
                 clipboardManager.setText(original)
             }
             // Hide Halo and show error toast to user
-            DispatchQueue.main.async { [weak self] in
-                self?.haloWindowController?.hide()
-                self?.eventHandler?.showToast(
+            DispatchQueue.mainAsync(weakRef: self) { slf in
+                slf.haloWindowController?.hide()
+                slf.eventHandler?.showToast(
                     type: .warning,
                     title: L("error.file_size"),
                     message: error,
@@ -408,8 +408,8 @@ final class InputCoordinator {
         print("[InputCoordinator] Context: app=\(windowContext.bundleId ?? "unknown"), window=\(windowContext.windowTitle ?? "nil")")
 
         // Update Halo to processing state
-        DispatchQueue.main.async { [weak self] in
-            self?.haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
         }
 
         // Process input asynchronously to avoid blocking UI
@@ -529,8 +529,8 @@ final class InputCoordinator {
                     let nsError = error as NSError
                     let suggestion = nsError.userInfo["suggestion"] as? String
 
-                    DispatchQueue.main.async { [weak self] in
-                        self?.eventHandler?.onError(
+                    DispatchQueue.mainAsync(weakRef: self) { slf in
+                        slf.eventHandler?.onError(
                             message: errorMessage,
                             suggestion: suggestion ?? L("error.check_connection")
                         )

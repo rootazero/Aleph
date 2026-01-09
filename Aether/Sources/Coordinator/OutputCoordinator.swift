@@ -182,13 +182,11 @@ final class OutputCoordinator {
             print("[OutputCoordinator] 🎯 Single-turn: useReplaceMode=\(context.useReplaceMode), useAppendMode=\(useAppendMode)")
         }
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-
+        DispatchQueue.mainAsync(weakRef: self) { slf in
             print("[OutputCoordinator] 🎯 Starting unified output phase...")
 
             // Reactivate target app
-            if let previousApp = self.previousFrontmostApp,
+            if let previousApp = slf.previousFrontmostApp,
                previousApp.bundleIdentifier != Bundle.main.bundleIdentifier {
                 print("[OutputCoordinator] 🔄 Reactivating target app: \(previousApp.localizedName ?? "Unknown")")
                 previousApp.activate(options: [])
@@ -203,7 +201,7 @@ final class OutputCoordinator {
                                         (context.sessionType == .multiTurn && context.turnId == 0)
 
             if shouldPreparePosition, let textSource = context.textSource {
-                self.prepareOutputPosition(textSource: textSource, useCutMode: context.useReplaceMode)
+                slf.prepareOutputPosition(textSource: textSource, useCutMode: context.useReplaceMode)
                 Thread.sleep(forTimeInterval: 0.05)
             }
 
@@ -221,13 +219,13 @@ final class OutputCoordinator {
 
             // Execute output
             if outputMode == "typewriter" {
-                self.executeTypewriterOutput(
+                slf.executeTypewriterOutput(
                     text: truncatedResponse,
                     speed: typingSpeed,
                     context: context
                 )
             } else {
-                self.executeInstantOutput(
+                slf.executeInstantOutput(
                     text: truncatedResponse,
                     context: context
                 )
@@ -282,13 +280,12 @@ final class OutputCoordinator {
         switch context.sessionType {
         case .singleTurn:
             // Restore clipboard after delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                guard let self = self else { return }
+            DispatchQueue.mainAsyncAfter(delay: 0.5, weakRef: self) { slf in
                 if let original = context.originalClipboard {
-                    self.clipboardManager.setText(original)
+                    slf.clipboardManager.setText(original)
                     print("[OutputCoordinator] ♻️ Restored original clipboard content")
                 } else {
-                    self.clipboardManager.clear()
+                    slf.clipboardManager.clear()
                     print("[OutputCoordinator] ♻️ Cleared clipboard (original was empty)")
                 }
             }
@@ -297,8 +294,8 @@ final class OutputCoordinator {
             print("[OutputCoordinator] ✅ Output complete, showing success state")
             haloWindowController?.showAtCurrentPosition()
             haloWindowController?.updateState(.success(finalText: responsePreview))
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                self?.haloWindowController?.hide()
+            DispatchQueue.mainAsyncAfter(delay: 1.5, weakRef: self) { slf in
+                slf.haloWindowController?.hide()
             }
 
         case .multiTurn:
@@ -415,10 +412,10 @@ final class OutputCoordinator {
         typewriterCancellation = nil
 
         // Show brief feedback
-        DispatchQueue.main.async { [weak self] in
-            self?.haloWindowController?.updateState(.success(finalText: "⏸ Typewriter cancelled"))
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                self?.haloWindowController?.hide()
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.haloWindowController?.updateState(.success(finalText: "⏸ Typewriter cancelled"))
+            DispatchQueue.mainAsyncAfter(delay: 1.0, weakRef: slf) { innerSlf in
+                innerSlf.haloWindowController?.hide()
             }
         }
     }

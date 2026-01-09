@@ -153,8 +153,8 @@ class HaloWindow: NSWindow {
 
                 // Refocus TextField after window activation
                 // Use async to ensure window is fully activated first
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                    self?.refocusTextField()
+                DispatchQueue.mainAsyncAfter(delay: 0.05, weakRef: self) { slf in
+                    slf.refocusTextField()
                 }
             }
         }

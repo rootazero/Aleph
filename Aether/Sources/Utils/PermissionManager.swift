@@ -90,20 +90,18 @@ class PermissionManager: ObservableObject {
         let inputStatus = checkInputMonitoringViaHID()
 
         // Update properties on main thread
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-
+        DispatchQueue.mainAsync(weakRef: self) { slf in
             // Update Accessibility status
-            if self.accessibilityGranted != axStatus {
+            if slf.accessibilityGranted != axStatus {
                 print("PermissionManager: Accessibility status changed: \(axStatus)")
-                self.accessibilityGranted = axStatus
+                slf.accessibilityGranted = axStatus
                 // ✅ NO automatic restart logic here
             }
 
             // Update Input Monitoring status
-            if self.inputMonitoringGranted != inputStatus {
+            if slf.inputMonitoringGranted != inputStatus {
                 print("PermissionManager: Input Monitoring status changed: \(inputStatus)")
-                self.inputMonitoringGranted = inputStatus
+                slf.inputMonitoringGranted = inputStatus
                 // ✅ NO automatic restart logic here
             }
         }

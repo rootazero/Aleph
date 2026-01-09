@@ -252,8 +252,8 @@ final class HaloWindowController {
     ///   - delay: Delay before hiding (default 1.5 seconds)
     func showSuccessThenHide(message: String? = nil, delay: TimeInterval = 1.5) {
         showSuccess(message: message)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.hide()
+        DispatchQueue.mainAsyncAfter(delay: delay, weakRef: self) { slf in
+            slf.hide()
         }
     }
 }

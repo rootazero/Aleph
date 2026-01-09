@@ -76,8 +76,8 @@ final class LaunchAtLoginManager: ObservableObject {
                 print("[LaunchAtLoginManager] ❌ Error setting launch at login: \(error)")
 
                 // Revert the published value to match actual state
-                DispatchQueue.main.async { [weak self] in
-                    self?.isEnabled = self?.getLaunchAtLoginStatus() ?? false
+                DispatchQueue.mainAsync(weakRef: self) { slf in
+                    slf.isEnabled = slf.getLaunchAtLoginStatus()
                 }
 
                 // Show error to user
