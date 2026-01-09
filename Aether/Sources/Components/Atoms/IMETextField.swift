@@ -234,6 +234,61 @@ class IMETextFieldView: NSTextField {
         return true
     }
 
+    /// Handle keyboard shortcuts (Cmd+V, Cmd+C, Cmd+X, Cmd+A) in borderless windows
+    ///
+    /// Borderless windows don't automatically receive menu key equivalents.
+    /// We need to manually handle common editing shortcuts here.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Check for command key modifier
+        guard event.modifierFlags.contains(.command) else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        // Get the key equivalent character
+        guard let chars = event.charactersIgnoringModifiers?.lowercased() else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        // Handle common editing shortcuts
+        switch chars {
+        case "v":
+            // Paste
+            if NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: self) {
+                return true
+            }
+        case "c":
+            // Copy
+            if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: self) {
+                return true
+            }
+        case "x":
+            // Cut
+            if NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: self) {
+                return true
+            }
+        case "a":
+            // Select All
+            if NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: self) {
+                return true
+            }
+        case "z":
+            // Undo (Cmd+Z) or Redo (Cmd+Shift+Z)
+            if event.modifierFlags.contains(.shift) {
+                if NSApp.sendAction(Selector(("redo:")), to: nil, from: self) {
+                    return true
+                }
+            } else {
+                if NSApp.sendAction(Selector(("undo:")), to: nil, from: self) {
+                    return true
+                }
+            }
+        default:
+            break
+        }
+
+        return super.performKeyEquivalent(with: event)
+    }
+
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
         if result {
