@@ -261,6 +261,14 @@ class HaloWindow: NSWindow {
     ) {
         NSLog("[HaloWindow] showUnifiedInput: sessionId=%@, turn=%d", sessionId, turnCount)
 
+        // CRITICAL: Ensure window is invisible and reset state before showing
+        // This prevents the theme animation from flashing during state transition
+        self.alphaValue = 0
+        self.orderOut(nil)  // Completely hide window first
+
+        // Reset to idle state to clear any previous state animation
+        viewModel.state = .idle
+
         // Reset SubPanel to hidden
         viewModel.subPanelState.hide()
 
@@ -269,27 +277,30 @@ class HaloWindow: NSWindow {
         viewModel.callbacks.unifiedInputOnCancel = onCancel
         viewModel.callbacks.unifiedInputOnCommandSelected = onCommandSelected
 
-        // Update state
-        viewModel.state = .unifiedInput(
-            sessionId: sessionId,
-            turnCount: turnCount,
-            subPanelMode: .hidden
-        )
-
         // Enable mouse events for interaction
         self.ignoresMouseEvents = false
 
         // Enable window dragging
         self.isMovableByWindowBackground = true
 
-        // Show at screen center
-        showCentered()
+        // Delay state update and window show to ensure SwiftUI has reset
+        DispatchQueue.mainAsyncAfter(delay: 0.05, weakRef: self) { slf in
+            // Now set the unified input state
+            slf.viewModel.state = .unifiedInput(
+                sessionId: sessionId,
+                turnCount: turnCount,
+                subPanelMode: .hidden
+            )
 
-        // Activate window for text input and setup key monitors
-        DispatchQueue.mainAsyncAfter(delay: 0.1, weakRef: self) { slf in
-            NSApp.activate(ignoringOtherApps: true)
-            slf.makeKeyAndOrderFront(nil)
-            slf.setupUnifiedInputKeyMonitors()
+            // Show at screen center (with fade-in animation)
+            slf.showCentered()
+
+            // Activate window for text input and setup key monitors
+            DispatchQueue.mainAsyncAfter(delay: 0.1, weakRef: slf) { innerSlf in
+                NSApp.activate(ignoringOtherApps: true)
+                innerSlf.makeKeyAndOrderFront(nil)
+                innerSlf.setupUnifiedInputKeyMonitors()
+            }
         }
     }
 

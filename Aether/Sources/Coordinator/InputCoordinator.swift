@@ -432,55 +432,8 @@ final class InputCoordinator {
                     print("[InputCoordinator] 🤖 Sending to AI: window text only (\(clipboardText.count) chars)")
                 }
 
-                // Check if should use multi-turn conversation mode
-                let trimmedInput = userInput.trimmingCharacters(in: .whitespacesAndNewlines)
-                let hasChatCommand = trimmedInput.hasPrefix("/chat")
-
-                let shouldUseMultiTurn: Bool
-                if hasChatCommand {
-                    shouldUseMultiTurn = true
-                } else {
-                    // Check config for default multi-turn setting
-                    if let core = self.core {
-                        do {
-                            let config = try core.loadConfig()
-                            shouldUseMultiTurn = config.behavior?.multiTurnEnabled ?? false
-                        } catch {
-                            shouldUseMultiTurn = false
-                        }
-                    } else {
-                        shouldUseMultiTurn = false
-                    }
-                }
-
-                if shouldUseMultiTurn {
-                    // Extract the actual message (remove /chat prefix if present)
-                    let conversationInput: String
-                    if hasChatCommand {
-                        let chatMessage = String(trimmedInput.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
-                        conversationInput = chatMessage.isEmpty ? "Hello" : chatMessage
-                        print("[InputCoordinator] 🎭 /chat command detected - starting multi-turn conversation")
-                    } else {
-                        conversationInput = userInput
-                        print("[InputCoordinator] 🎭 Multi-turn enabled by default - starting conversation")
-                    }
-                    print("[InputCoordinator] 🎭 Conversation input: \(conversationInput.prefix(50))...")
-
-                    // Store conversation context for output handling via ConversationCoordinator
-                    self.conversationCoordinator?.storeConversationContext(
-                        textSource: textSource,
-                        useCutMode: useCutMode,
-                        originalClipboard: originalClipboardText
-                    )
-                    self.conversationCoordinator?.previousFrontmostApp = self.previousFrontmostApp
-                    print("[InputCoordinator] 🎭 Stored context in ConversationCoordinator")
-
-                    // Start conversation (callbacks handle output and continuation UI)
-                    self.conversationCoordinator?.startConversation(userInput: conversationInput, context: capturedContext)
-
-                    // Return early - conversation flow is handled via callbacks
-                    return
-                }
+                // Double-tap Shift always uses single-turn mode
+                // Multi-turn conversations are only triggered by Cmd+Opt+/ hotkey
 
                 // Call Rust core's process_input()
                 guard let core = self.core else {
