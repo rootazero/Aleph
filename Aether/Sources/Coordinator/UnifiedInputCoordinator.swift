@@ -84,6 +84,10 @@ final class UnifiedInputCoordinator {
     /// Set to true when cursor is not in an input field
     private var useCLIOutputMode: Bool = false
 
+    /// Track if window was hidden for processing (to restore later)
+    /// Used when keepWindowVisibleDuringProcessing setting is false
+    private var windowHiddenForProcessing: Bool = false
+
     /// Unified input window (independent from HaloWindow)
     /// Can coexist with HaloWindow's processing indicator
     private lazy var unifiedInputWindow: UnifiedInputWindow = {
@@ -604,29 +608,88 @@ final class UnifiedInputCoordinator {
         completeCLIOutput()
     }
 
-    // MARK: - Processing Indicator (via HaloWindow)
+    // MARK: - Settings Helper
 
-    /// Show processing indicator using HaloWindow's .processing state
-    /// This can coexist with UnifiedInputWindow
-    private func showProcessingIndicator() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            // Position HaloWindow near the unified input window
-            if let windowFrame = self.unifiedInputWindow.frame as NSRect? {
-                let position = NSPoint(
-                    x: windowFrame.minX + 80,  // Left side of unified input
-                    y: windowFrame.maxY - 80   // Top of unified input
-                )
-                self.haloWindowController?.window?.updateState(.processing(providerColor: .purple, streamingText: nil))
-                self.haloWindowController?.window?.show(at: position)
-            }
+    /// Get the keepWindowVisibleDuringProcessing setting from core config
+    ///
+    /// - Returns: true if window should stay visible during processing (Mode A), false to hide (Mode B)
+    private func getKeepWindowVisibleSetting() -> Bool {
+        guard let core = core else { return true }
+        do {
+            let config = try core.loadConfig()
+            return config.behavior?.keepWindowVisibleDuringProcessing ?? true
+        } catch {
+            print("[UnifiedInputCoordinator] Failed to load config: \(error)")
+            return true  // Default to visible
         }
     }
 
-    /// Hide processing indicator
+    // MARK: - Processing Indicator (via HaloWindow)
+
+    /// Show processing indicator using HaloWindow's .processing state
+    ///
+    /// Behavior depends on `keepWindowVisibleDuringProcessing` setting:
+    /// - Mode A (true): Keep UnifiedInputWindow visible, show HaloWindow near it
+    /// - Mode B (false): Hide UnifiedInputWindow, show HaloWindow at screen center
+    private func showProcessingIndicator() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            let keepVisible = self.getKeepWindowVisibleSetting()
+
+            if !keepVisible {
+                // Mode B: Hide UnifiedInputWindow during processing
+                self.windowHiddenForProcessing = true
+                self.unifiedInputWindow.hideWindow()
+            }
+
+            // Position HaloWindow: near unified input window (Mode A) or screen center (Mode B)
+            let position: NSPoint
+            if keepVisible, let windowFrame = self.unifiedInputWindow.frame as NSRect? {
+                // Mode A: Position near the unified input window
+                position = NSPoint(
+                    x: windowFrame.minX + 80,  // Left side of unified input
+                    y: windowFrame.maxY - 80   // Top of unified input
+                )
+            } else {
+                // Mode B: Use screen center when window is hidden
+                if let screenFrame = NSScreen.main?.visibleFrame {
+                    position = NSPoint(x: screenFrame.midX, y: screenFrame.midY)
+                } else {
+                    position = NSEvent.mouseLocation
+                }
+            }
+
+            self.haloWindowController?.window?.updateState(.processing(providerColor: .purple, streamingText: nil))
+            self.haloWindowController?.window?.show(at: position)
+        }
+    }
+
+    /// Hide processing indicator and restore UnifiedInputWindow if it was hidden
     private func hideProcessingIndicator() {
         DispatchQueue.main.async { [weak self] in
-            self?.haloWindowController?.hide()
+            guard let self = self else { return }
+
+            self.haloWindowController?.hide()
+
+            // Restore UnifiedInputWindow if it was hidden for processing (Mode B)
+            if self.windowHiddenForProcessing {
+                self.windowHiddenForProcessing = false
+                // Re-show the window for next turn input
+                self.unifiedInputWindow.show(
+                    sessionId: self.currentSessionId ?? "",
+                    turnCount: self.currentTurnCount,
+                    onSubmit: { [weak self] text in
+                        self?.handleInputSubmitted(text)
+                    },
+                    onCancel: { [weak self] in
+                        self?.exitUnifiedInput()
+                    },
+                    onCommandSelected: { [weak self] command in
+                        self?.handleCommandSelected(command)
+                    }
+                )
+            }
         }
     }
 
