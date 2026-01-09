@@ -351,6 +351,7 @@ impl Default for LayerEnabledFlag {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dispatcher::RoutingLayer;
     use crate::semantic::intent::SemanticIntent;
 
     /// Mock layer for testing
