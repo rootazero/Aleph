@@ -84,6 +84,11 @@ final class UnifiedInputCoordinator {
     /// Set to true when cursor is not in an input field
     private var useCLIOutputMode: Bool = false
 
+    /// Processing indicator window (shown at cursor during AI thinking)
+    private lazy var processingIndicatorWindow: ProcessingIndicatorWindow = {
+        ProcessingIndicatorWindow()
+    }()
+
     // MARK: - SubPanel Access
 
     /// Access SubPanelState for CLI output
@@ -394,9 +399,9 @@ final class UnifiedInputCoordinator {
             return
         }
 
-        // Start processing indicator and CLI output in SubPanel
+        // Show processing indicator at cursor and start CLI output
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.haloWindowController?.window?.viewModel.subPanelState.startProcessing()
+            slf.processingIndicatorWindow.showAtCursor()
             slf.startCLIOutput()
             slf.appendCLIOutput(L("subpanel.cli.sending"), type: .command)
         }
@@ -443,9 +448,9 @@ final class UnifiedInputCoordinator {
         // Build the full input for routing
         let fullInput = "/\(commandKey) \(content)"
 
-        // Start processing indicator and CLI output in SubPanel
+        // Show processing indicator at cursor and start CLI output
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.haloWindowController?.window?.viewModel.subPanelState.startProcessing()
+            slf.processingIndicatorWindow.showAtCursor()
             slf.startCLIOutput()
             slf.appendCLIOutput("/\(commandKey)", type: .command)
             slf.appendThinkingOutput(L("subpanel.cli.routing"))
@@ -483,9 +488,9 @@ final class UnifiedInputCoordinator {
             } catch {
                 print("[UnifiedInputCoordinator] ❌ Error processing command: \(error)")
 
-                // Stop processing indicator and show error in CLI
+                // Hide processing indicator and show error in CLI
                 DispatchQueue.mainAsync(weakRef: self) { slf in
-                    slf.haloWindowController?.window?.viewModel.subPanelState.stopProcessing()
+                    slf.processingIndicatorWindow.hideIndicator()
                 }
                 self.showCLIError(error.localizedDescription)
             }
@@ -496,9 +501,9 @@ final class UnifiedInputCoordinator {
     ///
     /// - Parameter response: The AI response to output
     private func outputResponse(_ response: String) {
-        // Stop processing indicator
+        // Hide processing indicator
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.haloWindowController?.window?.viewModel.subPanelState.stopProcessing()
+            slf.processingIndicatorWindow.hideIndicator()
         }
 
         // Update CLI output status
@@ -592,15 +597,13 @@ final class UnifiedInputCoordinator {
 
     /// Append streaming response to CLI output
     private func appendStreamingOutput(_ text: String) {
-        DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.subPanelState?.appendCLILine(CLIOutputLine(type: .info, content: text))
-        }
+        appendCLIOutput(text, type: .info)
     }
 
     /// Complete CLI output (stop streaming indicator)
     private func completeCLIOutput() {
-        DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.subPanelState?.completeCLIOutput()
+        DispatchQueue.main.async { [weak self] in
+            self?.subPanelState?.completeCLIOutput()
         }
     }
 
