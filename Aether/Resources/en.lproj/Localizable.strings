@@ -19,6 +19,7 @@
 "common.test_connection" = "Test Connection";
 "common.close" = "Close";
 "common.done" = "Done";
+"common.view" = "View";
 "common.error" = "Error";
 "common.success" = "Success";
 "common.warning" = "Warning";

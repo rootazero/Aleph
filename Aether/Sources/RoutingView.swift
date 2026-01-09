@@ -770,104 +770,152 @@ enum PresetCommands {
 
 // MARK: - Preset Rule Card Component
 
-/// Card component for displaying a preset rule (read-only) with usage and subcommands
+/// Card component for displaying a preset rule (read-only) - compact view with detail popup
 struct PresetCommandCard: View {
     let preset: PresetRule
-    @State private var isExpanded: Bool = false
+    @State private var showingDetail: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Main row
-            HStack(spacing: DesignTokens.Spacing.md) {
-                // Icon
-                ZStack {
-                    Circle()
-                        .fill(DesignTokens.Colors.accentPurple.opacity(0.2))
-                        .frame(width: 36, height: 36)
+        HStack(spacing: DesignTokens.Spacing.md) {
+            // Command name (title)
+            Text(preset.command)
+                .font(DesignTokens.Typography.code)
+                .fontWeight(.semibold)
+                .foregroundColor(DesignTokens.Colors.textPrimary)
 
-                    Image(systemName: preset.icon)
-                        .font(.system(size: 16))
-                        .foregroundColor(DesignTokens.Colors.accentPurple)
-                }
+            // Description
+            Text(L(preset.descriptionKey))
+                .font(DesignTokens.Typography.caption)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
+                .lineLimit(1)
 
-                // Command details
-                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                    HStack(spacing: DesignTokens.Spacing.sm) {
-                        // Command name
-                        Text(preset.command)
-                            .font(DesignTokens.Typography.code)
-                            .fontWeight(.semibold)
-                            .foregroundColor(DesignTokens.Colors.textPrimary)
+            Spacer()
 
-                        // Status badge
-                        if preset.isImplemented {
-                            HStack(spacing: 2) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 8))
-                                Text(L("settings.routing.implemented"))
-                                    .font(.system(size: 10))
-                            }
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(DesignTokens.Colors.success)
-                            .cornerRadius(DesignTokens.CornerRadius.small)
-                        } else {
-                            HStack(spacing: 2) {
-                                Image(systemName: "clock.fill")
-                                    .font(.system(size: 8))
-                                Text(L("settings.routing.coming_soon"))
-                                    .font(.system(size: 10))
-                            }
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(DesignTokens.Colors.textSecondary)
-                            .cornerRadius(DesignTokens.CornerRadius.small)
-                        }
+            // View button
+            Button(action: { showingDetail = true }) {
+                Text(L("common.view"))
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(DesignTokens.Colors.accentPurple)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, DesignTokens.Spacing.md)
+        .padding(.vertical, DesignTokens.Spacing.sm)
+        .background(DesignTokens.Colors.cardBackground.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
+        .sheet(isPresented: $showingDetail) {
+            PresetRuleDetailView(preset: preset)
+        }
+    }
+}
+
+// MARK: - Preset Rule Detail View (Popup)
+
+/// Detail view for preset rule shown in a popup sheet
+struct PresetRuleDetailView: View {
+    let preset: PresetRule
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+            // Header with close button
+            HStack {
+                // Icon + Title
+                HStack(spacing: DesignTokens.Spacing.md) {
+                    ZStack {
+                        Circle()
+                            .fill(DesignTokens.Colors.accentPurple.opacity(0.2))
+                            .frame(width: 40, height: 40)
+
+                        Image(systemName: preset.icon)
+                            .font(.system(size: 18))
+                            .foregroundColor(DesignTokens.Colors.accentPurple)
                     }
 
-                    // Description
-                    Text(L(preset.descriptionKey))
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(DesignTokens.Colors.textSecondary)
-                        .lineLimit(2)
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                        HStack(spacing: DesignTokens.Spacing.sm) {
+                            Text(preset.command)
+                                .font(DesignTokens.Typography.heading)
+                                .fontWeight(.semibold)
+                                .foregroundColor(DesignTokens.Colors.textPrimary)
 
-                    // Usage example
-                    HStack(spacing: DesignTokens.Spacing.xs) {
-                        Text(L("settings.routing.usage"))
-                            .font(DesignTokens.Typography.caption)
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
-                        Text(preset.usage)
-                            .font(DesignTokens.Typography.code)
-                            .foregroundColor(DesignTokens.Colors.accentBlue)
+                            // Status badge
+                            if preset.isImplemented {
+                                HStack(spacing: 2) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 8))
+                                    Text(L("settings.routing.implemented"))
+                                        .font(.system(size: 10))
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(DesignTokens.Colors.success)
+                                .cornerRadius(DesignTokens.CornerRadius.small)
+                            } else {
+                                HStack(spacing: 2) {
+                                    Image(systemName: "clock.fill")
+                                        .font(.system(size: 8))
+                                    Text(L("settings.routing.coming_soon"))
+                                        .font(.system(size: 10))
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(DesignTokens.Colors.textSecondary)
+                                .cornerRadius(DesignTokens.CornerRadius.small)
+                            }
+                        }
+
+                        // Lock indicator
+                        HStack(spacing: DesignTokens.Spacing.xs) {
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: 10))
+                            Text(L("settings.routing.preset_badge"))
+                                .font(DesignTokens.Typography.caption)
+                        }
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
                 }
 
                 Spacer()
 
-                // Expand/collapse button if has subcommands
-                if !preset.subcommands.isEmpty {
-                    Button(action: { withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() } }) {
-                        Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 12))
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    // Lock icon to indicate read-only
-                    Image(systemName: "lock.fill")
-                        .font(.system(size: 12))
-                        .foregroundColor(DesignTokens.Colors.textSecondary.opacity(0.5))
+                // Close button
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
                 }
+                .buttonStyle(.plain)
             }
-            .padding(DesignTokens.Spacing.md)
 
-            // Subcommands section (expandable)
-            if isExpanded && !preset.subcommands.isEmpty {
-                Divider()
-                    .padding(.horizontal, DesignTokens.Spacing.md)
+            Divider()
 
+            // Description
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                Text(L(preset.descriptionKey))
+                    .font(DesignTokens.Typography.body)
+                    .foregroundColor(DesignTokens.Colors.textPrimary)
+            }
+
+            // Usage
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                Text(L("settings.routing.usage"))
+                    .font(DesignTokens.Typography.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                Text(preset.usage)
+                    .font(DesignTokens.Typography.code)
+                    .foregroundColor(DesignTokens.Colors.accentBlue)
+                    .padding(DesignTokens.Spacing.sm)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(DesignTokens.Colors.cardBackground)
+                    .cornerRadius(DesignTokens.CornerRadius.small)
+            }
+
+            // Subcommands (if any)
+            if !preset.subcommands.isEmpty {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
                     Text(L("settings.routing.subcommands"))
                         .font(DesignTokens.Typography.caption)
@@ -899,15 +947,18 @@ struct PresetCommandCard: View {
 
                             Spacer()
                         }
+                        .padding(DesignTokens.Spacing.sm)
+                        .background(DesignTokens.Colors.cardBackground.opacity(0.5))
+                        .cornerRadius(DesignTokens.CornerRadius.small)
                     }
                 }
-                .padding(.horizontal, DesignTokens.Spacing.md)
-                .padding(.bottom, DesignTokens.Spacing.md)
-                .padding(.leading, 36 + DesignTokens.Spacing.md) // Align with command text
             }
+
+            Spacer()
         }
-        .background(DesignTokens.Colors.cardBackground.opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
+        .padding(DesignTokens.Spacing.lg)
+        .frame(width: 400, height: 350)
+        .background(DesignTokens.Colors.contentBackground)
     }
 }
 
