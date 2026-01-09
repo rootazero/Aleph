@@ -58,17 +58,8 @@ struct UnifiedInputView: View {
     /// Text color - white for dark background
     private let textColor = Color.white
 
-    /// Background color (dark gray)
-    private let backgroundColor = Color(white: 0.1)
-
     /// Accent color for input field border
     private let accentColor = Color.accentColor
-
-    /// Outer glow color (subtle cyan/blue tint)
-    private let glowColor = Color(red: 0.4, green: 0.6, blue: 0.9)
-
-    /// Inner highlight color for 3D effect
-    private let innerHighlightColor = Color.white
 
     // MARK: - Body
 
@@ -92,59 +83,25 @@ struct UnifiedInputView: View {
             }
         }
         .frame(width: 480)
-        // Background with subtle gradient for 3D depth effect
+        // Gradient background: lighter at top/bottom, darker in center for 3D depth
         .background(
-            ZStack {
-                // Base background
-                backgroundColor.opacity(0.95)
-
-                // Top inner highlight for raised effect
-                LinearGradient(
-                    colors: [
-                        innerHighlightColor.opacity(0.1),
-                        innerHighlightColor.opacity(0.03),
-                        Color.clear
-                    ],
-                    startPoint: .top,
-                    endPoint: .center
-                )
-
-                // Bottom shadow gradient for depth
-                LinearGradient(
-                    colors: [
-                        Color.clear,
-                        Color.black.opacity(0.15)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            LinearGradient(
+                stops: [
+                    .init(color: Color(white: 0.18), location: 0),
+                    .init(color: Color(white: 0.08), location: 0.5),
+                    .init(color: Color(white: 0.14), location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .opacity(0.95)
         )
+        .clipShape(RoundedRectangle(cornerRadius: 14))
         // Subtle border for definition
         .overlay(
             RoundedRectangle(cornerRadius: 14)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            innerHighlightColor.opacity(0.2),
-                            innerHighlightColor.opacity(0.08),
-                            innerHighlightColor.opacity(0.03)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    ),
-                    lineWidth: 1
-                )
+                .stroke(Color.white.opacity(0.1), lineWidth: 1)
         )
-        // Outer glow with rounded corners (use overlay for proper clipping)
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(glowColor.opacity(0.25))
-                .blur(radius: 25)
-        )
-        // Bottom shadow for grounding
-        .shadow(color: .black.opacity(0.5), radius: 16, x: 0, y: 10)
         .onChange(of: inputText) { _, newValue in
             print("[UnifiedInputView] onChange triggered: '\(newValue)'")
             handleTextChange(newValue)
