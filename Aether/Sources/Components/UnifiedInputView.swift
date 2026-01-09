@@ -101,8 +101,8 @@ struct UnifiedInputView: View {
                 // Top inner highlight for raised effect
                 LinearGradient(
                     colors: [
-                        innerHighlightColor.opacity(0.08),
-                        innerHighlightColor.opacity(0.02),
+                        innerHighlightColor.opacity(0.1),
+                        innerHighlightColor.opacity(0.03),
                         Color.clear
                     ],
                     startPoint: .top,
@@ -113,23 +113,23 @@ struct UnifiedInputView: View {
                 LinearGradient(
                     colors: [
                         Color.clear,
-                        Color.black.opacity(0.1)
+                        Color.black.opacity(0.15)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
             }
+            .clipShape(RoundedRectangle(cornerRadius: 14))
         )
-        .clipShape(RoundedRectangle(cornerRadius: 14))
         // Subtle border for definition
         .overlay(
             RoundedRectangle(cornerRadius: 14)
                 .stroke(
                     LinearGradient(
                         colors: [
-                            innerHighlightColor.opacity(0.15),
-                            innerHighlightColor.opacity(0.05),
-                            Color.clear
+                            innerHighlightColor.opacity(0.2),
+                            innerHighlightColor.opacity(0.08),
+                            innerHighlightColor.opacity(0.03)
                         ],
                         startPoint: .top,
                         endPoint: .bottom
@@ -137,13 +137,14 @@ struct UnifiedInputView: View {
                     lineWidth: 1
                 )
         )
-        // Multi-layer shadow for depth and glow
-        // Layer 1: Outer glow (subtle halo effect)
-        .shadow(color: glowColor.opacity(0.12), radius: 20, x: 0, y: 0)
-        // Layer 2: Ambient shadow
-        .shadow(color: .black.opacity(0.2), radius: 16, x: 0, y: 4)
-        // Layer 3: Strong bottom shadow for grounding
-        .shadow(color: .black.opacity(0.35), radius: 12, x: 0, y: 8)
+        // Outer glow with rounded corners (use overlay for proper clipping)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(glowColor.opacity(0.25))
+                .blur(radius: 25)
+        )
+        // Bottom shadow for grounding
+        .shadow(color: .black.opacity(0.5), radius: 16, x: 0, y: 10)
         .onChange(of: inputText) { _, newValue in
             print("[UnifiedInputView] onChange triggered: '\(newValue)'")
             handleTextChange(newValue)
