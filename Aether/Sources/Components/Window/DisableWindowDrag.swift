@@ -42,15 +42,25 @@ private class WindowDragDisablerView: NSView {
             return
         }
 
-        // Save original state and disable window dragging
-        originalWindowDraggable = window.isMovableByWindowBackground
-        window.isMovableByWindowBackground = false
+        // Defer window property modification to avoid KVO notification during SwiftUI's
+        // AttributeGraph update cycle. Synchronous modification can crash SwiftUI internals.
+        let capturedWindow = window
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.window === capturedWindow else { return }
+            self.originalWindowDraggable = capturedWindow.isMovableByWindowBackground
+            capturedWindow.isMovableByWindowBackground = false
+        }
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         // Restore original state when view is removed
         if let window = window, newWindow == nil {
-            window.isMovableByWindowBackground = originalWindowDraggable
+            // Use async to match the async disable operation
+            let capturedWindow = window
+            let originalValue = originalWindowDraggable
+            DispatchQueue.main.async {
+                capturedWindow.isMovableByWindowBackground = originalValue
+            }
         }
 
         super.viewWillMove(toWindow: newWindow)
