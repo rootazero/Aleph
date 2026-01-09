@@ -4,11 +4,12 @@
 //
 //  A floating indicator window for AI processing state.
 //  Used in both single-turn and multi-turn modes.
-//  Matches HaloWindow's ZenTheme processing style.
+//  Follows the active theme from ThemeEngine.
 //
 
 import SwiftUI
 import AppKit
+import Combine
 
 // MARK: - Positioning Mode
 
@@ -39,11 +40,15 @@ final class ProcessingIndicatorWindow: NSWindow {
 
     // MARK: - Properties
 
-    private var hostingView: NSHostingView<ProcessingIndicatorView>?
+    private let themeEngine: ThemeEngine
+    private var hostingView: NSHostingView<ThemedProcessingIndicatorView>?
+    private var themeObserver: AnyCancellable?
 
     // MARK: - Initialization
 
-    init() {
+    init(themeEngine: ThemeEngine) {
+        self.themeEngine = themeEngine
+
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: Self.indicatorSize, height: Self.indicatorSize),
             styleMask: .borderless,
@@ -53,6 +58,7 @@ final class ProcessingIndicatorWindow: NSWindow {
 
         setupWindow()
         setupContent()
+        observeThemeChanges()
     }
 
     // MARK: - Setup
@@ -72,7 +78,26 @@ final class ProcessingIndicatorWindow: NSWindow {
     }
 
     private func setupContent() {
-        let indicatorView = ProcessingIndicatorView()
+        let indicatorView = ThemedProcessingIndicatorView(themeEngine: themeEngine)
+        let hosting = NSHostingView(rootView: indicatorView)
+        hosting.frame = NSRect(x: 0, y: 0, width: Self.indicatorSize, height: Self.indicatorSize)
+
+        contentView = hosting
+        hostingView = hosting
+    }
+
+    private func observeThemeChanges() {
+        // Observe theme changes and update the view
+        themeObserver = themeEngine.$selectedTheme
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateContent()
+            }
+    }
+
+    private func updateContent() {
+        // Recreate the hosting view with the new theme
+        let indicatorView = ThemedProcessingIndicatorView(themeEngine: themeEngine)
         let hosting = NSHostingView(rootView: indicatorView)
         hosting.frame = NSRect(x: 0, y: 0, width: Self.indicatorSize, height: Self.indicatorSize)
 
@@ -183,73 +208,22 @@ final class ProcessingIndicatorWindow: NSWindow {
     }
 }
 
-// MARK: - Processing Indicator View (SwiftUI)
+// MARK: - Themed Processing Indicator View (SwiftUI)
 
-/// SwiftUI view for the spinning processing indicator
-/// Matches HaloWindow's ZenTheme processing animation style exactly
-struct ProcessingIndicatorView: View {
-    @State private var breathingScale: CGFloat = 1.0
-    @State private var rotation: Double = 0
-
-    private let indicatorColor = Color.purple
+/// SwiftUI wrapper view that uses the active theme's processingView
+struct ThemedProcessingIndicatorView: View {
+    @ObservedObject var themeEngine: ThemeEngine
 
     var body: some View {
-        ZStack {
-            // Soft glow effect behind the animation (like ZenSuccessView)
-            Circle()
-                .fill(indicatorColor.opacity(0.3))
-                .frame(width: 90, height: 90)
-                .blur(radius: 15)
-
-            // Soft circular gradient background (matches ZenTheme)
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [indicatorColor.opacity(0.6), indicatorColor.opacity(0.1), .clear],
-                        center: .center,
-                        startRadius: 20,
-                        endRadius: 60
-                    )
-                )
-                .frame(width: 100, height: 100)
-
-            // Breathing outer circle (matches ZenTheme)
-            Circle()
-                .stroke(indicatorColor.opacity(0.5), lineWidth: 2)
-                .frame(width: 80, height: 80)
-                .scaleEffect(breathingScale)
-
-            // Rotating segments (matches ZenTheme - 3 arcs)
-            ForEach(0..<3, id: \.self) { i in
-                Circle()
-                    .trim(from: 0.0, to: 0.15)
-                    .stroke(indicatorColor, lineWidth: 3)
-                    .frame(width: 60, height: 60)
-                    .rotationEffect(.degrees(Double(i) * 120 + rotation))
-            }
-        }
-        .frame(width: ProcessingIndicatorWindow.indicatorSize, height: ProcessingIndicatorWindow.indicatorSize)
-        .onAppear {
-            startAnimation()
-        }
-    }
-
-    private func startAnimation() {
-        // Breathing animation (matches ZenTheme)
-        withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
-            breathingScale = 1.1
-        }
-        // Rotation animation (matches ZenTheme)
-        withAnimation(.linear(duration: 3).repeatForever(autoreverses: false)) {
-            rotation = 360
-        }
+        themeEngine.activeTheme.processingView(providerColor: nil, streamingText: nil)
+            .frame(width: ProcessingIndicatorWindow.indicatorSize, height: ProcessingIndicatorWindow.indicatorSize)
     }
 }
 
 // MARK: - Preview
 
 #Preview {
-    ProcessingIndicatorView()
+    ThemedProcessingIndicatorView(themeEngine: ThemeEngine())
         .frame(width: 120, height: 120)
         .background(Color.black.opacity(0.3))
 }

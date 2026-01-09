@@ -506,7 +506,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     haloWindowController: haloWindowController,
                     eventHandler: eventHandler,
                     outputCoordinator: outputCoordinator,
-                    conversationCoordinator: conversationCoordinator
+                    conversationCoordinator: conversationCoordinator,
+                    themeEngine: themeEngine
                 )
             }
             print("[Aether] All coordinators configured")
@@ -519,7 +520,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     haloWindowController: haloWindowController,
                     eventHandler: eventHandler,
                     outputCoordinator: outputCoordinator,
-                    conversationCoordinator: conversationCoordinator
+                    conversationCoordinator: conversationCoordinator,
+                    themeEngine: themeEngine
                 )
             }
             unifiedInputCoordinator?.setupUnifiedHotkey()

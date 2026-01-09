@@ -43,6 +43,9 @@ final class UnifiedInputCoordinator {
     /// Reference to conversation coordinator for multi-turn conversations
     private weak var conversationCoordinator: ConversationCoordinator?
 
+    /// Theme engine for theming the processing indicator
+    private var themeEngine: ThemeEngine?
+
     /// Clipboard manager for clipboard operations
     private let clipboardManager: any ClipboardManagerProtocol
 
@@ -84,11 +87,20 @@ final class UnifiedInputCoordinator {
     /// Set to true when cursor is not in an input field
     private var useCLIOutputMode: Bool = false
 
-    /// Processing indicator window for multi-turn mode
+    /// Processing indicator window for multi-turn mode (created lazily after themeEngine is set)
     /// Shows at cursor position, falls back to unified input window's top-left
-    private lazy var processingIndicatorWindow: ProcessingIndicatorWindow = {
-        ProcessingIndicatorWindow()
-    }()
+    private var _processingIndicatorWindow: ProcessingIndicatorWindow?
+    private var processingIndicatorWindow: ProcessingIndicatorWindow {
+        if _processingIndicatorWindow == nil, let themeEngine = themeEngine {
+            _processingIndicatorWindow = ProcessingIndicatorWindow(themeEngine: themeEngine)
+        }
+        return _processingIndicatorWindow ?? {
+            // Fallback: create with new ThemeEngine if not configured
+            let window = ProcessingIndicatorWindow(themeEngine: ThemeEngine())
+            _processingIndicatorWindow = window
+            return window
+        }()
+    }
 
     // MARK: - SubPanel Access
 
@@ -123,18 +135,21 @@ final class UnifiedInputCoordinator {
     ///   - eventHandler: EventHandler for callbacks
     ///   - outputCoordinator: OutputCoordinator for response output
     ///   - conversationCoordinator: ConversationCoordinator for multi-turn conversations
+    ///   - themeEngine: ThemeEngine for theming the processing indicator
     func configure(
         core: AetherCore,
         haloWindowController: HaloWindowController?,
         eventHandler: EventHandler?,
         outputCoordinator: OutputCoordinator? = nil,
-        conversationCoordinator: ConversationCoordinator? = nil
+        conversationCoordinator: ConversationCoordinator? = nil,
+        themeEngine: ThemeEngine? = nil
     ) {
         self.core = core
         self.haloWindowController = haloWindowController
         self.eventHandler = eventHandler
         self.outputCoordinator = outputCoordinator
         self.conversationCoordinator = conversationCoordinator
+        self.themeEngine = themeEngine
 
         // Observe conversation turn completed to hide processing indicator
         NotificationCenter.default.addObserver(
