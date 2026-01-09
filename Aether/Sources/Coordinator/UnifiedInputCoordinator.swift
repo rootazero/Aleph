@@ -426,7 +426,7 @@ final class UnifiedInputCoordinator {
         // CRITICAL: Read clipboard content (images, files, text context)
         // This enables users to copy an image in Finder, then type "请分析这张图片"
         // and have both the text and image sent to AI together
-        let (clipboardText, clipboardAttachments, extractionError) = clipboardManager.getMixedContent()
+        let (_, clipboardAttachments, extractionError) = clipboardManager.getMixedContent()
 
         // Check for extraction errors (e.g., file too large)
         if let error = extractionError {
@@ -442,12 +442,20 @@ final class UnifiedInputCoordinator {
             }
         }
 
+        // Get recent clipboard TEXT content (within 10 seconds) - same as single-turn
+        // This prevents old clipboard text from being included unintentionally
+        // Note: Media attachments (images, PDFs) have no time limit
+        let recentClipboardText = clipboardMonitor.getRecentClipboardContent()
+        if let recent = recentClipboardText {
+            print("[UnifiedInputCoordinator] 📋 Found recent clipboard text (\(recent.count) chars, within 10s)")
+        }
+
         // Use AttachmentMerger to combine input text with clipboard content
         // Data order: Input Text + Clipboard Text Context + Clipboard Attachments
         let mergeContext = AttachmentMerger.MergeContext(
             clipboardAttachments: clipboardAttachments,
             windowAttachments: [],  // No window attachments in unified input mode
-            clipboardTextContext: clipboardText != text ? clipboardText : nil,  // Avoid duplicating if same
+            clipboardTextContext: recentClipboardText != text ? recentClipboardText : nil,  // 10s limit, avoid duplicating
             windowText: text  // User's input from UnifiedInputWindow
         )
         let mergeResult = AttachmentMerger.merge(mergeContext)
@@ -514,7 +522,7 @@ final class UnifiedInputCoordinator {
 
         // CRITICAL: Read clipboard content (images, files, text context)
         // This enables users to copy an image, then use "/en describe this image"
-        let (clipboardText, clipboardAttachments, extractionError) = clipboardManager.getMixedContent()
+        let (_, clipboardAttachments, extractionError) = clipboardManager.getMixedContent()
 
         if let error = extractionError {
             print("[UnifiedInputCoordinator] ⚠️ Clipboard extraction error: \(error)")
@@ -524,11 +532,18 @@ final class UnifiedInputCoordinator {
             print("[UnifiedInputCoordinator] 📎 Command mode: Found \(clipboardAttachments.count) clipboard attachment(s)")
         }
 
+        // Get recent clipboard TEXT content (within 10 seconds) - same as single-turn
+        // Note: Media attachments (images, PDFs) have no time limit
+        let recentClipboardText = clipboardMonitor.getRecentClipboardContent()
+        if let recent = recentClipboardText {
+            print("[UnifiedInputCoordinator] 📋 Command mode: Found recent clipboard text (\(recent.count) chars)")
+        }
+
         // Use AttachmentMerger to combine command input with clipboard content
         let mergeContext = AttachmentMerger.MergeContext(
             clipboardAttachments: clipboardAttachments,
             windowAttachments: [],
-            clipboardTextContext: clipboardText != content ? clipboardText : nil,
+            clipboardTextContext: recentClipboardText != content ? recentClipboardText : nil,  // 10s limit
             windowText: fullInput
         )
         let mergeResult = AttachmentMerger.merge(mergeContext)
