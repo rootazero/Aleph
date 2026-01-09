@@ -96,7 +96,9 @@ final class ConversationFlowHandler: KeyboardFlowHandler {
             queue: .main
         ) { [weak self] notification in
             guard let sessionId = notification.object as? String else { return }
-            self?.showConversationInput(sessionId: sessionId)
+            MainActor.assumeIsolated {
+                self?.showConversationInput(sessionId: sessionId)
+            }
         }
     }
 

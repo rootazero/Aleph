@@ -91,7 +91,9 @@ final class ClarificationFlowHandler: KeyboardFlowHandler {
             queue: .main
         ) { [weak self] notification in
             guard let request = notification.object as? ClarificationRequest else { return }
-            self?.showClarification(request)
+            MainActor.assumeIsolated {
+                self?.showClarification(request)
+            }
         }
     }
 

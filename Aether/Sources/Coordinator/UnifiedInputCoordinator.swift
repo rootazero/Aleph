@@ -388,7 +388,7 @@ final class UnifiedInputCoordinator {
     private func handleConversationInput(_ text: String) {
         print("[UnifiedInputCoordinator] Conversation input: \(text.prefix(50))...")
 
-        guard let core = core else {
+        guard core != nil else {
             print("[UnifiedInputCoordinator] ❌ Core not available")
             return
         }

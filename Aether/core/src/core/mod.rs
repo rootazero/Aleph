@@ -29,7 +29,7 @@ pub use types::{
 };
 
 // Private re-exports for internal use
-use types::{RequestContext, StorageHelper};
+use types::RequestContext;
 
 use crate::config::{Config, ConfigWatcher};
 use crate::conversation::ConversationManager;

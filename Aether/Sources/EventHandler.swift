@@ -328,16 +328,6 @@ class EventHandler: AetherEventHandler {
 
     /// Show tool confirmation dialog in Halo
     private func showToolConfirmation(_ confirmation: PendingConfirmationInfo) {
-        // Build confirmation message
-        let title = L("confirmation.tool_execution")
-        let message = """
-        \(confirmation.toolDisplayName)
-
-        \(confirmation.reason)
-
-        \(L("confirmation.confidence")): \(Int(confirmation.confidence * 100))%
-        """
-
         // Show confirmation in Halo with action buttons
         haloWindow?.showToolConfirmation(
             confirmationId: confirmation.id,

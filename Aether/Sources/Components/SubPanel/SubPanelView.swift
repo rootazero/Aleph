@@ -547,8 +547,6 @@ private func fallbackString(for key: String) -> String {
 #if DEBUG
 struct SubPanelView_Previews: PreviewProvider {
     static var previews: some View {
-        let state = SubPanelState()
-
         VStack(spacing: 20) {
             // Command completion preview
             SubPanelView(state: {

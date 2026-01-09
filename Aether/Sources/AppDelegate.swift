@@ -177,7 +177,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Cut - use generic selector for responder chain to find correct target
         let cutItem = NSMenuItem(
             title: L("menu.edit.cut"),
-            action: Selector(("cut:")),
+            action: #selector(NSText.cut(_:)),
             keyEquivalent: "x"
         )
         editMenu.addItem(cutItem)
@@ -185,7 +185,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Copy
         let copyItem = NSMenuItem(
             title: L("menu.edit.copy"),
-            action: Selector(("copy:")),
+            action: #selector(NSText.copy(_:)),
             keyEquivalent: "c"
         )
         editMenu.addItem(copyItem)
@@ -193,7 +193,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Paste
         let pasteItem = NSMenuItem(
             title: L("menu.edit.paste"),
-            action: Selector(("paste:")),
+            action: #selector(NSText.paste(_:)),
             keyEquivalent: "v"
         )
         editMenu.addItem(pasteItem)
@@ -201,7 +201,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Paste and Match Style (for rich text compatibility)
         let pasteAndMatchStyleItem = NSMenuItem(
             title: L("menu.edit.paste_match_style"),
-            action: Selector(("pasteAsPlainText:")),
+            action: #selector(NSTextView.pasteAsPlainText(_:)),
             keyEquivalent: "V"
         )
         pasteAndMatchStyleItem.keyEquivalentModifierMask = [.command, .option]
@@ -210,7 +210,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Delete
         let deleteItem = NSMenuItem(
             title: L("menu.edit.delete"),
-            action: Selector(("delete:")),
+            action: #selector(NSText.delete(_:)),
             keyEquivalent: ""
         )
         editMenu.addItem(deleteItem)
@@ -220,7 +220,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Select All
         let selectAllItem = NSMenuItem(
             title: L("menu.edit.select_all"),
-            action: Selector(("selectAll:")),
+            action: #selector(NSText.selectAll(_:)),
             keyEquivalent: "a"
         )
         editMenu.addItem(selectAllItem)

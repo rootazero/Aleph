@@ -38,10 +38,11 @@ pub struct ExternalServerConfig {
 
 /// Tool location - where a tool comes from
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum ToolLocation {
     /// Builtin service (index in system_tools)
     Builtin(usize),
-    /// External server (name)
+    /// External server (name) - stored for future use
     External(String),
 }
 

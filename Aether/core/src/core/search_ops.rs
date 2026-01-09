@@ -26,6 +26,7 @@ impl AetherCore {
     /// # Returns
     ///
     /// * `crate::search::SearchOptions` - Configured search options
+    #[allow(dead_code)]
     pub(crate) fn get_search_options_from_config(
         search_config: &crate::config::SearchConfigInternal,
     ) -> crate::search::SearchOptions {

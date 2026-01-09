@@ -22,7 +22,6 @@
 
 use super::context::MatchingContext;
 use super::matcher::MatchResult;
-use crate::dispatcher::RoutingLayer;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

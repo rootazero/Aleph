@@ -89,7 +89,7 @@ struct UnifiedInputView: View {
         .background(backgroundColor.opacity(0.95))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 6)
-        .onChange(of: inputText) { newValue in
+        .onChange(of: inputText) { _, newValue in
             print("[UnifiedInputView] onChange triggered: '\(newValue)'")
             handleTextChange(newValue)
         }
