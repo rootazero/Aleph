@@ -226,7 +226,9 @@ final class UnifiedInputWindow: NSWindow {
         subPanelSizeCancellable = subPanelState.$mode
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.updateWindowSize()
+                guard let self = self else { return }
+                // Only animate if window is fully visible (not during fade-in)
+                self.updateWindowSize(animated: self.alphaValue > 0.5)
             }
     }
 
