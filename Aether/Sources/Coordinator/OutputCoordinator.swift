@@ -299,18 +299,6 @@ final class OutputCoordinator {
             }
 
         case .multiTurn:
-            // Restore clipboard after paste so user can paste in UnifiedInputWindow
-            // This is critical for multi-turn conversation usability
-            DispatchQueue.mainAsyncAfter(delay: 0.5, weakRef: self) { slf in
-                if let original = context.originalClipboard {
-                    slf.clipboardManager.setText(original)
-                    print("[OutputCoordinator] ♻️ Restored clipboard for multi-turn (allows paste in UnifiedInputWindow)")
-                } else {
-                    slf.clipboardManager.clear()
-                    print("[OutputCoordinator] ♻️ Cleared clipboard for multi-turn (original was empty)")
-                }
-            }
-
             // Post continuation notification
             let sessionId = context.conversationSessionId ?? conversationManager.sessionId
             if let sessionId = sessionId {

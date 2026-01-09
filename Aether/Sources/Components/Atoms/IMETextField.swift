@@ -237,7 +237,8 @@ class IMETextFieldView: NSTextField {
     /// Handle keyboard shortcuts (Cmd+V, Cmd+C, Cmd+X, Cmd+A) in borderless windows
     ///
     /// Borderless windows don't automatically receive menu key equivalents.
-    /// We need to manually handle common editing shortcuts here.
+    /// We need to manually handle common editing shortcuts by directly calling
+    /// the field editor's methods.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         // Check for command key modifier
         guard event.modifierFlags.contains(.command) else {
@@ -249,39 +250,41 @@ class IMETextFieldView: NSTextField {
             return super.performKeyEquivalent(with: event)
         }
 
-        // Handle common editing shortcuts
+        // Get the field editor (NSTextView) that handles text editing
+        // NSTextField uses a shared field editor for actual text manipulation
+        guard let fieldEditor = currentEditor() as? NSTextView else {
+            NSLog("[IMETextFieldView] performKeyEquivalent: no field editor available for '%@'", chars)
+            return super.performKeyEquivalent(with: event)
+        }
+
+        NSLog("[IMETextFieldView] performKeyEquivalent: handling '%@'", chars)
+
+        // Handle common editing shortcuts by directly calling field editor methods
         switch chars {
         case "v":
-            // Paste
-            if NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: self) {
-                return true
-            }
+            // Paste - directly call field editor's paste
+            fieldEditor.paste(nil)
+            return true
         case "c":
             // Copy
-            if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: self) {
-                return true
-            }
+            fieldEditor.copy(nil)
+            return true
         case "x":
             // Cut
-            if NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: self) {
-                return true
-            }
+            fieldEditor.cut(nil)
+            return true
         case "a":
             // Select All
-            if NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: self) {
-                return true
-            }
+            fieldEditor.selectAll(nil)
+            return true
         case "z":
             // Undo (Cmd+Z) or Redo (Cmd+Shift+Z)
             if event.modifierFlags.contains(.shift) {
-                if NSApp.sendAction(Selector(("redo:")), to: nil, from: self) {
-                    return true
-                }
+                fieldEditor.undoManager?.redo()
             } else {
-                if NSApp.sendAction(Selector(("undo:")), to: nil, from: self) {
-                    return true
-                }
+                fieldEditor.undoManager?.undo()
             }
+            return true
         default:
             break
         }

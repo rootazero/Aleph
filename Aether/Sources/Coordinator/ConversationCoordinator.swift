@@ -151,13 +151,11 @@ final class ConversationCoordinator {
 
         // Use unified output pipeline with multi-turn session type via OutputCoordinator
         // Pass conversationTextSource so first turn can prepare output position correctly
-        // Pass originalClipboard so clipboard is restored after each turn's paste operation
-        // This allows user to paste in UnifiedInputWindow during multi-turn conversation
         let outputContext = OutputContext(
             useReplaceMode: conversationUseCutMode,  // Use stored trigger mode
             textSource: conversationTextSource,  // Use stored textSource for first turn positioning
             sessionType: .multiTurn,
-            originalClipboard: conversationOriginalClipboard,  // Restore clipboard after each turn
+            originalClipboard: nil,  // Multi-turn restores at conversation end
             turnId: turnId,
             conversationSessionId: conversationManager.sessionId
         )
