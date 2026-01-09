@@ -697,3 +697,22 @@
 // MARK: - Clarification
 "clarification.enter_to_confirm" = "Enter to confirm";
 "clarification.esc_to_cancel" = "Esc to cancel";
+
+// MARK: - Unified Input (refactor-unified-halo-window)
+"unified.placeholder" = "Enter conversation or command...";
+"unified.exit" = "Exit";
+"unified.enter_to_send" = "Enter to send";
+"unified.command_mode" = "Command mode";
+"unified.focus_warning.title" = "Click on input field first";
+"unified.focus_warning.message" = "Move cursor to an input field before invoking Aether";
+"unified.accessibility_warning.title" = "Accessibility Permission Required";
+"unified.accessibility_warning.message" = "Please grant Accessibility permission in System Settings for better experience";
+
+// MARK: - SubPanel
+"subpanel.command.title" = "Commands";
+"subpanel.command.no_results" = "No matching commands";
+"subpanel.selector.confirm" = "Confirm";
+"subpanel.selector.cancel" = "Cancel";
+"subpanel.cli.processing" = "Processing...";
+"subpanel.confirmation.confirm" = "Confirm";
+"subpanel.confirmation.cancel" = "Cancel";

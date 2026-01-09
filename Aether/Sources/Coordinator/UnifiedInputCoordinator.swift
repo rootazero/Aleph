@@ -263,8 +263,9 @@ final class UnifiedInputCoordinator {
             showFocusWarningToast()
 
         case .accessibilityDenied:
-            // Accessibility permission denied - fall back to mouse position
+            // Accessibility permission denied - show toast and fall back to mouse position
             print("[UnifiedInputCoordinator] ⚠️ Accessibility permission denied, using mouse position")
+            showAccessibilityWarningToast()
             let mousePosition = NSEvent.mouseLocation
             showUnifiedInput(at: mousePosition)
 
@@ -277,13 +278,26 @@ final class UnifiedInputCoordinator {
     }
 
     /// Show focus warning toast
+    /// Uses `.info` type to enable auto-dismiss behavior
     private func showFocusWarningToast() {
         DispatchQueue.mainAsync(weakRef: self) { slf in
             slf.eventHandler?.showToast(
-                type: .warning,
+                type: .info,
                 title: L("unified.focus_warning.title"),
                 message: L("unified.focus_warning.message"),
                 autoDismiss: true
+            )
+        }
+    }
+
+    /// Show accessibility permission warning toast
+    private func showAccessibilityWarningToast() {
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.eventHandler?.showToast(
+                type: .warning,
+                title: L("unified.accessibility_warning.title"),
+                message: L("unified.accessibility_warning.message"),
+                autoDismiss: false  // User should manually dismiss or go to settings
             )
         }
     }
@@ -535,6 +549,8 @@ private func fallbackString(for key: String) -> String {
     switch key {
     case "unified.focus_warning.title": return "请先点击输入框"
     case "unified.focus_warning.message": return "将光标移动到输入框后再呼出 Aether"
+    case "unified.accessibility_warning.title": return "需要辅助功能权限"
+    case "unified.accessibility_warning.message": return "请在系统设置中授予辅助功能权限以获得更好的体验"
     default: return key
     }
 }

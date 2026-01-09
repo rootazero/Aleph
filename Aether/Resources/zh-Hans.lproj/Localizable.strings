@@ -699,3 +699,22 @@
 // MARK: - Clarification
 "clarification.enter_to_confirm" = "按 Enter 确认";
 "clarification.esc_to_cancel" = "按 Esc 取消";
+
+// MARK: - Unified Input (refactor-unified-halo-window)
+"unified.placeholder" = "输入对话或命令...";
+"unified.exit" = "退出";
+"unified.enter_to_send" = "Enter 发送";
+"unified.command_mode" = "命令模式";
+"unified.focus_warning.title" = "请先点击输入框";
+"unified.focus_warning.message" = "将光标移动到输入框后再呼出 Aether";
+"unified.accessibility_warning.title" = "需要辅助功能权限";
+"unified.accessibility_warning.message" = "请在系统设置中授予辅助功能权限以获得更好的体验";
+
+// MARK: - SubPanel
+"subpanel.command.title" = "命令";
+"subpanel.command.no_results" = "无匹配命令";
+"subpanel.selector.confirm" = "确认";
+"subpanel.selector.cancel" = "取消";
+"subpanel.cli.processing" = "处理中...";
+"subpanel.confirmation.confirm" = "确认";
+"subpanel.confirmation.cancel" = "取消";
