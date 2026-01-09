@@ -607,7 +607,10 @@ final class UnifiedInputCoordinator {
     // MARK: - Processing Indicator (via HaloWindow)
 
     /// Show processing indicator using HaloWindow's .processing state
-    /// Window stays visible, SubPanel is hidden, HaloWindow shows near the window
+    ///
+    /// Position priority:
+    /// 1. Saved cursor position from target app (targetAppInfo.caretPosition)
+    /// 2. Fallback: Top-left corner of unified input window
     private func showProcessingIndicator() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -615,17 +618,25 @@ final class UnifiedInputCoordinator {
             // Hide SubPanel to clear status messages
             self.subPanelState.hide()
 
-            // Position HaloWindow near the unified input window
+            // Position priority:
+            // 1. Saved cursor position from target app
+            // 2. Fallback: Near unified input window (top-left corner)
             let position: NSPoint
-            if let windowFrame = self.unifiedInputWindow.frame as NSRect? {
+            if let caretPosition = self.targetAppInfo?.caretPosition {
+                // Use saved cursor position from target app
+                position = caretPosition
+                print("[UnifiedInputCoordinator] Processing indicator at cursor position: \(position)")
+            } else if let windowFrame = self.unifiedInputWindow.frame as NSRect? {
+                // Fallback: Top-left corner of unified input window
                 position = NSPoint(
                     x: windowFrame.minX + 80,
                     y: windowFrame.maxY - 80
                 )
-            } else if let screenFrame = NSScreen.main?.visibleFrame {
-                position = NSPoint(x: screenFrame.midX, y: screenFrame.midY)
+                print("[UnifiedInputCoordinator] Processing indicator at window fallback: \(position)")
             } else {
+                // Final fallback: Mouse position
                 position = NSEvent.mouseLocation
+                print("[UnifiedInputCoordinator] Processing indicator at mouse fallback: \(position)")
             }
 
             self.haloWindowController?.window?.updateState(.processing(providerColor: .purple, streamingText: nil))
