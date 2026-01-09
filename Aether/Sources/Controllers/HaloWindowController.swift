@@ -160,53 +160,7 @@ final class HaloWindowController {
         window?.ignoresMouseEvents = true
     }
 
-    // MARK: - Command Mode (DEPRECATED)
-    // These methods are deprecated and will be removed in Phase 8.
-    // Use UnifiedInputCoordinator instead for command completion.
-
-    /// Check if currently in command mode
-    /// - Important: Deprecated. Use unified input mode instead.
-    @available(*, deprecated, message: "Use unified input mode instead. Will be removed in Phase 8.")
-    var isInCommandMode: Bool {
-        guard let viewModel = window?.viewModel else { return false }
-        if case .commandMode = viewModel.state {
-            return true
-        }
-        return false
-    }
-
-    /// Activate command mode
-    /// - Important: Deprecated. Use UnifiedInputCoordinator instead.
-    ///
-    /// - Parameters:
-    ///   - position: Position to show the window
-    ///   - onCommandSelected: Callback when a command is selected
-    @available(*, deprecated, message: "Use UnifiedInputCoordinator instead. Will be removed in Phase 8.")
-    func activateCommandMode(at position: NSPoint, onCommandSelected: @escaping (CommandNode) -> Void) {
-        guard let window = window else { return }
-
-        // Check if already in command mode
-        if case .commandMode = window.viewModel.state {
-            return
-        }
-
-        // Activate command mode
-        window.viewModel.commandManager.activateCommandMode(onSelect: onCommandSelected)
-
-        // Update state and show
-        window.viewModel.state = .commandMode
-        window.ignoresMouseEvents = false
-        window.showBelow(at: position)
-    }
-
-    /// Deactivate command mode
-    /// - Important: Deprecated. Use UnifiedInputCoordinator instead.
-    @available(*, deprecated, message: "Use UnifiedInputCoordinator instead. Will be removed in Phase 8.")
-    func deactivateCommandMode() {
-        window?.viewModel.commandManager.deactivateCommandMode()
-        window?.updateState(.idle)
-        window?.hide()
-    }
+    // MARK: - Command Completion (via UnifiedInputCoordinator)
 
     /// Get the current input prefix from command mode
     var inputPrefix: String {

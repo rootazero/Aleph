@@ -395,12 +395,7 @@ final class OutputCoordinator {
     /// Handle ESC key press - cancel typewriter animation
     private func handleEscapeKey() {
         guard let cancellation = typewriterCancellation else {
-            // Check if in command mode - ESC should dismiss it
-            if let haloWindowController = haloWindowController, haloWindowController.isInCommandMode {
-                print("[OutputCoordinator] ESC pressed - dismissing command mode")
-                haloWindowController.deactivateCommandMode()
-                return
-            }
+            // Note: Unified input ESC handling is managed by UnifiedInputCoordinator
             print("[OutputCoordinator] ESC pressed but no typewriter is running")
             return
         }

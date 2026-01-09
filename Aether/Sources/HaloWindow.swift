@@ -455,9 +455,9 @@ class HaloWindow: NSWindow {
         viewModel.state = state
 
         // Enable/disable mouse events based on state
-        // commandMode, error, permissionRequired, toast, clarification, conversationInput, toolConfirmation, and unifiedInput states need mouse interaction
+        // error, permissionRequired, toast, clarification, conversationInput, toolConfirmation, and unifiedInput states need mouse interaction
         switch state {
-        case .commandMode, .error, .permissionRequired, .toast, .clarification, .conversationInput, .toolConfirmation, .unifiedInput:
+        case .error, .permissionRequired, .toast, .clarification, .conversationInput, .toolConfirmation, .unifiedInput:
             self.ignoresMouseEvents = false
         default:
             self.ignoresMouseEvents = true
@@ -474,10 +474,10 @@ class HaloWindow: NSWindow {
             let widthDiff = newSize.width - newFrame.size.width
             let heightDiff = newSize.height - newFrame.size.height
 
-            // For command mode and unified input, keep TOP-LEFT corner fixed (like IDE autocomplete)
+            // For unified input, keep TOP-LEFT corner fixed (like IDE autocomplete)
             // For other states, keep window centered during resize
             switch state {
-            case .commandMode, .unifiedInput:
+            case .unifiedInput:
                 // TOP-LEFT fixed: only adjust y to account for height change
                 // NSWindow origin is BOTTOM-LEFT, so when height increases,
                 // we need to move origin DOWN to keep top-left fixed
@@ -608,10 +608,6 @@ class HaloWindow: NSWindow {
 
     private func getWindowSize() -> NSSize {
         switch viewModel.state {
-        case .commandMode:
-            // Fixed height for command mode to prevent window jumping during filtering
-            return NSSize(width: 400, height: 320)
-
         case .processing(_, let text), .success(let text):
             let width: CGFloat = text != nil ? 300 : 120
             let height: CGFloat

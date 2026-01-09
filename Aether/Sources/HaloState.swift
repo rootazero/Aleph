@@ -89,9 +89,6 @@ enum ToastType: Equatable {
 enum HaloState: Equatable {
     case idle
     case listening
-    // DEPRECATED: commandMode is replaced by unifiedInput as part of refactor-unified-halo-window
-    // Will be removed in Phase 8. Use unifiedInput instead for command completion.
-    case commandMode  // Command completion mode (add-command-completion-system) - DEPRECATED
     case retrievingMemory  // Retrieving memories from database
     case processingWithAI(providerColor: Color, providerName: String?)  // AI provider is processing
     case processing(providerColor: Color, streamingText: String? = nil)  // Generic processing

@@ -33,14 +33,6 @@ struct HaloView: View {
                 theme.listeningView()
                     .transition(.scale.combined(with: .opacity))
 
-            case .commandMode:
-                CommandListView(
-                    manager: viewModel.commandManager,
-                    maxHeight: 320
-                )
-                .frame(width: 400)
-                .transition(.scale.combined(with: .opacity))
-
             case .retrievingMemory:
                 theme.retrievingMemoryView()
                     .transition(.scale.combined(with: .opacity))
@@ -152,8 +144,6 @@ struct HaloView: View {
             return "Aether is idle"
         case .listening:
             return "Listening for input"
-        case .commandMode:
-            return "Command completion mode"
         case .retrievingMemory:
             return "Retrieving memories"
         case .processingWithAI(_, let providerName):
@@ -250,8 +240,6 @@ struct HaloView: View {
     // Dynamic sizing based on state
     private var dynamicWidth: CGFloat {
         switch state {
-        case .commandMode:
-            return 400  // Width for command list (wider for hints)
         case .retrievingMemory, .processingWithAI:
             return 120
         case .processing(_, let text):
@@ -281,10 +269,6 @@ struct HaloView: View {
 
     private var dynamicHeight: CGFloat {
         switch state {
-        case .commandMode:
-            // Fixed height for command mode to prevent window jumping during filtering
-            // Height fits 8 commands (max visible) + header
-            return 320
         case .retrievingMemory, .processingWithAI:
             return 120
         case .processing(_, let text):
