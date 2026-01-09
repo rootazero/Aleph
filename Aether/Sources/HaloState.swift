@@ -21,11 +21,23 @@ struct HaloStateCallbacks {
     /// Callback when tool confirmation is cancelled
     var toolConfirmationOnCancel: (() -> Void)?
 
+    /// Callback when unified input is submitted
+    var unifiedInputOnSubmit: ((String) -> Void)?
+
+    /// Callback when unified input is cancelled
+    var unifiedInputOnCancel: (() -> Void)?
+
+    /// Callback when command is selected in unified input
+    var unifiedInputOnCommandSelected: ((CommandNode) -> Void)?
+
     /// Reset all callbacks
     mutating func reset() {
         toastOnDismiss = nil
         toolConfirmationOnExecute = nil
         toolConfirmationOnCancel = nil
+        unifiedInputOnSubmit = nil
+        unifiedInputOnCancel = nil
+        unifiedInputOnCommandSelected = nil
     }
 }
 
@@ -95,6 +107,11 @@ enum HaloState: Equatable {
         reason: String,
         confidence: Float
     )
+    case unifiedInput(  // Unified Halo input (refactor-unified-halo-window)
+        sessionId: String,
+        turnCount: UInt32,
+        subPanelMode: SubPanelMode
+    )
     // Note: Equatable is now auto-derived since closures are stored in HaloStateCallbacks
 }
 
@@ -111,5 +128,17 @@ extension HaloState {
     var isToolConfirmation: Bool {
         if case .toolConfirmation = self { return true }
         return false
+    }
+
+    /// Check if this is a unified input state
+    var isUnifiedInput: Bool {
+        if case .unifiedInput = self { return true }
+        return false
+    }
+
+    /// Get the SubPanelMode if in unifiedInput state
+    var subPanelMode: SubPanelMode? {
+        if case .unifiedInput(_, _, let mode) = self { return mode }
+        return nil
     }
 }

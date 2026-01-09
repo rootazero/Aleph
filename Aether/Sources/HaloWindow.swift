@@ -98,7 +98,7 @@ class HaloWindow: NSWindow {
     // MARK: - Focus Prevention
 
     /// CRITICAL: Prevent Halo from becoming key window in most cases
-    /// Exception: Text-type clarification and conversation input need key window for TextField input
+    /// Exception: Text-type clarification, conversation input, and unified input need key window for TextField input
     override var canBecomeKey: Bool {
         // Allow key window only for text-type clarification (TextField needs focus)
         if case .clarification(let request) = viewModel.state {
@@ -106,6 +106,10 @@ class HaloWindow: NSWindow {
         }
         // Allow key window for conversation input (TextField needs focus)
         if case .conversationInput = viewModel.state {
+            return true
+        }
+        // Allow key window for unified input (TextField needs focus)
+        if case .unifiedInput = viewModel.state {
             return true
         }
         return false
@@ -200,6 +204,53 @@ class HaloWindow: NSWindow {
     /// - Parameter sessionId: The conversation session ID
     func showConversationInput(sessionId: String) {
         conversationHandler.showConversationInput(sessionId: sessionId)
+    }
+
+    /// Show unified input UI at the given position
+    ///
+    /// This is the new unified entry point for Halo interactions.
+    /// It combines conversation input with command completion in a single view.
+    ///
+    /// - Parameters:
+    ///   - position: Screen position to show the window (typically caret position)
+    ///   - sessionId: The conversation session ID
+    ///   - turnCount: Current conversation turn count
+    ///   - onSubmit: Callback when user submits input
+    ///   - onCancel: Callback when user cancels
+    ///   - onCommandSelected: Callback when user selects a command
+    func showUnifiedInput(
+        at position: NSPoint,
+        sessionId: String,
+        turnCount: UInt32,
+        onSubmit: @escaping (String) -> Void,
+        onCancel: @escaping () -> Void,
+        onCommandSelected: @escaping (CommandNode) -> Void
+    ) {
+        NSLog("[HaloWindow] showUnifiedInput: sessionId=%@, turn=%d", sessionId, turnCount)
+
+        // Reset SubPanel to hidden
+        viewModel.subPanelState.hide()
+
+        // Set callbacks
+        viewModel.callbacks.unifiedInputOnSubmit = onSubmit
+        viewModel.callbacks.unifiedInputOnCancel = onCancel
+        viewModel.callbacks.unifiedInputOnCommandSelected = onCommandSelected
+
+        // Update state
+        viewModel.state = .unifiedInput(
+            sessionId: sessionId,
+            turnCount: turnCount,
+            subPanelMode: .hidden
+        )
+
+        // Show below the caret position
+        showBelow(at: position)
+
+        // Activate window for text input
+        DispatchQueue.mainAsyncAfter(delay: 0.1, weakRef: self) { slf in
+            NSApp.activate(ignoringOtherApps: true)
+            slf.makeKeyAndOrderFront(nil)
+        }
     }
 
     func show(at position: NSPoint) {
@@ -321,10 +372,14 @@ class HaloWindow: NSWindow {
     }
 
     func hide() {
-        // CRITICAL: Do NOT hide when in conversation input mode
-        // The conversation input UI should remain visible until user explicitly ends the conversation
+        // CRITICAL: Do NOT hide when in conversation input mode or unified input mode
+        // These UIs should remain visible until user explicitly ends the conversation
         if case .conversationInput = viewModel.state {
             NSLog("[HaloWindow] Hide blocked - conversation input mode active")
+            return
+        }
+        if case .unifiedInput = viewModel.state {
+            NSLog("[HaloWindow] Hide blocked - unified input mode active")
             return
         }
 
@@ -400,9 +455,9 @@ class HaloWindow: NSWindow {
         viewModel.state = state
 
         // Enable/disable mouse events based on state
-        // commandMode, error, permissionRequired, toast, clarification, conversationInput, and toolConfirmation states need mouse interaction
+        // commandMode, error, permissionRequired, toast, clarification, conversationInput, toolConfirmation, and unifiedInput states need mouse interaction
         switch state {
-        case .commandMode, .error, .permissionRequired, .toast, .clarification, .conversationInput, .toolConfirmation:
+        case .commandMode, .error, .permissionRequired, .toast, .clarification, .conversationInput, .toolConfirmation, .unifiedInput:
             self.ignoresMouseEvents = false
         default:
             self.ignoresMouseEvents = true
@@ -419,15 +474,16 @@ class HaloWindow: NSWindow {
             let widthDiff = newSize.width - newFrame.size.width
             let heightDiff = newSize.height - newFrame.size.height
 
-            // For command mode, keep TOP-LEFT corner fixed (like IDE autocomplete)
+            // For command mode and unified input, keep TOP-LEFT corner fixed (like IDE autocomplete)
             // For other states, keep window centered during resize
-            if case .commandMode = state {
+            switch state {
+            case .commandMode, .unifiedInput:
                 // TOP-LEFT fixed: only adjust y to account for height change
                 // NSWindow origin is BOTTOM-LEFT, so when height increases,
                 // we need to move origin DOWN to keep top-left fixed
                 newFrame.origin.y -= heightDiff
                 // x stays the same (left edge fixed)
-            } else {
+            default:
                 // Keep window centered during resize
                 newFrame.origin.x -= widthDiff / 2
                 newFrame.origin.y -= heightDiff / 2
@@ -595,6 +651,12 @@ class HaloWindow: NSWindow {
             // Tool confirmation UI: tool name, description, reason, confidence, two buttons
             return NSSize(width: 380, height: 220)
 
+        case .unifiedInput:
+            // Unified input: base input area + dynamic SubPanel height
+            let baseHeight: CGFloat = 100  // Header + input + hints + padding
+            let subPanelHeight = viewModel.subPanelState.calculatedHeight
+            return NSSize(width: 480, height: baseHeight + subPanelHeight)
+
         default:
             return NSSize(width: 120, height: 120)
         }
@@ -628,28 +690,42 @@ class HaloViewModel: ObservableObject {
     @Published var state: HaloState = .idle {
         didSet {
             // Reset callbacks when state changes to a non-callback state
-            if !state.isToast && !state.isToolConfirmation {
+            if !state.isToast && !state.isToolConfirmation && !state.isUnifiedInput {
                 callbacks.reset()
             }
         }
     }
     weak var eventHandler: EventHandler?
 
-    /// Callbacks for states that need closures (toast, toolConfirmation)
+    /// Callbacks for states that need closures (toast, toolConfirmation, unifiedInput)
     /// Stored separately to enable automatic Equatable synthesis for HaloState
     var callbacks = HaloStateCallbacks()
 
     /// Command completion manager (add-command-completion-system)
     let commandManager = CommandCompletionManager()
 
+    /// SubPanel state for unified input mode (refactor-unified-halo-window)
+    let subPanelState = SubPanelState()
+
     /// Cancellable for forwarding commandManager changes
     private var commandManagerCancellable: AnyCancellable?
+
+    /// Cancellable for forwarding subPanelState changes
+    private var subPanelStateCancellable: AnyCancellable?
 
     init() {
         // Forward commandManager's objectWillChange to this ViewModel
         // This ensures HaloView re-renders when displayedCommands changes
         // Use receive(on:) to ensure main thread and debounce to prevent rapid updates
         commandManagerCancellable = commandManager.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+
+        // Forward subPanelState's objectWillChange to this ViewModel
+        // This ensures HaloView re-renders when SubPanel mode changes
+        subPanelStateCancellable = subPanelState.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.objectWillChange.send()

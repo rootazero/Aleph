@@ -35,6 +35,7 @@ struct IMETextField: NSViewRepresentable {
     var autoFocus: Bool = true
     var onSubmit: (() -> Void)?
     var onEscape: (() -> Void)?
+    var onTextChange: ((String) -> Void)?
 
     func makeNSView(context: Context) -> NSTextField {
         let textField = IMETextFieldView()
@@ -65,6 +66,7 @@ struct IMETextField: NSViewRepresentable {
         // Store callbacks in coordinator
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onEscape = onEscape
+        context.coordinator.onTextChange = onTextChange
         context.coordinator.textField = textField
 
         // Auto-focus after a short delay to ensure window is ready
@@ -113,6 +115,7 @@ struct IMETextField: NSViewRepresentable {
         // Update callbacks
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onEscape = onEscape
+        context.coordinator.onTextChange = onTextChange
     }
 
     func makeCoordinator() -> Coordinator {
@@ -123,6 +126,7 @@ struct IMETextField: NSViewRepresentable {
         var parent: IMETextField
         var onSubmit: (() -> Void)?
         var onEscape: (() -> Void)?
+        var onTextChange: ((String) -> Void)?
         weak var textField: NSTextField?
 
         init(_ parent: IMETextField) {
@@ -131,7 +135,9 @@ struct IMETextField: NSViewRepresentable {
 
         func controlTextDidChange(_ obj: Notification) {
             guard let textField = obj.object as? NSTextField else { return }
-            parent.text = textField.stringValue
+            let newValue = textField.stringValue
+            parent.text = newValue
+            onTextChange?(newValue)
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
