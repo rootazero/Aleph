@@ -12,7 +12,7 @@ import Combine
 
 class HaloWindow: NSWindow {
     private var haloHostingView: NSHostingView<HaloView>?
-    private var haloViewModel: HaloViewModel
+    private(set) var viewModel: HaloViewModel
     private let themeEngine: ThemeEngine
     private weak var eventHandler: EventHandler?
 
@@ -31,11 +31,6 @@ class HaloWindow: NSWindow {
         DependencyContainer.shared.conversationManager
     }
 
-    /// Public accessor for viewModel (used by AppDelegate for command mode)
-    var viewModel: HaloViewModel {
-        return haloViewModel
-    }
-
     /// Track when Halo started showing (for minimum display time before errors)
     private(set) var showTime: Date?
 
@@ -47,8 +42,8 @@ class HaloWindow: NSWindow {
         self.themeEngine = themeEngine
 
         // Create HaloViewModel (ObservableObject) and HaloView
-        haloViewModel = HaloViewModel()
-        let haloView = HaloView(viewModel: haloViewModel, themeEngine: themeEngine)
+        viewModel = HaloViewModel()
+        let haloView = HaloView(viewModel: viewModel, themeEngine: themeEngine)
 
         // Initialize window with borderless style
         super.init(
@@ -106,11 +101,11 @@ class HaloWindow: NSWindow {
     /// Exception: Text-type clarification and conversation input need key window for TextField input
     override var canBecomeKey: Bool {
         // Allow key window only for text-type clarification (TextField needs focus)
-        if case .clarification(let request) = haloViewModel.state {
+        if case .clarification(let request) = viewModel.state {
             return request.clarificationType == .text
         }
         // Allow key window for conversation input (TextField needs focus)
-        if case .conversationInput = haloViewModel.state {
+        if case .conversationInput = viewModel.state {
             return true
         }
         return false
@@ -136,7 +131,7 @@ class HaloWindow: NSWindow {
         if event.type == .leftMouseDown {
             // Check if window should be activatable
             let shouldActivate: Bool
-            switch haloViewModel.state {
+            switch viewModel.state {
             case .conversationInput:
                 shouldActivate = true
             case .clarification(let request):
@@ -197,7 +192,7 @@ class HaloWindow: NSWindow {
     /// Set event handler reference for error action callbacks
     func setEventHandler(_ handler: EventHandler) {
         self.eventHandler = handler
-        haloViewModel.eventHandler = handler
+        viewModel.eventHandler = handler
     }
 
     /// Show conversation input UI (proxy to ConversationFlowHandler)
@@ -328,7 +323,7 @@ class HaloWindow: NSWindow {
     func hide() {
         // CRITICAL: Do NOT hide when in conversation input mode
         // The conversation input UI should remain visible until user explicitly ends the conversation
-        if case .conversationInput = haloViewModel.state {
+        if case .conversationInput = viewModel.state {
             NSLog("[HaloWindow] Hide blocked - conversation input mode active")
             return
         }
@@ -397,12 +392,12 @@ class HaloWindow: NSWindow {
 
     func updateState(_ state: HaloState) {
         // Skip update if the state is visually identical (prevents flickering)
-        if isVisuallyIdentical(current: haloViewModel.state, new: state) {
+        if isVisuallyIdentical(current: viewModel.state, new: state) {
             return
         }
 
         // Update via ViewModel (ObservableObject) to propagate changes to SwiftUI
-        haloViewModel.state = state
+        viewModel.state = state
 
         // Enable/disable mouse events based on state
         // commandMode, error, permissionRequired, toast, clarification, conversationInput, and toolConfirmation states need mouse interaction
@@ -446,7 +441,7 @@ class HaloWindow: NSWindow {
     /// Update typewriter progress (0.0-1.0)
     func updateTypewriterProgress(_ progress: Float) {
         // Update state with new progress value
-        haloViewModel.state = .typewriting(progress: progress)
+        viewModel.state = .typewriting(progress: progress)
     }
 
     /// Show Halo at screen center (for initialization feedback, errors, etc.)
@@ -537,7 +532,7 @@ class HaloWindow: NSWindow {
         print("[HaloWindow] Showing tool confirmation: \(toolName)")
 
         // Update state to show confirmation UI
-        haloViewModel.state = .toolConfirmation(
+        viewModel.state = .toolConfirmation(
             confirmationId: confirmationId,
             toolName: toolName,
             toolDescription: toolDescription,
@@ -554,7 +549,7 @@ class HaloWindow: NSWindow {
     // MARK: - Private Helpers
 
     private func getWindowSize() -> NSSize {
-        switch haloViewModel.state {
+        switch viewModel.state {
         case .commandMode:
             // Fixed height for command mode to prevent window jumping during filtering
             return NSSize(width: 400, height: 320)
@@ -562,7 +557,7 @@ class HaloWindow: NSWindow {
         case .processing(_, let text), .success(let text):
             let width: CGFloat = text != nil ? 300 : 120
             let height: CGFloat
-            if case .processing = haloViewModel.state {
+            if case .processing = viewModel.state {
                 height = text != nil ? 200 : 120
             } else {
                 height = text != nil ? 150 : 120

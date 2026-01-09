@@ -352,27 +352,6 @@ final class DependencyContainer: ObservableObject {
         print("[DependencyContainer] Cleanup complete")
     }
 
-    // MARK: - Concrete Type Accessors (for SwiftUI @ObservedObject)
-
-    /// Clarification manager as concrete type for SwiftUI views
-    /// SwiftUI's @ObservedObject requires concrete types, not protocols
-    var clarificationManagerConcrete: ClarificationManager {
-        ClarificationManager.shared
-    }
-
-    /// Conversation manager as concrete type for SwiftUI views
-    /// SwiftUI's @ObservedObject requires concrete types, not protocols
-    var conversationManagerConcrete: ConversationManager {
-        ConversationManager.shared
-    }
-
-    /// Launch at login manager as concrete type for SwiftUI views
-    /// SwiftUI's @StateObject requires concrete types, not protocols
-    @MainActor
-    var launchAtLoginManagerConcrete: LaunchAtLoginManager {
-        LaunchAtLoginManager.shared
-    }
-
     // MARK: - Convenience Accessors
 
     /// Get core, throwing if not initialized
