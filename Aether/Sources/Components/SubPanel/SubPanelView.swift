@@ -39,10 +39,10 @@ struct SubPanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Top divider (only when visible)
+            // Top divider (only when visible) - subtle white on dark background
             if state.mode.isVisible {
                 Divider()
-                    .background(Color.secondary.opacity(0.3))
+                    .background(Color.white.opacity(0.1))
             }
 
             // Content area with dynamic height
@@ -114,14 +114,9 @@ struct SubPanelView: View {
     @ViewBuilder
     private var backgroundView: some View {
         if state.mode.isVisible {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(.ultraThinMaterial)
-                .shadow(
-                    color: .black.opacity(colorScheme == .dark ? 0.3 : 0.15),
-                    radius: 6,
-                    x: 0,
-                    y: 4
-                )
+            // Match UnifiedInputView's dark gray (0.1) but slightly lighter (0.12) for subtle distinction
+            Color(white: 0.12)
+                .opacity(0.98)
         }
     }
 }
@@ -136,23 +131,23 @@ struct SubPanelCommandList: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
+            // Header - use white text on dark background
             HStack(spacing: 6) {
                 Image(systemName: "command")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.white.opacity(0.6))
                 Text(L("command.mode.title"))
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.white.opacity(0.6))
                 Spacer()
                 // Keyboard hints
                 Text("↑↓  ⏎  ⎋")
                     .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.secondary.opacity(0.6))
+                    .foregroundColor(.white.opacity(0.4))
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(Color.secondary.opacity(0.08))
+            .background(Color.white.opacity(0.05))
 
             Divider()
 
@@ -191,10 +186,10 @@ struct SubPanelCommandList: View {
         VStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 24))
-                .foregroundColor(.secondary)
+                .foregroundColor(.white.opacity(0.4))
             Text(L("command.mode.no_results"))
                 .font(.system(size: 13))
-                .foregroundColor(.secondary)
+                .foregroundColor(.white.opacity(0.5))
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
@@ -207,32 +202,33 @@ struct SubPanelCommandRow: View {
     let isSelected: Bool
     let index: Int
 
+    // Row background - use white-based colors for dark background
     private var rowBackground: Color {
         if isSelected {
             return Color.accentColor
         }
-        return index % 2 == 0 ? Color.clear : Color.secondary.opacity(0.06)
+        return index % 2 == 0 ? Color.clear : Color.white.opacity(0.03)
     }
 
     var body: some View {
         HStack(spacing: 8) {
-            // Icon
+            // Icon - white on dark background
             Image(systemName: "text.quote")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(isSelected ? .white : .secondary)
+                .foregroundColor(isSelected ? .white : .white.opacity(0.5))
                 .frame(width: 18)
 
-            // Command key
+            // Command key - white on dark background
             Text("/\(command.key)")
                 .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                .foregroundColor(isSelected ? .white : .primary)
+                .foregroundColor(isSelected ? .white : .white)
                 .fixedSize(horizontal: true, vertical: false)
 
-            // Hint
+            // Hint - dimmed white on dark background
             if let hint = command.hint, !hint.isEmpty {
                 Text(hint)
                     .font(.system(size: 11))
-                    .foregroundColor(isSelected ? .white.opacity(0.7) : .secondary)
+                    .foregroundColor(isSelected ? .white.opacity(0.7) : .white.opacity(0.5))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -243,7 +239,7 @@ struct SubPanelCommandRow: View {
             if command.hasChildren {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(isSelected ? .white.opacity(0.6) : .secondary)
+                    .foregroundColor(isSelected ? .white.opacity(0.6) : .white.opacity(0.4))
             }
         }
         .padding(.horizontal, 10)

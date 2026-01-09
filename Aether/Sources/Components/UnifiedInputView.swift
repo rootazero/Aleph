@@ -48,8 +48,9 @@ struct UnifiedInputView: View {
     @State private var inputText: String = ""
 
     /// Reference to AetherCore for command filtering
+    /// Access via AppDelegate since HaloWindow doesn't have SwiftUI environment
     private var core: AetherCore? {
-        DependencyContainer.shared.core
+        (NSApplication.shared.delegate as? AppDelegate)?.core
     }
 
     // MARK: - Colors
@@ -88,6 +89,10 @@ struct UnifiedInputView: View {
         .background(backgroundColor.opacity(0.95))
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 6)
+        .onChange(of: inputText) { newValue in
+            print("[UnifiedInputView] onChange triggered: '\(newValue)'")
+            handleTextChange(newValue)
+        }
     }
 
     // MARK: - Main Input Area
@@ -189,22 +194,32 @@ struct UnifiedInputView: View {
     }
 
     private func handleTextChange(_ newText: String) {
+        NSLog("[UnifiedInputView] handleTextChange: '%@'", newText)
+
         // Check for command prefix
         if newText.hasPrefix("/") {
             // Extract prefix after "/"
             let prefix = String(newText.dropFirst())
+            NSLog("[UnifiedInputView] Command prefix detected: '%@'", prefix)
 
             // Get filtered commands from core
             if let core = core {
+                NSLog("[UnifiedInputView] Core available, fetching commands...")
                 let commands = prefix.isEmpty ?
                     core.getRootCommands() :
                     core.filterCommands(prefix: prefix)
 
+                NSLog("[UnifiedInputView] Got %d commands", commands.count)
+
                 if !commands.isEmpty {
                     subPanelState.updateCommands(commands, inputPrefix: prefix)
+                    NSLog("[UnifiedInputView] SubPanel updated with commands")
                 } else {
                     subPanelState.hide()
+                    NSLog("[UnifiedInputView] No commands found, hiding SubPanel")
                 }
+            } else {
+                NSLog("[UnifiedInputView] ⚠️ Core is nil!")
             }
         } else {
             // Not a command, hide SubPanel

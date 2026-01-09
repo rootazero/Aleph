@@ -38,8 +38,10 @@ struct IMETextField: NSViewRepresentable {
     var onTextChange: ((String) -> Void)?
 
     func makeNSView(context: Context) -> NSTextField {
+        NSLog("[IMETextField] makeNSView called")
         let textField = IMETextFieldView()
         textField.delegate = context.coordinator
+        NSLog("[IMETextField] delegate set to coordinator")
         textField.stringValue = text
         textField.font = font
         textField.textColor = textColor
@@ -68,6 +70,28 @@ struct IMETextField: NSViewRepresentable {
         context.coordinator.onEscape = onEscape
         context.coordinator.onTextChange = onTextChange
         context.coordinator.textField = textField
+
+        // Set direct callback on IMETextFieldView (most reliable method)
+        let coordinator = context.coordinator
+        textField.onTextChanged = { [weak coordinator] newValue in
+            NSLog("[IMETextField] onTextChanged closure called: '%@'", newValue)
+            guard let coordinator = coordinator else {
+                NSLog("[IMETextField] ⚠️ coordinator is nil in onTextChanged")
+                return
+            }
+            NSLog("[IMETextField] onTextChanged callback: '%@'", newValue)
+            coordinator.parent.text = newValue
+            coordinator.onTextChange?(newValue)
+        }
+        NSLog("[IMETextField] onTextChanged callback set on textField")
+
+        // Manually observe text changes via NotificationCenter (backup for delegate)
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.textDidChangeNotification(_:)),
+            name: NSControl.textDidChangeNotification,
+            object: textField
+        )
 
         // Auto-focus after a short delay to ensure window is ready
         if autoFocus {
@@ -116,6 +140,26 @@ struct IMETextField: NSViewRepresentable {
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onEscape = onEscape
         context.coordinator.onTextChange = onTextChange
+
+        // Update direct callback on IMETextFieldView
+        if let imeTextField = nsView as? IMETextFieldView {
+            let coordinator = context.coordinator
+            imeTextField.onTextChanged = { [weak coordinator] newValue in
+                NSLog("[IMETextField] updateNSView callback: '%@'", newValue)
+                guard let coordinator = coordinator else {
+                    NSLog("[IMETextField] ⚠️ coordinator nil in updateNSView callback")
+                    return
+                }
+                coordinator.parent.text = newValue
+                NSLog("[IMETextField] parent.text updated to: '%@'", newValue)
+                if let textChange = coordinator.onTextChange {
+                    NSLog("[IMETextField] calling onTextChange callback")
+                    textChange(newValue)
+                } else {
+                    NSLog("[IMETextField] ⚠️ onTextChange is nil")
+                }
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -133,11 +177,36 @@ struct IMETextField: NSViewRepresentable {
             self.parent = parent
         }
 
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+
         func controlTextDidChange(_ obj: Notification) {
-            guard let textField = obj.object as? NSTextField else { return }
+            print("[IMETextField] controlTextDidChange called")
+            handleTextChange(from: obj)
+        }
+
+        /// NotificationCenter backup method for text changes
+        @objc func textDidChangeNotification(_ notification: Notification) {
+            print("[IMETextField] textDidChangeNotification called (NotificationCenter)")
+            handleTextChange(from: notification)
+        }
+
+        /// Unified text change handler
+        private func handleTextChange(from notification: Notification) {
+            guard let textField = notification.object as? NSTextField else {
+                print("[IMETextField] ❌ Could not get textField from notification")
+                return
+            }
             let newValue = textField.stringValue
+            print("[IMETextField] Text changed to: '\(newValue)'")
             parent.text = newValue
-            onTextChange?(newValue)
+            if let callback = onTextChange {
+                print("[IMETextField] Calling onTextChange callback")
+                callback(newValue)
+            } else {
+                print("[IMETextField] ⚠️ onTextChange callback is nil")
+            }
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -156,7 +225,11 @@ struct IMETextField: NSViewRepresentable {
 }
 
 /// Custom NSTextField subclass that properly handles first responder
+/// and text change detection in floating windows
 class IMETextFieldView: NSTextField {
+    /// Callback for text changes - set by IMETextField coordinator
+    var onTextChanged: ((String) -> Void)?
+
     override var acceptsFirstResponder: Bool {
         return true
     }
@@ -175,6 +248,18 @@ class IMETextFieldView: NSTextField {
     // Ensure keyboard events go to this field
     override var needsPanelToBecomeKey: Bool {
         return false
+    }
+
+    /// Override textDidChange to ensure we capture text changes
+    /// This is called by the field editor when text changes
+    override func textDidChange(_ notification: Notification) {
+        super.textDidChange(notification)
+        NSLog("[IMETextFieldView] textDidChange called: '%@', onTextChanged is %@", stringValue, onTextChanged != nil ? "set" : "nil")
+        if let callback = onTextChanged {
+            callback(stringValue)
+        } else {
+            NSLog("[IMETextFieldView] ⚠️ onTextChanged callback is nil!")
+        }
     }
 }
 

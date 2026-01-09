@@ -24,6 +24,17 @@ class HaloWindow: NSWindow {
     /// Handler for Conversation (Multi-turn) keyboard events
     private let conversationHandler = ConversationFlowHandler()
 
+    // MARK: - Unified Input Key Monitors
+
+    /// Local keyboard event monitor for unified input
+    private var unifiedInputKeyMonitor: Any?
+
+    /// Global keyboard event monitor for unified input (fallback for ESC)
+    private var unifiedInputGlobalKeyMonitor: Any?
+
+    /// Combine subscription for SubPanel size changes
+    private var subPanelSizeCancellable: AnyCancellable?
+
     // MARK: - Managers (via DependencyContainer)
 
     /// Conversation manager accessed through DependencyContainer (for hide blocking)
@@ -88,9 +99,29 @@ class HaloWindow: NSWindow {
 
         conversationHandler.delegate = self
         conversationHandler.activate(window: self)
+
+        // Observe SubPanel mode changes to update window size
+        subPanelSizeCancellable = viewModel.subPanelState.$mode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                // Only update size if in unifiedInput state
+                if case .unifiedInput = self.viewModel.state {
+                    let newSize = self.getWindowSize()
+                    NSLog("[HaloWindow] SubPanel mode changed, updating size to: (%.0f, %.0f)", newSize.width, newSize.height)
+                    self.setContentSize(newSize)
+                }
+            }
     }
 
     deinit {
+        // Clean up unified input key monitors
+        if let monitor = unifiedInputKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = unifiedInputGlobalKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
         // Flow handlers will clean up in their own deinit
         // No need to explicitly call deactivate() here
     }
@@ -137,6 +168,8 @@ class HaloWindow: NSWindow {
             let shouldActivate: Bool
             switch viewModel.state {
             case .conversationInput:
+                shouldActivate = true
+            case .unifiedInput:
                 shouldActivate = true
             case .clarification(let request):
                 shouldActivate = request.clarificationType == .text
@@ -243,13 +276,67 @@ class HaloWindow: NSWindow {
             subPanelMode: .hidden
         )
 
-        // Show below the caret position
-        showBelow(at: position)
+        // Enable mouse events for interaction
+        self.ignoresMouseEvents = false
 
-        // Activate window for text input
+        // Enable window dragging
+        self.isMovableByWindowBackground = true
+
+        // Show at screen center
+        showCentered()
+
+        // Activate window for text input and setup key monitors
         DispatchQueue.mainAsyncAfter(delay: 0.1, weakRef: self) { slf in
             NSApp.activate(ignoringOtherApps: true)
             slf.makeKeyAndOrderFront(nil)
+            slf.setupUnifiedInputKeyMonitors()
+        }
+    }
+
+    /// Setup keyboard monitors for unified input (ESC handling)
+    private func setupUnifiedInputKeyMonitors() {
+        removeUnifiedInputKeyMonitors()
+
+        // Local monitor when window is key
+        unifiedInputKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return event }
+            guard case .unifiedInput = self.viewModel.state else { return event }
+
+            // ESC key
+            if event.keyCode == 53 {
+                NSLog("[HaloWindow] ESC pressed in unified input (local)")
+                self.viewModel.callbacks.unifiedInputOnCancel?()
+                return nil  // Consume the event
+            }
+            return event
+        }
+
+        // Global monitor as fallback (for ESC when window loses key)
+        unifiedInputGlobalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return }
+            guard case .unifiedInput = self.viewModel.state else { return }
+
+            // Only handle ESC key globally
+            if event.keyCode == 53 {
+                NSLog("[HaloWindow] ESC pressed in unified input (global)")
+                DispatchQueue.main.async {
+                    self.viewModel.callbacks.unifiedInputOnCancel?()
+                }
+            }
+        }
+
+        NSLog("[HaloWindow] Unified input key monitors installed")
+    }
+
+    /// Remove unified input keyboard monitors
+    private func removeUnifiedInputKeyMonitors() {
+        if let monitor = unifiedInputKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            unifiedInputKeyMonitor = nil
+        }
+        if let monitor = unifiedInputGlobalKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            unifiedInputGlobalKeyMonitor = nil
         }
     }
 
@@ -411,6 +498,9 @@ class HaloWindow: NSWindow {
     func forceHide() {
         NSLog("[HaloWindow] Force hide called")
 
+        // Remove unified input key monitors
+        removeUnifiedInputKeyMonitors()
+
         // Reset show time
         showTime = nil
 
@@ -500,7 +590,7 @@ class HaloWindow: NSWindow {
         viewModel.state = .typewriting(progress: progress)
     }
 
-    /// Show Halo at screen center (for initialization feedback, errors, etc.)
+    /// Show Halo at screen center (for initialization feedback, errors, unified input, etc.)
     func showCentered() {
         // Record show time for minimum display duration before errors
         showTime = Date()
@@ -514,7 +604,8 @@ class HaloWindow: NSWindow {
         }
 
         let screenFrame = screen.visibleFrame
-        let windowSize = NSSize(width: 120, height: 120)  // Standard Halo size
+        // Use dynamic window size based on current state (supports unified input, etc.)
+        let windowSize = getWindowSize()
         self.setContentSize(windowSize)
 
         // Center on screen
@@ -533,6 +624,9 @@ class HaloWindow: NSWindow {
             context.duration = 0.2
             self.animator().alphaValue = 1.0
         })
+
+        NSLog("[HaloWindow] showCentered - size: (%.0f, %.0f), window origin: (%.1f, %.1f)",
+              windowSize.width, windowSize.height, windowOrigin.x, windowOrigin.y)
     }
 
     /// Show toast at screen center (unlike regular Halo which shows at cursor)
