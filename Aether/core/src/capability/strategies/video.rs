@@ -46,6 +46,44 @@ impl CapabilityStrategy for VideoStrategy {
         true
     }
 
+    fn validate_config(&self) -> Result<()> {
+        // Config validation is optional - default config is always valid
+        // max_transcript_length of 0 means no limit, which is valid
+        Ok(())
+    }
+
+    async fn health_check(&self) -> Result<bool> {
+        // Video capability is always healthy if available
+        // We could optionally test YouTube API connectivity here
+        Ok(self.is_available())
+    }
+
+    fn status_info(&self) -> std::collections::HashMap<String, String> {
+        let mut info = std::collections::HashMap::new();
+        info.insert("capability".to_string(), "Video".to_string());
+        info.insert("name".to_string(), "video".to_string());
+        info.insert("priority".to_string(), "3".to_string());
+        info.insert("available".to_string(), self.is_available().to_string());
+        info.insert(
+            "has_config".to_string(),
+            self.video_config.is_some().to_string(),
+        );
+        if let Some(config) = &self.video_config {
+            info.insert("enabled".to_string(), config.enabled.to_string());
+            info.insert(
+                "youtube_transcript".to_string(),
+                config.youtube_transcript.to_string(),
+            );
+            info.insert(
+                "max_transcript_length".to_string(),
+                config.max_transcript_length.to_string(),
+            );
+        } else {
+            info.insert("enabled".to_string(), "true".to_string());
+        }
+        info
+    }
+
     async fn execute(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
         // Use provided config or default
         let default_config = VideoConfig::default();

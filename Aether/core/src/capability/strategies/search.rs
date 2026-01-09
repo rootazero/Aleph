@@ -77,6 +77,58 @@ impl CapabilityStrategy for SearchStrategy {
         self.search_registry.is_some()
     }
 
+    fn validate_config(&self) -> Result<()> {
+        // Check if timeout is reasonable
+        if self.search_options.timeout_seconds == 0 {
+            return Err(crate::error::AetherError::config(
+                "Search timeout cannot be 0",
+            ));
+        }
+
+        // Check if max_results is reasonable
+        if self.search_options.max_results == 0 {
+            return Err(crate::error::AetherError::config(
+                "Search max_results cannot be 0",
+            ));
+        }
+
+        Ok(())
+    }
+
+    async fn health_check(&self) -> Result<bool> {
+        // Search is healthy if registry is configured
+        // Actual provider availability is checked at runtime during search
+        if self.search_registry.is_some() {
+            debug!("Search registry configured");
+        }
+        Ok(self.is_available())
+    }
+
+    fn status_info(&self) -> std::collections::HashMap<String, String> {
+        let mut info = std::collections::HashMap::new();
+        info.insert("capability".to_string(), "Search".to_string());
+        info.insert("name".to_string(), "search".to_string());
+        info.insert("priority".to_string(), "1".to_string());
+        info.insert("available".to_string(), self.is_available().to_string());
+        info.insert(
+            "has_registry".to_string(),
+            self.search_registry.is_some().to_string(),
+        );
+        info.insert(
+            "timeout_seconds".to_string(),
+            self.search_options.timeout_seconds.to_string(),
+        );
+        info.insert(
+            "max_results".to_string(),
+            self.search_options.max_results.to_string(),
+        );
+        info.insert(
+            "pii_scrubbing".to_string(),
+            self.pii_scrubbing_enabled.to_string(),
+        );
+        info
+    }
+
     async fn execute(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
         // Check if search registry is available
         let Some(registry) = &self.search_registry else {

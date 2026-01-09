@@ -47,6 +47,57 @@ impl CapabilityStrategy for SkillsStrategy {
         self.skills_registry.is_some()
     }
 
+    fn validate_config(&self) -> Result<()> {
+        // Validate skills directory exists if registry is configured
+        if let Some(registry) = &self.skills_registry {
+            let dir = registry.skills_dir();
+            if !dir.exists() {
+                return Err(crate::error::AetherError::config(format!(
+                    "Skills directory does not exist: {}",
+                    dir.display()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    async fn health_check(&self) -> Result<bool> {
+        if !self.is_available() {
+            return Ok(false);
+        }
+
+        // Check if registry has any skills loaded
+        if let Some(registry) = &self.skills_registry {
+            let count = registry.count();
+            debug!(skill_count = count, "Skills health check: skills loaded");
+            // Skills is healthy as long as registry exists
+            // (could have 0 skills but still be operational)
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    fn status_info(&self) -> std::collections::HashMap<String, String> {
+        let mut info = std::collections::HashMap::new();
+        info.insert("capability".to_string(), "Skills".to_string());
+        info.insert("name".to_string(), "skills".to_string());
+        info.insert("priority".to_string(), "4".to_string());
+        info.insert("available".to_string(), self.is_available().to_string());
+        info.insert(
+            "has_registry".to_string(),
+            self.skills_registry.is_some().to_string(),
+        );
+        if let Some(registry) = &self.skills_registry {
+            info.insert("skill_count".to_string(), registry.count().to_string());
+            info.insert(
+                "skills_dir".to_string(),
+                registry.skills_dir().display().to_string(),
+            );
+        }
+        info
+    }
+
     async fn execute(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
         let Some(registry) = &self.skills_registry else {
             warn!("Skills capability requested but no registry configured");

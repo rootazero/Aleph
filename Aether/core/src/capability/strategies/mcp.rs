@@ -77,6 +77,58 @@ impl CapabilityStrategy for McpStrategy {
         self.mcp_client.is_some()
     }
 
+    fn validate_config(&self) -> Result<()> {
+        // MCP config validation is done at client initialization
+        // Here we just check consistency
+        if let Some(config) = &self.mcp_config {
+            if !config.enabled {
+                // MCP is disabled, nothing to validate
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    async fn health_check(&self) -> Result<bool> {
+        if !self.is_available() {
+            return Ok(false);
+        }
+
+        // Check if client has any tools available
+        if let Some(client) = &self.mcp_client {
+            let tools = client.list_tools().await;
+            debug!(
+                tool_count = tools.len(),
+                "MCP health check: tools available"
+            );
+            // MCP is healthy if we have at least some tools
+            // (could be 0 if all servers are down, but client is still running)
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    fn status_info(&self) -> std::collections::HashMap<String, String> {
+        let mut info = std::collections::HashMap::new();
+        info.insert("capability".to_string(), "Mcp".to_string());
+        info.insert("name".to_string(), "mcp".to_string());
+        info.insert("priority".to_string(), "2".to_string());
+        info.insert("available".to_string(), self.is_available().to_string());
+        info.insert(
+            "has_client".to_string(),
+            self.mcp_client.is_some().to_string(),
+        );
+        info.insert(
+            "has_config".to_string(),
+            self.mcp_config.is_some().to_string(),
+        );
+        if let Some(config) = &self.mcp_config {
+            info.insert("enabled".to_string(), config.enabled.to_string());
+        }
+        info
+    }
+
     async fn execute(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
         // Check if client is available
         let Some(client) = &self.mcp_client else {

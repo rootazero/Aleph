@@ -13,13 +13,18 @@ pub mod request;
 pub mod response_parser;
 pub mod strategies;
 pub mod strategy;
+pub mod system;
 
 // Re-exports for convenience
 pub use declaration::{CapabilityDeclaration, CapabilityParameter, CapabilityRegistry};
 pub use request::{AiResponse, CapabilityRequest, ClarificationInfo, ClarificationReason};
 pub use response_parser::ResponseParser;
 pub use strategies::{McpStrategy, MemoryStrategy, SearchStrategy, SkillsStrategy, VideoStrategy};
-pub use strategy::{CapabilityStrategy, CompositeCapabilityExecutor};
+pub use strategy::{CapabilityHealth, CapabilityStrategy, CompositeCapabilityExecutor};
+pub use system::{
+    CapabilityDiagnostics, CapabilityStatus, CapabilitySystem, CapabilitySystemBuilder,
+    CapabilitySystemConfig, SystemStatus,
+};
 
 // ============================================================================
 // Capability Executor

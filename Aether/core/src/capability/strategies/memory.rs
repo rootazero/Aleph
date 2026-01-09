@@ -108,6 +108,74 @@ impl CapabilityStrategy for MemoryStrategy {
         self.memory_db.is_some() && self.memory_config.is_some()
     }
 
+    fn validate_config(&self) -> Result<()> {
+        // Check if embedding model directory exists when db is configured
+        if self.memory_db.is_some() {
+            match Self::get_embedding_model_dir() {
+                Ok(dir) => {
+                    if !dir.exists() {
+                        return Err(AetherError::config(format!(
+                            "Embedding model directory not found: {}",
+                            dir.display()
+                        )));
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        // If AI retrieval is enabled, verify provider is configured
+        if self.use_ai_retrieval && self.ai_provider.is_none() {
+            return Err(AetherError::config(
+                "AI retrieval enabled but no AI provider configured",
+            ));
+        }
+
+        Ok(())
+    }
+
+    async fn health_check(&self) -> Result<bool> {
+        // Check if database is accessible
+        if let Some(db) = &self.memory_db {
+            // Try to get stats to verify db is healthy
+            match db.get_stats().await {
+                Ok(stats) => {
+                    debug!(
+                        total_memories = stats.total_memories,
+                        "Memory database health check passed"
+                    );
+                }
+                Err(e) => {
+                    warn!(error = %e, "Memory database health check failed");
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(self.is_available())
+    }
+
+    fn status_info(&self) -> std::collections::HashMap<String, String> {
+        let mut info = std::collections::HashMap::new();
+        info.insert("capability".to_string(), "Memory".to_string());
+        info.insert("name".to_string(), "memory".to_string());
+        info.insert("priority".to_string(), "0".to_string());
+        info.insert("available".to_string(), self.is_available().to_string());
+        info.insert("has_db".to_string(), self.memory_db.is_some().to_string());
+        info.insert(
+            "has_config".to_string(),
+            self.memory_config.is_some().to_string(),
+        );
+        info.insert(
+            "ai_retrieval_enabled".to_string(),
+            self.use_ai_retrieval.to_string(),
+        );
+        info.insert(
+            "has_ai_provider".to_string(),
+            self.ai_provider.is_some().to_string(),
+        );
+        info
+    }
+
     async fn execute(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
         // Check if memory database and config are available
         let Some(db) = &self.memory_db else {
