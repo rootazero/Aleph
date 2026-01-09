@@ -394,11 +394,8 @@ final class UnifiedInputCoordinator {
             return
         }
 
-        // Update Halo to processing state and start CLI output
+        // Start CLI output in SubPanel (keep unified input window visible)
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
-
-            // Start CLI output in SubPanel
             slf.startCLIOutput()
             slf.appendCLIOutput(L("subpanel.cli.sending"), type: .command)
         }
@@ -445,11 +442,8 @@ final class UnifiedInputCoordinator {
         // Build the full input for routing
         let fullInput = "/\(commandKey) \(content)"
 
-        // Update Halo to processing state and start CLI output
+        // Start CLI output in SubPanel (keep unified input window visible)
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
-
-            // Start CLI output in SubPanel
             slf.startCLIOutput()
             slf.appendCLIOutput("/\(commandKey)", type: .command)
             slf.appendThinkingOutput(L("subpanel.cli.routing"))

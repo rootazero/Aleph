@@ -265,10 +265,18 @@ final class ConversationCoordinator {
 
         print("[ConversationCoordinator] 🎭 Continuing conversation with: \(followUpInput.prefix(50))...")
 
-        // Update Halo to processing state
+        // Only show processing state if not in unified input mode
+        // Unified input keeps its own window visible with SubPanel CLI output
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
-            slf.haloWindowController?.showCentered()
+            if let window = slf.haloWindowController?.window,
+               case .unifiedInput = window.viewModel.state {
+                // Already in unified input mode - don't switch to processing state
+                print("[ConversationCoordinator] Keeping unified input window (no processing state switch)")
+            } else {
+                // Not in unified input mode - show processing state
+                slf.haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
+                slf.haloWindowController?.showCentered()
+            }
         }
 
         DispatchQueue.global(qos: .userInitiated).async {
