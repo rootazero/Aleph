@@ -403,21 +403,29 @@ class EventHandler: AetherEventHandler {
             accumulatedText = ""
 
         case .listening:
-            // Processing indicator is now handled by ProcessingIndicatorWindow
+            // Show HaloWindow with listening state
+            haloWindow?.updateState(.listening)
+            haloWindow?.show(at: NSEvent.mouseLocation)
             // Reset accumulated text when starting new interaction
             accumulatedText = ""
             announceToVoiceOver("Listening for input")
 
         case .retrievingMemory:
-            // Processing indicator is now handled by ProcessingIndicatorWindow
+            // Show HaloWindow with retrieving memory state
+            haloWindow?.updateState(.retrievingMemory)
+            haloWindow?.showAtCurrentPosition()
             announceToVoiceOver("Retrieving memories")
 
         case .processingWithAi:
-            // Processing indicator is now handled by ProcessingIndicatorWindow
+            // Show HaloWindow with processing with AI state
+            haloWindow?.updateState(.processingWithAI(providerColor: .purple, providerName: nil))
+            haloWindow?.showAtCurrentPosition()
             announceToVoiceOver("Processing with AI")
 
         case .processing:
-            // Processing indicator is now handled by ProcessingIndicatorWindow
+            // Show HaloWindow with processing state
+            haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
+            haloWindow?.showAtCurrentPosition()
             announceToVoiceOver("Processing request")
 
         case .success:
@@ -451,8 +459,8 @@ class EventHandler: AetherEventHandler {
         // Accumulate text for potential future use
         accumulatedText = text
 
-        // Processing indicator is now handled by ProcessingIndicatorWindow
-        // HaloWindow .processing state with streaming text is disabled
+        // Update HaloWindow with streaming text
+        haloWindow?.updateState(.processing(providerColor: .purple, streamingText: text))
 
         // Update timestamp
         lastUpdateTime = Date()
@@ -461,8 +469,12 @@ class EventHandler: AetherEventHandler {
     // MARK: - AI Processing Handling
 
     private func handleAiProcessingStarted(providerName: String, providerColor: String) {
-        // Processing indicator is now handled by ProcessingIndicatorWindow
-        // HaloWindow .processingWithAI state is disabled
+        // Parse the color string to SwiftUI Color
+        let color = Color(hex: providerColor) ?? .purple
+
+        // Update HaloWindow with AI processing state
+        haloWindow?.updateState(.processingWithAI(providerColor: color, providerName: providerName))
+        haloWindow?.showAtCurrentPosition()
         print("[EventHandler] AI processing started: \(providerName)")
     }
 
@@ -470,8 +482,8 @@ class EventHandler: AetherEventHandler {
         // Store the response preview for potential future use
         accumulatedText = responsePreview
 
-        // Processing indicator is now handled by ProcessingIndicatorWindow
-        // HaloWindow .processing state with preview is disabled
+        // Update HaloWindow with response preview
+        haloWindow?.updateState(.processing(providerColor: .purple, streamingText: responsePreview))
     }
 
     // MARK: - Typed Error Handling

@@ -38,9 +38,6 @@ final class InputCoordinator {
     /// Reference to conversation coordinator for multi-turn conversations
     private weak var conversationCoordinator: ConversationCoordinator?
 
-    /// Theme engine for theming the processing indicator
-    private var themeEngine: ThemeEngine?
-
     /// Clipboard manager for clipboard operations
     private let clipboardManager: any ClipboardManagerProtocol
 
@@ -54,20 +51,6 @@ final class InputCoordinator {
 
     /// Whether permission gate is active (blocks input)
     var isPermissionGateActive: Bool = false
-
-    /// Processing indicator window for single-turn mode (created lazily after themeEngine is set)
-    private var _processingIndicatorWindow: ProcessingIndicatorWindow?
-    private var processingIndicatorWindow: ProcessingIndicatorWindow {
-        if _processingIndicatorWindow == nil, let themeEngine = themeEngine {
-            _processingIndicatorWindow = ProcessingIndicatorWindow(themeEngine: themeEngine)
-        }
-        return _processingIndicatorWindow ?? {
-            // Fallback: create with new ThemeEngine if not configured
-            let window = ProcessingIndicatorWindow(themeEngine: ThemeEngine())
-            _processingIndicatorWindow = window
-            return window
-        }()
-    }
 
     // MARK: - Initialization
 
@@ -92,21 +75,18 @@ final class InputCoordinator {
     ///   - eventHandler: EventHandler for error callbacks
     ///   - outputCoordinator: OutputCoordinator for response output
     ///   - conversationCoordinator: ConversationCoordinator for multi-turn conversations
-    ///   - themeEngine: ThemeEngine for theming the processing indicator
     func configure(
         core: AetherCore,
         haloWindowController: HaloWindowController?,
         eventHandler: EventHandler?,
         outputCoordinator: OutputCoordinator? = nil,
-        conversationCoordinator: ConversationCoordinator? = nil,
-        themeEngine: ThemeEngine? = nil
+        conversationCoordinator: ConversationCoordinator? = nil
     ) {
         self.core = core
         self.haloWindowController = haloWindowController
         self.eventHandler = eventHandler
         self.outputCoordinator = outputCoordinator
         self.conversationCoordinator = conversationCoordinator
-        self.themeEngine = themeEngine
     }
 
     // MARK: - Trigger Handlers
@@ -497,14 +477,18 @@ final class InputCoordinator {
     /// Show processing indicator at cursor position (falls back to mouse position)
     private func showProcessingIndicator() {
         DispatchQueue.main.async { [weak self] in
-            self?.processingIndicatorWindow.show(mode: .singleTurn)
+            guard let self = self else { return }
+            // Try cursor position first, fall back to mouse position
+            let position = CaretPositionHelper.getBestPosition()
+            self.haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
+            self.haloWindowController?.show(at: position)
         }
     }
 
     /// Hide processing indicator
     private func hideProcessingIndicator() {
         DispatchQueue.main.async { [weak self] in
-            self?.processingIndicatorWindow.hideIndicator()
+            self?.haloWindowController?.hide()
         }
     }
 

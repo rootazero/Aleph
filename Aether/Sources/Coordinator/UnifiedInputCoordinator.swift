@@ -43,9 +43,6 @@ final class UnifiedInputCoordinator {
     /// Reference to conversation coordinator for multi-turn conversations
     private weak var conversationCoordinator: ConversationCoordinator?
 
-    /// Theme engine for theming the processing indicator
-    private var themeEngine: ThemeEngine?
-
     /// Clipboard manager for clipboard operations
     private let clipboardManager: any ClipboardManagerProtocol
 
@@ -87,26 +84,17 @@ final class UnifiedInputCoordinator {
     /// Set to true when cursor is not in an input field
     private var useCLIOutputMode: Bool = false
 
-    /// Processing indicator window for multi-turn mode (created lazily after themeEngine is set)
-    /// Shows at cursor position, falls back to unified input window's top-left
-    private var _processingIndicatorWindow: ProcessingIndicatorWindow?
-    private var processingIndicatorWindow: ProcessingIndicatorWindow {
-        if _processingIndicatorWindow == nil, let themeEngine = themeEngine {
-            _processingIndicatorWindow = ProcessingIndicatorWindow(themeEngine: themeEngine)
-        }
-        return _processingIndicatorWindow ?? {
-            // Fallback: create with new ThemeEngine if not configured
-            let window = ProcessingIndicatorWindow(themeEngine: ThemeEngine())
-            _processingIndicatorWindow = window
-            return window
-        }()
-    }
+    /// Unified input window (independent from HaloWindow)
+    /// Can coexist with HaloWindow's processing indicator
+    private lazy var unifiedInputWindow: UnifiedInputWindow = {
+        UnifiedInputWindow()
+    }()
 
     // MARK: - SubPanel Access
 
-    /// Access SubPanelState for CLI output
-    private var subPanelState: SubPanelState? {
-        haloWindowController?.window?.viewModel.subPanelState
+    /// Access SubPanelState for CLI output (from unified input window)
+    private var subPanelState: SubPanelState {
+        unifiedInputWindow.subPanelState
     }
 
     // MARK: - Initialization
@@ -131,39 +119,22 @@ final class UnifiedInputCoordinator {
     ///
     /// - Parameters:
     ///   - core: AetherCore instance
-    ///   - haloWindowController: HaloWindowController for UI
+    ///   - haloWindowController: HaloWindowController for UI (used for processing state)
     ///   - eventHandler: EventHandler for callbacks
     ///   - outputCoordinator: OutputCoordinator for response output
     ///   - conversationCoordinator: ConversationCoordinator for multi-turn conversations
-    ///   - themeEngine: ThemeEngine for theming the processing indicator
     func configure(
         core: AetherCore,
         haloWindowController: HaloWindowController?,
         eventHandler: EventHandler?,
         outputCoordinator: OutputCoordinator? = nil,
-        conversationCoordinator: ConversationCoordinator? = nil,
-        themeEngine: ThemeEngine? = nil
+        conversationCoordinator: ConversationCoordinator? = nil
     ) {
         self.core = core
         self.haloWindowController = haloWindowController
         self.eventHandler = eventHandler
         self.outputCoordinator = outputCoordinator
         self.conversationCoordinator = conversationCoordinator
-        self.themeEngine = themeEngine
-
-        // Observe conversation turn completed to hide processing indicator
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(onConversationTurnCompleted(_:)),
-            name: .conversationTurnCompleted,
-            object: nil
-        )
-    }
-
-    /// Handle conversation turn completed notification
-    @objc private func onConversationTurnCompleted(_ notification: Notification) {
-        // Hide processing indicator when conversation turn completes
-        hideProcessingIndicator()
     }
 
     // MARK: - Hotkey Setup
@@ -278,13 +249,8 @@ final class UnifiedInputCoordinator {
             return
         }
 
-        guard let haloWindow = haloWindowController?.window else {
-            print("[UnifiedInputCoordinator] ❌ HaloWindow not available")
-            return
-        }
-
-        // If already in unified input mode, toggle off
-        if case .unifiedInput = haloWindow.viewModel.state {
+        // If already showing unified input, toggle off
+        if unifiedInputWindow.isVisible {
             exitUnifiedInput()
             return
         }
@@ -350,22 +316,16 @@ final class UnifiedInputCoordinator {
 
     /// Show unified input at specified position
     ///
-    /// - Parameter position: Screen position to show the Halo window
+    /// - Parameter position: Screen position (not used - window is centered)
     private func showUnifiedInput(at position: NSPoint) {
-        print("[UnifiedInputCoordinator] Showing unified input at: (\(position.x), \(position.y))")
-
-        guard let haloWindow = haloWindowController?.window else {
-            print("[UnifiedInputCoordinator] ❌ HaloWindow not available")
-            return
-        }
+        print("[UnifiedInputCoordinator] Showing unified input")
 
         // Generate a new session ID for this conversation
         currentSessionId = UUID().uuidString
         currentTurnCount = 0
 
         // Show unified input window with callbacks
-        haloWindow.showUnifiedInput(
-            at: position,
+        unifiedInputWindow.show(
             sessionId: currentSessionId!,
             turnCount: currentTurnCount,
             onSubmit: { [weak self] text in
@@ -590,14 +550,11 @@ final class UnifiedInputCoordinator {
         currentTurnCount = 0
         targetAppInfo = nil
 
-        // Clear callbacks
-        haloWindowController?.window?.viewModel.callbacks.unifiedInputOnSubmit = nil
-        haloWindowController?.window?.viewModel.callbacks.unifiedInputOnCancel = nil
-        haloWindowController?.window?.viewModel.callbacks.unifiedInputOnCommandSelected = nil
+        // Hide unified input window
+        unifiedInputWindow.hideWindow()
 
-        // Hide Halo
-        haloWindowController?.window?.updateState(.idle)
-        haloWindowController?.forceHide()
+        // Also hide any processing indicator from HaloWindow
+        haloWindowController?.hide()
     }
 
     // MARK: - CLI Output
@@ -605,7 +562,7 @@ final class UnifiedInputCoordinator {
     /// Start CLI output mode in SubPanel
     private func startCLIOutput() {
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.subPanelState?.showCLIOutput(initialLines: [
+            slf.subPanelState.showCLIOutput(initialLines: [
                 CLIOutputLine(type: .info, content: L("subpanel.cli.processing"))
             ])
         }
@@ -614,7 +571,7 @@ final class UnifiedInputCoordinator {
     /// Append a line to CLI output
     private func appendCLIOutput(_ text: String, type: CLIOutputType = .info) {
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.subPanelState?.appendCLIText(text, type: type)
+            slf.subPanelState.appendCLIText(text, type: type)
         }
     }
 
@@ -631,7 +588,7 @@ final class UnifiedInputCoordinator {
     /// Complete CLI output (stop streaming indicator)
     private func completeCLIOutput() {
         DispatchQueue.main.async { [weak self] in
-            self?.subPanelState?.completeCLIOutput()
+            self?.subPanelState.completeCLIOutput()
         }
     }
 
@@ -647,21 +604,29 @@ final class UnifiedInputCoordinator {
         completeCLIOutput()
     }
 
-    // MARK: - Processing Indicator
+    // MARK: - Processing Indicator (via HaloWindow)
 
-    /// Show processing indicator at cursor position (falls back to unified input window's top-left)
+    /// Show processing indicator using HaloWindow's .processing state
+    /// This can coexist with UnifiedInputWindow
     private func showProcessingIndicator() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            let windowFrame = self.haloWindowController?.window?.frame
-            self.processingIndicatorWindow.show(mode: .multiTurn(windowFrame: windowFrame))
+            // Position HaloWindow near the unified input window
+            if let windowFrame = self.unifiedInputWindow.frame as NSRect? {
+                let position = NSPoint(
+                    x: windowFrame.minX + 80,  // Left side of unified input
+                    y: windowFrame.maxY - 80   // Top of unified input
+                )
+                self.haloWindowController?.window?.updateState(.processing(providerColor: .purple, streamingText: nil))
+                self.haloWindowController?.window?.show(at: position)
+            }
         }
     }
 
     /// Hide processing indicator
     private func hideProcessingIndicator() {
         DispatchQueue.main.async { [weak self] in
-            self?.processingIndicatorWindow.hideIndicator()
+            self?.haloWindowController?.hide()
         }
     }
 
@@ -671,8 +636,6 @@ final class UnifiedInputCoordinator {
     func cleanup() {
         removeUnifiedHotkey()
         exitUnifiedInput()
-        NotificationCenter.default.removeObserver(self)
-        processingIndicatorWindow.hideIndicator()
     }
 }
 

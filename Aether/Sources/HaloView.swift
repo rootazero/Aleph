@@ -108,23 +108,6 @@ struct HaloView: View {
                     onCancel: viewModel.callbacks.toolConfirmationOnCancel ?? {}
                 )
                 .transition(.scale.combined(with: .opacity))
-
-            case .unifiedInput(let sessionId, let turnCount, _):
-                UnifiedInputView(
-                    sessionId: sessionId,
-                    turnCount: turnCount,
-                    subPanelState: viewModel.subPanelState,
-                    onSubmit: { text in
-                        viewModel.callbacks.unifiedInputOnSubmit?(text)
-                    },
-                    onCancel: {
-                        viewModel.callbacks.unifiedInputOnCancel?()
-                    },
-                    onCommandSelected: { command in
-                        viewModel.callbacks.unifiedInputOnCommandSelected?(command)
-                    }
-                )
-                .transition(.scale.combined(with: .opacity))
             }
         }
         .frame(width: dynamicWidth, height: dynamicHeight)
@@ -182,8 +165,6 @@ struct HaloView: View {
             return "Conversation input, turn \(turnCount + 1)"
         case .toolConfirmation(_, let name, _, _, _):
             return "Tool confirmation: \(name)"
-        case .unifiedInput(_, let turnCount, _):
-            return "Unified input, turn \(turnCount + 1)"
         }
     }
 
@@ -207,9 +188,6 @@ struct HaloView: View {
             return "Turn \(turnCount + 1), text input required"
         case .toolConfirmation(_, _, let desc, let reason, let conf):
             return "\(desc). \(reason). Confidence: \(Int(conf * 100))%"
-        case .unifiedInput(_, let turnCount, let subPanelMode):
-            let modeDesc = subPanelMode.isVisible ? "SubPanel visible" : "SubPanel hidden"
-            return "Turn \(turnCount + 1), \(modeDesc)"
         default:
             return nil
         }
@@ -229,8 +207,6 @@ struct HaloView: View {
         case .conversationInput:
             return [.allowsDirectInteraction]
         case .toolConfirmation:
-            return [.allowsDirectInteraction]
-        case .unifiedInput:
             return [.allowsDirectInteraction]
         default:
             return []
@@ -260,8 +236,6 @@ struct HaloView: View {
             return 320  // Width for conversation input
         case .toolConfirmation:
             return 380  // Width for tool confirmation
-        case .unifiedInput:
-            return 480  // Width for unified input
         default:
             return 120
         }
@@ -296,11 +270,6 @@ struct HaloView: View {
             return 130  // Height for conversation input (header + input + hint + padding)
         case .toolConfirmation:
             return 220  // Height for tool confirmation (header + confidence + reason + buttons + hints)
-        case .unifiedInput(_, _, let subPanelMode):
-            // Base height for input area + dynamic SubPanel height
-            let baseHeight: CGFloat = 100  // Header + input + hints + padding
-            let subPanelHeight = viewModel.subPanelState.calculatedHeight
-            return baseHeight + subPanelHeight
         default:
             return 120
         }

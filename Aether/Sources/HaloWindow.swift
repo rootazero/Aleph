@@ -24,17 +24,6 @@ class HaloWindow: NSWindow {
     /// Handler for Conversation (Multi-turn) keyboard events
     private let conversationHandler = ConversationFlowHandler()
 
-    // MARK: - Unified Input Key Monitors
-
-    /// Local keyboard event monitor for unified input
-    private var unifiedInputKeyMonitor: Any?
-
-    /// Global keyboard event monitor for unified input (fallback for ESC)
-    private var unifiedInputGlobalKeyMonitor: Any?
-
-    /// Combine subscription for SubPanel size changes
-    private var subPanelSizeCancellable: AnyCancellable?
-
     // MARK: - Managers (via DependencyContainer)
 
     /// Conversation manager accessed through DependencyContainer (for hide blocking)
@@ -99,29 +88,9 @@ class HaloWindow: NSWindow {
 
         conversationHandler.delegate = self
         conversationHandler.activate(window: self)
-
-        // Observe SubPanel mode changes to update window size
-        subPanelSizeCancellable = viewModel.subPanelState.$mode
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard let self = self else { return }
-                // Only update size if in unifiedInput state
-                if case .unifiedInput = self.viewModel.state {
-                    let newSize = self.getWindowSize()
-                    NSLog("[HaloWindow] SubPanel mode changed, updating size to: (%.0f, %.0f)", newSize.width, newSize.height)
-                    self.setContentSize(newSize)
-                }
-            }
     }
 
     deinit {
-        // Clean up unified input key monitors
-        if let monitor = unifiedInputKeyMonitor {
-            NSEvent.removeMonitor(monitor)
-        }
-        if let monitor = unifiedInputGlobalKeyMonitor {
-            NSEvent.removeMonitor(monitor)
-        }
         // Flow handlers will clean up in their own deinit
         // No need to explicitly call deactivate() here
     }
@@ -129,7 +98,7 @@ class HaloWindow: NSWindow {
     // MARK: - Focus Prevention
 
     /// CRITICAL: Prevent Halo from becoming key window in most cases
-    /// Exception: Text-type clarification, conversation input, and unified input need key window for TextField input
+    /// Exception: Text-type clarification and conversation input need key window for TextField input
     override var canBecomeKey: Bool {
         // Allow key window only for text-type clarification (TextField needs focus)
         if case .clarification(let request) = viewModel.state {
@@ -137,10 +106,6 @@ class HaloWindow: NSWindow {
         }
         // Allow key window for conversation input (TextField needs focus)
         if case .conversationInput = viewModel.state {
-            return true
-        }
-        // Allow key window for unified input (TextField needs focus)
-        if case .unifiedInput = viewModel.state {
             return true
         }
         return false
@@ -168,8 +133,6 @@ class HaloWindow: NSWindow {
             let shouldActivate: Bool
             switch viewModel.state {
             case .conversationInput:
-                shouldActivate = true
-            case .unifiedInput:
                 shouldActivate = true
             case .clarification(let request):
                 shouldActivate = request.clarificationType == .text
@@ -237,118 +200,6 @@ class HaloWindow: NSWindow {
     /// - Parameter sessionId: The conversation session ID
     func showConversationInput(sessionId: String) {
         conversationHandler.showConversationInput(sessionId: sessionId)
-    }
-
-    /// Show unified input UI at the given position
-    ///
-    /// This is the new unified entry point for Halo interactions.
-    /// It combines conversation input with command completion in a single view.
-    ///
-    /// - Parameters:
-    ///   - position: Screen position to show the window (typically caret position)
-    ///   - sessionId: The conversation session ID
-    ///   - turnCount: Current conversation turn count
-    ///   - onSubmit: Callback when user submits input
-    ///   - onCancel: Callback when user cancels
-    ///   - onCommandSelected: Callback when user selects a command
-    func showUnifiedInput(
-        at position: NSPoint,
-        sessionId: String,
-        turnCount: UInt32,
-        onSubmit: @escaping (String) -> Void,
-        onCancel: @escaping () -> Void,
-        onCommandSelected: @escaping (CommandNode) -> Void
-    ) {
-        NSLog("[HaloWindow] showUnifiedInput: sessionId=%@, turn=%d", sessionId, turnCount)
-
-        // CRITICAL: Ensure window is invisible and reset state before showing
-        // This prevents the theme animation from flashing during state transition
-        self.alphaValue = 0
-        self.orderOut(nil)  // Completely hide window first
-
-        // Reset to idle state to clear any previous state animation
-        viewModel.state = .idle
-
-        // Reset SubPanel to hidden
-        viewModel.subPanelState.hide()
-
-        // Set callbacks
-        viewModel.callbacks.unifiedInputOnSubmit = onSubmit
-        viewModel.callbacks.unifiedInputOnCancel = onCancel
-        viewModel.callbacks.unifiedInputOnCommandSelected = onCommandSelected
-
-        // Enable mouse events for interaction
-        self.ignoresMouseEvents = false
-
-        // Enable window dragging
-        self.isMovableByWindowBackground = true
-
-        // Delay state update and window show to ensure SwiftUI has reset
-        DispatchQueue.mainAsyncAfter(delay: 0.05, weakRef: self) { slf in
-            // Now set the unified input state
-            slf.viewModel.state = .unifiedInput(
-                sessionId: sessionId,
-                turnCount: turnCount,
-                subPanelMode: .hidden
-            )
-
-            // Show at screen center (with fade-in animation)
-            slf.showCentered()
-
-            // Activate window for text input and setup key monitors
-            DispatchQueue.mainAsyncAfter(delay: 0.1, weakRef: slf) { innerSlf in
-                NSApp.activate(ignoringOtherApps: true)
-                innerSlf.makeKeyAndOrderFront(nil)
-                innerSlf.setupUnifiedInputKeyMonitors()
-            }
-        }
-    }
-
-    /// Setup keyboard monitors for unified input (ESC handling)
-    private func setupUnifiedInputKeyMonitors() {
-        removeUnifiedInputKeyMonitors()
-
-        // Local monitor when window is key
-        unifiedInputKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self = self else { return event }
-            guard case .unifiedInput = self.viewModel.state else { return event }
-
-            // ESC key
-            if event.keyCode == 53 {
-                NSLog("[HaloWindow] ESC pressed in unified input (local)")
-                self.viewModel.callbacks.unifiedInputOnCancel?()
-                return nil  // Consume the event
-            }
-            return event
-        }
-
-        // Global monitor as fallback (for ESC when window loses key)
-        unifiedInputGlobalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self = self else { return }
-            guard case .unifiedInput = self.viewModel.state else { return }
-
-            // Only handle ESC key globally
-            if event.keyCode == 53 {
-                NSLog("[HaloWindow] ESC pressed in unified input (global)")
-                DispatchQueue.main.async {
-                    self.viewModel.callbacks.unifiedInputOnCancel?()
-                }
-            }
-        }
-
-        NSLog("[HaloWindow] Unified input key monitors installed")
-    }
-
-    /// Remove unified input keyboard monitors
-    private func removeUnifiedInputKeyMonitors() {
-        if let monitor = unifiedInputKeyMonitor {
-            NSEvent.removeMonitor(monitor)
-            unifiedInputKeyMonitor = nil
-        }
-        if let monitor = unifiedInputGlobalKeyMonitor {
-            NSEvent.removeMonitor(monitor)
-            unifiedInputGlobalKeyMonitor = nil
-        }
     }
 
     func show(at position: NSPoint) {
@@ -470,14 +321,10 @@ class HaloWindow: NSWindow {
     }
 
     func hide() {
-        // CRITICAL: Do NOT hide when in conversation input mode or unified input mode
-        // These UIs should remain visible until user explicitly ends the conversation
+        // CRITICAL: Do NOT hide when in conversation input mode
+        // This UI should remain visible until user explicitly ends the conversation
         if case .conversationInput = viewModel.state {
             NSLog("[HaloWindow] Hide blocked - conversation input mode active")
-            return
-        }
-        if case .unifiedInput = viewModel.state {
-            NSLog("[HaloWindow] Hide blocked - unified input mode active")
             return
         }
 
@@ -508,9 +355,6 @@ class HaloWindow: NSWindow {
     /// Use this when explicitly ending a conversation session
     func forceHide() {
         NSLog("[HaloWindow] Force hide called")
-
-        // Remove unified input key monitors
-        removeUnifiedInputKeyMonitors()
 
         // Reset show time
         showTime = nil
@@ -556,9 +400,9 @@ class HaloWindow: NSWindow {
         viewModel.state = state
 
         // Enable/disable mouse events based on state
-        // error, permissionRequired, toast, clarification, conversationInput, toolConfirmation, and unifiedInput states need mouse interaction
+        // error, permissionRequired, toast, clarification, conversationInput, and toolConfirmation states need mouse interaction
         switch state {
-        case .error, .permissionRequired, .toast, .clarification, .conversationInput, .toolConfirmation, .unifiedInput:
+        case .error, .permissionRequired, .toast, .clarification, .conversationInput, .toolConfirmation:
             self.ignoresMouseEvents = false
         default:
             self.ignoresMouseEvents = true
@@ -575,20 +419,9 @@ class HaloWindow: NSWindow {
             let widthDiff = newSize.width - newFrame.size.width
             let heightDiff = newSize.height - newFrame.size.height
 
-            // For unified input, keep TOP-LEFT corner fixed (like IDE autocomplete)
-            // For other states, keep window centered during resize
-            switch state {
-            case .unifiedInput:
-                // TOP-LEFT fixed: only adjust y to account for height change
-                // NSWindow origin is BOTTOM-LEFT, so when height increases,
-                // we need to move origin DOWN to keep top-left fixed
-                newFrame.origin.y -= heightDiff
-                // x stays the same (left edge fixed)
-            default:
-                // Keep window centered during resize
-                newFrame.origin.x -= widthDiff / 2
-                newFrame.origin.y -= heightDiff / 2
-            }
+            // Keep window centered during resize
+            newFrame.origin.x -= widthDiff / 2
+            newFrame.origin.y -= heightDiff / 2
             newFrame.size = newSize
 
             self.animator().setFrame(newFrame, display: true)
@@ -752,12 +585,6 @@ class HaloWindow: NSWindow {
             // Tool confirmation UI: tool name, description, reason, confidence, two buttons
             return NSSize(width: 380, height: 220)
 
-        case .unifiedInput:
-            // Unified input: base input area + dynamic SubPanel height
-            let baseHeight: CGFloat = 100  // Header + input + hints + padding
-            let subPanelHeight = viewModel.subPanelState.calculatedHeight
-            return NSSize(width: 480, height: baseHeight + subPanelHeight)
-
         default:
             return NSSize(width: 120, height: 120)
         }
@@ -791,42 +618,28 @@ class HaloViewModel: ObservableObject {
     @Published var state: HaloState = .idle {
         didSet {
             // Reset callbacks when state changes to a non-callback state
-            if !state.isToast && !state.isToolConfirmation && !state.isUnifiedInput {
+            if !state.isToast && !state.isToolConfirmation {
                 callbacks.reset()
             }
         }
     }
     weak var eventHandler: EventHandler?
 
-    /// Callbacks for states that need closures (toast, toolConfirmation, unifiedInput)
+    /// Callbacks for states that need closures (toast, toolConfirmation)
     /// Stored separately to enable automatic Equatable synthesis for HaloState
     var callbacks = HaloStateCallbacks()
 
     /// Command completion manager (add-command-completion-system)
     let commandManager = CommandCompletionManager()
 
-    /// SubPanel state for unified input mode (refactor-unified-halo-window)
-    let subPanelState = SubPanelState()
-
     /// Cancellable for forwarding commandManager changes
     private var commandManagerCancellable: AnyCancellable?
-
-    /// Cancellable for forwarding subPanelState changes
-    private var subPanelStateCancellable: AnyCancellable?
 
     init() {
         // Forward commandManager's objectWillChange to this ViewModel
         // This ensures HaloView re-renders when displayedCommands changes
         // Use receive(on:) to ensure main thread and debounce to prevent rapid updates
         commandManagerCancellable = commandManager.objectWillChange
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.objectWillChange.send()
-            }
-
-        // Forward subPanelState's objectWillChange to this ViewModel
-        // This ensures HaloView re-renders when SubPanel mode changes
-        subPanelStateCancellable = subPanelState.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
