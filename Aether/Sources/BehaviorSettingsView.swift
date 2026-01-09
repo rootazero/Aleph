@@ -24,9 +24,6 @@ struct BehaviorSettingsView: View {
     @State private var piiScrubSSN: Bool = true
     @State private var piiScrubCreditCard: Bool = true
 
-    // Window visibility settings
-    @State private var keepWindowVisibleDuringProcessing: Bool = true
-
     // Saved output settings (for comparison)
     @State private var savedOutputMode: OutputMode = .typewriter
     @State private var savedTypingSpeed: Double = 50.0
@@ -37,9 +34,6 @@ struct BehaviorSettingsView: View {
     @State private var savedPiiScrubPhone: Bool = true
     @State private var savedPiiScrubSSN: Bool = true
     @State private var savedPiiScrubCreditCard: Bool = true
-
-    // Saved window visibility settings (for comparison)
-    @State private var savedKeepWindowVisibleDuringProcessing: Bool = true
 
     // UI state
     @State private var showingPreview = false
@@ -55,8 +49,6 @@ struct BehaviorSettingsView: View {
                 if outputMode == .typewriter {
                     typingSpeedCard
                 }
-
-                windowVisibilityCard
 
                 piiScrubbingCard
             }
@@ -79,7 +71,6 @@ struct BehaviorSettingsView: View {
         .onChange(of: piiScrubPhone) { _, _ in updateSaveBarState() }
         .onChange(of: piiScrubSSN) { _, _ in updateSaveBarState() }
         .onChange(of: piiScrubCreditCard) { _, _ in updateSaveBarState() }
-        .onChange(of: keepWindowVisibleDuringProcessing) { _, _ in updateSaveBarState() }
         .onChange(of: isSaving) { _, _ in updateSaveBarState() }
     }
 
@@ -180,27 +171,6 @@ struct BehaviorSettingsView: View {
                     .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
     }
 
-    private var windowVisibilityCard: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-            Label(L("settings.behavior.window_visibility"), systemImage: "rectangle.and.text.magnifyingglass")
-                .font(DesignTokens.Typography.heading)
-                .foregroundColor(DesignTokens.Colors.textPrimary)
-
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
-                Toggle(L("settings.behavior.keep_window_visible"), isOn: $keepWindowVisibleDuringProcessing)
-                    .toggleStyle(.switch)
-                    .font(DesignTokens.Typography.body)
-
-                Text(L("settings.behavior.keep_window_visible_description"))
-                    .font(DesignTokens.Typography.caption)
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
-            }
-        }
-        .padding(DesignTokens.Spacing.md)
-        .background(DesignTokens.Colors.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
-    }
-
     private var piiScrubbingCard: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
             Label(L("settings.behavior.pii_scrubbing"), systemImage: "lock.shield")
@@ -296,8 +266,7 @@ struct BehaviorSettingsView: View {
                piiScrubEmail != savedPiiScrubEmail ||
                piiScrubPhone != savedPiiScrubPhone ||
                piiScrubSSN != savedPiiScrubSSN ||
-               piiScrubCreditCard != savedPiiScrubCreditCard ||
-               keepWindowVisibleDuringProcessing != savedKeepWindowVisibleDuringProcessing
+               piiScrubCreditCard != savedPiiScrubCreditCard
     }
 
     /// Status message for UnifiedSaveBar
@@ -351,10 +320,6 @@ struct BehaviorSettingsView: View {
                         piiEnabled = behavior.piiScrubbingEnabled
                         savedPiiEnabled = piiEnabled
                         // Note: Individual PII type settings will be loaded when backend support is added
-
-                        // Load window visibility setting
-                        keepWindowVisibleDuringProcessing = behavior.keepWindowVisibleDuringProcessing
-                        savedKeepWindowVisibleDuringProcessing = keepWindowVisibleDuringProcessing
                     }
                 }
             } catch {
@@ -384,7 +349,7 @@ struct BehaviorSettingsView: View {
                 typingSpeed: UInt32(typingSpeed),
                 piiScrubbingEnabled: piiEnabled,
                 multiTurnEnabled: false,  // Multi-turn is now controlled by hotkey, not config
-                keepWindowVisibleDuringProcessing: keepWindowVisibleDuringProcessing
+                keepWindowVisibleDuringProcessing: true  // Always keep window visible (simplified behavior)
             )
             try core.updateBehavior(behavior: behaviorConfig)
 
@@ -392,7 +357,6 @@ struct BehaviorSettingsView: View {
             print("  Output Mode: \(outputMode.rawValue)")
             print("  Typing Speed: \(Int(typingSpeed))")
             print("  PII Scrubbing Enabled: \(piiEnabled)")
-            print("  Keep Window Visible: \(keepWindowVisibleDuringProcessing)")
 
             await MainActor.run {
                 // Update saved state to match current state
@@ -403,7 +367,6 @@ struct BehaviorSettingsView: View {
                 savedPiiScrubPhone = piiScrubPhone
                 savedPiiScrubSSN = piiScrubSSN
                 savedPiiScrubCreditCard = piiScrubCreditCard
-                savedKeepWindowVisibleDuringProcessing = keepWindowVisibleDuringProcessing
 
                 isSaving = false
                 errorMessage = nil
@@ -432,7 +395,6 @@ struct BehaviorSettingsView: View {
         piiScrubPhone = savedPiiScrubPhone
         piiScrubSSN = savedPiiScrubSSN
         piiScrubCreditCard = savedPiiScrubCreditCard
-        keepWindowVisibleDuringProcessing = savedKeepWindowVisibleDuringProcessing
         errorMessage = nil
     }
 
