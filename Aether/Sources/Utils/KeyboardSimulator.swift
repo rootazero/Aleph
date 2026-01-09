@@ -169,24 +169,30 @@ class KeyboardSimulator {
         let delayMs = 1000.0 / Double(speed)
         var typedCount = 0
 
-        for char in text {
+        NSLog("[KeyboardSimulator] typeText: starting, length=%d, speed=%d chars/sec", text.count, speed)
+
+        for (index, char) in text.enumerated() {
             // Check cancellation
             if cancellationToken?.isCancelled == true {
-                print("[KeyboardSimulator] Typing cancelled by user")
+                NSLog("[KeyboardSimulator] Typing cancelled by user at index %d", index)
                 break
             }
 
-            // Type character
-            if typeCharacter(char) {
+            // Type character with retry logic
+            if typeCharacterWithRetry(char) {
                 typedCount += 1
             } else {
-                print("[KeyboardSimulator] WARNING: Failed to type character: \(char)")
+                NSLog("[KeyboardSimulator] WARNING: Failed to type character at index %d: '%@'", index, String(char))
             }
 
-            // Delay before next character
+            // Delay before next character (based on typing speed)
             try? await Task.sleep(nanoseconds: UInt64(delayMs * 1_000_000))
+
+            // Additional small delay for event processing stability
+            usleep(5_000) // 5ms extra
         }
 
+        NSLog("[KeyboardSimulator] typeText: completed, typed %d/%d characters", typedCount, text.count)
         return typedCount
     }
 
@@ -198,10 +204,69 @@ class KeyboardSimulator {
     func typeTextInstant(_ text: String) -> Bool {
         var success = true
         for char in text {
-            if !typeCharacter(char) {
+            if !typeCharacterWithRetry(char) {
                 success = false
             }
+            // Small delay for stability even in instant mode
+            usleep(5_000) // 5ms
         }
+        return success
+    }
+
+    /// Type a character with retry logic and clipboard fallback
+    ///
+    /// - Parameters:
+    ///   - char: Character to type
+    ///   - maxRetries: Maximum retry attempts (default: 3)
+    /// - Returns: True if character was typed successfully
+    private func typeCharacterWithRetry(_ char: Character, maxRetries: Int = 3) -> Bool {
+        // First attempt
+        if typeCharacter(char) {
+            return true
+        }
+
+        // Retry with exponential backoff
+        for attempt in 1...maxRetries {
+            let delayMs = UInt32(20 * (1 << (attempt - 1))) // 20ms, 40ms, 80ms
+            usleep(delayMs * 1000)
+
+            NSLog("[KeyboardSimulator] Retry %d/%d for character: '%@'", attempt, maxRetries, String(char))
+
+            if typeCharacter(char) {
+                return true
+            }
+        }
+
+        // Fallback: Use clipboard paste for this character
+        NSLog("[KeyboardSimulator] Using clipboard fallback for character: '%@'", String(char))
+        return typeCharacterViaClipboard(char)
+    }
+
+    /// Type a character via clipboard paste as fallback
+    ///
+    /// - Parameter char: Character to type
+    /// - Returns: True if successful
+    private func typeCharacterViaClipboard(_ char: Character) -> Bool {
+        let pasteboard = NSPasteboard.general
+        let oldContent = pasteboard.string(forType: .string)
+
+        // Set character to clipboard
+        pasteboard.clearContents()
+        pasteboard.setString(String(char), forType: .string)
+
+        // Small delay for clipboard
+        usleep(10_000) // 10ms
+
+        // Paste
+        let success = simulatePaste()
+
+        // Restore clipboard after delay
+        usleep(50_000) // 50ms for paste completion
+        pasteboard.clearContents()
+        if let old = oldContent {
+            pasteboard.setString(old, forType: .string)
+        }
+
         return success
     }
 
@@ -299,7 +364,7 @@ class KeyboardSimulator {
     private func typeCharacter(_ char: Character) -> Bool {
         let string = String(char)
 
-        // Handle special characters
+        // Handle special characters (Tab only - newlines use Unicode)
         if let specialKey = specialKeyMap[char] {
             return typeSpecialKey(specialKey)
         }
@@ -311,6 +376,7 @@ class KeyboardSimulator {
 
         // Create a single keyboard event (keyDown initially)
         guard let keyEvent = CGEvent(keyboardEventSource: eventSource, virtualKey: 0, keyDown: true) else {
+            NSLog("[KeyboardSimulator] typeCharacter: failed to create event for '%@'", string)
             return false
         }
 
@@ -324,6 +390,9 @@ class KeyboardSimulator {
 
         // Post key down event
         keyEvent.post(tap: .cghidEventTap)
+
+        // Small delay between key down and key up for stability
+        usleep(10_000) // 10ms
 
         // Change event type to key up
         keyEvent.type = .keyUp
@@ -374,11 +443,14 @@ class KeyboardSimulator {
     }
 
     /// Map special characters to virtual key codes
+    ///
+    /// Note: Newlines (\n, \r) are intentionally NOT mapped here.
+    /// They are handled via Unicode string input to avoid triggering
+    /// special behaviors in rich text apps like Notes.app.
+    /// Only Tab uses a virtual key code for proper field navigation.
     private let specialKeyMap: [Character: CGKeyCode] = [
-        "\n": CGKeyCode(kVK_Return),
-        "\r": CGKeyCode(kVK_Return),
         "\t": CGKeyCode(kVK_Tab),
-        // Add more as needed
+        // Newlines handled via Unicode, not virtual keys
     ]
 }
 
