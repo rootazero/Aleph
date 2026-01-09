@@ -4,6 +4,7 @@
 //
 //  A floating indicator window for AI processing state.
 //  Used in both single-turn and multi-turn modes.
+//  Matches HaloWindow's ZenTheme processing style.
 //
 
 import SwiftUI
@@ -32,8 +33,9 @@ final class ProcessingIndicatorWindow: NSWindow {
 
     // MARK: - Constants
 
-    static let indicatorSize: CGFloat = 48
-    private static let windowOffset: CGFloat = 8  // Offset from reference point
+    /// Window size matches HaloWindow's processing state size
+    static let indicatorSize: CGFloat = 120
+    private static let windowOffset: CGFloat = 20  // Offset from reference point
 
     // MARK: - Properties
 
@@ -60,7 +62,7 @@ final class ProcessingIndicatorWindow: NSWindow {
         level = .floating
         backgroundColor = .clear
         isOpaque = false
-        hasShadow = false
+        hasShadow = true  // Enable soft window shadow for depth
 
         // Click-through behavior
         ignoresMouseEvents = true
@@ -86,7 +88,7 @@ final class ProcessingIndicatorWindow: NSWindow {
     func show(mode: IndicatorPositionMode) {
         let position = calculatePosition(mode: mode)
 
-        // Position the indicator
+        // Position the indicator (center on position)
         let origin = NSPoint(
             x: position.x - Self.indicatorSize / 2,
             y: position.y - Self.indicatorSize / 2
@@ -184,32 +186,45 @@ final class ProcessingIndicatorWindow: NSWindow {
 // MARK: - Processing Indicator View (SwiftUI)
 
 /// SwiftUI view for the spinning processing indicator
-/// Matches the Zen theme's processing animation style
+/// Matches HaloWindow's ZenTheme processing animation style exactly
 struct ProcessingIndicatorView: View {
-    @State private var rotation: Double = 0
     @State private var breathingScale: CGFloat = 1.0
+    @State private var rotation: Double = 0
 
     private let indicatorColor = Color.purple
 
     var body: some View {
         ZStack {
-            // Blur background circle
+            // Soft glow effect behind the animation (like ZenSuccessView)
             Circle()
-                .fill(.ultraThinMaterial)
-                .frame(width: 44, height: 44)
+                .fill(indicatorColor.opacity(0.3))
+                .frame(width: 90, height: 90)
+                .blur(radius: 15)
 
-            // Breathing outer circle
+            // Soft circular gradient background (matches ZenTheme)
             Circle()
-                .stroke(indicatorColor.opacity(0.3), lineWidth: 2)
-                .frame(width: 36, height: 36)
+                .fill(
+                    RadialGradient(
+                        colors: [indicatorColor.opacity(0.6), indicatorColor.opacity(0.1), .clear],
+                        center: .center,
+                        startRadius: 20,
+                        endRadius: 60
+                    )
+                )
+                .frame(width: 100, height: 100)
+
+            // Breathing outer circle (matches ZenTheme)
+            Circle()
+                .stroke(indicatorColor.opacity(0.5), lineWidth: 2)
+                .frame(width: 80, height: 80)
                 .scaleEffect(breathingScale)
 
-            // Rotating segments (matches Zen theme)
+            // Rotating segments (matches ZenTheme - 3 arcs)
             ForEach(0..<3, id: \.self) { i in
                 Circle()
                     .trim(from: 0.0, to: 0.15)
-                    .stroke(indicatorColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .frame(width: 28, height: 28)
+                    .stroke(indicatorColor, lineWidth: 3)
+                    .frame(width: 60, height: 60)
                     .rotationEffect(.degrees(Double(i) * 120 + rotation))
             }
         }
@@ -220,13 +235,13 @@ struct ProcessingIndicatorView: View {
     }
 
     private func startAnimation() {
-        // Rotation animation
-        withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) {
-            rotation = 360
-        }
-        // Breathing animation
+        // Breathing animation (matches ZenTheme)
         withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
             breathingScale = 1.1
+        }
+        // Rotation animation (matches ZenTheme)
+        withAnimation(.linear(duration: 3).repeatForever(autoreverses: false)) {
+            rotation = 360
         }
     }
 }
@@ -235,6 +250,6 @@ struct ProcessingIndicatorView: View {
 
 #Preview {
     ProcessingIndicatorView()
-        .frame(width: 100, height: 100)
-        .background(Color.gray.opacity(0.3))
+        .frame(width: 120, height: 120)
+        .background(Color.black.opacity(0.3))
 }
