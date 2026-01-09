@@ -37,6 +37,7 @@ struct RoutingView: View {
     @State private var ruleEditorState: RuleEditorState?
     @State private var showingDeleteConfirmation: Bool = false
     @State private var deletingRuleIndex: Int?
+    @State private var showingPresetRulesList: Bool = false
 
     var body: some View {
         ScrollView {
@@ -108,7 +109,7 @@ struct RoutingView: View {
     // MARK: - Preset Commands Section (Hardcoded)
 
     private var presetCommandsSection: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+        HStack(alignment: .top, spacing: DesignTokens.Spacing.md) {
             // Section header
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
                 Text(L("settings.routing.preset_commands"))
@@ -121,12 +122,19 @@ struct RoutingView: View {
                     .foregroundColor(DesignTokens.Colors.textSecondary)
             }
 
-            // Hardcoded preset commands
-            VStack(spacing: DesignTokens.Spacing.sm) {
-                ForEach(PresetCommands.all, id: \.command) { preset in
-                    PresetCommandCard(preset: preset)
+            Spacer()
+
+            // View button to open preset rules list
+            Button(action: { showingPresetRulesList = true }) {
+                HStack(spacing: DesignTokens.Spacing.xs) {
+                    Text(L("common.view"))
+                        .font(DesignTokens.Typography.body)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12))
                 }
+                .foregroundColor(DesignTokens.Colors.accentPurple)
             }
+            .buttonStyle(.plain)
         }
         .padding(DesignTokens.Spacing.md)
         .background(DesignTokens.Colors.accentPurple.opacity(0.03))
@@ -135,6 +143,9 @@ struct RoutingView: View {
             RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.large, style: .continuous)
                 .stroke(DesignTokens.Colors.accentPurple.opacity(0.15), lineWidth: 1)
         )
+        .sheet(isPresented: $showingPresetRulesList) {
+            PresetRulesListView()
+        }
     }
 
     // MARK: - Custom Rules Section
@@ -1098,6 +1109,280 @@ struct RuleCard: View {
         .animation(DesignTokens.Animation.quick, value: isHovering)
         .onHover { hovering in
             isHovering = hovering
+        }
+    }
+}
+
+// MARK: - Preset Rules List View (Popup)
+
+/// Popup view displaying all preset rules with expand/collapse support
+struct PresetRulesListView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var expandedRules: Set<String> = []
+    @State private var expandedSubcommands: Set<String> = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                    Text(L("settings.routing.preset_commands"))
+                        .font(DesignTokens.Typography.heading)
+                        .fontWeight(.semibold)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                    Text(L("settings.routing.preset_commands_subtitle"))
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+
+                Spacer()
+
+                // Close button
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(DesignTokens.Spacing.lg)
+
+            Divider()
+
+            // Rules list with expand/collapse
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(PresetRules.all, id: \.command) { preset in
+                        PresetRuleExpandableRow(
+                            preset: preset,
+                            isExpanded: expandedRules.contains(preset.command),
+                            expandedSubcommands: $expandedSubcommands,
+                            onToggle: {
+                                withAnimation(DesignTokens.Animation.quick) {
+                                    if expandedRules.contains(preset.command) {
+                                        expandedRules.remove(preset.command)
+                                    } else {
+                                        expandedRules.insert(preset.command)
+                                    }
+                                }
+                            }
+                        )
+
+                        if preset.command != PresetRules.all.last?.command {
+                            Divider()
+                                .padding(.leading, DesignTokens.Spacing.lg)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(width: 500, height: 450)
+        .background(DesignTokens.Colors.contentBackground)
+    }
+}
+
+// MARK: - Preset Rule Expandable Row
+
+/// Single row for a preset rule with expand/collapse functionality
+struct PresetRuleExpandableRow: View {
+    let preset: PresetRule
+    let isExpanded: Bool
+    @Binding var expandedSubcommands: Set<String>
+    let onToggle: () -> Void
+
+    private var hasSubcommands: Bool {
+        !preset.subcommands.isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Main row (always visible)
+            Button(action: onToggle) {
+                HStack(spacing: DesignTokens.Spacing.md) {
+                    // Icon
+                    ZStack {
+                        Circle()
+                            .fill(DesignTokens.Colors.accentPurple.opacity(0.15))
+                            .frame(width: 36, height: 36)
+
+                        Image(systemName: preset.icon)
+                            .font(.system(size: 16))
+                            .foregroundColor(DesignTokens.Colors.accentPurple)
+                    }
+
+                    // Title and description
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: DesignTokens.Spacing.sm) {
+                            Text(preset.command)
+                                .font(DesignTokens.Typography.code)
+                                .fontWeight(.semibold)
+                                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                            // Status badge
+                            if preset.isImplemented {
+                                HStack(spacing: 2) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 8))
+                                    Text(L("settings.routing.implemented"))
+                                        .font(.system(size: 10))
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(DesignTokens.Colors.success)
+                                .cornerRadius(DesignTokens.CornerRadius.small)
+                            }
+
+                            // Subcommands count badge
+                            if hasSubcommands {
+                                Text("\(preset.subcommands.count)")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundColor(DesignTokens.Colors.accentBlue)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(DesignTokens.Colors.accentBlue.opacity(0.15))
+                                    .cornerRadius(DesignTokens.CornerRadius.small)
+                            }
+                        }
+
+                        Text(L(preset.descriptionKey))
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+
+                    // Expand/collapse indicator
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+                .padding(.horizontal, DesignTokens.Spacing.lg)
+                .padding(.vertical, DesignTokens.Spacing.md)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            // Expanded content
+            if isExpanded {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+                    // Usage
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                        Text(L("settings.routing.usage"))
+                            .font(DesignTokens.Typography.caption)
+                            .fontWeight(.medium)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                        Text(preset.usage)
+                            .font(DesignTokens.Typography.code)
+                            .foregroundColor(DesignTokens.Colors.accentBlue)
+                            .padding(DesignTokens.Spacing.sm)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(DesignTokens.Colors.cardBackground)
+                            .cornerRadius(DesignTokens.CornerRadius.small)
+                    }
+
+                    // Subcommands (secondary collapse)
+                    if hasSubcommands {
+                        SubcommandsSection(
+                            preset: preset,
+                            expandedSubcommands: $expandedSubcommands
+                        )
+                    }
+                }
+                .padding(.horizontal, DesignTokens.Spacing.lg)
+                .padding(.bottom, DesignTokens.Spacing.md)
+                .padding(.leading, 52)  // Align with text after icon
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .background(isExpanded ? DesignTokens.Colors.accentPurple.opacity(0.03) : Color.clear)
+    }
+}
+
+// MARK: - Subcommands Section (Secondary Collapse)
+
+/// Section displaying subcommands with secondary expand/collapse
+struct SubcommandsSection: View {
+    let preset: PresetRule
+    @Binding var expandedSubcommands: Set<String>
+
+    private var sectionKey: String {
+        "\(preset.command)-subcommands"
+    }
+
+    private var isExpanded: Bool {
+        expandedSubcommands.contains(sectionKey)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            // Subcommands header (clickable to expand/collapse)
+            Button(action: {
+                withAnimation(DesignTokens.Animation.quick) {
+                    if isExpanded {
+                        expandedSubcommands.remove(sectionKey)
+                    } else {
+                        expandedSubcommands.insert(sectionKey)
+                    }
+                }
+            }) {
+                HStack(spacing: DesignTokens.Spacing.xs) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                    Text(L("settings.routing.subcommands"))
+                        .font(DesignTokens.Typography.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                    Text("(\(preset.subcommands.count))")
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary.opacity(0.7))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            // Subcommands list (when expanded)
+            if isExpanded {
+                VStack(spacing: DesignTokens.Spacing.xs) {
+                    ForEach(preset.subcommands, id: \.name) { subcommand in
+                        HStack(spacing: DesignTokens.Spacing.sm) {
+                            // Subcommand name
+                            Text(subcommand.name)
+                                .font(DesignTokens.Typography.code)
+                                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                            // Status indicator
+                            if subcommand.isImplemented {
+                                Circle()
+                                    .fill(DesignTokens.Colors.success)
+                                    .frame(width: 6, height: 6)
+                            } else {
+                                Circle()
+                                    .fill(DesignTokens.Colors.textSecondary.opacity(0.5))
+                                    .frame(width: 6, height: 6)
+                            }
+
+                            // Description
+                            Text(L(subcommand.descriptionKey))
+                                .font(DesignTokens.Typography.caption)
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                                .lineLimit(1)
+
+                            Spacer()
+                        }
+                        .padding(DesignTokens.Spacing.sm)
+                        .background(DesignTokens.Colors.cardBackground.opacity(0.5))
+                        .cornerRadius(DesignTokens.CornerRadius.small)
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
     }
 }
