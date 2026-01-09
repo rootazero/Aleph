@@ -84,7 +84,8 @@ final class UnifiedInputCoordinator {
     /// Set to true when cursor is not in an input field
     private var useCLIOutputMode: Bool = false
 
-    /// Processing indicator window for visual feedback
+    /// Processing indicator window for multi-turn mode
+    /// Shows at cursor position, falls back to unified input window's top-left
     private lazy var processingIndicatorWindow: ProcessingIndicatorWindow = {
         ProcessingIndicatorWindow()
     }()
@@ -134,6 +135,20 @@ final class UnifiedInputCoordinator {
         self.eventHandler = eventHandler
         self.outputCoordinator = outputCoordinator
         self.conversationCoordinator = conversationCoordinator
+
+        // Observe conversation turn completed to hide processing indicator
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(onConversationTurnCompleted(_:)),
+            name: .conversationTurnCompleted,
+            object: nil
+        )
+    }
+
+    /// Handle conversation turn completed notification
+    @objc private func onConversationTurnCompleted(_ notification: Notification) {
+        // Hide processing indicator when conversation turn completes
+        hideProcessingIndicator()
     }
 
     // MARK: - Hotkey Setup
@@ -405,7 +420,7 @@ final class UnifiedInputCoordinator {
             slf.appendCLIOutput(L("subpanel.cli.sending"), type: .command)
         }
 
-        // Show processing indicator
+        // Show processing indicator at cursor position
         showProcessingIndicator()
 
         // Capture context
@@ -457,7 +472,7 @@ final class UnifiedInputCoordinator {
             slf.appendThinkingOutput(L("subpanel.cli.routing"))
         }
 
-        // Show processing indicator
+        // Show processing indicator at cursor position
         showProcessingIndicator()
 
         // Capture context
@@ -619,23 +634,12 @@ final class UnifiedInputCoordinator {
 
     // MARK: - Processing Indicator
 
-    /// Show processing indicator at appropriate position
+    /// Show processing indicator at cursor position (falls back to unified input window's top-left)
     private func showProcessingIndicator() {
-        // Check if we should keep window visible (from config)
-        let keepWindowVisible = getKeepWindowVisibleSetting()
-
-        // Determine position mode based on setting
-        let mode: IndicatorPositionMode = keepWindowVisible ? .multiTurnWindowVisible : .multiTurnWindowHidden
-
-        // Get window frame for fallback positioning
-        let windowFrame = haloWindowController?.window?.frame
-
-        // Get position based on mode
-        let position = ProcessingIndicatorWindow.getPosition(mode: mode, windowFrame: windowFrame)
-
-        // Show indicator
         DispatchQueue.main.async { [weak self] in
-            self?.processingIndicatorWindow.show(at: position)
+            guard let self = self else { return }
+            let windowFrame = self.haloWindowController?.window?.frame
+            self.processingIndicatorWindow.show(mode: .multiTurn(windowFrame: windowFrame))
         }
     }
 
@@ -646,22 +650,14 @@ final class UnifiedInputCoordinator {
         }
     }
 
-    /// Get keep window visible setting from config
-    private func getKeepWindowVisibleSetting() -> Bool {
-        guard let core = core,
-              let config = try? core.loadConfig(),
-              let behavior = config.behavior else {
-            return true  // Default to visible
-        }
-        return behavior.keepWindowVisibleDuringProcessing
-    }
-
     // MARK: - Cleanup
 
     /// Clean up all resources
     func cleanup() {
         removeUnifiedHotkey()
         exitUnifiedInput()
+        NotificationCenter.default.removeObserver(self)
+        processingIndicatorWindow.hideIndicator()
     }
 }
 

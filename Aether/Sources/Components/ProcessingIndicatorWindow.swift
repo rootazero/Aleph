@@ -2,23 +2,38 @@
 //  ProcessingIndicatorWindow.swift
 //  Aether
 //
-//  A floating indicator window that shows during AI processing.
-//  Tracks cursor position with intelligent fallback based on conversation mode.
+//  A floating indicator window for AI processing state.
+//  Used in both single-turn and multi-turn modes.
 //
 
 import SwiftUI
 import AppKit
 
+// MARK: - Positioning Mode
+
+/// Defines how the indicator should determine its fallback position
+enum IndicatorPositionMode {
+    /// Single-turn mode: cursor → mouse position
+    case singleTurn
+
+    /// Multi-turn mode: cursor → unified input window top-left → mouse position
+    case multiTurn(windowFrame: NSRect?)
+}
+
 // MARK: - Processing Indicator Window
 
 /// A floating, click-through window that displays a processing indicator
-/// during AI thinking/processing operations.
+/// during AI processing operations.
+///
+/// Positioning strategy:
+/// - Single-turn: Cursor position → Mouse position
+/// - Multi-turn: Cursor position → Unified input window top-left → Mouse position
 final class ProcessingIndicatorWindow: NSWindow {
 
     // MARK: - Constants
 
     static let indicatorSize: CGFloat = 48
-    private static let padding: CGFloat = 20
+    private static let windowOffset: CGFloat = 8  // Offset from reference point
 
     // MARK: - Properties
 
@@ -65,10 +80,13 @@ final class ProcessingIndicatorWindow: NSWindow {
 
     // MARK: - Public API
 
-    /// Show the indicator at the specified position
-    /// - Parameter position: Screen position (bottom-left corner of indicator)
-    func show(at position: NSPoint) {
-        // Center the indicator on the position
+    /// Show the indicator with the specified positioning mode
+    ///
+    /// - Parameter mode: The positioning mode (single-turn or multi-turn)
+    func show(mode: IndicatorPositionMode) {
+        let position = calculatePosition(mode: mode)
+
+        // Position the indicator
         let origin = NSPoint(
             x: position.x - Self.indicatorSize / 2,
             y: position.y - Self.indicatorSize / 2
@@ -85,7 +103,14 @@ final class ProcessingIndicatorWindow: NSWindow {
             self.animator().alphaValue = 1
         }
 
-        print("[ProcessingIndicator] Shown at position: \(position)")
+        let modeString: String
+        switch mode {
+        case .singleTurn:
+            modeString = "single-turn"
+        case .multiTurn:
+            modeString = "multi-turn"
+        }
+        NSLog("[ProcessingIndicator] Shown at (%.1f, %.1f), mode: %@", position.x, position.y, modeString)
     }
 
     /// Hide the indicator with fade-out animation
@@ -98,61 +123,48 @@ final class ProcessingIndicatorWindow: NSWindow {
             self?.orderOut(nil)
         })
 
-        print("[ProcessingIndicator] Hidden")
+        NSLog("[ProcessingIndicator] Hidden")
     }
 
-    /// Update the indicator position without animation
-    /// - Parameter position: New screen position
-    func updatePosition(_ position: NSPoint) {
-        let origin = NSPoint(
-            x: position.x - Self.indicatorSize / 2,
-            y: position.y - Self.indicatorSize / 2
-        )
-        setFrameOrigin(origin)
-    }
+    // MARK: - Position Calculation
 
-    // MARK: - Position Helpers
-
-    /// Get indicator position based on mode
-    /// - Parameters:
-    ///   - mode: The positioning mode (single-turn or multi-turn)
-    ///   - windowFrame: Optional window frame for multi-turn fallback
+    /// Calculate the best position for the indicator based on mode
+    ///
+    /// - Parameter mode: The positioning mode
     /// - Returns: The calculated position
-    static func getPosition(
-        mode: IndicatorPositionMode,
-        windowFrame: NSRect? = nil
-    ) -> NSPoint {
-        // Step 1: Try cursor position via CaretPositionHelper
+    private func calculatePosition(mode: IndicatorPositionMode) -> NSPoint {
+        // Step 1: Try cursor position (common for both modes)
         if let caretPos = CaretPositionHelper.getCaretPosition(),
            isValidPosition(caretPos) {
+            NSLog("[ProcessingIndicator] Using cursor position")
             return caretPos
         }
 
-        // Step 2: Fallback based on mode
+        // Step 2: Mode-specific fallback
         switch mode {
         case .singleTurn:
-            // Fall back to mouse position
+            // Single-turn: fall back to mouse position
+            NSLog("[ProcessingIndicator] Fallback to mouse position (single-turn)")
             return NSEvent.mouseLocation
 
-        case .multiTurnWindowVisible:
-            // Fall back to window's top-left corner (with padding)
+        case .multiTurn(let windowFrame):
+            // Multi-turn: fall back to unified input window's top-left corner
             if let frame = windowFrame {
-                return NSPoint(
-                    x: frame.minX + padding,
-                    y: frame.maxY - padding
+                let topLeftPosition = NSPoint(
+                    x: frame.minX + Self.windowOffset + Self.indicatorSize / 2,
+                    y: frame.maxY - Self.windowOffset - Self.indicatorSize / 2
                 )
+                NSLog("[ProcessingIndicator] Fallback to window top-left (multi-turn)")
+                return topLeftPosition
             }
             // If no window frame, fall back to mouse
-            return NSEvent.mouseLocation
-
-        case .multiTurnWindowHidden:
-            // Fall back to mouse position (same as single-turn)
+            NSLog("[ProcessingIndicator] Fallback to mouse position (multi-turn, no window)")
             return NSEvent.mouseLocation
         }
     }
 
     /// Check if a position is valid (on screen and not at origin)
-    private static func isValidPosition(_ point: NSPoint) -> Bool {
+    private func isValidPosition(_ point: NSPoint) -> Bool {
         // Check if position is not at origin (invalid)
         guard point.x > 0 || point.y > 0 else {
             return false
@@ -169,26 +181,15 @@ final class ProcessingIndicatorWindow: NSWindow {
     }
 }
 
-// MARK: - Indicator Position Mode
-
-/// Defines how the indicator should determine its fallback position
-enum IndicatorPositionMode {
-    /// Single-turn conversation mode (falls back to mouse position)
-    case singleTurn
-
-    /// Multi-turn mode with window visible (falls back to window corner)
-    case multiTurnWindowVisible
-
-    /// Multi-turn mode with window hidden (falls back to mouse position)
-    case multiTurnWindowHidden
-}
-
 // MARK: - Processing Indicator View (SwiftUI)
 
 /// SwiftUI view for the spinning processing indicator
+/// Matches the Zen theme's processing animation style
 struct ProcessingIndicatorView: View {
     @State private var rotation: Double = 0
-    @State private var isAnimating: Bool = false
+    @State private var breathingScale: CGFloat = 1.0
+
+    private let indicatorColor = Color.purple
 
     var body: some View {
         ZStack {
@@ -197,34 +198,36 @@ struct ProcessingIndicatorView: View {
                 .fill(.ultraThinMaterial)
                 .frame(width: 44, height: 44)
 
-            // Spinning arc (accent color)
+            // Breathing outer circle
             Circle()
-                .trim(from: 0, to: 0.7)
-                .stroke(
-                    Color.accentColor,
-                    style: StrokeStyle(lineWidth: 3, lineCap: .round)
-                )
-                .frame(width: 28, height: 28)
-                .rotationEffect(.degrees(rotation))
+                .stroke(indicatorColor.opacity(0.3), lineWidth: 2)
+                .frame(width: 36, height: 36)
+                .scaleEffect(breathingScale)
+
+            // Rotating segments (matches Zen theme)
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .trim(from: 0.0, to: 0.15)
+                    .stroke(indicatorColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .frame(width: 28, height: 28)
+                    .rotationEffect(.degrees(Double(i) * 120 + rotation))
+            }
         }
         .frame(width: ProcessingIndicatorWindow.indicatorSize, height: ProcessingIndicatorWindow.indicatorSize)
         .onAppear {
             startAnimation()
         }
-        .onDisappear {
-            stopAnimation()
-        }
     }
 
     private func startAnimation() {
-        isAnimating = true
-        withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) {
+        // Rotation animation
+        withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) {
             rotation = 360
         }
-    }
-
-    private func stopAnimation() {
-        isAnimating = false
+        // Breathing animation
+        withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+            breathingScale = 1.1
+        }
     }
 }
 

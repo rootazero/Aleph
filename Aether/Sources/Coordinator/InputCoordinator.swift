@@ -52,7 +52,7 @@ final class InputCoordinator {
     /// Whether permission gate is active (blocks input)
     var isPermissionGateActive: Bool = false
 
-    /// Processing indicator window for visual feedback during single-turn
+    /// Processing indicator window for single-turn mode
     private lazy var processingIndicatorWindow: ProcessingIndicatorWindow = {
         ProcessingIndicatorWindow()
     }()
@@ -113,19 +113,8 @@ final class InputCoordinator {
         previousFrontmostApp = NSWorkspace.shared.frontmostApplication
         print("[InputCoordinator] 📱 Stored frontmost app: \(previousFrontmostApp?.localizedName ?? "Unknown")")
 
-        // Get best position for Halo
-        let haloPosition = CaretPositionHelper.getBestPosition()
-
-        // Show Halo immediately with processing state
-        if Thread.isMainThread {
-            haloWindowController?.show(at: haloPosition)
-            haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
-        } else {
-            DispatchQueue.main.sync { [weak self] in
-                self?.haloWindowController?.show(at: haloPosition)
-                self?.haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
-            }
-        }
+        // Show processing indicator at cursor/mouse position
+        showProcessingIndicator()
 
         // Process with replace mode (AI response replaces original text)
         processWithInputMode(useCutMode: true)
@@ -148,19 +137,8 @@ final class InputCoordinator {
         previousFrontmostApp = NSWorkspace.shared.frontmostApplication
         print("[InputCoordinator] 📱 Stored frontmost app: \(previousFrontmostApp?.localizedName ?? "Unknown")")
 
-        // Get best position for Halo
-        let haloPosition = CaretPositionHelper.getBestPosition()
-
-        // Show Halo immediately with processing state
-        if Thread.isMainThread {
-            haloWindowController?.show(at: haloPosition)
-            haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
-        } else {
-            DispatchQueue.main.sync { [weak self] in
-                self?.haloWindowController?.show(at: haloPosition)
-                self?.haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
-            }
-        }
+        // Show processing indicator at cursor/mouse position
+        showProcessingIndicator()
 
         // Process with append mode (AI response appends after original text)
         processWithInputMode(useCutMode: false)
@@ -412,14 +390,6 @@ final class InputCoordinator {
         let windowContext = ContextCapture.captureContext()
         print("[InputCoordinator] Context: app=\(windowContext.bundleId ?? "unknown"), window=\(windowContext.windowTitle ?? "nil")")
 
-        // Update Halo to processing state
-        DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
-        }
-
-        // Show processing indicator at cursor/mouse position
-        showProcessingIndicator()
-
         // Process input asynchronously to avoid blocking UI
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
@@ -509,14 +479,10 @@ final class InputCoordinator {
 
     // MARK: - Processing Indicator
 
-    /// Show processing indicator for single-turn mode
+    /// Show processing indicator at cursor position (falls back to mouse position)
     private func showProcessingIndicator() {
-        // Get position based on single-turn mode (falls back to mouse)
-        let position = ProcessingIndicatorWindow.getPosition(mode: .singleTurn, windowFrame: nil)
-
-        // Show indicator
         DispatchQueue.main.async { [weak self] in
-            self?.processingIndicatorWindow.show(at: position)
+            self?.processingIndicatorWindow.show(mode: .singleTurn)
         }
     }
 
