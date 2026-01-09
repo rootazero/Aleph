@@ -86,7 +86,19 @@ struct UnifiedInputView: View {
             }
         }
         .frame(width: 480)
-        .background(backgroundColor.opacity(0.95))
+        // Gradient background: lighter at top/bottom, darker in center for 3D depth
+        .background(
+            LinearGradient(
+                stops: [
+                    .init(color: Color(white: 0.18), location: 0),
+                    .init(color: Color(white: 0.08), location: 0.5),
+                    .init(color: Color(white: 0.14), location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .opacity(0.95)
+        )
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 6)
         .onChange(of: inputText) { _, newValue in
