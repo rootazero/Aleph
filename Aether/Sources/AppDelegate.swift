@@ -58,10 +58,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Global hotkey monitor (Swift layer)
     private var hotkeyMonitor: GlobalHotkeyMonitor?
 
-    // Command mode coordinator for slash command completion
-    private var commandModeCoordinator: CommandModeCoordinator?
+    // DEPRECATED: Command mode coordinator for slash command completion
+    // Replaced by UnifiedInputCoordinator as part of refactor-unified-halo-window
+    // Will be removed in Phase 8
+    // private var commandModeCoordinator: CommandModeCoordinator?
 
     // Unified input coordinator for new Halo window (refactor-unified-halo-window)
+    // This replaces CommandModeCoordinator with unified focus detection and SubPanel support
     private var unifiedInputCoordinator: UnifiedInputCoordinator?
 
     // MARK: - Managers (via DependencyContainer)
@@ -120,10 +123,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Stop output coordinator (removes ESC key monitor)
         outputCoordinator?.stop()
 
-        // Remove command mode hotkey monitor
-        commandModeCoordinator?.removeCommandModeHotkey()
-
-        // Clean up unified input coordinator
+        // Clean up unified input coordinator (replaces old CommandModeCoordinator)
         unifiedInputCoordinator?.cleanup()
 
         // Clean up Rust core (only if initialized)
@@ -517,14 +517,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
             print("[Aether] All coordinators configured")
 
-            // Initialize and configure command mode coordinator
-            commandModeCoordinator = CommandModeCoordinator()
-            if let core = core {
-                commandModeCoordinator?.configure(core: core, haloWindowController: haloWindowController)
-            }
-            commandModeCoordinator?.setupCommandModeHotkey()
+            // DEPRECATED: Command mode coordinator initialization (replaced by UnifiedInputCoordinator)
+            // Will be removed in Phase 8 of refactor-unified-halo-window
+            // commandModeCoordinator = CommandModeCoordinator()
+            // if let core = core {
+            //     commandModeCoordinator?.configure(core: core, haloWindowController: haloWindowController)
+            // }
+            // commandModeCoordinator?.setupCommandModeHotkey()
 
             // Initialize and configure unified input coordinator (refactor-unified-halo-window)
+            // This replaces the old CommandModeCoordinator with unified focus detection and SubPanel support
             unifiedInputCoordinator = UnifiedInputCoordinator()
             if let core = core {
                 unifiedInputCoordinator?.configure(
@@ -782,11 +784,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         rebuildProvidersMenu()
     }
 
-    // MARK: - Command Mode
+    // MARK: - Unified Input Hotkey
 
-    /// Update command prompt hotkey at runtime (called from ShortcutsView)
+    /// Update unified input hotkey at runtime (called from ShortcutsView)
+    /// This replaces the old command mode hotkey with the unified input system
     func updateCommandPromptHotkey(_ shortcuts: ShortcutsConfig) {
-        commandModeCoordinator?.updateCommandPromptHotkey(shortcuts)
+        // DEPRECATED: commandModeCoordinator?.updateCommandPromptHotkey(shortcuts)
         unifiedInputCoordinator?.updateUnifiedHotkey(shortcuts)
     }
 

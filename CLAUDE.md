@@ -32,13 +32,45 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Frictionless**: Brings AI intelligence directly to the cursor without context switching
 - **Native-First**: 100% native code - Rust core with platform-specific UI (Swift, C#, GTK)
 
-### User Interaction Flow ("Transmutation")
+### User Interaction Flows
+
+#### Selection-Based Flow ("Transmutation")
 
 1. User selects text/image in ANY app, presses global hotkey (default: ` key, customizable)
 2. Aether simulates Cut (Cmd+X) - content "disappears" for physical feedback
 3. Beautiful "Halo" appears at cursor location (native transparent overlay)
 4. Backend routes request to appropriate AI (OpenAI/Claude/Gemini/Local LLM)
 5. Halo dissolves, result is pasted back (Cmd+V) or typed character-by-character
+
+#### Unified Input Flow (refactor-unified-halo-window)
+
+The new unified input system provides a Raycast-style interface:
+
+1. User places cursor in any input field, presses hotkey (default: `Cmd+Opt+/`)
+2. **Focus Detection**: FocusDetector checks if cursor is in a valid input field
+   - If focused: Show unified input Halo at caret position
+   - If not focused: Show toast warning "请先点击输入框"
+   - If Accessibility denied: Fall back to mouse position
+3. **Unified Halo Window** appears with:
+   - Input field for conversation or command entry
+   - SubPanel below for command completion, selectors, or CLI output
+4. User types:
+   - Start with `/` → SubPanel shows command completion list
+   - Plain text → Multi-turn conversation mode
+5. On submit:
+   - Command: Route to AI with command-specific system prompt
+   - Conversation: Continue multi-turn dialogue with context
+6. **Output Routing**:
+   - If target app available: Paste/type result to app
+   - If no target: Display result in SubPanel CLI mode
+
+**Key Components:**
+- `UnifiedInputCoordinator.swift` - Main coordinator for the flow
+- `FocusDetector.swift` - Accessibility API integration for focus detection
+- `SubPanelState.swift` - State management for SubPanel modes
+- `UnifiedInputView.swift` - SwiftUI view for unified input
+
+**Migration Note:** The old `CommandModeCoordinator` is deprecated and will be removed in Phase 8.
 
 ### Multimodal Content Data Order
 

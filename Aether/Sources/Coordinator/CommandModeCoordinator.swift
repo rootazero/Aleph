@@ -5,6 +5,10 @@
 //  Coordinator for managing command mode (slash command completion).
 //  Extracted from AppDelegate to improve separation of concerns.
 //
+//  DEPRECATED: This coordinator is being replaced by UnifiedInputCoordinator
+//  as part of the refactor-unified-halo-window initiative.
+//  See UnifiedInputCoordinator.swift for the new implementation.
+//
 
 import AppKit
 import Carbon.HIToolbox
@@ -13,11 +17,16 @@ import Carbon.HIToolbox
 
 /// Coordinator for managing command mode input and completion
 ///
+/// - Important: This class is deprecated and will be removed in a future version.
+///   Use `UnifiedInputCoordinator` instead, which provides a unified Halo window
+///   experience with integrated command completion, focus detection, and SubPanel support.
+///
 /// Responsibilities:
 /// - Setup and manage command mode hotkey (Cmd+Opt+/)
 /// - Handle keyboard input during command mode
 /// - Coordinate with Halo for command completion UI
 /// - Handle command selection and text insertion
+@available(*, deprecated, message: "Use UnifiedInputCoordinator instead. This will be removed in Phase 8.")
 final class CommandModeCoordinator {
 
     // MARK: - Dependencies
