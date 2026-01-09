@@ -151,8 +151,8 @@ final class UnifiedInputWindow: NSWindow {
         // Create/update content view
         setupContentView()
 
-        // Calculate initial size
-        updateWindowSize()
+        // Calculate initial size (no animation on first show)
+        updateWindowSize(animated: false)
 
         // Center on screen
         centerOnScreen()
@@ -230,22 +230,26 @@ final class UnifiedInputWindow: NSWindow {
             }
     }
 
-    private func updateWindowSize() {
+    private func updateWindowSize(animated: Bool = true) {
         let subPanelHeight = subPanelState.calculatedHeight
         let totalHeight = Self.baseHeight + subPanelHeight
         let newSize = NSSize(width: Self.windowWidth, height: totalHeight)
 
-        // Animate size change while keeping top-left fixed
+        // Calculate new frame while keeping top-left fixed
         let currentFrame = frame
         let heightDiff = newSize.height - currentFrame.height
         var newFrame = currentFrame
         newFrame.size = newSize
         newFrame.origin.y -= heightDiff  // Keep top edge fixed
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            self.animator().setFrame(newFrame, display: true)
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.2
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                self.animator().setFrame(newFrame, display: true)
+            }
+        } else {
+            setFrame(newFrame, display: true)
         }
     }
 
