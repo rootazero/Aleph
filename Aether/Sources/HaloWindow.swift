@@ -21,9 +21,6 @@ class HaloWindow: NSWindow {
     /// Handler for Clarification (Phantom Flow) keyboard events
     private let clarificationHandler = ClarificationFlowHandler()
 
-    /// Handler for Conversation (Multi-turn) keyboard events
-    private let conversationHandler = ConversationFlowHandler()
-
     // MARK: - Managers (via DependencyContainer)
 
     /// Conversation manager accessed through DependencyContainer (for hide blocking)
@@ -85,9 +82,6 @@ class HaloWindow: NSWindow {
         // Setup flow handlers (Phase 2 Refactoring)
         clarificationHandler.delegate = self
         clarificationHandler.activate(window: self)
-
-        conversationHandler.delegate = self
-        conversationHandler.activate(window: self)
     }
 
     deinit {
@@ -193,13 +187,6 @@ class HaloWindow: NSWindow {
     func setEventHandler(_ handler: EventHandler) {
         self.eventHandler = handler
         viewModel.eventHandler = handler
-    }
-
-    /// Show conversation input UI (proxy to ConversationFlowHandler)
-    ///
-    /// - Parameter sessionId: The conversation session ID
-    func showConversationInput(sessionId: String) {
-        conversationHandler.showConversationInput(sessionId: sessionId)
     }
 
     func show(at position: NSPoint) {

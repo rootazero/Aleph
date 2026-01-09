@@ -18,7 +18,6 @@ import AppKit
 ///
 /// Implementations:
 /// - ClarificationFlowHandler: Handles Phantom Flow clarification UI
-/// - ConversationFlowHandler: Handles multi-turn conversation UI
 protocol KeyboardFlowHandler: AnyObject {
     /// Whether this handler is currently active
     var isActive: Bool { get }

@@ -330,9 +330,6 @@ final class UnifiedInputCoordinator {
     private func showUnifiedInput(at position: NSPoint) {
         print("[UnifiedInputCoordinator] Showing unified input")
 
-        // Disable ConversationFlowHandler during unified input to prevent window overlap
-        ConversationFlowHandler.isUnifiedInputModeActive = true
-
         // Generate a new session ID for this conversation
         currentSessionId = UUID().uuidString
         currentTurnCount = 0
@@ -557,9 +554,6 @@ final class UnifiedInputCoordinator {
     /// Exit unified input mode and clean up
     func exitUnifiedInput() {
         print("[UnifiedInputCoordinator] Exiting unified input mode")
-
-        // Re-enable ConversationFlowHandler
-        ConversationFlowHandler.isUnifiedInputModeActive = false
 
         // Clear state
         currentSessionId = nil

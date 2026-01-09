@@ -139,15 +139,6 @@ final class HaloWindowController {
         window?.updateTypewriterProgress(progress)
     }
 
-    // MARK: - Conversation Input
-
-    /// Show conversation input UI
-    ///
-    /// - Parameter sessionId: The conversation session ID
-    func showConversationInput(sessionId: String) {
-        window?.showConversationInput(sessionId: sessionId)
-    }
-
     // MARK: - Command Mode
 
     /// Enable mouse events for command mode
