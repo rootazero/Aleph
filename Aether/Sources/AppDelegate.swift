@@ -61,6 +61,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Command mode coordinator for slash command completion
     private var commandModeCoordinator: CommandModeCoordinator?
 
+    // Unified input coordinator for new Halo window (refactor-unified-halo-window)
+    private var unifiedInputCoordinator: UnifiedInputCoordinator?
+
     // MARK: - Managers (via DependencyContainer)
 
     /// Clipboard monitor accessed through DependencyContainer
@@ -119,6 +122,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Remove command mode hotkey monitor
         commandModeCoordinator?.removeCommandModeHotkey()
+
+        // Clean up unified input coordinator
+        unifiedInputCoordinator?.cleanup()
 
         // Clean up Rust core (only if initialized)
         // Note: No need to call stopListening() as hotkey monitoring is now in Swift
@@ -518,6 +524,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
             commandModeCoordinator?.setupCommandModeHotkey()
 
+            // Initialize and configure unified input coordinator (refactor-unified-halo-window)
+            unifiedInputCoordinator = UnifiedInputCoordinator()
+            if let core = core {
+                unifiedInputCoordinator?.configure(
+                    core: core,
+                    haloWindowController: haloWindowController,
+                    eventHandler: eventHandler,
+                    outputCoordinator: outputCoordinator,
+                    conversationCoordinator: conversationCoordinator
+                )
+            }
+            unifiedInputCoordinator?.setupUnifiedHotkey()
+            print("[Aether] UnifiedInputCoordinator configured")
+
             // Hide startup Halo animation (initialization succeeded)
             // Note: "No providers" error will be shown when user presses hotkey, not at startup
             haloWindow?.hide()
@@ -767,6 +787,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// Update command prompt hotkey at runtime (called from ShortcutsView)
     func updateCommandPromptHotkey(_ shortcuts: ShortcutsConfig) {
         commandModeCoordinator?.updateCommandPromptHotkey(shortcuts)
+        unifiedInputCoordinator?.updateUnifiedHotkey(shortcuts)
     }
 
     // MARK: - Trigger System Configuration
