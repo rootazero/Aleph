@@ -423,12 +423,42 @@ final class UnifiedInputCoordinator {
         // Show processing indicator at cursor position
         showProcessingIndicator()
 
-        // Capture context
+        // CRITICAL: Read clipboard content (images, files, text context)
+        // This enables users to copy an image in Finder, then type "请分析这张图片"
+        // and have both the text and image sent to AI together
+        let (clipboardText, clipboardAttachments, extractionError) = clipboardManager.getMixedContent()
+
+        // Check for extraction errors (e.g., file too large)
+        if let error = extractionError {
+            print("[UnifiedInputCoordinator] ⚠️ Clipboard extraction error: \(error)")
+            // Continue without clipboard content - don't block the user
+        }
+
+        // Log clipboard content
+        if !clipboardAttachments.isEmpty {
+            print("[UnifiedInputCoordinator] 📎 Found \(clipboardAttachments.count) clipboard attachment(s):")
+            for (index, attachment) in clipboardAttachments.enumerated() {
+                print("[UnifiedInputCoordinator]   [\(index + 1)] \(attachment.mediaType)/\(attachment.mimeType) - \(attachment.sizeBytes) bytes")
+            }
+        }
+
+        // Use AttachmentMerger to combine input text with clipboard content
+        // Data order: Input Text + Clipboard Text Context + Clipboard Attachments
+        let mergeContext = AttachmentMerger.MergeContext(
+            clipboardAttachments: clipboardAttachments,
+            windowAttachments: [],  // No window attachments in unified input mode
+            clipboardTextContext: clipboardText != text ? clipboardText : nil,  // Avoid duplicating if same
+            windowText: text  // User's input from UnifiedInputWindow
+        )
+        let mergeResult = AttachmentMerger.merge(mergeContext)
+        mergeResult.logStatistics(prefix: "[UnifiedInputCoordinator]")
+
+        // Capture window context
         let windowContext = ContextCapture.captureContext()
         let capturedContext = CapturedContext(
             appBundleId: windowContext.bundleId ?? "unknown",
             windowTitle: windowContext.windowTitle,
-            attachments: nil
+            attachments: mergeResult.finalAttachments.isEmpty ? nil : mergeResult.finalAttachments
         )
 
         // Store conversation context for output handling
@@ -439,13 +469,20 @@ final class UnifiedInputCoordinator {
         )
         conversationCoordinator?.previousFrontmostApp = previousFrontmostApp
 
+        // Use merged text (includes clipboard context if present)
+        let finalUserInput = mergeResult.finalText
+
         // Start or continue conversation
         if currentTurnCount == 0 {
             // First turn - start new conversation
-            conversationCoordinator?.startConversation(userInput: text, context: capturedContext)
+            print("[UnifiedInputCoordinator] 🤖 Starting conversation with: \(finalUserInput.prefix(50))... + \(mergeResult.totalAttachmentCount) attachment(s)")
+            conversationCoordinator?.startConversation(userInput: finalUserInput, context: capturedContext)
         } else {
             // Continuation - continue existing conversation
-            conversationCoordinator?.continueConversation(followUpInput: text)
+            // Note: For continuation, we still read clipboard but pass text only
+            // Attachments are only sent with the user input text
+            print("[UnifiedInputCoordinator] 🤖 Continuing conversation with: \(finalUserInput.prefix(50))...")
+            conversationCoordinator?.continueConversation(followUpInput: finalUserInput)
         }
 
         currentTurnCount += 1
@@ -475,12 +512,34 @@ final class UnifiedInputCoordinator {
         // Show processing indicator at cursor position
         showProcessingIndicator()
 
-        // Capture context
+        // CRITICAL: Read clipboard content (images, files, text context)
+        // This enables users to copy an image, then use "/en describe this image"
+        let (clipboardText, clipboardAttachments, extractionError) = clipboardManager.getMixedContent()
+
+        if let error = extractionError {
+            print("[UnifiedInputCoordinator] ⚠️ Clipboard extraction error: \(error)")
+        }
+
+        if !clipboardAttachments.isEmpty {
+            print("[UnifiedInputCoordinator] 📎 Command mode: Found \(clipboardAttachments.count) clipboard attachment(s)")
+        }
+
+        // Use AttachmentMerger to combine command input with clipboard content
+        let mergeContext = AttachmentMerger.MergeContext(
+            clipboardAttachments: clipboardAttachments,
+            windowAttachments: [],
+            clipboardTextContext: clipboardText != content ? clipboardText : nil,
+            windowText: fullInput
+        )
+        let mergeResult = AttachmentMerger.merge(mergeContext)
+        mergeResult.logStatistics(prefix: "[UnifiedInputCoordinator]")
+
+        // Capture window context
         let windowContext = ContextCapture.captureContext()
         let capturedContext = CapturedContext(
             appBundleId: windowContext.bundleId ?? "unknown",
             windowTitle: windowContext.windowTitle,
-            attachments: nil
+            attachments: mergeResult.finalAttachments.isEmpty ? nil : mergeResult.finalAttachments
         )
 
         // Process in background
