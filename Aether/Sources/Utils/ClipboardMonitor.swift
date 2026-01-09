@@ -133,6 +133,34 @@ class ClipboardMonitor {
         return change.content
     }
 
+    /// Check if clipboard was changed within the recent threshold
+    ///
+    /// This method checks if ANY clipboard change (text or media) occurred within
+    /// the threshold. Use this to determine if media attachments should be included.
+    ///
+    /// - Returns: true if clipboard was changed within `recentThresholdSeconds`
+    func isClipboardRecent() -> Bool {
+        guard let change = lastChange else {
+            // No recorded change - check if current clipboard state is "fresh"
+            // by comparing changeCount (if it changed since init, it's recent)
+            let currentCount = ClipboardManager.shared.changeCount()
+            if currentCount != lastChangeCount {
+                // Clipboard changed but we haven't recorded it yet - treat as recent
+                return true
+            }
+            return false
+        }
+
+        let elapsed = Date().timeIntervalSince(change.timestamp)
+        let isRecent = elapsed <= recentThresholdSeconds
+
+        if !isRecent {
+            print("[ClipboardMonitor] Clipboard too old for attachments (\(Int(elapsed))s > \(Int(recentThresholdSeconds))s)")
+        }
+
+        return isRecent
+    }
+
     /// Check if clipboard has recent content
     var hasRecentContent: Bool {
         return getRecentClipboardContent() != nil

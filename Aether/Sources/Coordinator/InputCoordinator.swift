@@ -194,12 +194,23 @@ final class InputCoordinator {
         // This preserves images/files that user manually copied to clipboard
         // Without this, simulateCut()/simulateCopy() would overwrite the clipboard
         // and lose the media attachments that user intended to send to AI
-        let (_, originalMediaAttachments, _) = clipboardManager.getMixedContent()
-        if !originalMediaAttachments.isEmpty {
-            print("[InputCoordinator] 📎 Saved \(originalMediaAttachments.count) original media attachment(s) from clipboard")
-            for (index, attachment) in originalMediaAttachments.enumerated() {
-                print("[InputCoordinator]   [\(index + 1)] \(attachment.mediaType)/\(attachment.mimeType) - \(attachment.sizeBytes) bytes")
+        //
+        // Also check if clipboard is recent (within 10 seconds) - only include
+        // attachments if they were copied recently to avoid unintentional inclusion
+        let isClipboardRecent = clipboardMonitor.isClipboardRecent()
+        let originalMediaAttachments: [MediaAttachment]
+        if isClipboardRecent {
+            let (_, attachments, _) = clipboardManager.getMixedContent()
+            originalMediaAttachments = attachments
+            if !originalMediaAttachments.isEmpty {
+                print("[InputCoordinator] 📎 Saved \(originalMediaAttachments.count) recent media attachment(s) from clipboard (within 10s)")
+                for (index, attachment) in originalMediaAttachments.enumerated() {
+                    print("[InputCoordinator]   [\(index + 1)] \(attachment.mediaType)/\(attachment.mimeType) - \(attachment.sizeBytes) bytes")
+                }
             }
+        } else {
+            originalMediaAttachments = []
+            print("[InputCoordinator] 📎 Skipping clipboard attachments (clipboard too old)")
         }
 
         // Step 1: Always COPY selected text first (not cut)

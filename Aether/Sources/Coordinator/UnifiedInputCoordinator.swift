@@ -424,30 +424,38 @@ final class UnifiedInputCoordinator {
         showProcessingIndicator()
 
         // CRITICAL: Read clipboard content (images, files, text context)
-        // This enables users to copy an image in Finder, then type "请分析这张图片"
-        // and have both the text and image sent to AI together
-        let (_, clipboardAttachments, extractionError) = clipboardManager.getMixedContent()
+        // Only include clipboard content if it was changed within 10 seconds
+        // This prevents old clipboard content from being included unintentionally
+        let isClipboardRecent = clipboardMonitor.isClipboardRecent()
 
-        // Check for extraction errors (e.g., file too large)
-        if let error = extractionError {
-            print("[UnifiedInputCoordinator] ⚠️ Clipboard extraction error: \(error)")
-            // Continue without clipboard content - don't block the user
-        }
+        let clipboardAttachments: [MediaAttachment]
+        let recentClipboardText: String?
 
-        // Log clipboard content
-        if !clipboardAttachments.isEmpty {
-            print("[UnifiedInputCoordinator] 📎 Found \(clipboardAttachments.count) clipboard attachment(s):")
-            for (index, attachment) in clipboardAttachments.enumerated() {
-                print("[UnifiedInputCoordinator]   [\(index + 1)] \(attachment.mediaType)/\(attachment.mimeType) - \(attachment.sizeBytes) bytes")
+        if isClipboardRecent {
+            // Clipboard is recent - read all content
+            let (clipText, attachments, extractionError) = clipboardManager.getMixedContent()
+            clipboardAttachments = attachments
+            recentClipboardText = clipboardMonitor.getRecentClipboardContent()
+
+            if let error = extractionError {
+                print("[UnifiedInputCoordinator] ⚠️ Clipboard extraction error: \(error)")
             }
-        }
 
-        // Get recent clipboard TEXT content (within 10 seconds) - same as single-turn
-        // This prevents old clipboard text from being included unintentionally
-        // Note: Media attachments (images, PDFs) have no time limit
-        let recentClipboardText = clipboardMonitor.getRecentClipboardContent()
-        if let recent = recentClipboardText {
-            print("[UnifiedInputCoordinator] 📋 Found recent clipboard text (\(recent.count) chars, within 10s)")
+            if !clipboardAttachments.isEmpty {
+                print("[UnifiedInputCoordinator] 📎 Found \(clipboardAttachments.count) recent clipboard attachment(s) (within 10s):")
+                for (index, attachment) in clipboardAttachments.enumerated() {
+                    print("[UnifiedInputCoordinator]   [\(index + 1)] \(attachment.mediaType)/\(attachment.mimeType) - \(attachment.sizeBytes) bytes")
+                }
+            }
+
+            if let recent = recentClipboardText {
+                print("[UnifiedInputCoordinator] 📋 Found recent clipboard text (\(recent.count) chars, within 10s)")
+            }
+        } else {
+            // Clipboard too old - skip all clipboard content
+            clipboardAttachments = []
+            recentClipboardText = nil
+            print("[UnifiedInputCoordinator] 📎 Skipping clipboard content (clipboard too old, >10s)")
         }
 
         // Use AttachmentMerger to combine input text with clipboard content
@@ -455,7 +463,7 @@ final class UnifiedInputCoordinator {
         let mergeContext = AttachmentMerger.MergeContext(
             clipboardAttachments: clipboardAttachments,
             windowAttachments: [],  // No window attachments in unified input mode
-            clipboardTextContext: recentClipboardText != text ? recentClipboardText : nil,  // 10s limit, avoid duplicating
+            clipboardTextContext: recentClipboardText != text ? recentClipboardText : nil,  // Avoid duplicating
             windowText: text  // User's input from UnifiedInputWindow
         )
         let mergeResult = AttachmentMerger.merge(mergeContext)
@@ -521,29 +529,39 @@ final class UnifiedInputCoordinator {
         showProcessingIndicator()
 
         // CRITICAL: Read clipboard content (images, files, text context)
-        // This enables users to copy an image, then use "/en describe this image"
-        let (_, clipboardAttachments, extractionError) = clipboardManager.getMixedContent()
+        // Only include clipboard content if it was changed within 10 seconds
+        let isClipboardRecent = clipboardMonitor.isClipboardRecent()
 
-        if let error = extractionError {
-            print("[UnifiedInputCoordinator] ⚠️ Clipboard extraction error: \(error)")
-        }
+        let clipboardAttachments: [MediaAttachment]
+        let recentClipboardText: String?
 
-        if !clipboardAttachments.isEmpty {
-            print("[UnifiedInputCoordinator] 📎 Command mode: Found \(clipboardAttachments.count) clipboard attachment(s)")
-        }
+        if isClipboardRecent {
+            let (_, attachments, extractionError) = clipboardManager.getMixedContent()
+            clipboardAttachments = attachments
+            recentClipboardText = clipboardMonitor.getRecentClipboardContent()
 
-        // Get recent clipboard TEXT content (within 10 seconds) - same as single-turn
-        // Note: Media attachments (images, PDFs) have no time limit
-        let recentClipboardText = clipboardMonitor.getRecentClipboardContent()
-        if let recent = recentClipboardText {
-            print("[UnifiedInputCoordinator] 📋 Command mode: Found recent clipboard text (\(recent.count) chars)")
+            if let error = extractionError {
+                print("[UnifiedInputCoordinator] ⚠️ Clipboard extraction error: \(error)")
+            }
+
+            if !clipboardAttachments.isEmpty {
+                print("[UnifiedInputCoordinator] 📎 Command mode: Found \(clipboardAttachments.count) recent attachment(s) (within 10s)")
+            }
+
+            if let recent = recentClipboardText {
+                print("[UnifiedInputCoordinator] 📋 Command mode: Found recent clipboard text (\(recent.count) chars)")
+            }
+        } else {
+            clipboardAttachments = []
+            recentClipboardText = nil
+            print("[UnifiedInputCoordinator] 📎 Command mode: Skipping clipboard (too old, >10s)")
         }
 
         // Use AttachmentMerger to combine command input with clipboard content
         let mergeContext = AttachmentMerger.MergeContext(
             clipboardAttachments: clipboardAttachments,
             windowAttachments: [],
-            clipboardTextContext: recentClipboardText != content ? recentClipboardText : nil,  // 10s limit
+            clipboardTextContext: recentClipboardText != content ? recentClipboardText : nil,
             windowText: fullInput
         )
         let mergeResult = AttachmentMerger.merge(mergeContext)

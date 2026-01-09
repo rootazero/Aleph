@@ -34,6 +34,10 @@ protocol ClipboardMonitorProtocol: AnyObject {
     /// Get recent clipboard content (if within threshold)
     func getRecentClipboardContent() -> String?
 
+    /// Check if clipboard was changed within the recent threshold
+    /// Use this to determine if media attachments should be included
+    func isClipboardRecent() -> Bool
+
     /// Clear recorded clipboard history
     func clearHistory()
 }
