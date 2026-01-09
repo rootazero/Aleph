@@ -7,6 +7,30 @@
 
 import SwiftUI
 
+// MARK: - HaloState Callbacks
+
+/// Stores closures separately from HaloState to enable automatic Equatable synthesis.
+/// Closures cannot be compared, so they must be stored outside the enum.
+struct HaloStateCallbacks {
+    /// Callback when toast is dismissed
+    var toastOnDismiss: (() -> Void)?
+
+    /// Callback when tool confirmation is executed
+    var toolConfirmationOnExecute: (() -> Void)?
+
+    /// Callback when tool confirmation is cancelled
+    var toolConfirmationOnCancel: (() -> Void)?
+
+    /// Reset all callbacks
+    mutating func reset() {
+        toastOnDismiss = nil
+        toolConfirmationOnExecute = nil
+        toolConfirmationOnCancel = nil
+    }
+}
+
+// MARK: - Toast Types
+
 /// Toast notification types for Halo overlay
 enum ToastType: Equatable {
     case info      // Blue accent, info.circle icon - for success/confirmation
@@ -61,55 +85,31 @@ enum HaloState: Equatable {
     case success(finalText: String? = nil)
     case error(type: ErrorType, message: String, suggestion: String? = nil)  // Error with optional suggestion
     case permissionRequired(type: PermissionType)  // Permission prompt
-    case toast(type: ToastType, title: String, message: String, autoDismiss: Bool, onDismiss: (() -> Void)?)  // Toast notification
+    case toast(type: ToastType, title: String, message: String, autoDismiss: Bool)  // Toast notification (callbacks in HaloStateCallbacks)
     case clarification(request: ClarificationRequest)  // Phantom Flow clarification (add-phantom-flow-interaction)
     case conversationInput(sessionId: String, turnCount: UInt32)  // Multi-turn conversation input (add-multi-turn-conversation)
-    case toolConfirmation(  // Async tool confirmation (Phase 6)
+    case toolConfirmation(  // Async tool confirmation (Phase 6) - callbacks in HaloStateCallbacks
         confirmationId: String,
         toolName: String,
         toolDescription: String,
         reason: String,
-        confidence: Float,
-        onExecute: () -> Void,
-        onCancel: () -> Void
+        confidence: Float
     )
+    // Note: Equatable is now auto-derived since closures are stored in HaloStateCallbacks
+}
 
-    // Equatable conformance
-    static func == (lhs: HaloState, rhs: HaloState) -> Bool {
-        switch (lhs, rhs) {
-        case (.idle, .idle):
-            return true
-        case (.listening, .listening):
-            return true
-        case (.commandMode, .commandMode):
-            return true
-        case (.retrievingMemory, .retrievingMemory):
-            return true
-        case (.processingWithAI(let color1, let name1), .processingWithAI(let color2, let name2)):
-            return color1 == color2 && name1 == name2
-        case (.processing(let color1, let text1), .processing(let color2, let text2)):
-            return color1 == color2 && text1 == text2
-        case (.typewriting(let progress1), .typewriting(let progress2)):
-            return progress1 == progress2
-        case (.success(let text1), .success(let text2)):
-            return text1 == text2
-        case (.error(let type1, let msg1, let sug1), .error(let type2, let msg2, let sug2)):
-            return type1 == type2 && msg1 == msg2 && sug1 == sug2
-        case (.permissionRequired(let type1), .permissionRequired(let type2)):
-            return type1 == type2
-        case (.toast(let type1, let title1, let msg1, let auto1, _), .toast(let type2, let title2, let msg2, let auto2, _)):
-            // Closures can't be compared, so we compare other fields
-            return type1 == type2 && title1 == title2 && msg1 == msg2 && auto1 == auto2
-        case (.clarification(let req1), .clarification(let req2)):
-            return req1 == req2
-        case (.conversationInput(let sid1, let tc1), .conversationInput(let sid2, let tc2)):
-            return sid1 == sid2 && tc1 == tc2
-        case (.toolConfirmation(let id1, let name1, let desc1, let reason1, let conf1, _, _),
-              .toolConfirmation(let id2, let name2, let desc2, let reason2, let conf2, _, _)):
-            // Closures can't be compared, so we compare other fields
-            return id1 == id2 && name1 == name2 && desc1 == desc2 && reason1 == reason2 && conf1 == conf2
-        default:
-            return false
-        }
+// MARK: - Convenience Extensions
+
+extension HaloState {
+    /// Check if this is a toast state
+    var isToast: Bool {
+        if case .toast = self { return true }
+        return false
+    }
+
+    /// Check if this is a tool confirmation state
+    var isToolConfirmation: Bool {
+        if case .toolConfirmation = self { return true }
+        return false
     }
 }

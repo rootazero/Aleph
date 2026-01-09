@@ -537,10 +537,12 @@ class HaloWindow: NSWindow {
             toolName: toolName,
             toolDescription: toolDescription,
             reason: reason,
-            confidence: confidence,
-            onExecute: onExecute,
-            onCancel: onCancel
+            confidence: confidence
         )
+
+        // Set callbacks separately (closures stored outside HaloState for Equatable)
+        viewModel.callbacks.toolConfirmationOnExecute = onExecute
+        viewModel.callbacks.toolConfirmationOnCancel = onCancel
 
         // Show centered
         showToastCentered()
@@ -571,7 +573,7 @@ class HaloWindow: NSWindow {
         case .error:
             return NSSize(width: 300, height: 180)
 
-        case .toast(_, _, let message, _, _):
+        case .toast(_, _, let message, _):
             // Dynamic height based on message length
             let lineCount = min(5, max(1, message.count / 50 + 1))
             let height = CGFloat(80 + lineCount * 16)
@@ -623,8 +625,19 @@ class HaloWindow: NSWindow {
 // MARK: - HaloViewModel (ObservableObject for SwiftUI state propagation)
 
 class HaloViewModel: ObservableObject {
-    @Published var state: HaloState = .idle
+    @Published var state: HaloState = .idle {
+        didSet {
+            // Reset callbacks when state changes to a non-callback state
+            if !state.isToast && !state.isToolConfirmation {
+                callbacks.reset()
+            }
+        }
+    }
     weak var eventHandler: EventHandler?
+
+    /// Callbacks for states that need closures (toast, toolConfirmation)
+    /// Stored separately to enable automatic Equatable synthesis for HaloState
+    var callbacks = HaloStateCallbacks()
 
     /// Command completion manager (add-command-completion-system)
     let commandManager = CommandCompletionManager()

@@ -88,12 +88,12 @@ struct HaloView: View {
                 )
                 .transition(.scale.combined(with: .opacity))
 
-            case .toast(let type, let title, let message, _, let onDismiss):
+            case .toast(let type, let title, let message, _):
                 theme.toastView(
                     type: type,
                     title: title,
                     message: message,
-                    onDismiss: onDismiss
+                    onDismiss: viewModel.callbacks.toastOnDismiss
                 )
                 .transition(.scale.combined(with: .opacity))
 
@@ -105,15 +105,15 @@ struct HaloView: View {
                 ConversationInputView(sessionId: sessionId, turnCount: turnCount)
                     .transition(.scale.combined(with: .opacity))
 
-            case .toolConfirmation(let id, let name, let desc, let reason, let conf, let onExec, let onCancel):
+            case .toolConfirmation(let id, let name, let desc, let reason, let conf):
                 ToolConfirmationView(
                     confirmationId: id,
                     toolName: name,
                     toolDescription: desc,
                     reason: reason,
                     confidence: conf,
-                    onExecute: onExec,
-                    onCancel: onCancel
+                    onExecute: viewModel.callbacks.toolConfirmationOnExecute ?? {},
+                    onCancel: viewModel.callbacks.toolConfirmationOnCancel ?? {}
                 )
                 .transition(.scale.combined(with: .opacity))
             }
@@ -167,13 +167,13 @@ struct HaloView: View {
             return "\(errorTypeString) error occurred"
         case .permissionRequired(let permissionType):
             return permissionType.title
-        case .toast(let type, let title, _, _, _):
+        case .toast(let type, let title, _, _):
             return "\(type.displayName): \(title)"
         case .clarification(let request):
             return "Clarification: \(request.prompt)"
         case .conversationInput(_, let turnCount):
             return "Conversation input, turn \(turnCount + 1)"
-        case .toolConfirmation(_, let name, _, _, _, _, _):
+        case .toolConfirmation(_, let name, _, _, _):
             return "Tool confirmation: \(name)"
         }
     }
@@ -187,7 +187,7 @@ struct HaloView: View {
             return text
         case .success(let text):
             return text
-        case .toast(_, _, let message, _, _):
+        case .toast(_, _, let message, _):
             return message
         case .clarification(let request):
             if let options = request.options {
@@ -196,7 +196,7 @@ struct HaloView: View {
             return "Text input required"
         case .conversationInput(_, let turnCount):
             return "Turn \(turnCount + 1), text input required"
-        case .toolConfirmation(_, _, let desc, let reason, let conf, _, _):
+        case .toolConfirmation(_, _, let desc, let reason, let conf):
             return "\(desc). \(reason). Confidence: \(Int(conf * 100))%"
         default:
             return nil
@@ -271,7 +271,7 @@ struct HaloView: View {
             return 180
         case .permissionRequired:
             return 450  // Taller for permission prompt
-        case .toast(_, _, let message, _, _):
+        case .toast(_, _, let message, _):
             // Dynamic height based on message length
             let lineCount = min(5, max(1, message.count / 50 + 1))
             return CGFloat(80 + lineCount * 16)

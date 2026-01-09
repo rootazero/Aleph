@@ -541,20 +541,19 @@ class EventHandler: AetherEventHandler {
         toastDismissTimer = nil
 
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            // Create dismiss closure
-            let dismissAction: () -> Void = { [weak slf] in
-                slf?.dismissToast()
-            }
-
             // Update Halo state to toast
             let shouldAutoDismiss = autoDismiss && type == .info
             slf.haloWindow?.updateState(.toast(
                 type: type,
                 title: title,
                 message: message,
-                autoDismiss: shouldAutoDismiss,
-                onDismiss: dismissAction
+                autoDismiss: shouldAutoDismiss
             ))
+
+            // Set dismiss callback separately (closures stored outside HaloState for Equatable)
+            slf.haloWindow?.viewModel.callbacks.toastOnDismiss = { [weak slf] in
+                slf?.dismissToast()
+            }
 
             // Show at screen center
             slf.haloWindow?.showToastCentered()
