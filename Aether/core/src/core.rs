@@ -432,6 +432,40 @@ impl AetherCore {
                     info!("Registered System Tool: SystemInfoService");
                 }
 
+                // Register clipboard service (content provided by Swift via UniFFI)
+                if unified_tools.is_clipboard_enabled() {
+                    let clipboard_service = crate::mcp::ClipboardService::new();
+                    client.register_system_tool(Arc::new(clipboard_service));
+                    info!("Registered System Tool: ClipboardService");
+                }
+
+                // Register screen capture service
+                if unified_tools.is_screen_capture_enabled() {
+                    let screen_config = unified_tools.screen_capture_config();
+                    let screen_config = crate::config::ScreenCaptureToolConfig {
+                        enabled: screen_config.enabled,
+                        max_dimension: screen_config.max_dimension,
+                        jpeg_quality: screen_config.jpeg_quality,
+                    };
+                    let screen_service = crate::mcp::ScreenCaptureService::new(screen_config);
+                    client.register_system_tool(Arc::new(screen_service));
+                    info!("Registered System Tool: ScreenCaptureService");
+                }
+
+                // Register search service (wraps existing SearchRegistry)
+                if unified_tools.is_search_tool_enabled() {
+                    let search_config = unified_tools.search_tool_config();
+                    let search_config = crate::config::SearchToolConfig {
+                        enabled: search_config.enabled,
+                        default_max_results: search_config.default_max_results,
+                        default_timeout_seconds: search_config.default_timeout_seconds,
+                    };
+                    let search_service = crate::mcp::SearchService::new(search_config);
+                    // Note: SearchRegistry will be injected later via set_registry()
+                    client.register_system_tool(Arc::new(search_service));
+                    info!("Registered System Tool: SearchService");
+                }
+
                 // Register MCP external servers from unified config
                 for (server_name, server_config) in unified_tools.enabled_mcp_servers() {
                     debug!(

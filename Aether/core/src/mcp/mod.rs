@@ -37,8 +37,11 @@ pub mod types;
 
 // Re-export system tools from services::tools for backward compatibility
 pub use crate::services::tools::{
+    // Existing tools
     FsService, FsServiceConfig, GitService, GitServiceConfig, ShellService, ShellServiceConfig,
     SystemInfoService, SystemTool,
+    // New tools
+    ClipboardContent, ClipboardService, ScreenCaptureService, SearchService,
 };
 // Backward compatibility alias
 pub use crate::services::tools::BuiltinMcpService;

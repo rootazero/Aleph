@@ -1697,6 +1697,18 @@ pub struct NativeToolsConfig {
     /// System info service configuration
     #[serde(default)]
     pub system_info: Option<SystemInfoToolConfig>,
+
+    /// Clipboard read service configuration
+    #[serde(default)]
+    pub clipboard: Option<ClipboardToolConfig>,
+
+    /// Screen capture service configuration
+    #[serde(default)]
+    pub screen_capture: Option<ScreenCaptureToolConfig>,
+
+    /// Search tool service configuration
+    #[serde(default)]
+    pub search: Option<SearchToolConfig>,
 }
 
 /// Filesystem tool configuration
@@ -1792,6 +1804,88 @@ impl Default for SystemInfoToolConfig {
     }
 }
 
+/// Clipboard tool configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipboardToolConfig {
+    /// Enable clipboard read service
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for ClipboardToolConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+/// Screen capture tool configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScreenCaptureToolConfig {
+    /// Enable screen capture service
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Maximum image dimension (width or height)
+    #[serde(default = "default_max_dimension")]
+    pub max_dimension: u32,
+
+    /// JPEG quality for captured images (0-100)
+    #[serde(default = "default_jpeg_quality")]
+    pub jpeg_quality: u8,
+}
+
+fn default_max_dimension() -> u32 {
+    1920
+}
+
+fn default_jpeg_quality() -> u8 {
+    85
+}
+
+impl Default for ScreenCaptureToolConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_dimension: default_max_dimension(),
+            jpeg_quality: default_jpeg_quality(),
+        }
+    }
+}
+
+/// Search tool configuration (wraps existing SearchRegistry as tool)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchToolConfig {
+    /// Enable search tool
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Default maximum number of search results
+    #[serde(default = "default_search_tool_max_results")]
+    pub default_max_results: usize,
+
+    /// Default search timeout in seconds
+    #[serde(default = "default_search_tool_timeout_seconds")]
+    pub default_timeout_seconds: u64,
+}
+
+fn default_search_tool_max_results() -> usize {
+    5
+}
+
+fn default_search_tool_timeout_seconds() -> u64 {
+    10
+}
+
+impl Default for SearchToolConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_max_results: default_search_tool_max_results(),
+            default_timeout_seconds: default_search_tool_timeout_seconds(),
+        }
+    }
+}
+
 /// MCP external server configuration (unified format)
 ///
 /// This is similar to McpExternalServerConfig but with a cleaner structure
@@ -1858,6 +1952,10 @@ impl UnifiedToolsConfig {
                 system_info: Some(SystemInfoToolConfig {
                     enabled: tools.system_info_enabled,
                 }),
+                // New tools use defaults (not in legacy config)
+                clipboard: None,
+                screen_capture: None,
+                search: None,
             },
             mcp: HashMap::new(),
         };
@@ -1920,6 +2018,31 @@ impl UnifiedToolsConfig {
     /// Get shell configuration
     pub fn shell_config(&self) -> ShellToolConfig {
         self.native.shell.clone().unwrap_or_default()
+    }
+
+    /// Check if clipboard service is enabled
+    pub fn is_clipboard_enabled(&self) -> bool {
+        self.enabled && self.native.clipboard.as_ref().map_or(true, |c| c.enabled)
+    }
+
+    /// Check if screen capture service is enabled
+    pub fn is_screen_capture_enabled(&self) -> bool {
+        self.enabled && self.native.screen_capture.as_ref().map_or(true, |c| c.enabled)
+    }
+
+    /// Get screen capture configuration
+    pub fn screen_capture_config(&self) -> ScreenCaptureToolConfig {
+        self.native.screen_capture.clone().unwrap_or_default()
+    }
+
+    /// Check if search tool service is enabled
+    pub fn is_search_tool_enabled(&self) -> bool {
+        self.enabled && self.native.search.as_ref().map_or(true, |c| c.enabled)
+    }
+
+    /// Get search tool configuration
+    pub fn search_tool_config(&self) -> SearchToolConfig {
+        self.native.search.clone().unwrap_or_default()
     }
 
     /// Get all enabled MCP servers
