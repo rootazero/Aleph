@@ -206,16 +206,6 @@ class ClarificationManager: ObservableObject {
     }
 }
 
-// MARK: - Notification Names
-
-extension Notification.Name {
-    /// Posted when a clarification request needs to be displayed
-    static let clarificationRequested = Notification.Name("AetherClarificationRequested")
-
-    /// Posted when clarification is completed
-    static let clarificationCompleted = Notification.Name("AetherClarificationCompleted")
-}
-
 // MARK: - Preview Helpers
 
 #if DEBUG

@@ -282,24 +282,3 @@ class ConversationManager: ObservableObject {
     }
 }
 
-// MARK: - Notification Names
-
-extension Notification.Name {
-    /// Posted when a conversation session starts
-    static let conversationStarted = Notification.Name("AetherConversationStarted")
-
-    /// Posted when a conversation turn is completed
-    static let conversationTurnCompleted = Notification.Name("AetherConversationTurnCompleted")
-
-    /// Posted when continuation input should be shown
-    static let conversationContinuationReady = Notification.Name("AetherConversationContinuationReady")
-
-    /// Posted when a conversation session ends
-    static let conversationEnded = Notification.Name("AetherConversationEnded")
-
-    /// Posted when user submits continuation input (UI → AppDelegate)
-    static let conversationContinuationSubmitted = Notification.Name("AetherConversationContinuationSubmitted")
-
-    /// Posted when user cancels the conversation (UI → AppDelegate)
-    static let conversationCancelled = Notification.Name("AetherConversationCancelled")
-}

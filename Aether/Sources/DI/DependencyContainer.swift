@@ -10,10 +10,54 @@
 //  2. Access services through container.shared or direct injection
 //  3. Use protocols for testability
 //
+//  Generic Registration API:
+//  - register<T>(_:factory:) - Register a factory that creates new instances
+//  - registerSingleton<T>(_:instance:) - Register a singleton instance
+//  - resolve<T>(_:) - Resolve a registered dependency
+//
 
 import Foundation
 import SwiftUI
 import Combine
+
+// MARK: - Registration Mode
+
+/// How a dependency should be instantiated
+enum RegistrationMode {
+    /// Create a new instance each time resolve is called
+    case factory
+    /// Return the same instance every time
+    case singleton
+}
+
+// MARK: - Dependency Registration
+
+/// Type-erased wrapper for dependency factories
+private struct AnyDependencyFactory {
+    let mode: RegistrationMode
+    let factory: () -> Any
+
+    /// Cached singleton instance (only used when mode == .singleton)
+    private var cachedInstance: Any?
+
+    init(mode: RegistrationMode, factory: @escaping () -> Any) {
+        self.mode = mode
+        self.factory = factory
+        // Pre-create singleton instance
+        if mode == .singleton {
+            self.cachedInstance = factory()
+        }
+    }
+
+    func resolve() -> Any {
+        switch mode {
+        case .factory:
+            return factory()
+        case .singleton:
+            return cachedInstance ?? factory()
+        }
+    }
+}
 
 // MARK: - Dependency Container
 
@@ -35,6 +79,104 @@ final class DependencyContainer: ObservableObject {
     /// Shared container instance
     /// This is the only singleton in the app - all other dependencies flow through it
     static let shared = DependencyContainer()
+
+    // MARK: - Generic Registration Storage
+
+    /// Storage for registered dependencies, keyed by type name
+    private var registrations: [String: AnyDependencyFactory] = [:]
+
+    /// Lock for thread-safe access to registrations
+    private let registrationLock = NSLock()
+
+    // MARK: - Generic Registration API
+
+    /// Register a factory that creates new instances each time
+    ///
+    /// - Parameters:
+    ///   - type: The protocol or type to register
+    ///   - factory: Closure that creates instances of the type
+    func register<T>(_ type: T.Type, factory: @escaping () -> T) {
+        let key = String(describing: type)
+        registrationLock.lock()
+        defer { registrationLock.unlock() }
+        registrations[key] = AnyDependencyFactory(mode: .factory, factory: factory)
+        print("[DependencyContainer] Registered factory for \(key)")
+    }
+
+    /// Register a singleton instance
+    ///
+    /// - Parameters:
+    ///   - type: The protocol or type to register
+    ///   - instance: The singleton instance to return
+    func registerSingleton<T>(_ type: T.Type, instance: T) {
+        let key = String(describing: type)
+        registrationLock.lock()
+        defer { registrationLock.unlock() }
+        registrations[key] = AnyDependencyFactory(mode: .singleton, factory: { instance })
+        print("[DependencyContainer] Registered singleton for \(key)")
+    }
+
+    /// Register a lazy singleton that's created on first resolve
+    ///
+    /// - Parameters:
+    ///   - type: The protocol or type to register
+    ///   - factory: Closure that creates the singleton instance
+    func registerLazySingleton<T>(_ type: T.Type, factory: @escaping () -> T) {
+        let key = String(describing: type)
+        registrationLock.lock()
+        defer { registrationLock.unlock() }
+        registrations[key] = AnyDependencyFactory(mode: .singleton, factory: factory)
+        print("[DependencyContainer] Registered lazy singleton for \(key)")
+    }
+
+    /// Resolve a registered dependency
+    ///
+    /// - Parameter type: The protocol or type to resolve
+    /// - Returns: The resolved instance, or nil if not registered
+    func resolve<T>(_ type: T.Type) -> T? {
+        let key = String(describing: type)
+        registrationLock.lock()
+        defer { registrationLock.unlock() }
+        guard let factory = registrations[key] else {
+            print("[DependencyContainer] Warning: No registration found for \(key)")
+            return nil
+        }
+        return factory.resolve() as? T
+    }
+
+    /// Resolve a registered dependency, throwing if not found
+    ///
+    /// - Parameter type: The protocol or type to resolve
+    /// - Returns: The resolved instance
+    /// - Throws: DependencyError.notRegistered if type is not registered
+    func require<T>(_ type: T.Type) throws -> T {
+        guard let instance = resolve(type) else {
+            throw DependencyError.notRegistered(String(describing: type))
+        }
+        return instance
+    }
+
+    /// Unregister a dependency
+    ///
+    /// - Parameter type: The type to unregister
+    func unregister<T>(_ type: T.Type) {
+        let key = String(describing: type)
+        registrationLock.lock()
+        defer { registrationLock.unlock() }
+        registrations.removeValue(forKey: key)
+        print("[DependencyContainer] Unregistered \(key)")
+    }
+
+    /// Check if a type is registered
+    ///
+    /// - Parameter type: The type to check
+    /// - Returns: true if the type is registered
+    func isRegistered<T>(_ type: T.Type) -> Bool {
+        let key = String(describing: type)
+        registrationLock.lock()
+        defer { registrationLock.unlock() }
+        return registrations[key] != nil
+    }
 
     // MARK: - Core Services (initialized after permissions)
 
@@ -266,6 +408,7 @@ enum DependencyError: LocalizedError {
     case eventHandlerNotInitialized
     case themeEngineNotInitialized
     case coordinatorNotInitialized(String)
+    case notRegistered(String)
 
     var errorDescription: String? {
         switch self {
@@ -277,6 +420,8 @@ enum DependencyError: LocalizedError {
             return "ThemeEngine has not been initialized. Call initializeCoreServices() first."
         case .coordinatorNotInitialized(let name):
             return "\(name) has not been initialized. Call initializeCoordinators() first."
+        case .notRegistered(let typeName):
+            return "No registration found for type: \(typeName). Register it first with register() or registerSingleton()."
         }
     }
 }
