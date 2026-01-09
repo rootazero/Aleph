@@ -329,6 +329,11 @@ struct MemoryView: View {
                     triggerCompression()
                 }
                 .disabled(isCompressing)
+
+                // Clear all button (same as memory browser)
+                ActionButton(L("settings.memory.clear_all_button"), icon: "trash.fill", style: .danger) {
+                    showClearAllConfirmation = true
+                }
             }
 
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
