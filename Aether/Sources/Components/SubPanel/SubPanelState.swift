@@ -193,6 +193,20 @@ final class SubPanelState: ObservableObject {
     @Published var mode: SubPanelMode = .hidden {
         didSet {
             NSLog("[SubPanelState] Mode changed: %@", mode.debugDescription)
+            // Update published height only when it actually changes
+            updatePublishedHeight()
+        }
+    }
+
+    /// Published height for window sizing (only updates when height actually changes)
+    /// This prevents window jittering when only selectedIndex changes
+    @Published private(set) var publishedHeight: CGFloat = 0
+
+    /// Update publishedHeight only when calculatedHeight actually changes
+    private func updatePublishedHeight() {
+        let newHeight = calculatedHeight
+        if abs(newHeight - publishedHeight) > 0.5 {
+            publishedHeight = newHeight
         }
     }
 

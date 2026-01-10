@@ -67,26 +67,41 @@ struct UnifiedInputView: View {
     // MARK: - Body
 
     var body: some View {
+        // Fixed height container - window never resizes
+        // Content aligns to top, background only covers content area
+        VStack(spacing: 0) {
+            // Content area with dynamic background
+            contentWithBackground
+
+            // Transparent spacer fills remaining window space
+            Spacer(minLength: 0)
+        }
+        .frame(width: 480)
+        .onChange(of: inputText) { _, newValue in
+            print("[UnifiedInputView] onChange triggered: '\(newValue)'")
+            handleTextChange(newValue)
+        }
+    }
+
+    /// Content area with animated background
+    private var contentWithBackground: some View {
         VStack(spacing: 0) {
             // Main input area
             mainInputArea
                 .padding(12)
 
-            // SubPanel (conditionally shown)
-            if subPanelState.mode.isVisible {
-                SubPanelView(
-                    state: subPanelState,
-                    onCommandSelected: { command in
-                        onCommandSelected?(command)
-                    },
-                    onCancelled: {
-                        subPanelState.hide()
-                    }
-                )
-            }
+            // SubPanel - always present, height is 0 when hidden
+            SubPanelView(
+                state: subPanelState,
+                onCommandSelected: { command in
+                    onCommandSelected?(command)
+                },
+                onCancelled: {
+                    subPanelState.hide()
+                }
+            )
         }
-        .frame(width: 480)
-        // Gradient background: lighter at top/bottom, darker in center for 3D depth
+        // Gradient background only covers content area
         .background(
             LinearGradient(
                 stops: [
@@ -101,10 +116,8 @@ struct UnifiedInputView: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 6)
-        .onChange(of: inputText) { _, newValue in
-            print("[UnifiedInputView] onChange triggered: '\(newValue)'")
-            handleTextChange(newValue)
-        }
+        // Smooth spring animation for background expansion
+        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: subPanelState.calculatedHeight)
     }
 
     // MARK: - Main Input Area

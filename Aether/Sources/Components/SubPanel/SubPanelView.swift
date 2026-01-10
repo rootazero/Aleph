@@ -39,19 +39,21 @@ struct SubPanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Top divider (only when visible) - subtle white on dark background
-            if state.mode.isVisible {
-                Divider()
-                    .background(Color.white.opacity(0.1))
-            }
+            // Top divider - always present but opacity controlled
+            // Using opacity instead of conditional rendering to prevent view rebuild jittering
+            Divider()
+                .background(Color.white.opacity(0.1))
+                .opacity(state.mode.isVisible ? 1 : 0)
 
             // Content area with dynamic height
+            // Note: Animation is handled by NSWindow frame animation (UnifiedInputWindow)
+            // to prevent dual-animation conflicts that cause jittering
             contentView
                 .frame(height: state.calculatedHeight)
                 .clipped()
         }
         .background(backgroundView)
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: state.mode)
+        // No SwiftUI animation - NSWindow controls all sizing
     }
 
     // MARK: - Content View

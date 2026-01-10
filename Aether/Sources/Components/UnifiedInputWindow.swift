@@ -10,7 +10,6 @@
 
 import SwiftUI
 import AppKit
-import Combine
 
 // MARK: - UnifiedInputWindow
 
@@ -35,6 +34,11 @@ final class UnifiedInputWindow: NSWindow {
     /// Base height (header + input + hints + padding)
     private static let baseHeight: CGFloat = 100
 
+    /// Fixed window height = base + max SubPanel height
+    /// Window never resizes - content expands within this fixed frame
+    /// This eliminates window animation jittering completely
+    private static let fixedWindowHeight: CGFloat = baseHeight + SubPanelState.maxHeight + 20
+
     // MARK: - State
 
     /// SubPanel state for dynamic content
@@ -48,9 +52,6 @@ final class UnifiedInputWindow: NSWindow {
 
     /// Hosting view for SwiftUI content
     private var hostingView: NSHostingView<UnifiedInputView>?
-
-    /// Observer for SubPanel height changes
-    private var subPanelSizeCancellable: AnyCancellable?
 
     /// Keyboard monitors for ESC handling
     private var keyMonitor: Any?
@@ -71,14 +72,14 @@ final class UnifiedInputWindow: NSWindow {
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: Self.windowWidth, height: Self.baseHeight),
+            contentRect: NSRect(x: 0, y: 0, width: Self.windowWidth, height: Self.fixedWindowHeight),
             styleMask: .borderless,
             backing: .buffered,
             defer: false
         )
 
         setupWindow()
-        observeSubPanelChanges()
+        // No need to observe SubPanel changes - window size is fixed
     }
 
     // MARK: - Window Configuration
@@ -143,10 +144,8 @@ final class UnifiedInputWindow: NSWindow {
         // Create/update content view
         setupContentView()
 
-        // Calculate initial size
-        updateWindowSize()
-
-        // Center on screen
+        // Window size is fixed - no need to adjust
+        // Center on screen (uses fixed height)
         centerOnScreen()
 
         // Show with fade-in
@@ -212,34 +211,7 @@ final class UnifiedInputWindow: NSWindow {
         hostingView = hosting
     }
 
-    // MARK: - Window Sizing
-
-    private func observeSubPanelChanges() {
-        subPanelSizeCancellable = subPanelState.$mode
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.updateWindowSize()
-            }
-    }
-
-    private func updateWindowSize() {
-        let subPanelHeight = subPanelState.calculatedHeight
-        let totalHeight = Self.baseHeight + subPanelHeight
-        let newSize = NSSize(width: Self.windowWidth, height: totalHeight)
-
-        // Animate size change while keeping top-left fixed
-        let currentFrame = frame
-        let heightDiff = newSize.height - currentFrame.height
-        var newFrame = currentFrame
-        newFrame.size = newSize
-        newFrame.origin.y -= heightDiff  // Keep top edge fixed
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            self.animator().setFrame(newFrame, display: true)
-        }
-    }
+    // MARK: - Window Positioning
 
     private func centerOnScreen() {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else {
@@ -250,9 +222,15 @@ final class UnifiedInputWindow: NSWindow {
         let screenFrame = screen.visibleFrame
         let windowSize = frame.size
 
+        // Position like Raycast: input area at upper portion of screen
+        // so SubPanel can expand downward without going off-screen
+        // Place input area at ~60% height (upper 40% of screen)
+        let inputAreaTopY = screenFrame.minY + screenFrame.height * 0.6
+        let windowOriginY = inputAreaTopY - windowSize.height
+
         let origin = NSPoint(
             x: screenFrame.midX - windowSize.width / 2,
-            y: screenFrame.midY - windowSize.height / 2
+            y: windowOriginY
         )
 
         setFrameOrigin(origin)
@@ -319,6 +297,6 @@ final class UnifiedInputWindow: NSWindow {
 
     deinit {
         removeKeyMonitors()
-        subPanelSizeCancellable?.cancel()
+        // subPanelSizeCancellable no longer used - window size is fixed
     }
 }
