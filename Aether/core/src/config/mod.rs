@@ -11,6 +11,7 @@
 //! Phase 6: Added Keychain integration and file watching support.
 //! Phase 8: Added config file loading from ~/.config/aether/config.toml
 
+use crate::dispatcher::get_builtin_routing_rules;
 use crate::error::{AetherError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -154,8 +155,8 @@ impl Default for Config {
             general: GeneralConfig::default(),
             memory: MemoryConfig::default(),
             providers: HashMap::new(),
-            // Use builtin_rules() to ensure consistency with merge_builtin_rules()
-            rules: Config::builtin_rules(),
+            // Use get_builtin_routing_rules() from dispatcher (single source of truth)
+            rules: get_builtin_routing_rules(),
             shortcuts: Some(ShortcutsConfig::default()),
             behavior: Some(BehaviorConfig::default()),
             search: None,
@@ -352,111 +353,10 @@ impl Config {
         }
     }
 
-    /// Get builtin routing rules
-    ///
-    /// Returns the preset routing rules for builtin commands (/search, /mcp, /skill, /video, /chat).
-    /// These rules are always available and merged with user-defined rules.
-    fn builtin_rules() -> Vec<RoutingRuleConfig> {
-        vec![
-            // /search command - web search capability
-            RoutingRuleConfig {
-                rule_type: Some("command".to_string()),
-                is_builtin: true,
-                regex: r"^/search\s+".to_string(),
-                provider: Some("openai".to_string()), // Default, actual provider determined by default_provider
-                system_prompt: Some("You are a helpful search assistant. Answer questions based on the web search results provided below. Be concise and cite sources when possible.".to_string()),
-                strip_prefix: Some(true),
-                capabilities: Some(vec!["search".to_string()]),
-                intent_type: Some("builtin_search".to_string()),
-                context_format: Some("markdown".to_string()),
-                skill_id: None,
-                skill_version: None,
-                workflow: None,
-                tools: None,
-                knowledge_base: None,
-                icon: None,
-                hint: None,
-            },
-            // /mcp command - Model Context Protocol integration (reserved for future)
-            RoutingRuleConfig {
-                rule_type: Some("command".to_string()),
-                is_builtin: true,
-                regex: r"^/mcp\s+".to_string(),
-                provider: Some("openai".to_string()),
-                system_prompt: Some("You are an MCP integration assistant. (Feature not yet implemented)".to_string()),
-                strip_prefix: Some(true),
-                capabilities: None, // Will add ["mcp"] when implemented
-                intent_type: Some("builtin_mcp".to_string()),
-                context_format: Some("markdown".to_string()),
-                skill_id: None,
-                skill_version: None,
-                workflow: None,
-                tools: None,
-                knowledge_base: None,
-                icon: None,
-                hint: None,
-            },
-            // /skill command - Claude Agent Skills instruction injection
-            // Usage: /skill <skill_name> <user_input>
-            // The skill_name is extracted and used to look up instructions from the skills registry
-            RoutingRuleConfig {
-                rule_type: Some("command".to_string()),
-                is_builtin: true,
-                regex: r"^/skill\s+".to_string(),
-                provider: Some("openai".to_string()),
-                system_prompt: Some("You are a helpful AI assistant. Follow the skill instructions provided in the context to complete the task.".to_string()),
-                strip_prefix: Some(true),
-                capabilities: Some(vec!["skills".to_string(), "memory".to_string()]),
-                intent_type: Some("skills".to_string()),
-                context_format: Some("markdown".to_string()),
-                skill_id: None, // Extracted dynamically from command argument
-                skill_version: None,
-                workflow: None,
-                tools: None,
-                knowledge_base: None,
-                icon: None,
-                hint: None,
-            },
-            // /video command - YouTube video transcript analysis
-            RoutingRuleConfig {
-                rule_type: Some("command".to_string()),
-                is_builtin: true,
-                regex: r"^/video\s+".to_string(),
-                provider: Some("openai".to_string()),
-                system_prompt: Some("You are a video content analyst. A video transcript will be provided in the context section below if available. Analyze the transcript and provide insights, summaries, or answer questions about the video content. If no transcript is provided, explain that the video may not have captions enabled or transcript extraction failed.".to_string()),
-                strip_prefix: Some(true),
-                capabilities: Some(vec!["video".to_string(), "memory".to_string()]),
-                intent_type: Some("video_analysis".to_string()),
-                context_format: Some("markdown".to_string()),
-                skill_id: None,
-                skill_version: None,
-                workflow: None,
-                tools: None,
-                knowledge_base: None,
-                icon: None,
-                hint: None,
-            },
-            // /chat command - General conversation assistant
-            RoutingRuleConfig {
-                rule_type: Some("command".to_string()),
-                is_builtin: true,
-                regex: r"^/chat\s+".to_string(),
-                provider: Some("openai".to_string()),
-                system_prompt: Some("You are a helpful AI assistant. Engage in natural conversation and provide helpful responses.".to_string()),
-                strip_prefix: Some(true),
-                capabilities: Some(vec!["memory".to_string()]),
-                intent_type: Some("general_chat".to_string()),
-                context_format: Some("markdown".to_string()),
-                skill_id: None,
-                skill_version: None,
-                workflow: None,
-                tools: None,
-                knowledge_base: None,
-                icon: None,
-                hint: None,
-            },
-        ]
-    }
+    // NOTE: builtin_rules() has been REMOVED (unify-tool-registry)
+    // Builtin routing rules are now generated from dispatcher::get_builtin_routing_rules()
+    // which uses BUILTIN_COMMANDS as the single source of truth.
+    // See: dispatcher/builtin_defs.rs
 
     /// Merge builtin rules with user-defined rules
     ///
@@ -466,8 +366,10 @@ impl Config {
     ///
     /// Builtin rules will use the user's default_provider if configured,
     /// otherwise fall back to the first configured provider.
+    ///
+    /// Uses get_builtin_routing_rules() from dispatcher as the single source of truth.
     fn merge_builtin_rules(&mut self) {
-        let mut builtin = Self::builtin_rules();
+        let mut builtin = get_builtin_routing_rules();
 
         // Determine the provider to use for builtin rules
         // Priority: default_provider > first configured provider > "openai" (fallback)
@@ -504,11 +406,11 @@ impl Config {
         self.rules = merged_rules;
 
         debug!(
-            builtin_count = Self::builtin_rules().len(),
+            builtin_count = get_builtin_routing_rules().len(),
             user_count = user_count,
             merged_count = self.rules.len(),
             builtin_provider = %builtin_provider,
-            "Merged builtin rules with user rules"
+            "Merged builtin rules with user rules (from dispatcher)"
         );
     }
 

@@ -149,6 +149,40 @@ pub struct UnifiedTool {
     /// True for /mcp (has MCP server tools) and /skill (has installed skills)
     #[serde(default)]
     pub has_subtools: bool,
+
+    // =========================================================================
+    // Routing Configuration Fields (for builtin commands)
+    // =========================================================================
+    // These fields are only populated for builtin tools and define how
+    // requests matching this command are routed and processed.
+
+    /// Regex pattern for L1 routing match
+    /// e.g., "^/search\\s+" for /search command
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing_regex: Option<String>,
+
+    /// System prompt to inject for this command
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing_system_prompt: Option<String>,
+
+    /// Capabilities to enable for this command
+    /// e.g., ["search"], ["memory", "skills"]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routing_capabilities: Vec<String>,
+
+    /// Intent type for classification
+    /// e.g., "builtin_search", "general_chat"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing_intent_type: Option<String>,
+
+    /// Whether to strip the command prefix from user input
+    #[serde(default)]
+    pub routing_strip_prefix: bool,
+
+    /// Context format for prompt assembly
+    /// Default: "markdown"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing_context_format: Option<String>,
 }
 
 impl UnifiedTool {
@@ -180,6 +214,13 @@ impl UnifiedTool {
             is_builtin,
             sort_order: 100, // Default sort order (user commands come after builtins)
             has_subtools: false,
+            // Routing config defaults (only set for builtins)
+            routing_regex: None,
+            routing_system_prompt: None,
+            routing_capabilities: Vec::new(),
+            routing_intent_type: None,
+            routing_strip_prefix: false,
+            routing_context_format: None,
         }
     }
 
@@ -268,6 +309,46 @@ impl UnifiedTool {
     /// Builder method: add a subtool ID
     pub fn with_subtool(mut self, subtool_id: impl Into<String>) -> Self {
         self.subtools.push(subtool_id.into());
+        self
+    }
+
+    // =========================================================================
+    // Routing Config Builder Methods (for builtin commands)
+    // =========================================================================
+
+    /// Builder method: set routing regex pattern
+    pub fn with_routing_regex(mut self, regex: impl Into<String>) -> Self {
+        self.routing_regex = Some(regex.into());
+        self
+    }
+
+    /// Builder method: set routing system prompt
+    pub fn with_routing_system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.routing_system_prompt = Some(prompt.into());
+        self
+    }
+
+    /// Builder method: set routing capabilities
+    pub fn with_routing_capabilities(mut self, caps: Vec<String>) -> Self {
+        self.routing_capabilities = caps;
+        self
+    }
+
+    /// Builder method: set routing intent type
+    pub fn with_routing_intent_type(mut self, intent: impl Into<String>) -> Self {
+        self.routing_intent_type = Some(intent.into());
+        self
+    }
+
+    /// Builder method: set routing strip prefix
+    pub fn with_routing_strip_prefix(mut self, strip: bool) -> Self {
+        self.routing_strip_prefix = strip;
+        self
+    }
+
+    /// Builder method: set routing context format
+    pub fn with_routing_context_format(mut self, format: impl Into<String>) -> Self {
+        self.routing_context_format = Some(format.into());
         self
     }
 

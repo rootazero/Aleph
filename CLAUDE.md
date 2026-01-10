@@ -769,10 +769,47 @@ User Input
 
 | Source | Description | Example |
 |--------|-------------|---------|
+| `Builtin` | System builtin commands | `/search`, `/mcp`, `/skill`, `/video`, `/chat` |
 | `Native` | Built-in capabilities | Search, Video transcript |
 | `Mcp` | MCP server tools | `github:git_status`, `filesystem:read_file` |
 | `Skill` | Claude Agent Skills | `refine-text`, `code-review` |
 | `Custom` | User-defined rules | `[[rules]]` in config.toml |
+
+**Single Source of Truth (BUILTIN_COMMANDS):**
+
+The 5 builtin commands are defined in `dispatcher/builtin_defs.rs` and serve as the single source of truth for:
+- Tool metadata (UI display, command completion, L3 router awareness)
+- Routing rules (system_prompt, capabilities, regex patterns)
+
+```rust
+// dispatcher/builtin_defs.rs
+pub const BUILTIN_COMMANDS: &[BuiltinCommandDef] = &[
+    BuiltinCommandDef { name: "search", ... },
+    BuiltinCommandDef { name: "mcp", ... },
+    BuiltinCommandDef { name: "skill", ... },
+    BuiltinCommandDef { name: "video", ... },
+    BuiltinCommandDef { name: "chat", ... },
+];
+
+// Used by:
+// - ToolRegistry.register_builtin_tools() - for tool metadata
+// - get_builtin_routing_rules() - for routing config
+// - Config module - for default rules
+```
+
+**Event System (Tool Changes):**
+
+When tools change (MCP connect/disconnect, skill install/uninstall), the event system notifies Swift UI:
+
+```
+Rust: refresh_tool_registry()
+    ↓
+Rust: event_handler.on_tools_changed(tool_count)
+    ↓
+Swift: EventHandler.onToolsChanged() posts .toolsDidChange notification
+    ↓
+Swift: CommandCompletionManager auto-refreshes command list
+```
 
 **Confirmation Flow:**
 - Tools with `confidence < confirmation_threshold` trigger user confirmation
@@ -793,11 +830,15 @@ confirmation_timeout_ms = 30000   # Auto-cancel after timeout
 
 **Code Locations:**
 - Dispatcher module: `Aether/core/src/dispatcher/`
+- Builtin definitions: `dispatcher/builtin_defs.rs` (SINGLE SOURCE OF TRUTH)
 - Tool Registry: `dispatcher/registry.rs`
 - L3 Router: `dispatcher/l3_router.rs`
 - Prompt Builder: `dispatcher/prompt_builder.rs`
 - Confirmation: `dispatcher/confirmation.rs`
 - Integration: `dispatcher/integration.rs`
+- Swift event handler: `Sources/EventHandler.swift`
+- Swift notifications: `Sources/Notifications.swift`
+- Command completion: `Sources/Utils/CommandCompletionManager.swift`
 
 **UniFFI Interface:**
 ```swift

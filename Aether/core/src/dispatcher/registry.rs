@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
+use super::builtin_defs::BUILTIN_COMMANDS;
 use super::types::{ToolSource, UnifiedTool};
 
 /// Unified Tool Registry
@@ -74,67 +75,34 @@ impl ToolRegistry {
     /// - Settings UI preset rules list
     /// - Command completion root commands
     /// - L3 router tool awareness
+    ///
+    /// Uses BUILTIN_COMMANDS from builtin_defs module as the single source of truth.
     pub async fn register_builtin_tools(&self) {
         let mut tools = self.tools.write().await;
 
-        // /search - Web search capability
-        let search = UnifiedTool::builtin("search")
-            .with_display_name("Web Search")
-            .with_description("Search the web for real-time information, news, and facts")
-            .with_icon("magnifyingglass")
-            .with_usage("/search <query>")
-            .with_localization_key("tool.search")
-            .with_sort_order(1)
-            .with_requires_confirmation(false);
-        tools.insert(search.id.clone(), search);
+        for def in BUILTIN_COMMANDS {
+            let tool = UnifiedTool::builtin(def.name)
+                .with_display_name(def.display_name)
+                .with_description(def.description)
+                .with_icon(def.icon)
+                .with_usage(def.usage)
+                .with_localization_key(def.localization_key)
+                .with_sort_order(def.sort_order)
+                .with_has_subtools(def.has_subtools)
+                .with_requires_confirmation(false)
+                // Routing config from definition
+                .with_routing_regex(def.routing_regex)
+                .with_routing_system_prompt(def.routing_system_prompt)
+                .with_routing_capabilities(
+                    def.routing_capabilities.iter().map(|s| s.to_string()).collect()
+                )
+                .with_routing_intent_type(def.routing_intent_type)
+                .with_routing_strip_prefix(true)
+                .with_routing_context_format("markdown");
+            tools.insert(tool.id.clone(), tool);
+        }
 
-        // /mcp - MCP tools namespace
-        let mcp = UnifiedTool::builtin("mcp")
-            .with_display_name("MCP Tools")
-            .with_description("Invoke Model Context Protocol tools for extended capabilities")
-            .with_icon("puzzlepiece.extension")
-            .with_usage("/mcp <tool> [params]")
-            .with_localization_key("tool.mcp")
-            .with_sort_order(2)
-            .with_has_subtools(true) // Dynamic subtools from MCP servers
-            .with_requires_confirmation(false);
-        tools.insert(mcp.id.clone(), mcp);
-
-        // /skill - Skills namespace
-        let skill = UnifiedTool::builtin("skill")
-            .with_display_name("Skills")
-            .with_description("Execute predefined skill workflows")
-            .with_icon("wand.and.stars")
-            .with_usage("/skill <name>")
-            .with_localization_key("tool.skill")
-            .with_sort_order(3)
-            .with_has_subtools(true) // Dynamic subtools from installed skills
-            .with_requires_confirmation(false);
-        tools.insert(skill.id.clone(), skill);
-
-        // /video - Video transcript capability
-        let video = UnifiedTool::builtin("video")
-            .with_display_name("Video Transcript")
-            .with_description("Analyze YouTube video content via transcript extraction")
-            .with_icon("play.rectangle")
-            .with_usage("/video <YouTube URL>")
-            .with_localization_key("tool.video")
-            .with_sort_order(4)
-            .with_requires_confirmation(false);
-        tools.insert(video.id.clone(), video);
-
-        // /chat - Multi-turn conversation
-        let chat = UnifiedTool::builtin("chat")
-            .with_display_name("Chat")
-            .with_description("Start a multi-turn conversation session")
-            .with_icon("bubble.left.and.bubble.right")
-            .with_usage("/chat <message>")
-            .with_localization_key("tool.chat")
-            .with_sort_order(5)
-            .with_requires_confirmation(false);
-        tools.insert(chat.id.clone(), chat);
-
-        debug!("Registered 5 builtin tools");
+        debug!("Registered {} builtin tools from BUILTIN_COMMANDS", BUILTIN_COMMANDS.len());
     }
 
     /// Register built-in native tools (Search, Video)
@@ -438,6 +406,42 @@ impl ToolRegistry {
             .collect();
         builtins.sort_by_key(|t| t.sort_order);
         builtins
+    }
+
+    /// Generate routing rules from builtin tools
+    ///
+    /// This is the SINGLE SOURCE OF TRUTH for builtin command routing configuration.
+    /// Config module should call this instead of maintaining separate hardcoded rules.
+    ///
+    /// Returns RoutingRuleConfig for each builtin tool that has routing_regex set.
+    pub async fn get_builtin_routing_rules(&self) -> Vec<RoutingRuleConfig> {
+        let tools = self.tools.read().await;
+        tools
+            .values()
+            .filter(|t| t.is_builtin && t.routing_regex.is_some())
+            .map(|t| RoutingRuleConfig {
+                rule_type: Some("command".to_string()),
+                is_builtin: true,
+                regex: t.routing_regex.clone().unwrap_or_default(),
+                provider: Some("openai".to_string()), // Will be overridden by default_provider
+                system_prompt: t.routing_system_prompt.clone(),
+                strip_prefix: Some(t.routing_strip_prefix),
+                capabilities: if t.routing_capabilities.is_empty() {
+                    None
+                } else {
+                    Some(t.routing_capabilities.clone())
+                },
+                intent_type: t.routing_intent_type.clone(),
+                context_format: t.routing_context_format.clone(),
+                skill_id: None,
+                skill_version: None,
+                workflow: None,
+                tools: None,
+                knowledge_base: None,
+                icon: t.icon.clone(),
+                hint: t.usage.clone(),
+            })
+            .collect()
     }
 
     /// List all tools for UI display (sorted by sort_order, then name)

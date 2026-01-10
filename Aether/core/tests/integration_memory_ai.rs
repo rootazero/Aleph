@@ -40,6 +40,7 @@ impl AetherEventHandler for TestEventHandler {
     fn on_conversation_ended(&self, _session_id: String, _total_turns: u32) {}
     fn on_confirmation_needed(&self, _confirmation: aethecore::PendingConfirmationInfo) {}
     fn on_confirmation_expired(&self, _confirmation_id: String) {}
+    fn on_tools_changed(&self, _tool_count: u32) {}
 }
 
 /// Test helper: Create a test config with mock provider
