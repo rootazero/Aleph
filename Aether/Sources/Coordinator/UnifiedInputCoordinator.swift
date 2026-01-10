@@ -433,7 +433,7 @@ final class UnifiedInputCoordinator {
 
         if isClipboardRecent {
             // Clipboard is recent - read all content
-            let (clipText, attachments, extractionError) = clipboardManager.getMixedContent()
+            let (_, attachments, extractionError) = clipboardManager.getMixedContent()
             clipboardAttachments = attachments
             recentClipboardText = clipboardMonitor.getRecentClipboardContent()
 

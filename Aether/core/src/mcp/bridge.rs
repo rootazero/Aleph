@@ -264,11 +264,14 @@ pub async fn create_bridges(client: &Arc<McpClient>) -> Vec<Arc<dyn AgentTool>> 
 }
 
 /// Helper to create builtin-only bridges (sync)
-pub fn create_builtin_bridges(client: &Arc<McpClient>) -> Vec<Arc<dyn AgentTool>> {
-    McpToolBridge::from_client_builtin_only(Arc::clone(client))
-        .into_iter()
-        .map(|b| Arc::new(b) as Arc<dyn AgentTool>)
-        .collect()
+///
+/// Note: Native tools are now handled via the `AgentTool` infrastructure
+/// in the `tools` module. This function returns an empty vector.
+#[deprecated(note = "Native tools are now handled via AgentTool. Use tools module instead.")]
+pub fn create_builtin_bridges(_client: &Arc<McpClient>) -> Vec<Arc<dyn AgentTool>> {
+    // No builtin tools in McpClient anymore
+    // Native tools are handled via AgentTool infrastructure
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -456,11 +459,12 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_from_client_builtin_only_empty() {
         let client = Arc::new(McpClient::new());
         let bridges = McpToolBridge::from_client_builtin_only(client);
 
-        // Empty client has no builtin tools
+        // Empty client has no builtin tools (deprecated - native tools now via AgentTool)
         assert!(bridges.is_empty());
     }
 
@@ -482,10 +486,12 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_create_builtin_bridges_empty() {
         let client = Arc::new(McpClient::new());
         let bridges = create_builtin_bridges(&client);
 
+        // Deprecated - native tools now via AgentTool
         assert!(bridges.is_empty());
     }
 }
