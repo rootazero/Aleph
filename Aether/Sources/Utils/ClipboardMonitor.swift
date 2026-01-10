@@ -39,11 +39,17 @@ class ClipboardMonitor {
     /// Time threshold for "recent" clipboard content (in seconds)
     let recentThresholdSeconds: TimeInterval = 10.0
 
+    /// Clipboard manager for clipboard operations (lazy to avoid circular dependency)
+    private var clipboardManager: any ClipboardManagerProtocol {
+        DependencyContainer.shared.clipboardManager
+    }
+
     // MARK: - Initialization
 
     private init() {
         // Initialize with current clipboard state
-        lastChangeCount = ClipboardManager.shared.changeCount()
+        // Use NSPasteboard directly here to avoid accessing DependencyContainer during init
+        lastChangeCount = NSPasteboard.general.changeCount
     }
 
     // MARK: - Monitoring Control
@@ -85,7 +91,7 @@ class ClipboardMonitor {
 
     /// Check if clipboard has changed since last check
     private func checkClipboardChange() {
-        let currentChangeCount = ClipboardManager.shared.changeCount()
+        let currentChangeCount = clipboardManager.changeCount()
 
         // Check if clipboard changed
         guard currentChangeCount != lastChangeCount else {
@@ -96,7 +102,7 @@ class ClipboardMonitor {
         lastChangeCount = currentChangeCount
 
         // Get current clipboard content
-        guard let content = ClipboardManager.shared.getText() else {
+        guard let content = clipboardManager.getText() else {
             return // No text content
         }
 
@@ -125,7 +131,7 @@ class ClipboardMonitor {
         // CRITICAL: Check if clipboard has changed since we recorded this change.
         // If user copied non-text content (e.g., image) after the text was recorded,
         // changeCount will be different, meaning our recorded content is stale.
-        let currentChangeCount = ClipboardManager.shared.changeCount()
+        let currentChangeCount = clipboardManager.changeCount()
         if change.changeCount != currentChangeCount {
             print("[ClipboardMonitor] Clipboard changeCount mismatch (\(change.changeCount) vs \(currentChangeCount)) - content is stale")
             return nil
@@ -157,7 +163,7 @@ class ClipboardMonitor {
         // CRITICAL: Check if clipboard has changed since we recorded this change.
         // If user copied non-text content (e.g., image) after the text was recorded,
         // changeCount will be different, meaning our recorded timestamp is stale.
-        let currentChangeCount = ClipboardManager.shared.changeCount()
+        let currentChangeCount = clipboardManager.changeCount()
         if change.changeCount != currentChangeCount {
             // Clipboard changed since last text recording - we don't have
             // timestamp for the new content, so we can't determine recency.
