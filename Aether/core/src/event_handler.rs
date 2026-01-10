@@ -138,6 +138,23 @@ pub trait AetherEventHandler: Send + Sync {
     /// # Arguments
     /// * `confirmation_id` - ID of the expired confirmation
     fn on_confirmation_expired(&self, confirmation_id: String);
+
+    // ========================================================================
+    // Tool Registry Callbacks (unify-tool-registry)
+    // ========================================================================
+
+    /// Called when the unified tool registry is refreshed.
+    ///
+    /// This fires after tools are aggregated from all sources:
+    /// - Native capabilities (Search, Video)
+    /// - System tools (MCP builtin services)
+    /// - External MCP servers
+    /// - Installed skills
+    /// - Custom commands from config rules
+    ///
+    /// # Arguments
+    /// * `tool_count` - Total number of active tools in the registry
+    fn on_tools_changed(&self, tool_count: u32);
 }
 
 /// Mock event handler for testing
@@ -167,6 +184,8 @@ pub struct MockEventHandler {
     // Async confirmation tracking
     pub confirmations_needed: std::sync::Arc<std::sync::Mutex<Vec<PendingConfirmationInfo>>>,
     pub confirmations_expired: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    // Tool registry tracking
+    pub tools_changed: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
 }
 
 #[cfg(test)]
@@ -193,7 +212,15 @@ impl MockEventHandler {
             conversation_ended: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             confirmations_needed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             confirmations_expired: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            tools_changed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
+    }
+
+    pub fn get_tools_changed(&self) -> Vec<u32> {
+        self.tools_changed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn get_state_changes(&self) -> Vec<ProcessingState> {
@@ -458,6 +485,13 @@ impl AetherEventHandler for MockEventHandler {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(confirmation_id);
+    }
+
+    fn on_tools_changed(&self, tool_count: u32) {
+        self.tools_changed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(tool_count);
     }
 }
 

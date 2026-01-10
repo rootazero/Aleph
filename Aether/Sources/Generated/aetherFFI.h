@@ -377,6 +377,13 @@ typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod17)(uint64_t, Rust
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD18
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD18
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod18)(uint64_t, uint32_t, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_INITIALIZATION_PROGRESS_HANDLER_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_INITIALIZATION_PROGRESS_HANDLER_METHOD0
 typedef void (*UniffiCallbackInterfaceInitializationProgressHandlerMethod0)(uint64_t, void* _Nonnull, 
@@ -440,6 +447,7 @@ typedef struct UniffiVTableCallbackInterfaceAetherEventHandler {
     UniffiCallbackInterfaceAetherEventHandlerMethod15 _Nonnull onConversationTurnCompleted;
     UniffiCallbackInterfaceAetherEventHandlerMethod16 _Nonnull onConversationContinuationReady;
     UniffiCallbackInterfaceAetherEventHandlerMethod17 _Nonnull onConversationEnded;
+    UniffiCallbackInterfaceAetherEventHandlerMethod18 _Nonnull onToolsChanged;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceAetherEventHandler;
 
@@ -1812,6 +1820,12 @@ uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_con
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CONVERSATION_ENDED
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_CONVERSATION_ENDED
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_ended(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOLS_CHANGED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOLS_CHANGED
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_tools_changed(void
     
 );
 #endif

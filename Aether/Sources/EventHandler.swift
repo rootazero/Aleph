@@ -383,6 +383,23 @@ class EventHandler: AetherEventHandler {
         haloWindow?.hide()
     }
 
+    // MARK: - Tool Registry Callbacks (unify-tool-registry)
+
+    /// Called when tool registry is refreshed
+    ///
+    /// NOTE: This method is called from a background thread by Rust/UniFFI.
+    func onToolsChanged(toolCount: UInt32) {
+        print("[EventHandler] Tools changed: \(toolCount) tools available")
+
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .toolsDidChange,
+                object: nil,
+                userInfo: ["toolCount": toolCount]
+            )
+        }
+    }
+
     // MARK: - State Change Handling
 
     private func handleStateChange(_ state: ProcessingState) {

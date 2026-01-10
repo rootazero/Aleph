@@ -494,4 +494,5 @@ class PreviewEventHandler: AetherEventHandler {
     func onConversationEnded(sessionId: String, totalTurns: UInt32) {}
     func onConfirmationNeeded(confirmation: PendingConfirmationInfo) {}
     func onConfirmationExpired(confirmationId: String) {}
+    func onToolsChanged(toolCount: UInt32) {}
 }

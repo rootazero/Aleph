@@ -34,6 +34,7 @@ impl AetherCore {
         let registry = Arc::clone(&self.tool_registry);
         let config = self.lock_config().clone();
         let mcp_client = self.mcp_client.clone();
+        let event_handler = Arc::clone(&self.event_handler);
 
         // Run refresh in tokio runtime
         self.runtime.spawn(async move {
@@ -92,10 +93,11 @@ impl AetherCore {
             // 4. Register custom commands from routing rules
             registry.register_custom_commands(&config.rules).await;
 
-            info!(
-                "Tool registry refreshed: {} tools",
-                registry.active_count().await
-            );
+            let tool_count = registry.active_count().await;
+            info!("Tool registry refreshed: {} tools", tool_count);
+
+            // Notify Swift that tools have changed
+            event_handler.on_tools_changed(tool_count as u32);
         });
     }
 

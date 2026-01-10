@@ -70,6 +70,12 @@ extension Notification.Name {
     /// Posted when the app language changes
     /// - UserInfo: ["language": String]
     static let localizationDidChange = Notification.Name("LocalizationDidChange")
+
+    // MARK: - Tool Registry (unify-tool-registry)
+
+    /// Posted when tool registry is refreshed (tools added/removed/changed)
+    /// - UserInfo: ["toolCount": UInt32]
+    static let toolsDidChange = Notification.Name("AetherToolsDidChange")
 }
 
 // MARK: - UserInfo Keys

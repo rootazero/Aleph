@@ -560,6 +560,10 @@ callback interface AetherEventHandler {
 
   // Called when a conversation session ends
   void on_conversation_ended(string session_id, u32 total_turns);
+
+  // TOOL REGISTRY CALLBACKS (unify-tool-registry)
+  // Called when tool registry is refreshed (tools added/removed/changed)
+  void on_tools_changed(u32 tool_count);
 };
 
 // Callback interface for first-time initialization progress

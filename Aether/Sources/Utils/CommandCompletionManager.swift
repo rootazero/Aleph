@@ -3,7 +3,7 @@
 //  Aether
 //
 //  Manages command completion state and interactions.
-//  Provides commands from Rust Core's CommandRegistry for UI rendering.
+//  Uses ToolRegistry as the single source of truth for commands.
 //
 //  IMPORTANT: Command completion is for INPUT ASSISTANCE only.
 //  It helps users type commands, but does NOT execute them.
@@ -18,9 +18,10 @@ import SwiftUI
 ///
 /// This class is responsible for:
 /// - Toggling command mode on/off (Cmd+Opt+/)
-/// - Fetching commands from Rust Core
+/// - Fetching commands from ToolRegistry (single source of truth)
 /// - Filtering commands by prefix as user types
-/// - Notifying when user selects a command (for input insertion)
+/// - Supporting namespace navigation for /mcp and /skill
+/// - Listening for tool changes to auto-refresh
 final class CommandCompletionManager: ObservableObject {
 
     // MARK: - Published State
@@ -41,25 +42,46 @@ final class CommandCompletionManager: ObservableObject {
         }
     }
 
+    /// Current parent command key for namespace navigation (e.g., "mcp", "skill")
+    @Published private(set) var currentParentKey: String?
+
     // MARK: - Private Properties
 
     /// Reference to Rust Core
     private weak var core: AetherCore?
 
-    /// All root commands (cached)
+    /// All commands at current level (cached)
     private var allCommands: [CommandNode] = []
 
     /// Callback when user selects a command
     private var onCommandSelected: ((CommandNode) -> Void)?
 
+    /// Subscription to tool changes notification
+    private var cancellables = Set<AnyCancellable>()
+
     // MARK: - Initialization
 
-    init() {}
+    init() {
+        setupNotifications()
+    }
 
     /// Configure with AetherCore reference
     func configure(core: AetherCore?) {
         self.core = core
         refreshCommands()
+    }
+
+    // MARK: - Notification Setup
+
+    private func setupNotifications() {
+        // Listen for tool registry changes
+        NotificationCenter.default.publisher(for: .toolsDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                NSLog("[CommandCompletionManager] Received toolsDidChange notification, refreshing commands")
+                self?.refreshCommands()
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Public API
@@ -81,6 +103,7 @@ final class CommandCompletionManager: ObservableObject {
         refreshCommands()
         inputPrefix = ""
         selectedIndex = 0
+        currentParentKey = nil
         isCommandModeActive = true
     }
 
@@ -90,6 +113,7 @@ final class CommandCompletionManager: ObservableObject {
         onCommandSelected = nil
         inputPrefix = ""
         selectedIndex = 0
+        currentParentKey = nil
     }
 
     /// Select the currently highlighted command
@@ -101,6 +125,13 @@ final class CommandCompletionManager: ObservableObject {
         }
 
         let command = displayedCommands[selectedIndex]
+
+        // If namespace command with children, navigate into it
+        if command.nodeType == .namespace && command.hasChildren {
+            navigateIntoNamespace(command.key)
+            return
+        }
+
         onCommandSelected?(command)
         deactivateCommandMode()
     }
@@ -117,7 +148,28 @@ final class CommandCompletionManager: ObservableObject {
         selectedIndex = (selectedIndex + 1) % displayedCommands.count
     }
 
-    /// Refresh commands from Rust Core
+    /// Navigate into a namespace command (e.g., /mcp, /skill)
+    func navigateIntoNamespace(_ parentKey: String) {
+        currentParentKey = parentKey
+        refreshSubcommands()
+        inputPrefix = ""
+        selectedIndex = 0
+    }
+
+    /// Navigate back to root commands
+    func navigateToRoot() {
+        currentParentKey = nil
+        refreshCommands()
+        inputPrefix = ""
+        selectedIndex = 0
+    }
+
+    /// Check if currently in a namespace (for UI back button)
+    var isInNamespace: Bool {
+        currentParentKey != nil
+    }
+
+    /// Refresh commands from ToolRegistry (single source of truth)
     func refreshCommands() {
         guard let core = core else {
             NSLog("[CommandCompletionManager] refreshCommands: core is nil!")
@@ -126,10 +178,28 @@ final class CommandCompletionManager: ObservableObject {
             return
         }
 
-        allCommands = core.getRootCommands()
-        NSLog("[CommandCompletionManager] refreshCommands: loaded %d commands", allCommands.count)
+        // Use registry-based method (single source of truth)
+        allCommands = core.getRootCommandsFromRegistry()
+        NSLog("[CommandCompletionManager] refreshCommands: loaded %d commands from registry", allCommands.count)
         for cmd in allCommands {
-            NSLog("[CommandCompletionManager]   - /%@", cmd.key)
+            NSLog("[CommandCompletionManager]   - /%@ (hasChildren: %@)", cmd.key, cmd.hasChildren ? "true" : "false")
+        }
+        filterCommands()
+    }
+
+    /// Refresh subcommands for current namespace
+    private func refreshSubcommands() {
+        guard let core = core, let parentKey = currentParentKey else {
+            allCommands = []
+            displayedCommands = []
+            return
+        }
+
+        // Use registry-based method for subcommands
+        allCommands = core.getSubcommandsFromRegistry(parentKey: parentKey)
+        NSLog("[CommandCompletionManager] refreshSubcommands: loaded %d subcommands for /%@", allCommands.count, parentKey)
+        for cmd in allCommands {
+            NSLog("[CommandCompletionManager]   - %@", cmd.key)
         }
         filterCommands()
     }
@@ -138,22 +208,16 @@ final class CommandCompletionManager: ObservableObject {
 
     /// Filter commands by current input prefix
     private func filterCommands() {
-        NSLog("[CommandCompletionManager] filterCommands: prefix='%@', core=%@", inputPrefix, core != nil ? "available" : "nil")
+        NSLog("[CommandCompletionManager] filterCommands: prefix='%@', parent=%@", inputPrefix, currentParentKey ?? "root")
 
         if inputPrefix.isEmpty {
             displayedCommands = allCommands
             NSLog("[CommandCompletionManager] Empty prefix, showing all %d commands", allCommands.count)
-        } else if let core = core {
-            displayedCommands = core.filterCommands(prefix: inputPrefix)
-            NSLog("[CommandCompletionManager] Filtered via Rust core: %d results", displayedCommands.count)
-            for cmd in displayedCommands {
-                NSLog("[CommandCompletionManager]   - %@", cmd.key)
-            }
         } else {
-            // Fallback: local filtering
+            // Local filtering by prefix
             let lowercasedPrefix = inputPrefix.lowercased()
             displayedCommands = allCommands.filter { $0.key.lowercased().hasPrefix(lowercasedPrefix) }
-            NSLog("[CommandCompletionManager] Fallback filtering: %d results", displayedCommands.count)
+            NSLog("[CommandCompletionManager] Filtered by prefix: %d results", displayedCommands.count)
         }
 
         // Reset selection if out of bounds

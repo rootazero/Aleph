@@ -6479,6 +6479,8 @@ public protocol AetherEventHandler : AnyObject {
     
     func onConversationEnded(sessionId: String, totalTurns: UInt32) 
     
+    func onToolsChanged(toolCount: UInt32) 
+    
 }
 
 // Magic number for the Rust proxy to call using the same mechanism as every other method,
@@ -6920,6 +6922,30 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
                 return uniffiObj.onConversationEnded(
                      sessionId: try FfiConverterString.lift(sessionId),
                      totalTurns: try FfiConverterUInt32.lift(totalTurns)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onToolsChanged: { (
+            uniffiHandle: UInt64,
+            toolCount: UInt32,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onToolsChanged(
+                     toolCount: try FfiConverterUInt32.lift(toolCount)
                 )
             }
 
@@ -8492,6 +8518,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_ended() != 15108) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tools_changed() != 46377) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_init_started() != 45699) {

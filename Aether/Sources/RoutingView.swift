@@ -691,93 +691,9 @@ struct PresetSubcommand {
     let isImplemented: Bool
 }
 
-/// All preset rules
-enum PresetRules {
-    static let all: [PresetRule] = [
-        PresetRule(
-            command: "/search",
-            description: "Search the web and get AI-summarized results",
-            descriptionKey: "settings.routing.preset.search.description",
-            isImplemented: true,
-            icon: "magnifyingglass",
-            usage: "/search <query>",
-            usageKey: "settings.routing.preset.search.usage",
-            subcommands: []  // Search provider is configured in Settings > Search
-        ),
-        PresetRule(
-            command: "/mcp",
-            description: "Invoke MCP tools for extended capabilities",
-            descriptionKey: "settings.routing.preset.mcp.description",
-            isImplemented: true,
-            icon: "puzzlepiece.extension",
-            usage: "/mcp <tool> [params]",
-            usageKey: "settings.routing.preset.mcp.usage",
-            subcommands: [
-                PresetSubcommand(
-                    name: "list",
-                    description: "List available MCP tools",
-                    descriptionKey: "settings.routing.preset.mcp.sub.list",
-                    isImplemented: true
-                ),
-                PresetSubcommand(
-                    name: "<tool_name>",
-                    description: "Execute specific MCP tool",
-                    descriptionKey: "settings.routing.preset.mcp.sub.tool",
-                    isImplemented: true
-                )
-            ]
-        ),
-        PresetRule(
-            command: "/skill",
-            description: "Execute predefined skill workflows",
-            descriptionKey: "settings.routing.preset.skills.description",
-            isImplemented: true,
-            icon: "wand.and.stars",
-            usage: "/skill <name>",
-            usageKey: "settings.routing.preset.skills.usage",
-            subcommands: [
-                PresetSubcommand(
-                    name: "list",
-                    description: "List available skills",
-                    descriptionKey: "settings.routing.preset.skills.sub.list",
-                    isImplemented: true
-                ),
-                PresetSubcommand(
-                    name: "<skill_name>",
-                    description: "Execute specific skill",
-                    descriptionKey: "settings.routing.preset.skills.sub.skill",
-                    isImplemented: true
-                )
-            ]
-        ),
-        PresetRule(
-            command: "/video",
-            description: "Analyze YouTube video content via transcript extraction",
-            descriptionKey: "settings.routing.preset.video.description",
-            isImplemented: true,
-            icon: "play.rectangle",
-            usage: "/video <YouTube URL>",
-            usageKey: "settings.routing.preset.video.usage",
-            subcommands: []  // Auto-detects YouTube URLs in input
-        ),
-        PresetRule(
-            command: "/chat",
-            description: "Start a multi-turn conversation session",
-            descriptionKey: "settings.routing.preset.chat.description",
-            isImplemented: true,
-            icon: "bubble.left.and.bubble.right",
-            usage: "/chat <message>",
-            usageKey: "settings.routing.preset.chat.usage",
-            subcommands: []  // Multi-turn mode can also be enabled by default in Behavior settings
-        )
-    ]
-}
-
-// MARK: - Backward Compatibility Alias
-typealias PresetCommand = PresetRule
-enum PresetCommands {
-    static var all: [PresetRule] { PresetRules.all }
-}
+// NOTE: The deprecated PresetRules enum was removed (unify-tool-registry).
+// Preset commands are now loaded from ToolRegistry via core.listBuiltinTools().
+// See PresetRulesListView.loadBuiltinTools() for the new implementation.
 
 // MARK: - Preset Rule Card Component
 
