@@ -1362,3 +1362,86 @@ mod tests {
         assert!(mcp.was_renamed);
     }
 }
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::mcp::{FsService, FsServiceConfig, GitService, GitServiceConfig, McpClient};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_system_tools_registration_flow() {
+        // Create registry
+        let registry = ToolRegistry::new();
+        
+        // Create MCP client with system tools
+        let mut client = McpClient::new();
+        
+        // Register FsService
+        let fs_config = FsServiceConfig { 
+            allowed_roots: vec![] 
+        };
+        let fs_service = FsService::new(fs_config);
+        client.register_system_tool(Arc::new(fs_service));
+        
+        // Register GitService
+        let git_config = GitServiceConfig { 
+            allowed_repos: vec![] 
+        };
+        let git_service = GitService::new(git_config);
+        client.register_system_tool(Arc::new(git_service));
+        
+        // Check client has tools
+        let services = client.list_builtin_tools_by_service();
+        println!("MCP client has {} services", services.len());
+        for (name, tools) in &services {
+            println!("  Service '{}': {} tools", name, tools.len());
+            for tool in tools {
+                println!("    - {}", tool.name);
+            }
+        }
+        assert!(services.len() >= 2, "Should have at least fs and git services");
+        
+        // Register builtin tools first
+        registry.register_builtin_tools().await;
+        
+        // Register system tools (same logic as refresh_tool_registry)
+        for (service_name, tools) in services {
+            let mcp_tool_infos: Vec<crate::mcp::McpToolInfo> = tools
+                .into_iter()
+                .map(|tool| crate::mcp::McpToolInfo {
+                    name: tool.name,
+                    description: tool.description,
+                    requires_confirmation: tool.requires_confirmation,
+                    service_name: service_name.clone(),
+                })
+                .collect();
+            registry.register_mcp_tools(&mcp_tool_infos, &service_name, true).await;
+        }
+        
+        // Check registry
+        let all_tools = registry.list_all().await;
+        println!("\nRegistry has {} total tools:", all_tools.len());
+        for tool in &all_tools {
+            println!("  [{:?}] {} - {}", tool.source, tool.name, tool.id);
+        }
+        
+        // Check root commands
+        let root_commands = registry.list_root_commands().await;
+        println!("\nRoot commands ({}):", root_commands.len());
+        for tool in &root_commands {
+            println!("  [{:?}] {}", tool.source, tool.name);
+        }
+        
+        // Assertions
+        assert!(all_tools.len() > 3, "Should have more than 3 builtin tools");
+        assert!(root_commands.len() > 3, "Root commands should include system tools");
+        
+        // Check that fs tools are in root commands
+        let has_fs_tools = root_commands.iter().any(|t| 
+            matches!(&t.source, ToolSource::Mcp { server } if server == "fs")
+        );
+        assert!(has_fs_tools, "Should have fs tools in root commands");
+    }
+}

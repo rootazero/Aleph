@@ -36,8 +36,10 @@ impl AetherCore {
         let mcp_client = self.mcp_client.clone();
         let event_handler = Arc::clone(&self.event_handler);
 
-        // Run refresh in tokio runtime
-        self.runtime.spawn(async move {
+        // Run refresh synchronously using block_on to ensure tools are available
+        // immediately after AetherCore::new() returns. This is safe because
+        // AetherCore initialization runs on a background thread.
+        self.runtime.block_on(async move {
             // 0. Clear existing tools
             registry.clear().await;
 
@@ -50,7 +52,17 @@ impl AetherCore {
             // 2. Register system tools (from MCP client)
             // Use list_builtin_tools_by_service() to preserve correct service names
             if let Some(client) = &mcp_client {
-                for (service_name, tools) in client.list_builtin_tools_by_service() {
+                let services = client.list_builtin_tools_by_service();
+                info!(
+                    "MCP client has {} system tool services",
+                    services.len()
+                );
+                for (service_name, tools) in services {
+                    info!(
+                        "Registering {} tools from service '{}'",
+                        tools.len(),
+                        service_name
+                    );
                     let mcp_tool_infos: Vec<crate::mcp::McpToolInfo> = tools
                         .into_iter()
                         .map(|tool| crate::mcp::McpToolInfo {
@@ -65,6 +77,8 @@ impl AetherCore {
                         .register_mcp_tools(&mcp_tool_infos, &service_name, true)
                         .await;
                 }
+            } else {
+                warn!("MCP client is None, skipping system tools registration");
             }
 
             // 3. Register skills
