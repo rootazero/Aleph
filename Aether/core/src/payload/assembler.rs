@@ -137,6 +137,45 @@ impl PromptAssembler {
                 }
             }
 
+            // Add detailed MCP tool information if available
+            if cap.id == "mcp" {
+                if let Some(ref tools) = cap.mcp_tools {
+                    lines.push(String::new());
+                    lines.push("- **Available MCP Tools**:".to_string());
+                    for tool in tools {
+                        lines.push(format!("  - `{}`: {}", tool.name, tool.description));
+                        // Add input schema hints for better AI understanding
+                        if let Some(properties) = tool.input_schema.get("properties") {
+                            if let Some(props_obj) = properties.as_object() {
+                                if !props_obj.is_empty() {
+                                    let param_names: Vec<&str> = props_obj.keys().map(|s| s.as_str()).collect();
+                                    lines.push(format!("    - Parameters: {}", param_names.join(", ")));
+                                }
+                            }
+                        }
+                    }
+                    lines.push(String::new());
+                    lines.push("- **How to invoke MCP tools**:".to_string());
+                    lines.push("  When user asks to perform a system operation (screenshot, file read, etc.):".to_string());
+                    lines.push("  ```json".to_string());
+                    lines.push(r#"  {"__capability_request__": true, "capability": "mcp", "parameters": {"tool": "tool_name", "args": {...}}, "query": "original user request"}"#.to_string());
+                    lines.push("  ```".to_string());
+                    lines.push(String::new());
+                    lines.push("  **MCP Tool Examples**:".to_string());
+                    lines.push("  - User: \"截屏\" or \"Take a screenshot\"".to_string());
+                    lines.push("    ```json".to_string());
+                    lines.push(r#"    {"__capability_request__": true, "capability": "mcp", "parameters": {"tool": "screen_capture", "args": {}}, "query": "截屏"}"#.to_string());
+                    lines.push("    ```".to_string());
+                    lines.push("  - User: \"Read file /path/to/file.txt\"".to_string());
+                    lines.push("    ```json".to_string());
+                    lines.push(r#"    {"__capability_request__": true, "capability": "mcp", "parameters": {"tool": "file_read", "args": {"path": "/path/to/file.txt"}}, "query": "Read file /path/to/file.txt"}"#.to_string());
+                    lines.push("    ```".to_string());
+                    lines.push(String::new());
+                    lines.push("  **CRITICAL**: DO NOT say \"I cannot access your screen\" or \"I cannot read files\".".to_string());
+                    lines.push("  You HAVE these capabilities through MCP tools. Use them proactively!".to_string());
+                }
+            }
+
             lines.push(String::new());
         }
 
@@ -250,9 +289,15 @@ impl PromptAssembler {
             sections.push(video_section);
         }
 
-        // MCP section (reserved for future)
+        // MCP tool result section
+        if let Some(result) = &context.mcp_tool_result {
+            let mcp_section = self.format_mcp_tool_result_markdown(result);
+            sections.push(mcp_section);
+        }
+
+        // MCP resources section (tool listing, less commonly used)
         if let Some(_resources) = &context.mcp_resources {
-            // TODO: Implement MCP formatting
+            // Tool listing is handled in capability instructions, not here
         }
 
         // Skills instructions section
@@ -361,6 +406,102 @@ impl PromptAssembler {
                 lines.push(format!("   _{}_", metadata.join(" | ")));
             }
         }
+
+        lines.join("\n")
+    }
+
+    /// Format MCP tool result as Markdown
+    fn format_mcp_tool_result_markdown(&self, result: &super::McpToolResult) -> String {
+        let mut lines = vec![
+            format!("**MCP Tool Execution Result** (Tool: `{}`)", result.tool_name),
+            String::new(),
+        ];
+
+        if result.success {
+            lines.push("_Status: SUCCESS_".to_string());
+            lines.push(String::new());
+
+            // Format the content based on its type
+            if let Some(obj) = result.content.as_object() {
+                // Handle structured results
+                for (key, value) in obj {
+                    if key == "data" || key == "content" || key == "result" {
+                        // For main data fields, show more content
+                        match value {
+                            serde_json::Value::String(s) => {
+                                let truncated = truncate_text(s, 2000);
+                                lines.push(format!("**{}**:", key));
+                                lines.push("```".to_string());
+                                lines.push(truncated);
+                                lines.push("```".to_string());
+                            }
+                            serde_json::Value::Array(arr) => {
+                                lines.push(format!("**{}** ({} items):", key, arr.len()));
+                                for (i, item) in arr.iter().take(10).enumerate() {
+                                    lines.push(format!("{}. {}", i + 1, item));
+                                }
+                                if arr.len() > 10 {
+                                    lines.push(format!("... and {} more items", arr.len() - 10));
+                                }
+                            }
+                            _ => {
+                                let formatted = serde_json::to_string_pretty(value)
+                                    .unwrap_or_else(|_| value.to_string());
+                                let truncated = truncate_text(&formatted, 1000);
+                                lines.push(format!("**{}**: {}", key, truncated));
+                            }
+                        }
+                    } else if key == "image" || key == "screenshot" || key == "image_data" {
+                        // Handle image data (base64)
+                        if let Some(s) = value.as_str() {
+                            lines.push(format!("**{}**: [Image data, {} bytes]", key, s.len()));
+                            // Note: In a real implementation, you might want to pass the image
+                            // to the AI as an attachment for multimodal processing
+                        } else {
+                            lines.push(format!("**{}**: [Image data]", key));
+                        }
+                    } else if key == "path" || key == "file" {
+                        // File paths
+                        lines.push(format!("**{}**: `{}`", key, value));
+                    } else {
+                        // Other fields
+                        let formatted = value.to_string();
+                        let truncated = truncate_text(&formatted, 200);
+                        lines.push(format!("**{}**: {}", key, truncated));
+                    }
+                    lines.push(String::new());
+                }
+            } else if let Some(s) = result.content.as_str() {
+                // Plain string result
+                let truncated = truncate_text(s, 2000);
+                lines.push("**Result**:".to_string());
+                lines.push("```".to_string());
+                lines.push(truncated);
+                lines.push("```".to_string());
+            } else if result.content.is_null() {
+                lines.push("_Tool executed successfully with no output._".to_string());
+            } else {
+                // Fallback: JSON format
+                let formatted = serde_json::to_string_pretty(&result.content)
+                    .unwrap_or_else(|_| result.content.to_string());
+                let truncated = truncate_text(&formatted, 2000);
+                lines.push("**Result**:".to_string());
+                lines.push("```json".to_string());
+                lines.push(truncated);
+                lines.push("```".to_string());
+            }
+        } else {
+            lines.push("_Status: FAILED_".to_string());
+            lines.push(String::new());
+            if let Some(ref error) = result.error {
+                lines.push(format!("**Error**: {}", error));
+            } else {
+                lines.push("**Error**: Unknown error occurred during tool execution.".to_string());
+            }
+        }
+
+        lines.push(String::new());
+        lines.push("_IMPORTANT: Use the above tool result to answer the user's question. If the tool execution failed, explain what went wrong and suggest alternatives._".to_string());
 
         lines.join("\n")
     }
@@ -819,6 +960,7 @@ mod tests {
             memory_snippets: Some(memories),
             search_results: None,
             mcp_resources: None,
+            mcp_tool_result: None,
             video_transcript: None,
             workflow_state: None,
             attachments: None,

@@ -5,6 +5,21 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Information about an MCP tool for capability declaration.
+///
+/// This is a simplified version of McpTool for capability declaration purposes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpToolInfo {
+    /// Tool name (e.g., "screen_capture", "file_read")
+    pub name: String,
+    /// Tool description for AI understanding
+    pub description: String,
+    /// Input schema as JSON value
+    pub input_schema: serde_json::Value,
+    /// Whether this tool requires user confirmation before execution
+    pub requires_confirmation: bool,
+}
+
 /// Declaration of a capability for AI understanding.
 ///
 /// This structure is used to build the system prompt that informs the AI
@@ -23,6 +38,9 @@ pub struct CapabilityDeclaration {
     pub examples: Vec<String>,
     /// Whether this capability is currently available
     pub available: bool,
+    /// MCP tools information (only populated for MCP capability)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_tools: Option<Vec<McpToolInfo>>,
 }
 
 impl CapabilityDeclaration {
@@ -35,6 +53,7 @@ impl CapabilityDeclaration {
             parameters: Vec::new(),
             examples: Vec::new(),
             available: true,
+            mcp_tools: None,
         }
     }
 
@@ -94,26 +113,79 @@ impl CapabilityDeclaration {
         .with_example("总结一下这个视频 https://youtube.com/watch?v=xxx")
     }
 
-    /// Create the MCP capability declaration (reserved for future).
+    /// Create the MCP capability declaration.
+    ///
+    /// When MCP tools are available, this capability allows the AI to invoke
+    /// system tools like screen_capture, file operations, git commands, etc.
     pub fn mcp() -> Self {
         Self::new(
             "mcp",
             "MCP Tools",
-            "Execute Model Context Protocol (MCP) tools for advanced integrations. Use this when the user wants to interact with external tools or services.",
+            "Execute Model Context Protocol (MCP) tools for system operations. Use this when the user wants to interact with the system, such as taking screenshots, reading/writing files, running git commands, or executing shell commands.",
         )
         .with_parameter(CapabilityParameter::new(
             "tool",
             "string",
-            "The MCP tool name to invoke",
+            "The MCP tool name to invoke (e.g., 'screen_capture', 'file_read', 'git_status')",
             true,
         ))
         .with_parameter(CapabilityParameter::new(
             "args",
             "object",
-            "Arguments to pass to the MCP tool",
+            "Arguments to pass to the MCP tool (tool-specific parameters)",
             false,
         ))
-        .with_available(false) // Not yet implemented
+        .with_example("Take a screenshot")
+        .with_example("截屏")
+        .with_example("Read file /path/to/file")
+        .with_example("Show git status")
+        .with_example("List files in current directory")
+    }
+
+    /// Create the MCP capability declaration with a specific tool list.
+    ///
+    /// This variant includes the list of available tools so the AI knows
+    /// exactly which tools it can invoke.
+    pub fn mcp_with_tools(tools: Vec<McpToolInfo>) -> Self {
+        let tool_list: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+        let description = if tools.is_empty() {
+            "No MCP tools currently available.".to_string()
+        } else {
+            format!(
+                "Execute Model Context Protocol (MCP) tools for system operations. Available tools: {}. Use these tools when the user wants to interact with the system.",
+                tool_list.join(", ")
+            )
+        };
+
+        let mut decl = Self::new("mcp", "MCP Tools", description)
+            .with_parameter(CapabilityParameter::new(
+                "tool",
+                "string",
+                &format!("The MCP tool name to invoke. Must be one of: {}", tool_list.join(", ")),
+                true,
+            ))
+            .with_parameter(CapabilityParameter::new(
+                "args",
+                "object",
+                "Arguments to pass to the MCP tool (tool-specific parameters)",
+                false,
+            ));
+
+        // Add examples for common tools
+        for tool in &tools {
+            if tool.name == "screen_capture" {
+                decl = decl.with_example("Take a screenshot");
+                decl = decl.with_example("截屏");
+            } else if tool.name.contains("file_read") {
+                decl = decl.with_example("Read file /path/to/file");
+            } else if tool.name.contains("git") {
+                decl = decl.with_example("Show git status");
+            }
+        }
+
+        // Store the full tool info for prompt generation
+        decl.mcp_tools = Some(tools);
+        decl
     }
 
     /// Create the Skill capability declaration (reserved for future).
@@ -212,6 +284,21 @@ impl CapabilityRegistry {
 
     /// Build a registry with default capabilities based on configuration.
     pub fn with_defaults(search_enabled: bool, video_enabled: bool) -> Self {
+        Self::with_all_capabilities(search_enabled, video_enabled, None)
+    }
+
+    /// Build a registry with all capabilities including MCP tools.
+    ///
+    /// # Arguments
+    ///
+    /// * `search_enabled` - Whether search capability is available
+    /// * `video_enabled` - Whether video capability is available
+    /// * `mcp_tools` - Optional list of MCP tools to register
+    pub fn with_all_capabilities(
+        search_enabled: bool,
+        video_enabled: bool,
+        mcp_tools: Option<Vec<McpToolInfo>>,
+    ) -> Self {
         let mut registry = Self::new();
 
         if search_enabled {
@@ -222,8 +309,14 @@ impl CapabilityRegistry {
             registry.register(CapabilityDeclaration::video());
         }
 
+        // Register MCP capability if tools are provided
+        if let Some(tools) = mcp_tools {
+            if !tools.is_empty() {
+                registry.register(CapabilityDeclaration::mcp_with_tools(tools));
+            }
+        }
+
         // Future capabilities (always registered but marked unavailable)
-        // registry.register(CapabilityDeclaration::mcp());
         // registry.register(CapabilityDeclaration::skill());
 
         registry
@@ -270,12 +363,12 @@ mod tests {
         let mut registry = CapabilityRegistry::new();
         registry.register(CapabilityDeclaration::search());
         registry.register(CapabilityDeclaration::video());
-        registry.register(CapabilityDeclaration::mcp()); // unavailable
+        registry.register(CapabilityDeclaration::mcp());
 
         assert_eq!(registry.all().len(), 3);
-        assert_eq!(registry.available().len(), 2); // MCP is unavailable
+        assert_eq!(registry.available().len(), 3); // All are available
         assert!(registry.is_available("search"));
-        assert!(!registry.is_available("mcp"));
+        assert!(registry.is_available("mcp"));
     }
 
     #[test]

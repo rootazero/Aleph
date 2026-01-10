@@ -114,7 +114,7 @@ impl AetherCore {
         start_time: std::time::Instant,
     ) -> Result<String> {
         use crate::capability::{
-            AiResponse, CapabilityDeclaration, CapabilityRegistry, ResponseParser,
+            AiResponse, CapabilityDeclaration, CapabilityRegistry, McpToolInfo, ResponseParser,
         };
         use crate::payload::ContextFormat;
 
@@ -154,13 +154,30 @@ impl AetherCore {
         let memory_enabled = config.memory.enabled;
         drop(config);
 
-        // Step 2: Build capability declarations
-        let registry = CapabilityRegistry::with_defaults(search_enabled, video_enabled);
+        // Step 2: Get MCP tools if available
+        let mcp_tools: Option<Vec<McpToolInfo>> = self.mcp_client.as_ref().map(|client| {
+            client
+                .list_builtin_tools()
+                .into_iter()
+                .map(|tool| McpToolInfo {
+                    name: tool.name,
+                    description: tool.description,
+                    input_schema: tool.input_schema,
+                    requires_confirmation: tool.requires_confirmation,
+                })
+                .collect()
+        });
+
+        let mcp_tool_count = mcp_tools.as_ref().map(|t| t.len()).unwrap_or(0);
+
+        // Step 3: Build capability declarations (including MCP tools)
+        let registry = CapabilityRegistry::with_all_capabilities(search_enabled, video_enabled, mcp_tools);
         let capabilities: Vec<CapabilityDeclaration> = registry.all().to_vec();
 
         info!(
             search_enabled = search_enabled,
             video_enabled = video_enabled,
+            mcp_tool_count = mcp_tool_count,
             capability_count = capabilities.len(),
             "Built capability registry for AI-first mode"
         );
@@ -397,6 +414,18 @@ impl AetherCore {
                 .on_state_changed(ProcessingState::RetrievingMemory); // Reusing state
         }
 
+        // Handle MCP capability specially - execute the tool directly
+        if capability == Capability::Mcp {
+            return self.execute_mcp_tool_and_continue(
+                request,
+                original_input,
+                context,
+                provider,
+                base_prompt,
+                start_time,
+            );
+        }
+
         // Build capabilities list - always include memory if available
         let mut capabilities = vec![capability];
         if self.memory_db.is_some() && !capabilities.contains(&Capability::Memory) {
@@ -473,6 +502,179 @@ impl AetherCore {
                     Err(e) => {
                         log::error!(
                             "[AI-first] Failed to store capability response memory: {}",
+                            e
+                        );
+                    }
+                }
+            });
+        }
+
+        // Record turn for compression scheduling
+        self.record_conversation_turn();
+
+        self.event_handler
+            .on_state_changed(ProcessingState::Success);
+
+        Ok(response)
+    }
+
+    /// Execute MCP tool and continue with a second AI call with tool results.
+    ///
+    /// This method handles MCP capability requests by:
+    /// 1. Extracting tool name and args from the request
+    /// 2. Calling the MCP tool via McpClient
+    /// 3. Building a payload with the tool results
+    /// 4. Making a second AI call to interpret the results
+    fn execute_mcp_tool_and_continue(
+        &self,
+        request: crate::capability::CapabilityRequest,
+        original_input: &str,
+        context: CapturedContext,
+        provider: Arc<dyn crate::providers::AiProvider>,
+        base_prompt: &str,
+        start_time: std::time::Instant,
+    ) -> Result<String> {
+        use crate::payload::{ContextFormat, McpToolResult as PayloadMcpToolResult};
+
+        // Extract tool name and args from the request
+        let tool_name = request
+            .parameters
+            .get("tool")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| AetherError::config("MCP capability request missing 'tool' parameter"))?;
+
+        let tool_args = request
+            .parameters
+            .get("args")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+
+        info!(
+            tool = %tool_name,
+            args = %tool_args,
+            "Executing MCP tool from AI capability request"
+        );
+
+        // Get MCP client
+        let mcp_client = self.mcp_client.as_ref().ok_or_else(|| {
+            AetherError::config("MCP capability requested but no MCP client available")
+        })?;
+
+        // Execute the tool
+        let tool_result = self.runtime.block_on(async {
+            mcp_client.call_tool(tool_name, tool_args).await
+        });
+
+        // Build the MCP tool result for the payload
+        let mcp_tool_result = match tool_result {
+            Ok(result) => {
+                info!(
+                    tool = %tool_name,
+                    success = result.success,
+                    "MCP tool execution completed"
+                );
+                PayloadMcpToolResult {
+                    tool_name: tool_name.to_string(),
+                    success: result.success,
+                    content: result.content,
+                    error: result.error,
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    tool = %tool_name,
+                    error = %e,
+                    "MCP tool execution failed"
+                );
+                PayloadMcpToolResult {
+                    tool_name: tool_name.to_string(),
+                    success: false,
+                    content: serde_json::json!({}),
+                    error: Some(e.to_string()),
+                }
+            }
+        };
+
+        // Build payload with MCP tool result using ContextAnchor helper
+        let anchor = crate::payload::ContextAnchor::from_captured_context(&context);
+
+        // Get current timestamp as i64
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let mut payload = crate::payload::PayloadBuilder::new()
+            .meta(
+                crate::payload::Intent::GeneralChat,
+                timestamp,
+                anchor,
+            )
+            .config(
+                provider.name().to_string(),
+                vec![],
+                ContextFormat::Markdown,
+            )
+            .user_input(request.query.clone())
+            .build()
+            .map_err(|e| AetherError::config(e))?;
+
+        // Set the MCP tool result
+        payload.context.mcp_tool_result = Some(mcp_tool_result);
+
+        // Also get memory context if available
+        if self.memory_db.is_some() {
+            if let Ok(Some(memory_context)) = self.get_memory_context_for_ai_first(original_input, &context) {
+                // get_memory_context_for_ai_first returns AgentContext, extract memory_snippets
+                if let Some(snippets) = memory_context.memory_snippets {
+                    payload.context.memory_snippets = Some(snippets);
+                }
+            }
+        }
+
+        // Assemble enriched prompt with MCP tool results
+        let assembler = crate::payload::PromptAssembler::new(ContextFormat::Markdown);
+        let enriched_prompt = assembler.assemble_system_prompt(base_prompt, &payload);
+
+        info!(
+            enriched_prompt_length = enriched_prompt.len(),
+            has_mcp_result = payload.context.mcp_tool_result.is_some(),
+            has_memory = payload.context.memory_snippets.is_some(),
+            "Making second AI call with MCP tool results"
+        );
+
+        // Make second AI call with enriched context
+        let attachments = context.attachments.as_ref().map(|a| a.as_slice());
+        let response = self.runtime.block_on(
+            provider.process_with_attachments(&request.query, attachments, Some(&enriched_prompt)),
+        )?;
+
+        info!(
+            response_length = response.len(),
+            elapsed_ms = start_time.elapsed().as_millis(),
+            "AI-first: Response with MCP tool results"
+        );
+
+        // Store in memory asynchronously if enabled
+        if self.memory_db.is_some() {
+            let user_input = original_input.to_string();
+            let ai_output = response.clone();
+            let core_clone = self.clone_for_storage();
+
+            self.runtime.spawn(async move {
+                match core_clone
+                    .store_interaction_memory(user_input, ai_output)
+                    .await
+                {
+                    Ok(memory_id) => {
+                        log::debug!(
+                            "[AI-first] MCP tool response memory stored: {}",
+                            memory_id
+                        );
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "[AI-first] Failed to store MCP tool response memory: {}",
                             e
                         );
                     }

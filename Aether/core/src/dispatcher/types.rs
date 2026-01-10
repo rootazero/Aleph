@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::tools::{ToolCategory, ToolDefinition};
+
 // =============================================================================
 // Conflict Resolution System (Flat Namespace)
 // =============================================================================
@@ -493,6 +495,68 @@ impl UnifiedTool {
     pub fn with_was_renamed(mut self, renamed: bool) -> Self {
         self.was_renamed = renamed;
         self
+    }
+
+    // =========================================================================
+    // Conversion from AgentTool Types
+    // =========================================================================
+
+    /// Create UnifiedTool from ToolDefinition (AgentTool interface)
+    ///
+    /// Converts native `AgentTool` definitions to `UnifiedTool` for unified
+    /// registry management. The source is set to `Native` and appropriate
+    /// defaults are applied based on the tool category.
+    ///
+    /// # Arguments
+    ///
+    /// * `def` - The tool definition from an AgentTool implementation
+    /// * `service_name` - Optional service grouping name (e.g., "filesystem", "git")
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let tool = FileReadTool::new(ctx);
+    /// let unified = UnifiedTool::from_tool_definition(tool.definition(), Some("filesystem"));
+    /// ```
+    pub fn from_tool_definition(def: ToolDefinition, service_name: Option<&str>) -> Self {
+        let id = match service_name {
+            Some(svc) => format!("native:{}:{}", svc, def.name),
+            None => format!("native:{}", def.name),
+        };
+
+        let icon = Self::icon_for_category(def.category);
+
+        let mut tool = Self::new(&id, &def.name, &def.description, ToolSource::Native)
+            .with_display_name(&def.name)
+            .with_parameters_schema(def.parameters.clone())
+            .with_requires_confirmation(def.requires_confirmation)
+            .with_icon(icon)
+            .with_usage(format!("/{} [args]", def.name))
+            // Generate routing regex for flat namespace
+            .with_routing_regex(format!(r"^/{}\s*", regex::escape(&def.name)))
+            .with_routing_intent_type(format!("native:{}", def.name))
+            .with_routing_strip_prefix(true);
+
+        if let Some(svc) = service_name {
+            tool = tool.with_service_name(svc);
+        }
+
+        tool
+    }
+
+    /// Get icon for a tool category
+    fn icon_for_category(category: ToolCategory) -> &'static str {
+        match category {
+            ToolCategory::Filesystem => "folder.fill",
+            ToolCategory::Git => "arrow.triangle.branch",
+            ToolCategory::Shell => "terminal.fill",
+            ToolCategory::System => "gearshape.fill",
+            ToolCategory::Clipboard => "doc.on.clipboard",
+            ToolCategory::Screen => "camera.viewfinder",
+            ToolCategory::Search => "magnifyingglass",
+            ToolCategory::External => "puzzlepiece.extension.fill",
+            ToolCategory::Other => "wrench.fill",
+        }
     }
 
     /// Format tool for LLM prompt inclusion

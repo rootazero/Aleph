@@ -34,6 +34,7 @@ use types::RequestContext;
 use crate::config::{Config, ConfigWatcher};
 use crate::conversation::ConversationManager;
 use crate::dispatcher::{AsyncConfirmationHandler, ToolRegistry};
+use crate::tools::NativeToolRegistry;
 use crate::error::{AetherError, Result};
 use crate::event_handler::ErrorType;
 use crate::event_handler::{AetherEventHandler, ProcessingState};
@@ -94,6 +95,8 @@ pub struct AetherCore {
     pub(crate) conversation_manager: Arc<Mutex<ConversationManager>>,
     /// Unified tool registry (Dispatcher Layer)
     pub(crate) tool_registry: Arc<ToolRegistry>,
+    /// Native tool registry (AgentTool instances for execution)
+    pub(crate) native_tool_registry: Arc<NativeToolRegistry>,
     /// Async confirmation handler
     pub(crate) async_confirmation: Arc<AsyncConfirmationHandler>,
 }
@@ -266,6 +269,9 @@ impl AetherCore {
         // Initialize unified tool registry (Dispatcher Layer)
         let tool_registry = Arc::new(ToolRegistry::new());
 
+        // Initialize native tool registry (AgentTool instances for execution)
+        let native_tool_registry = Arc::new(NativeToolRegistry::new());
+
         // Initialize async confirmation handler
         let async_confirmation = Arc::new(AsyncConfirmationHandler::new());
 
@@ -286,6 +292,7 @@ impl AetherCore {
             config_watcher,
             conversation_manager: Arc::new(Mutex::new(ConversationManager::new())),
             tool_registry,
+            native_tool_registry,
             async_confirmation,
         };
 

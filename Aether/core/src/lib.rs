@@ -99,6 +99,7 @@ pub mod services; // NEW: Shared foundation services (FileOps, GitOps, SystemInf
 pub mod mcp; // NEW: MCP (Model Context Protocol) capability
 pub mod dispatcher; // NEW: Intelligent tool routing (Dispatcher Layer)
 pub mod routing; // NEW: Unified multi-layer routing framework
+pub mod tools; // NEW: Native function calling tools (AgentTool trait)
 
 // Re-export public types
 // NOTE: ImageData/ImageFormat still exported for AI provider image encoding
@@ -154,6 +155,25 @@ pub use crate::dispatcher::{
 pub use crate::routing::{
     RoutingConfig, RoutingContext as UnifiedRoutingContext, RoutingLayerType, RoutingMatch,
     RoutingResult as UnifiedRoutingResult, UnifiedRouter,
+};
+pub use crate::tools::{
+    // Core types
+    AgentTool, NativeToolRegistry, ToolCategory, ToolDefinition, ToolResult,
+    // Filesystem tools
+    create_filesystem_tools, FileDeleteTool, FileListTool, FileReadTool, FileSearchTool,
+    FileWriteTool, FilesystemConfig, FilesystemContext,
+    // Git tools
+    create_git_tools, GitBranchTool, GitConfig, GitContext, GitDiffTool, GitLogTool, GitStatusTool,
+    // Shell tools
+    create_shell_tools, ShellConfig, ShellContext, ShellExecuteTool,
+    // System tools
+    create_system_tools, SystemContext, SystemInfoTool,
+    // Clipboard tools
+    create_clipboard_tools, ClipboardContent, ClipboardContext, ClipboardReadTool,
+    // Screen tools
+    create_screen_tools, ScreenCaptureTool, ScreenConfig, ScreenContext,
+    // Search tools
+    create_search_tools, SearchConfig as SearchToolConfig, SearchContext, WebSearchTool,
 };
 pub use crate::utils::pii;
 

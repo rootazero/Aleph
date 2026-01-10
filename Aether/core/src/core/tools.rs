@@ -5,11 +5,17 @@
 //! - Tool registry refresh
 //! - Command completion
 //! - Async confirmation handling
+//! - Native tool execution (AgentTool)
 
 use super::AetherCore;
 use crate::error::Result;
+use crate::tools::{
+    create_clipboard_tools, create_filesystem_tools, create_git_tools, create_screen_tools,
+    create_shell_tools, create_system_tools, FilesystemConfig, GitConfig, ScreenConfig,
+    ShellConfig, ToolResult,
+};
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 impl AetherCore {
     // ========================================================================
@@ -19,8 +25,8 @@ impl AetherCore {
     /// Refresh the unified tool registry
     ///
     /// This method aggregates tools from all sources:
-    /// - Native capabilities (Search, Video)
-    /// - System tools (fs, git, shell, sys)
+    /// - Native AgentTools (filesystem, git, shell, system, clipboard, screen)
+    /// - System tools (legacy MCP-style, from MCP client)
     /// - External MCP servers
     /// - Installed skills
     /// - Custom commands from config rules
@@ -32,6 +38,7 @@ impl AetherCore {
     /// - Skills are installed/removed
     pub fn refresh_tool_registry(&self) {
         let registry = Arc::clone(&self.tool_registry);
+        let native_registry = Arc::clone(&self.native_tool_registry);
         let config = self.lock_config().clone();
         let mcp_client = self.mcp_client.clone();
         let event_handler = Arc::clone(&self.event_handler);
@@ -42,14 +49,23 @@ impl AetherCore {
         self.runtime.block_on(async move {
             // 0. Clear existing tools
             registry.clear().await;
+            native_registry.clear().await;
 
             // 1. Register builtin commands (single source of truth)
             registry.register_builtin_tools().await;
 
-            // 2. Register native tools (capabilities)
-            registry.register_native_tools().await;
+            // 2. Register native AgentTools for execution
+            // These are the new native function calling tools
+            let native_tools = Self::create_native_agent_tools();
+            let native_tool_count = native_registry.register_all(native_tools.clone()).await;
+            debug!("Registered {} native AgentTools for execution", native_tool_count);
 
-            // 2. Register system tools (from MCP client)
+            // 2b. Also register native tools in the dispatcher registry for UI display
+            for (service_name, tools) in Self::group_native_tools_by_service(&native_tools) {
+                registry.register_agent_tools(&tools, &service_name).await;
+            }
+
+            // 3. Register system tools (legacy MCP-style, from MCP client)
             // Use list_builtin_tools_by_service() to preserve correct service names
             if let Some(client) = &mcp_client {
                 let services = client.list_builtin_tools_by_service();
@@ -81,20 +97,84 @@ impl AetherCore {
                 warn!("MCP client is None, skipping system tools registration");
             }
 
-            // 3. Register skills
+            // 4. Register skills
             if let Ok(skills) = crate::initialization::list_installed_skills() {
                 registry.register_skills(&skills).await;
             }
 
-            // 4. Register custom commands from routing rules
+            // 5. Register custom commands from routing rules
             registry.register_custom_commands(&config.rules).await;
 
             let tool_count = registry.active_count().await;
-            info!("Tool registry refreshed: {} tools", tool_count);
+            info!("Tool registry refreshed: {} tools ({} native)", tool_count, native_tool_count);
 
             // Notify Swift that tools have changed
             event_handler.on_tools_changed(tool_count as u32);
         });
+    }
+
+    /// Create all native AgentTool instances
+    ///
+    /// Returns a flat list of all native tools with default configurations.
+    /// These tools can be executed via `execute_native_tool()`.
+    fn create_native_agent_tools() -> Vec<Arc<dyn crate::tools::AgentTool>> {
+        let mut all_tools: Vec<Arc<dyn crate::tools::AgentTool>> = Vec::new();
+
+        // Filesystem tools - allow access to home directory by default
+        let fs_config = FilesystemConfig::with_home_dir();
+        all_tools.extend(create_filesystem_tools(fs_config));
+
+        // Git tools - allow all repositories by default (empty list = all allowed)
+        let git_config = GitConfig::default();
+        all_tools.extend(create_git_tools(git_config));
+
+        // Shell tools - disabled by default for security
+        // Users must explicitly configure allowed commands
+        let shell_config = ShellConfig::default(); // Disabled by default
+        all_tools.extend(create_shell_tools(shell_config));
+
+        // System info tools
+        all_tools.extend(create_system_tools());
+
+        // Clipboard tools (returns tuple, extract just the tools)
+        let (clipboard_tools, _ctx) = create_clipboard_tools();
+        all_tools.extend(clipboard_tools);
+
+        // Screen capture tools
+        let screen_config = ScreenConfig::default();
+        all_tools.extend(create_screen_tools(screen_config));
+
+        all_tools
+    }
+
+    /// Group native tools by service name for dispatcher registration
+    fn group_native_tools_by_service(
+        tools: &[Arc<dyn crate::tools::AgentTool>],
+    ) -> Vec<(String, Vec<Arc<dyn crate::tools::AgentTool>>)> {
+        use std::collections::HashMap;
+
+        let mut groups: HashMap<String, Vec<Arc<dyn crate::tools::AgentTool>>> = HashMap::new();
+
+        for tool in tools {
+            let service_name = match tool.category() {
+                crate::tools::ToolCategory::Filesystem => "filesystem",
+                crate::tools::ToolCategory::Git => "git",
+                crate::tools::ToolCategory::Shell => "shell",
+                crate::tools::ToolCategory::System => "system",
+                crate::tools::ToolCategory::Clipboard => "clipboard",
+                crate::tools::ToolCategory::Screen => "screen",
+                crate::tools::ToolCategory::Search => "search",
+                crate::tools::ToolCategory::External => "external",
+                crate::tools::ToolCategory::Other => "other",
+            };
+
+            groups
+                .entry(service_name.to_string())
+                .or_default()
+                .push(Arc::clone(tool));
+        }
+
+        groups.into_iter().collect()
     }
 
     /// Get all registered tools from the unified registry
@@ -217,6 +297,103 @@ impl AetherCore {
     pub fn refresh_tools(&self) -> Result<()> {
         self.refresh_tool_registry();
         Ok(())
+    }
+
+    // ========================================================================
+    // NATIVE TOOL EXECUTION (native-function-calling)
+    // ========================================================================
+
+    /// Execute a native tool by name with JSON arguments
+    ///
+    /// This method executes a tool registered in the NativeToolRegistry.
+    /// Use this for executing AgentTool implementations with typed parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Tool name (e.g., "file_read", "git_status")
+    /// * `args` - JSON string containing tool parameters
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(ToolResult)` - Execution result with success/error status
+    /// * `Err(AetherError::ToolNotFound)` - Tool not registered
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let result = core.execute_native_tool(
+    ///     "file_read".to_string(),
+    ///     r#"{"path": "/tmp/test.txt"}"#.to_string()
+    /// )?;
+    /// ```
+    pub fn execute_native_tool(&self, name: String, args: String) -> Result<ToolResult> {
+        let registry = Arc::clone(&self.native_tool_registry);
+
+        self.runtime.block_on(async move {
+            registry.execute(&name, &args).await
+        })
+    }
+
+    /// Check if a native tool requires confirmation before execution
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Tool name to check
+    ///
+    /// # Returns
+    ///
+    /// * `Some(true)` - Tool requires confirmation
+    /// * `Some(false)` - Tool does not require confirmation
+    /// * `None` - Tool not found
+    pub fn native_tool_requires_confirmation(&self, name: String) -> Option<bool> {
+        let registry = Arc::clone(&self.native_tool_registry);
+
+        self.runtime.block_on(async move {
+            registry.requires_confirmation(&name).await
+        })
+    }
+
+    /// Get all native tool definitions for LLM prompt generation
+    ///
+    /// Returns definitions sorted by category then name.
+    /// These can be converted to OpenAI/Anthropic tool format.
+    pub fn get_native_tool_definitions(&self) -> Vec<crate::tools::ToolDefinition> {
+        let registry = Arc::clone(&self.native_tool_registry);
+
+        self.runtime.block_on(async move {
+            registry.get_definitions().await
+        })
+    }
+
+    /// Get native tools in OpenAI function calling format
+    ///
+    /// Returns a JSON array suitable for the OpenAI API `tools` parameter.
+    pub fn get_native_tools_openai(&self) -> Vec<serde_json::Value> {
+        let registry = Arc::clone(&self.native_tool_registry);
+
+        self.runtime.block_on(async move {
+            registry.to_openai_tools().await
+        })
+    }
+
+    /// Get native tools in Anthropic tool format
+    ///
+    /// Returns a JSON array suitable for the Anthropic API `tools` parameter.
+    pub fn get_native_tools_anthropic(&self) -> Vec<serde_json::Value> {
+        let registry = Arc::clone(&self.native_tool_registry);
+
+        self.runtime.block_on(async move {
+            registry.to_anthropic_tools().await
+        })
+    }
+
+    /// Get count of registered native tools
+    pub fn native_tool_count(&self) -> u32 {
+        let registry = Arc::clone(&self.native_tool_registry);
+
+        self.runtime.block_on(async move {
+            registry.count().await as u32
+        })
     }
 
     // ========================================================================

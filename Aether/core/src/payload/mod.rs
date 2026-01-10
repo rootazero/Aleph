@@ -125,8 +125,12 @@ pub struct AgentContext {
     /// Search results (None in Stage 1)
     pub search_results: Option<Vec<SearchResult>>,
 
-    /// MCP resources (None in Stage 1)
+    /// MCP resources - stores available tool info (for listing)
     pub mcp_resources: Option<HashMap<String, serde_json::Value>>,
+
+    /// MCP tool execution result
+    /// Contains the result of an MCP tool invocation (e.g., screenshot, file content)
+    pub mcp_tool_result: Option<McpToolResult>,
 
     /// 🔮 Skills workflow state (reserved for Solution C)
     ///
@@ -145,6 +149,19 @@ pub struct AgentContext {
     /// Skills instructions - dynamically injected from matched SKILL.md
     /// Contains the instructions from the skill's markdown body
     pub skill_instructions: Option<String>,
+}
+
+/// Result of an MCP tool execution
+#[derive(Debug, Clone)]
+pub struct McpToolResult {
+    /// Tool name that was executed
+    pub tool_name: String,
+    /// Whether the execution was successful
+    pub success: bool,
+    /// Result content (JSON value)
+    pub content: serde_json::Value,
+    /// Error message if execution failed
+    pub error: Option<String>,
 }
 
 // ====== Reserved structures for future stages ======

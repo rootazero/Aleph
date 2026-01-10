@@ -702,6 +702,7 @@ mod tests {
             memory_snippets: Some(memories),
             search_results: None,
             mcp_resources: None,
+            mcp_tool_result: None,
             video_transcript: None,
             workflow_state: None,
             attachments: None,

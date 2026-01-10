@@ -133,6 +133,13 @@ pub enum AetherError {
     /// MCP request timeout
     #[error("MCP request timed out")]
     McpTimeout,
+
+    /// Native tool not found
+    #[error("Tool not found: {name}")]
+    ToolNotFound {
+        name: String,
+        suggestion: Option<String>,
+    },
 }
 
 impl AetherError {
@@ -290,7 +297,8 @@ impl AetherError {
             | AetherError::KeychainError { suggestion, .. }
             | AetherError::Other { suggestion, .. }
             | AetherError::PermissionDenied { suggestion, .. }
-            | AetherError::VideoError { suggestion, .. } => suggestion.as_deref(),
+            | AetherError::VideoError { suggestion, .. }
+            | AetherError::ToolNotFound { suggestion, .. } => suggestion.as_deref(),
             // Simple error types without suggestion field
             AetherError::NotFound(_)
             | AetherError::IoError(_)
@@ -412,6 +420,29 @@ impl AetherError {
             AetherError::McpTimeout => {
                 "MCP request timed out. Please try again.".to_string()
             }
+            AetherError::ToolNotFound { name, suggestion } => {
+                if let Some(sug) = suggestion {
+                    format!("Tool '{}' not found. {}", name, sug)
+                } else {
+                    format!("Tool '{}' not found", name)
+                }
+            }
+        }
+    }
+
+    /// Create a tool not found error
+    pub fn tool_not_found<S: Into<String>>(name: S) -> Self {
+        AetherError::ToolNotFound {
+            name: name.into(),
+            suggestion: None,
+        }
+    }
+
+    /// Create a tool not found error with suggestion
+    pub fn tool_not_found_with_suggestion<S: Into<String>, T: Into<String>>(name: S, suggestion: T) -> Self {
+        AetherError::ToolNotFound {
+            name: name.into(),
+            suggestion: Some(suggestion.into()),
         }
     }
 }

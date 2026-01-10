@@ -16,7 +16,7 @@ pub mod strategy;
 pub mod system;
 
 // Re-exports for convenience
-pub use declaration::{CapabilityDeclaration, CapabilityParameter, CapabilityRegistry};
+pub use declaration::{CapabilityDeclaration, CapabilityParameter, CapabilityRegistry, McpToolInfo};
 pub use request::{AiResponse, CapabilityRequest, ClarificationInfo, ClarificationReason};
 pub use response_parser::ResponseParser;
 pub use strategies::{McpStrategy, MemoryStrategy, SearchStrategy, SkillsStrategy, VideoStrategy};

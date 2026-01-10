@@ -28,7 +28,22 @@
 //! │  └── ShellService  → /shell     │      (node, python, bun)       │
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
+//!
+//! # MCP Tool Bridge
+//!
+//! The `bridge` module provides `McpToolBridge` which implements the `AgentTool`
+//! trait for MCP tools. This allows seamless integration with the native function
+//! calling infrastructure.
+//!
+//! ```rust,ignore
+//! use aether_core::mcp::{McpClient, McpToolBridge};
+//! use std::sync::Arc;
+//!
+//! let client = Arc::new(McpClient::new());
+//! let bridges = McpToolBridge::from_client(client).await;
+//! ```
 
+pub mod bridge;
 mod client;
 pub mod external;
 pub mod jsonrpc;
@@ -55,3 +70,6 @@ pub use types::{
     McpServerStatusInfo, McpServerType, McpServiceInfo, McpSettingsConfig, McpTool, McpToolCall,
     McpToolInfo, McpToolResult,
 };
+
+// MCP Tool Bridge - implements AgentTool for MCP tools
+pub use bridge::{create_bridges, create_builtin_bridges, McpToolBridge, McpToolSource};
