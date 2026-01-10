@@ -156,7 +156,8 @@ struct UnifiedInputView: View {
             onArrowDown: {
                 // Move selection down in command completion
                 subPanelState.moveSelectionDown()
-            }
+            },
+            onTab: { handleTabCompletion() }
         )
         .frame(height: 26)
         .padding(.horizontal, 10)
@@ -190,15 +191,30 @@ struct UnifiedInputView: View {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
-        // If a command is selected in SubPanel, use that
+        // If command completion is showing, treat Enter as Tab (complete the command)
         if case .commandCompletion = subPanelState.mode,
            let selectedCommand = subPanelState.getSelectedCommand() {
-            onCommandSelected?(selectedCommand)
+            // Write the command to input field with trailing space for parameter input
+            inputText = "/\(selectedCommand.key) "
+            subPanelState.hide()
             return
         }
 
         onSubmit?(text)
         inputText = ""
+        subPanelState.hide()
+    }
+
+    /// Handle Tab key - complete the selected command into input field
+    private func handleTabCompletion() {
+        // Only handle when command completion is showing
+        guard case .commandCompletion = subPanelState.mode,
+              let selectedCommand = subPanelState.getSelectedCommand() else {
+            return
+        }
+
+        // Write the command to input field with trailing space for parameter input
+        inputText = "/\(selectedCommand.key) "
         subPanelState.hide()
     }
 

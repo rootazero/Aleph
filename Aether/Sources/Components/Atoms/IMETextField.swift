@@ -38,6 +38,7 @@ struct IMETextField: NSViewRepresentable {
     var onTextChange: ((String) -> Void)?
     var onArrowUp: (() -> Void)?
     var onArrowDown: (() -> Void)?
+    var onTab: (() -> Void)?
 
     func makeNSView(context: Context) -> NSTextField {
         NSLog("[IMETextField] makeNSView called")
@@ -73,6 +74,7 @@ struct IMETextField: NSViewRepresentable {
         context.coordinator.onTextChange = onTextChange
         context.coordinator.onArrowUp = onArrowUp
         context.coordinator.onArrowDown = onArrowDown
+        context.coordinator.onTab = onTab
         context.coordinator.textField = textField
 
         // Set direct callback on IMETextFieldView (most reliable method)
@@ -146,6 +148,7 @@ struct IMETextField: NSViewRepresentable {
         context.coordinator.onTextChange = onTextChange
         context.coordinator.onArrowUp = onArrowUp
         context.coordinator.onArrowDown = onArrowDown
+        context.coordinator.onTab = onTab
 
         // Update direct callback on IMETextFieldView
         if let imeTextField = nsView as? IMETextFieldView {
@@ -179,6 +182,7 @@ struct IMETextField: NSViewRepresentable {
         var onTextChange: ((String) -> Void)?
         var onArrowUp: (() -> Void)?
         var onArrowDown: (() -> Void)?
+        var onTab: (() -> Void)?
         weak var textField: NSTextField?
 
         init(_ parent: IMETextField) {
@@ -235,6 +239,12 @@ struct IMETextField: NSViewRepresentable {
             } else if commandSelector == #selector(NSResponder.moveDown(_:)) {
                 // Down arrow pressed
                 if let callback = onArrowDown {
+                    callback()
+                    return true
+                }
+            } else if commandSelector == #selector(NSResponder.insertTab(_:)) {
+                // Tab pressed
+                if let callback = onTab {
                     callback()
                     return true
                 }
