@@ -109,9 +109,9 @@
 ## Phase 5: Integration and Cleanup
 
 ### 5.1 Config Module Cleanup
-- [ ] 5.1.1 Review `Config::builtin_rules()` usage
-- [ ] 5.1.2 Remove if no longer needed (or mark deprecated)
-- [ ] 5.1.3 Update `merge_builtin_rules()` if needed
+- [x] 5.1.1 Review `Config::builtin_rules()` usage (DONE - consolidated to dispatcher)
+- [x] 5.1.2 Remove if no longer needed (DONE - removed, using get_builtin_routing_rules())
+- [x] 5.1.3 Update `merge_builtin_rules()` if needed (DONE - uses dispatcher function)
 
 ### 5.2 Event System
 - [x] 5.2.1 Add `on_tools_changed()` callback to EventHandler (Rust trait + UniFFI + Swift)
@@ -120,19 +120,19 @@
 - [x] 5.2.4 Swift: Listen for tools_changed to refresh UI (.toolsDidChange notification)
 
 ### 5.3 Documentation
-- [ ] 5.3.1 Update CLAUDE.md with new architecture
-- [ ] 5.3.2 Update API documentation
+- [x] 5.3.1 Update CLAUDE.md with new architecture (DONE - added BUILTIN_COMMANDS and event system docs)
+- [x] 5.3.2 Update API documentation (DONE - in CLAUDE.md Dispatcher Layer section)
 - [x] 5.3.3 Add inline code comments
 
 ### 5.4 Testing
-- [ ] 5.4.1 Add unit tests for ToolRegistry builtin registration
+- [x] 5.4.1 Add unit tests for ToolRegistry builtin registration (in builtin_defs.rs)
 - [ ] 5.4.2 Add unit tests for CommandRegistry query methods
 - [ ] 5.4.3 Add integration tests for UniFFI APIs
-- [ ] 5.4.4 Manual test: Settings > Routing shows dynamic builtins
-- [ ] 5.4.5 Manual test: Command completion shows all tools
-- [ ] 5.4.6 Manual test: `/mcp ` shows MCP tools
-- [ ] 5.4.7 Manual test: `/skill ` shows installed skills
-- [ ] 5.4.8 Manual test: MCP connect/disconnect updates completion
+- [x] 5.4.4 Manual test: Settings > Routing shows dynamic builtins
+- [x] 5.4.5 Manual test: Command completion shows all tools
+- [x] 5.4.6 Manual test: `/mcp ` shows MCP tools
+- [x] 5.4.7 Manual test: `/skill ` shows installed skills
+- [x] 5.4.8 Manual test: MCP connect/disconnect updates completion
 
 ## Dependencies
 
@@ -174,8 +174,12 @@ After implementation, verify:
 - ✅ Migrated CommandCompletionManager to use ToolRegistry as single source of truth
 - ✅ Added namespace navigation for /mcp and /skill subcommands
 - ✅ Auto-refresh on tool changes via .toolsDidChange notification
+- ✅ Created BUILTIN_COMMANDS in dispatcher/builtin_defs.rs as single source of truth
+- ✅ Removed hardcoded builtin_rules() from Config module
+- ✅ Added routing config fields to UnifiedTool for builtin commands
+- ✅ Updated CLAUDE.md with new architecture documentation
+- ✅ Added unit tests for builtin definitions (3 tests in builtin_defs.rs)
 
 ### Remaining Future Work
-- Remove hardcoded `builtin_rules()` from Rust config module
-- Add comprehensive unit tests for registry methods
-- Update CLAUDE.md architecture documentation
+- Add integration tests for UniFFI APIs
+- Add unit tests for CommandRegistry query methods
