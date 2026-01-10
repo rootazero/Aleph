@@ -44,6 +44,7 @@ use crate::memory::compression::{CompressionConfig, ConflictConfig, SchedulerCon
 use crate::memory::database::VectorDatabase;
 use crate::memory::CompressionService;
 use crate::router::Router;
+use crate::routing::IntentRoutingPipeline;
 use crate::search::SearchRegistry;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
@@ -99,6 +100,8 @@ pub struct AetherCore {
     pub(crate) native_tool_registry: Arc<NativeToolRegistry>,
     /// Async confirmation handler
     pub(crate) async_confirmation: Arc<AsyncConfirmationHandler>,
+    /// Intent routing pipeline (enhanced routing system)
+    pub(crate) intent_pipeline: Option<Arc<IntentRoutingPipeline>>,
 }
 
 impl AetherCore {
@@ -275,6 +278,9 @@ impl AetherCore {
         // Initialize async confirmation handler
         let async_confirmation = Arc::new(AsyncConfirmationHandler::new());
 
+        // Initialize intent routing pipeline if enabled
+        let intent_pipeline = Self::init_intent_pipeline(&config, &router);
+
         let core = Self {
             event_handler,
             runtime: Arc::new(runtime),
@@ -294,6 +300,7 @@ impl AetherCore {
             tool_registry,
             native_tool_registry,
             async_confirmation,
+            intent_pipeline,
         };
 
         // Initialize tool registry with builtin tools and configured tools
@@ -452,6 +459,73 @@ impl AetherCore {
         );
 
         Some(Arc::new(client))
+    }
+
+    /// Initialize intent routing pipeline if enabled
+    ///
+    /// The pipeline provides enhanced routing with:
+    /// - Intent caching for fast path
+    /// - Confidence calibration
+    /// - Multi-layer routing (L1/L2/L3)
+    /// - Intent aggregation and clarification flow
+    fn init_intent_pipeline(
+        config: &Arc<Mutex<Config>>,
+        _router: &Arc<RwLock<Option<Arc<Router>>>>,
+    ) -> Option<Arc<IntentRoutingPipeline>> {
+        let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Check if pipeline is enabled
+        if !cfg.pipeline.enabled {
+            debug!("Intent routing pipeline disabled in config");
+            return None;
+        }
+
+        // Create semantic matcher for pipeline
+        // Uses smart_matching config from Config to configure the matcher
+        use crate::semantic::{MatcherConfig, SemanticMatcher};
+        let semantic_matcher = Arc::new(SemanticMatcher::new(MatcherConfig {
+            enabled: cfg.smart_matching.enabled,
+            regex_threshold: cfg.smart_matching.regex_threshold,
+            keyword_threshold: cfg.smart_matching.keyword_threshold as f32,
+            ai_threshold: cfg.smart_matching.ai_threshold,
+            ..MatcherConfig::default()
+        }));
+
+        // Get provider for L3 if enabled
+        let provider = if cfg.pipeline.layers.l3_enabled {
+            if let Some(ref default_name) = cfg.general.default_provider {
+                if let Some(provider_config) = cfg.providers.get(default_name) {
+                    use crate::providers::create_provider;
+                    create_provider(default_name, provider_config.clone()).ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Create pipeline
+        let pipeline = if let Some(p) = provider {
+            IntentRoutingPipeline::with_provider(
+                cfg.pipeline.clone(),
+                semantic_matcher,
+                p,
+            )
+        } else {
+            IntentRoutingPipeline::new(cfg.pipeline.clone(), semantic_matcher)
+        };
+
+        info!(
+            enabled = cfg.pipeline.enabled,
+            cache_enabled = cfg.pipeline.cache.enabled,
+            l3_enabled = cfg.pipeline.layers.l3_enabled,
+            "Intent routing pipeline initialized"
+        );
+
+        Some(Arc::new(pipeline))
     }
 
     /// Initialize config watcher for hot-reload

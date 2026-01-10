@@ -87,11 +87,129 @@ impl AetherCore {
         // Store context for memory operations
         self.set_current_context(context.clone());
 
+        // Try the new intent routing pipeline if enabled
+        if let Some(ref pipeline) = self.intent_pipeline {
+            match self.process_with_pipeline(pipeline, user_input.clone(), context.clone(), start_time) {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    // Log warning but fall back to AI-first mode
+                    tracing::warn!(error = %e, "Pipeline processing failed, falling back to AI-first mode");
+                }
+            }
+        }
+
         // AI-First Mode: AI decides if capability is needed in a single call
-        // This is now the only processing mode - legacy intent detection has been removed
+        // This is the fallback processing mode when pipeline is disabled or fails
         match self.process_with_ai_first(user_input.clone(), context.clone(), start_time) {
             Ok(response) => Ok(response),
             Err(e) => Err(self.handle_processing_error(&e)),
+        }
+    }
+
+    /// Process input using the intent routing pipeline
+    ///
+    /// The pipeline provides:
+    /// - Fast path via intent cache
+    /// - Multi-layer routing (L1 regex, L2 semantic, L3 AI inference)
+    /// - Confidence calibration
+    /// - Clarification flow for missing parameters
+    fn process_with_pipeline(
+        &self,
+        pipeline: &std::sync::Arc<crate::routing::IntentRoutingPipeline>,
+        user_input: String,
+        context: CapturedContext,
+        start_time: std::time::Instant,
+    ) -> Result<String> {
+        use crate::routing::{PipelineResult, RoutingContext};
+
+        info!("Processing with intent routing pipeline");
+
+        // Build routing context
+        let mut routing_ctx = RoutingContext::new(&user_input);
+
+        // Add app context
+        let app_name = context.app_bundle_id.split('.').next_back().unwrap_or("Unknown");
+        routing_ctx = routing_ctx.with_app(
+            Some(context.app_bundle_id.clone()),
+            context.window_title.clone(),
+        );
+        routing_ctx.entity_hints.push(app_name.to_string());
+        if let Some(ref title) = context.window_title {
+            routing_ctx.entity_hints.push(title.clone());
+        }
+
+        // Process through pipeline
+        let result = self.runtime.block_on(pipeline.process(routing_ctx));
+
+        match result {
+            PipelineResult::Executed { tool_name, content, .. } => {
+                info!(
+                    tool = %tool_name,
+                    latency_ms = start_time.elapsed().as_millis(),
+                    "Pipeline: Tool executed successfully"
+                );
+                Ok(content)
+            }
+            PipelineResult::GeneralChat { input, .. } => {
+                // Fall back to AI-first processing for general chat
+                debug!(
+                    input = %input,
+                    "Pipeline: No tool matched, falling back to AI-first"
+                );
+                Err(AetherError::other("Pipeline returned GeneralChat, use AI-first"))
+            }
+            PipelineResult::PendingClarification(request) => {
+                // Handle clarification request
+                info!(
+                    session_id = %request.session_id,
+                    prompt = %request.prompt,
+                    "Pipeline: Clarification needed"
+                );
+
+                // Convert to ClarificationRequest for UI
+                use crate::clarification::{ClarificationOption, ClarificationRequest as UiRequest};
+
+                let ui_request = if request.suggestions.is_empty() {
+                    UiRequest::text(&request.session_id, &request.prompt, None)
+                } else {
+                    let options: Vec<ClarificationOption> = request.suggestions.iter()
+                        .map(|s| ClarificationOption::new(s, s))
+                        .collect();
+                    UiRequest::select(&request.session_id, &request.prompt, options)
+                };
+
+                // Notify UI
+                let clarification_result = self.event_handler.on_clarification_needed(ui_request);
+
+                if clarification_result.is_success() {
+                    if let Some(value) = clarification_result.get_value() {
+                        // Resume pipeline with user's clarification
+                        let resume_result = self.runtime.block_on(
+                            pipeline.resume_clarification(&request.session_id, &value)
+                        );
+
+                        match resume_result {
+                            PipelineResult::Executed { content, .. } => Ok(content),
+                            PipelineResult::GeneralChat { .. } => {
+                                Err(AetherError::other("Pipeline returned GeneralChat after clarification"))
+                            }
+                            _ => Err(AetherError::other("Unexpected pipeline result after clarification"))
+                        }
+                    } else {
+                        Err(AetherError::other("Clarification cancelled"))
+                    }
+                } else {
+                    Err(AetherError::other("Clarification cancelled or timed out"))
+                }
+            }
+            PipelineResult::Cancelled { reason } => {
+                debug!(reason = %reason, "Pipeline: Cancelled");
+                Err(AetherError::other(format!("Pipeline cancelled: {}", reason)))
+            }
+            PipelineResult::Skipped { reason } => {
+                debug!(reason = %reason, "Pipeline: Skipped");
+                Err(AetherError::other(format!("Pipeline skipped: {}", reason)))
+            }
         }
     }
 

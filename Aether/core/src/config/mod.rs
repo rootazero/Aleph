@@ -89,6 +89,9 @@ pub struct Config {
     /// Dispatcher Layer configuration (intelligent tool routing)
     #[serde(default)]
     pub dispatcher: DispatcherConfigToml,
+    /// Intent routing pipeline configuration (enhanced routing)
+    #[serde(default)]
+    pub pipeline: crate::routing::PipelineConfig,
 }
 
 // =============================================================================
@@ -169,6 +172,7 @@ impl Default for Config {
             smart_flow: SmartFlowConfig::default(),
             smart_matching: SmartMatchingConfig::default(),
             dispatcher: DispatcherConfigToml::default(),
+            pipeline: crate::routing::PipelineConfig::default(),
         }
     }
 }

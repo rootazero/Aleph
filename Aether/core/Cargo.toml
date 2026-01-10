@@ -66,6 +66,8 @@ hostname = "0.4"
 whoami = "1.5"
 # For screen capture (System Tools)
 xcap = "0.8"
+# For LRU cache (Intent Routing Pipeline)
+lru = "0.12"
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }
