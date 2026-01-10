@@ -105,63 +105,21 @@ impl ToolRegistry {
         debug!("Registered {} builtin tools from BUILTIN_COMMANDS", BUILTIN_COMMANDS.len());
     }
 
-    /// Register built-in native tools (Search, Video)
+    /// Register native OS command tools
     ///
-    /// These are always-available capabilities that don't require
-    /// external services or configuration.
+    /// Native tools are for registering operating system command tools
+    /// that directly invoke OS-level commands (e.g., shell commands, OS utilities).
+    ///
+    /// Note: This is different from System Tools which are Rust-implemented
+    /// tools wrapped via MCP protocol (e.g., fs, git, shell from SystemTool trait).
+    ///
+    /// Currently empty - native tools will be added when OS command integration
+    /// is implemented.
     pub async fn register_native_tools(&self) {
-        let mut tools = self.tools.write().await;
-
-        // Search capability
-        let search = UnifiedTool::new(
-            "native:search",
-            "search",
-            "Search the web for real-time information, news, and facts",
-            ToolSource::Native,
-        )
-        .with_display_name("Web Search")
-        .with_parameters_schema(json!({
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search query keywords"
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum number of results",
-                    "default": 5
-                }
-            },
-            "required": ["query"]
-        }))
-        .with_requires_confirmation(false);
-
-        tools.insert(search.id.clone(), search);
-
-        // Video capability
-        let video = UnifiedTool::new(
-            "native:video",
-            "video",
-            "Extract and analyze YouTube video transcripts",
-            ToolSource::Native,
-        )
-        .with_display_name("Video Transcript")
-        .with_parameters_schema(json!({
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "YouTube video URL"
-                }
-            },
-            "required": ["url"]
-        }))
-        .with_requires_confirmation(false);
-
-        tools.insert(video.id.clone(), video);
-
-        debug!("Registered {} native tools", 2);
+        // Reserved for future OS command tools registration
+        // Native tools should invoke OS-level commands directly
+        // Examples: system shell, OS utilities, hardware interfaces
+        debug!("Native tools registration reserved for OS command tools");
     }
 
     /// Register MCP tools from tool info list (Flat Namespace Mode)
@@ -637,6 +595,44 @@ impl ToolRegistry {
         builtins
     }
 
+    /// List preset tools for Settings UI (Flat Namespace Mode)
+    ///
+    /// Returns all non-Custom tools: Builtin + MCP + Skill + Native
+    /// These are the "preset" tools that users can't delete, sorted by priority.
+    pub async fn list_preset_tools(&self) -> Vec<UnifiedTool> {
+        let tools = self.tools.read().await;
+        let mut presets: Vec<_> = tools
+            .values()
+            .filter(|t| {
+                t.is_active && !matches!(t.source, ToolSource::Custom { .. })
+            })
+            .cloned()
+            .collect();
+
+        // Sort by source priority: Builtin > Native > MCP > Skill
+        presets.sort_by(|a, b| {
+            let priority_a = match &a.source {
+                ToolSource::Builtin => 0,
+                ToolSource::Native => 1,
+                ToolSource::Mcp { .. } => 2,
+                ToolSource::Skill { .. } => 3,
+                ToolSource::Custom { .. } => 4,
+            };
+            let priority_b = match &b.source {
+                ToolSource::Builtin => 0,
+                ToolSource::Native => 1,
+                ToolSource::Mcp { .. } => 2,
+                ToolSource::Skill { .. } => 3,
+                ToolSource::Custom { .. } => 4,
+            };
+            priority_a
+                .cmp(&priority_b)
+                .then(a.sort_order.cmp(&b.sort_order))
+                .then(a.name.cmp(&b.name))
+        });
+        presets
+    }
+
     /// Generate routing rules from builtin tools
     ///
     /// This is the SINGLE SOURCE OF TRUTH for builtin command routing configuration.
@@ -694,12 +690,14 @@ impl ToolRegistry {
     /// In flat namespace mode, ALL tools are root-level commands.
     /// Returns all active tools sorted by source priority then alphabetically.
     ///
+    /// Native tools are EXCLUDED to prevent exposing internal capabilities to L3 AI router.
+    /// Native capabilities are implementation details, not user-facing commands.
+    ///
     /// Source priority order for display:
     /// 1. Builtin (system commands)
     /// 2. Custom (user-defined rules)
     /// 3. MCP (external tools)
     /// 4. Skill (Claude Agent skills)
-    /// 5. Native (internal capabilities - usually not shown)
     pub async fn list_root_commands(&self) -> Vec<UnifiedTool> {
         let tools = self.tools.read().await;
         let mut result: Vec<_> = tools
@@ -707,6 +705,7 @@ impl ToolRegistry {
             .filter(|t| {
                 t.is_active
                     // Exclude native capabilities (internal implementations)
+                    // They should not be exposed to L3 AI router
                     && !matches!(t.source, ToolSource::Native)
             })
             .cloned()
@@ -992,17 +991,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_native_tools() {
+        // Native tools registration is reserved for future OS command tools
+        // Currently no tools are registered
         let registry = ToolRegistry::new();
         registry.register_native_tools().await;
 
-        assert_eq!(registry.count().await, 2);
-
-        let search = registry.get_by_name("search").await;
-        assert!(search.is_some());
-        assert_eq!(search.unwrap().source, ToolSource::Native);
-
-        let video = registry.get_by_name("video").await;
-        assert!(video.is_some());
+        // Should be empty - no native tools registered yet
+        assert_eq!(registry.count().await, 0);
     }
 
     #[tokio::test]
@@ -1074,7 +1069,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_by_source_type() {
         let registry = ToolRegistry::new();
-        registry.register_native_tools().await;
+        registry.register_builtin_tools().await;
 
         let skills = vec![SkillInfo {
             id: "test".to_string(),
@@ -1084,17 +1079,21 @@ mod tests {
         }];
         registry.register_skills(&skills).await;
 
-        let native = registry.list_by_source_type("Native").await;
-        assert_eq!(native.len(), 2);
+        let builtin = registry.list_by_source_type("Builtin").await;
+        assert_eq!(builtin.len(), 3); // search, video, chat
 
         let skill = registry.list_by_source_type("Skill").await;
         assert_eq!(skill.len(), 1);
+
+        // Native should be empty (reserved for future OS command tools)
+        let native = registry.list_by_source_type("Native").await;
+        assert_eq!(native.len(), 0);
     }
 
     #[tokio::test]
     async fn test_search() {
         let registry = ToolRegistry::new();
-        registry.register_native_tools().await;
+        registry.register_builtin_tools().await;
 
         let results = registry.search("search").await;
         assert_eq!(results.len(), 1);
@@ -1107,29 +1106,30 @@ mod tests {
     #[tokio::test]
     async fn test_set_tool_active() {
         let registry = ToolRegistry::new();
-        registry.register_native_tools().await;
+        registry.register_builtin_tools().await;
 
-        // Deactivate search
-        let updated = registry.set_tool_active("native:search", false).await;
+        // Deactivate search builtin
+        let updated = registry.set_tool_active("builtin:search", false).await;
         assert!(updated);
 
         // Should not appear in active list
         let all = registry.list_all().await;
-        assert!(!all.iter().any(|t| t.id == "native:search"));
+        assert!(!all.iter().any(|t| t.id == "builtin:search"));
 
         // Should appear in full list
         let all_with_inactive = registry.list_all_with_inactive().await;
-        assert!(all_with_inactive.iter().any(|t| t.id == "native:search"));
+        assert!(all_with_inactive.iter().any(|t| t.id == "builtin:search"));
     }
 
     #[tokio::test]
     async fn test_to_prompt_block() {
         let registry = ToolRegistry::new();
-        registry.register_native_tools().await;
+        registry.register_builtin_tools().await;
 
         let prompt = registry.to_prompt_block().await;
         assert!(prompt.contains("**search**"));
         assert!(prompt.contains("**video**"));
+        assert!(prompt.contains("**chat**"));
     }
 
     #[test]

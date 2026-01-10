@@ -1115,6 +1115,8 @@ struct PresetRulesListView: View {
     }
 
     /// Load builtin tools from ToolRegistry
+    ///
+    /// Returns only Builtin tools (3 system commands: /search, /video, /chat)
     private func loadBuiltinTools() {
         guard let appDelegate = NSApp.delegate as? AppDelegate,
               let core = appDelegate.core else {
@@ -1123,7 +1125,7 @@ struct PresetRulesListView: View {
             return
         }
 
-        // Load from ToolRegistry (single source of truth)
+        // Load only builtin tools (system commands)
         builtinTools = core.listBuiltinTools()
         isLoading = false
     }
