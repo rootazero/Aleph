@@ -395,30 +395,30 @@ Implementation tasks for the enhanced intent routing pipeline. Tasks are ordered
 ### Task 10.1: Update API Documentation
 **Files**: Various
 
-- [ ] Document `IntentRoutingPipeline` public API
-- [ ] Document configuration options
-- [ ] Add usage examples
-- [ ] Update ARCHITECTURE.md with pipeline diagram
+- [x] Document `IntentRoutingPipeline` public API
+- [x] Document configuration options
+- [x] Add usage examples
+- [x] Update ARCHITECTURE.md with pipeline diagram
 
 **Validation**: Documentation is complete and accurate
 
 ### Task 10.2: Update CLAUDE.md
 **File**: `CLAUDE.md`
 
-- [ ] Add pipeline architecture section
-- [ ] Update routing description
-- [ ] Add configuration schema
-- [ ] Update anti-patterns
+- [x] Add pipeline architecture section
+- [x] Update routing description
+- [x] Add configuration schema
+- [x] Update anti-patterns
 
 **Validation**: CLAUDE.md reflects new architecture
 
 ### Task 10.3: Migration Guide
 **File**: `docs/PIPELINE_MIGRATION.md` (new)
 
-- [ ] Document how to enable pipeline
-- [ ] Document config migration
-- [ ] Document breaking changes (if any)
-- [ ] Add troubleshooting section
+- [x] Document how to enable pipeline
+- [x] Document config migration
+- [x] Document breaking changes (if any)
+- [x] Add troubleshooting section
 
 **Validation**: Migration guide covers all scenarios
 
@@ -466,9 +466,9 @@ Phase 6 (Clarification) ──────────────────�
 - [x] Unit test coverage >= 80%
 - [x] Integration tests cover main flows
 - [x] No regressions in existing tests
-- [ ] Documentation complete
+- [x] Documentation complete
 
 ### Rollout
 - [x] Feature flag allows gradual rollout
-- [ ] Metrics enable A/B comparison
-- [ ] Rollback path documented
+- [x] Metrics enable A/B comparison
+- [x] Rollback path documented

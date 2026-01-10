@@ -451,6 +451,253 @@ match self.format {
 
 ---
 
+## Intent Routing Pipeline
+
+**Location**: `core/src/routing/`
+
+The Intent Routing Pipeline is an enhanced multi-layer routing system that optimizes intent detection through caching, confidence calibration, and intelligent layer execution.
+
+### Architecture Overview
+
+```
+User Input
+    ↓
+┌──────────────────────────────────────────────────────────────┐
+│                 Intent Routing Pipeline                       │
+│                                                               │
+│  ┌─────────────┐    ┌──────────────────────────────────────┐ │
+│  │ IntentCache │◄───│ Check cache for matching intent      │ │
+│  └─────────────┘    └──────────────────────────────────────┘ │
+│         │ miss                                                │
+│         ▼                                                     │
+│  ┌──────────────────────────────────────────────────────────┐│
+│  │              LayerExecutionEngine                        ││
+│  │                                                          ││
+│  │  ┌─────────┐   ┌─────────┐   ┌─────────┐                ││
+│  │  │   L1    │──▶│   L2    │──▶│   L3    │                ││
+│  │  │ Regex   │   │Semantic │   │LLM Infer│                ││
+│  │  └─────────┘   └─────────┘   └─────────┘                ││
+│  │      │              │             │                      ││
+│  │      ▼              ▼             ▼                      ││
+│  │  IntentSignal  IntentSignal  IntentSignal               ││
+│  └──────────────────────────────────────────────────────────┘│
+│         │                                                     │
+│         ▼                                                     │
+│  ┌──────────────────────────────────────────────────────────┐│
+│  │              IntentAggregator                            ││
+│  │  • Sort by calibrated confidence                         ││
+│  │  • Detect conflicts                                       ││
+│  │  • Check parameter completeness                          ││
+│  │  • Determine action (Execute/Confirm/Clarify/Chat)       ││
+│  └──────────────────────────────────────────────────────────┘│
+│         │                                                     │
+│         ▼                                                     │
+│  ┌──────────────────────────────────────────────────────────┐│
+│  │  Action Handling                                         ││
+│  │  • Execute: Run tool directly                            ││
+│  │  • RequestConfirmation: Show confirmation UI             ││
+│  │  • RequestClarification: Ask for missing parameters      ││
+│  │  • GeneralChat: Fall back to AI chat                     ││
+│  └──────────────────────────────────────────────────────────┘│
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Core Components
+
+#### IntentCache
+
+**Location**: `core/src/routing/cache.rs`
+
+LRU-based cache with time decay for fast-path routing:
+
+```rust
+pub struct IntentCache {
+    cache: Arc<RwLock<LruCache<u64, CachedIntent>>>,
+    config: CacheConfig,
+    metrics: CacheMetricsTracker,
+}
+
+pub struct CachedIntent {
+    pub tool_name: String,
+    pub parameters: Value,
+    pub confidence: f32,
+    pub hit_count: u32,
+    pub success_count: u32,
+    pub failure_count: u32,
+}
+```
+
+**Features**:
+- Time-based confidence decay (configurable half-life)
+- Success/failure tracking for learning
+- Automatic eviction of failed entries
+- Thread-safe operations with RwLock
+
+#### LayerExecutionEngine
+
+**Location**: `core/src/routing/engine.rs`
+
+Orchestrates L1/L2/L3 layer execution with early exit optimization:
+
+```rust
+pub enum ExecutionMode {
+    Sequential,  // L1 → L2 → L3 in order
+    Parallel,    // L1 + L2 concurrent, then L3
+}
+```
+
+**Layer Cascade**:
+1. **L1 (Regex)**: Exact command matching (`/search`, `/translate`)
+2. **L2 (Semantic)**: Keyword-based intent detection
+3. **L3 (LLM)**: AI inference for ambiguous queries
+
+**Early Exit**:
+- If L1 matches with confidence ≥ 0.9, skip L2/L3
+- If L2 matches with confidence ≥ `l2_skip_l3_threshold`, skip L3
+
+#### ConfidenceCalibrator
+
+**Location**: `core/src/routing/calibrator.rs`
+
+Adjusts raw confidence scores using multiple factors:
+
+```rust
+pub struct ConfidenceCalibrator {
+    config: CalibratorConfig,
+    history: CalibrationHistory,
+}
+
+pub struct CalibrationFactor {
+    pub name: String,
+    pub value: f32,
+    pub weight: f32,
+}
+```
+
+**Calibration Factors**:
+- Layer-specific adjustments (L1 boosted, L3 reduced)
+- Tool-specific history (success rate boost)
+- Context-based adjustments (app context, conversation)
+
+#### IntentAggregator
+
+**Location**: `core/src/routing/aggregator.rs`
+
+Combines signals from multiple layers:
+
+```rust
+pub struct AggregatedIntent {
+    pub primary_signal: IntentSignal,
+    pub alternatives: Vec<IntentSignal>,
+    pub action: IntentAction,
+    pub final_confidence: f32,
+    pub has_conflict: bool,
+    pub missing_parameters: Vec<ParameterRequirement>,
+}
+
+pub enum IntentAction {
+    Execute,
+    RequestConfirmation,
+    RequestClarification { prompt: String, suggestions: Vec<String> },
+    GeneralChat,
+}
+```
+
+**Conflict Detection**:
+- If top two signals have different tools but similar confidence (within threshold), mark as conflict
+- Conflicts trigger confirmation instead of auto-execute
+
+#### ClarificationIntegrator
+
+**Location**: `core/src/routing/clarification.rs`
+
+Manages multi-turn clarification flows:
+
+```rust
+pub struct ClarificationIntegrator {
+    pending: Arc<RwLock<HashMap<String, PendingClarification>>>,
+    config: ClarificationConfig,
+}
+
+pub struct PendingClarification {
+    pub session_id: String,
+    pub original_input: String,
+    pub partial_intent: AggregatedIntent,
+    pub collected_params: Value,
+    pub missing_params: Vec<ParameterRequirement>,
+    pub created_at: Instant,
+}
+```
+
+**Flow**:
+1. Start clarification: Store pending state, return ClarificationRequest
+2. Resume: User provides input, merge with collected params
+3. Check completeness: If all params provided, continue to execution
+4. Timeout: Cleanup expired sessions (configurable TTL)
+
+### Configuration
+
+```toml
+[routing.pipeline]
+enabled = true                    # Enable Intent Routing Pipeline
+
+[routing.pipeline.cache]
+enabled = true
+max_size = 1000
+ttl_seconds = 3600
+decay_half_life_seconds = 600
+cache_auto_execute_threshold = 0.85
+
+[routing.pipeline.layers]
+execution_mode = "sequential"
+l1_enabled = true
+l2_enabled = true
+l3_enabled = true
+l3_timeout_ms = 5000
+l2_skip_l3_threshold = 0.85
+
+[routing.pipeline.confidence]
+auto_execute = 0.9
+requires_confirmation = 0.6
+no_match = 0.3
+
+[routing.pipeline.clarification]
+enabled = true
+timeout_seconds = 300
+max_turns = 5
+
+[[routing.pipeline.tools]]
+name = "search"
+min_threshold = 0.5
+auto_execute_threshold = 0.85
+repeat_boost = 0.1
+```
+
+### Performance
+
+| Operation | Target | Typical |
+|-----------|--------|---------|
+| Cache hit | < 50ms | ~10ms |
+| L1 only | < 100ms | ~20ms |
+| L1 + L2 | < 200ms | ~50ms |
+| Full cascade | < 500ms | ~200ms |
+| L3 inference | < 5s | ~1-3s |
+
+### Testing
+
+Integration tests: `core/src/tests/pipeline_integration.rs` (23 tests)
+Performance benchmarks: `core/benches/pipeline_bench.rs`
+
+```bash
+# Run pipeline tests
+cargo test tests::pipeline_integration --lib
+
+# Run benchmarks
+cargo bench --bench pipeline_bench
+```
+
+---
+
 ## Performance Considerations
 
 ### Latency Targets
@@ -590,6 +837,6 @@ pub struct Skill {
 
 ---
 
-**Last Updated**: 2026-01-08
+**Last Updated**: 2026-01-11
 **Implemented In**: Aether v0.1.0
-**OpenSpec Changes**: `implement-structured-context-protocol`, `add-skills-capability`
+**OpenSpec Changes**: `implement-structured-context-protocol`, `add-skills-capability`, `enhance-intent-routing-pipeline`

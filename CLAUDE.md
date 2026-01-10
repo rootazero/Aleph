@@ -865,6 +865,61 @@ let matches = core.searchTools(query: "git")
 try core.refreshTools()
 ```
 
+### Intent Routing Pipeline (Enhanced)
+
+The Intent Routing Pipeline enhances the Dispatcher Layer with caching, confidence calibration, and intelligent layer execution for optimized intent detection.
+
+**Key Components:**
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| `IntentCache` | `routing/cache.rs` | LRU cache with time decay for fast-path routing |
+| `LayerExecutionEngine` | `routing/engine.rs` | Orchestrates L1/L2/L3 layer execution |
+| `ConfidenceCalibrator` | `routing/calibrator.rs` | Adjusts confidence using history and context |
+| `IntentAggregator` | `routing/aggregator.rs` | Combines signals, detects conflicts |
+| `ClarificationIntegrator` | `routing/clarification.rs` | Multi-turn parameter collection |
+| `IntentRoutingPipeline` | `routing/pipeline.rs` | Main coordinator |
+
+**Processing Flow:**
+```
+Input → Cache Check → [L1 Regex] → [L2 Semantic] → [L3 LLM] → Aggregate → Action
+              ↓                         ↓                          ↓
+          (hit: skip)            (early exit if                 (Execute/
+                                 high confidence)               Confirm/
+                                                               Clarify/
+                                                               Chat)
+```
+
+**IntentAction Types:**
+- `Execute`: High confidence (≥0.9), run tool directly
+- `RequestConfirmation`: Medium confidence or conflict detected
+- `RequestClarification`: Missing required parameters
+- `GeneralChat`: No tool match, fall back to AI chat
+
+**Configuration:**
+```toml
+[routing.pipeline]
+enabled = true
+
+[routing.pipeline.cache]
+enabled = true
+max_size = 1000
+ttl_seconds = 3600
+decay_half_life_seconds = 600
+
+[routing.pipeline.confidence]
+auto_execute = 0.9
+requires_confirmation = 0.6
+no_match = 0.3
+```
+
+**Code Locations:**
+- Pipeline module: `Aether/core/src/routing/`
+- Pipeline types: `routing/intent.rs`, `routing/types.rs`
+- Pipeline config: `routing/pipeline_config.rs`
+- Integration tests: `src/tests/pipeline_integration.rs`
+- Benchmarks: `benches/pipeline_bench.rs`
+
 ### Privacy & Security
 
 - **PII Scrubbing**: Regex-based removal of phone/email before API calls
