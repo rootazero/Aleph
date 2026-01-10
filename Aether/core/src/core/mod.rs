@@ -413,10 +413,11 @@ impl AetherCore {
         (Some(service), task_handle)
     }
 
-    /// Initialize MCP client with system tools
+    /// Initialize MCP client for external servers only
+    ///
+    /// Native tools are now handled via AgentTool infrastructure in `tools` module.
+    /// This client is only used for external MCP server connections.
     fn init_mcp_client(config: &Arc<Mutex<Config>>) -> Option<Arc<McpClient>> {
-        use crate::services::tools::{FsServiceConfig, GitServiceConfig, ShellServiceConfig};
-
         let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
         let unified_tools = cfg.get_effective_tools_config();
 
@@ -425,7 +426,9 @@ impl AetherCore {
             return None;
         }
 
-        let mut client = McpClient::new();
+        // Create MCP client for external servers only
+        // Native tools (fs, git, shell, etc.) are handled via AgentTool infrastructure
+        let client = McpClient::new();
 
         // Log which config format is being used
         if cfg.is_using_unified_tools() {
@@ -434,96 +437,7 @@ impl AetherCore {
             debug!("Using legacy tools configuration [tools] + [mcp]");
         }
 
-        // Helper to expand ~ in paths
-        let expand_path = |s: &str| -> PathBuf {
-            if s.starts_with("~/") {
-                if let Ok(home) = std::env::var("HOME") {
-                    return PathBuf::from(home).join(&s[2..]);
-                }
-            }
-            PathBuf::from(s)
-        };
-
-        // Register filesystem service
-        if unified_tools.is_fs_enabled() {
-            let allowed_roots: Vec<PathBuf> = unified_tools
-                .fs_allowed_roots()
-                .iter()
-                .map(|s| expand_path(s))
-                .collect();
-            let fs_config = FsServiceConfig { allowed_roots };
-            let fs_service = crate::mcp::FsService::new(fs_config);
-            client.register_system_tool(Arc::new(fs_service));
-            info!("Registered System Tool: FsService");
-        }
-
-        // Register git service
-        if unified_tools.is_git_enabled() {
-            let allowed_repos: Vec<PathBuf> = unified_tools
-                .git_allowed_repos()
-                .iter()
-                .map(|s| expand_path(s))
-                .collect();
-            let git_config = GitServiceConfig { allowed_repos };
-            let git_service = crate::mcp::GitService::new(git_config);
-            client.register_system_tool(Arc::new(git_service));
-            info!("Registered System Tool: GitService");
-        }
-
-        // Register shell service
-        if unified_tools.is_shell_enabled() {
-            let shell_config_data = unified_tools.shell_config();
-            let shell_config = ShellServiceConfig {
-                enabled: true,
-                timeout_seconds: shell_config_data.timeout_seconds,
-                allowed_commands: shell_config_data.allowed_commands,
-            };
-            let shell_service = crate::mcp::ShellService::new(shell_config);
-            client.register_system_tool(Arc::new(shell_service));
-            info!("Registered System Tool: ShellService");
-        }
-
-        // Register system info service
-        if unified_tools.is_system_info_enabled() {
-            let sys_info_service = crate::mcp::SystemInfoService::new();
-            client.register_system_tool(Arc::new(sys_info_service));
-            info!("Registered System Tool: SystemInfoService");
-        }
-
-        // Register clipboard service
-        if unified_tools.is_clipboard_enabled() {
-            let clipboard_service = crate::mcp::ClipboardService::new();
-            client.register_system_tool(Arc::new(clipboard_service));
-            info!("Registered System Tool: ClipboardService");
-        }
-
-        // Register screen capture service
-        if unified_tools.is_screen_capture_enabled() {
-            let screen_config = unified_tools.screen_capture_config();
-            let screen_config = crate::config::ScreenCaptureToolConfig {
-                enabled: screen_config.enabled,
-                max_dimension: screen_config.max_dimension,
-                jpeg_quality: screen_config.jpeg_quality,
-            };
-            let screen_service = crate::mcp::ScreenCaptureService::new(screen_config);
-            client.register_system_tool(Arc::new(screen_service));
-            info!("Registered System Tool: ScreenCaptureService");
-        }
-
-        // Register search service
-        if unified_tools.is_search_tool_enabled() {
-            let search_config = unified_tools.search_tool_config();
-            let search_config = crate::config::SearchToolConfig {
-                enabled: search_config.enabled,
-                default_max_results: search_config.default_max_results,
-                default_timeout_seconds: search_config.default_timeout_seconds,
-            };
-            let search_service = crate::mcp::SearchService::new(search_config);
-            client.register_system_tool(Arc::new(search_service));
-            info!("Registered System Tool: SearchService");
-        }
-
-        // Log MCP external servers
+        // Log MCP external servers (will be started on demand)
         for (server_name, server_config) in unified_tools.enabled_mcp_servers() {
             debug!(
                 server = %server_name,
@@ -533,10 +447,8 @@ impl AetherCore {
         }
 
         info!(
-            services = client.builtin_service_names().len(),
-            tools = client.builtin_tool_count(),
             mcp_servers = unified_tools.enabled_mcp_servers().len(),
-            "MCP client initialized with unified tools config"
+            "MCP client initialized (native tools handled via AgentTool)"
         );
 
         Some(Arc::new(client))

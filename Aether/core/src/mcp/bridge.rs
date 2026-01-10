@@ -112,48 +112,30 @@ impl McpToolBridge {
 
     /// Create bridges for all tools from an MCP client
     ///
-    /// Creates `McpToolBridge` instances for all registered tools.
-    /// This includes both builtin services and external servers.
+    /// Creates `McpToolBridge` instances for all registered external MCP server tools.
+    ///
+    /// Note: Native tools (fs, git, shell, etc.) are now handled via the `AgentTool`
+    /// infrastructure in the `tools` module, not via MCP bridges.
     pub async fn from_client(client: Arc<McpClient>) -> Vec<Self> {
         let mut bridges = Vec::new();
 
-        // Bridge builtin tools (grouped by service)
-        for (service_name, tools) in client.list_builtin_tools_by_service() {
-            for tool in tools {
-                bridges.push(Self::new(
-                    tool,
-                    Arc::clone(&client),
-                    McpToolSource::Builtin {
-                        service_name: service_name.clone(),
-                    },
-                ));
-            }
-        }
-
-        // Bridge external tools
+        // Bridge external server tools only
+        // Native tools are now handled via AgentTool infrastructure
         let all_tools = client.list_tools().await;
         for tool in all_tools {
-            // Skip builtin tools (already added above)
-            let is_builtin = client
-                .builtin_service_names()
-                .iter()
-                .any(|svc| tool.name.starts_with(svc));
+            // External tools have format "server_name:tool_name"
+            let server_name = tool
+                .name
+                .split(':')
+                .next()
+                .unwrap_or("unknown")
+                .to_string();
 
-            if !is_builtin {
-                // External tools have format "server_name:tool_name"
-                let server_name = tool
-                    .name
-                    .split(':')
-                    .next()
-                    .unwrap_or("unknown")
-                    .to_string();
-
-                bridges.push(Self::new(
-                    tool,
-                    Arc::clone(&client),
-                    McpToolSource::External { server_name },
-                ));
-            }
+            bridges.push(Self::new(
+                tool,
+                Arc::clone(&client),
+                McpToolSource::External { server_name },
+            ));
         }
 
         bridges
@@ -161,23 +143,14 @@ impl McpToolBridge {
 
     /// Create bridges for builtin tools only (sync version)
     ///
-    /// Useful when you only need builtin tools and don't want async.
-    pub fn from_client_builtin_only(client: Arc<McpClient>) -> Vec<Self> {
-        let mut bridges = Vec::new();
-
-        for (service_name, tools) in client.list_builtin_tools_by_service() {
-            for tool in tools {
-                bridges.push(Self::new(
-                    tool,
-                    Arc::clone(&client),
-                    McpToolSource::Builtin {
-                        service_name: service_name.clone(),
-                    },
-                ));
-            }
-        }
-
-        bridges
+    /// Note: Native tools are now handled via the `AgentTool` infrastructure
+    /// in the `tools` module. McpClient no longer stores builtin services.
+    /// This method returns an empty vector for backward compatibility.
+    #[deprecated(note = "Native tools are now handled via AgentTool. Use tools module instead.")]
+    pub fn from_client_builtin_only(_client: Arc<McpClient>) -> Vec<Self> {
+        // No builtin tools in McpClient anymore
+        // Native tools are handled via AgentTool infrastructure
+        Vec::new()
     }
 
     /// Get the tool source

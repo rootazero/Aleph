@@ -65,37 +65,9 @@ impl AetherCore {
                 registry.register_agent_tools(&tools, &service_name).await;
             }
 
-            // 3. Register system tools (legacy MCP-style, from MCP client)
-            // Use list_builtin_tools_by_service() to preserve correct service names
-            if let Some(client) = &mcp_client {
-                let services = client.list_builtin_tools_by_service();
-                info!(
-                    "MCP client has {} system tool services",
-                    services.len()
-                );
-                for (service_name, tools) in services {
-                    info!(
-                        "Registering {} tools from service '{}'",
-                        tools.len(),
-                        service_name
-                    );
-                    let mcp_tool_infos: Vec<crate::mcp::McpToolInfo> = tools
-                        .into_iter()
-                        .map(|tool| crate::mcp::McpToolInfo {
-                            name: tool.name,
-                            description: tool.description,
-                            requires_confirmation: tool.requires_confirmation,
-                            service_name: service_name.clone(),
-                        })
-                        .collect();
-
-                    registry
-                        .register_mcp_tools(&mcp_tool_infos, &service_name, true)
-                        .await;
-                }
-            } else {
-                warn!("MCP client is None, skipping system tools registration");
-            }
+            // 3. External MCP server tools will be registered when servers connect
+            // Native tools are now handled exclusively via AgentTool infrastructure above
+            let _ = mcp_client; // Suppress unused warning
 
             // 4. Register skills
             if let Ok(skills) = crate::initialization::list_installed_skills() {

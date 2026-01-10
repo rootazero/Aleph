@@ -154,21 +154,28 @@ impl AetherCore {
         let memory_enabled = config.memory.enabled;
         drop(config);
 
-        // Step 2: Get MCP tools if available
-        let mcp_tools: Option<Vec<McpToolInfo>> = self.mcp_client.as_ref().map(|client| {
-            client
-                .list_builtin_tools()
-                .into_iter()
-                .map(|tool| McpToolInfo {
-                    name: tool.name,
-                    description: tool.description,
-                    input_schema: tool.input_schema,
-                    requires_confirmation: tool.requires_confirmation,
-                })
-                .collect()
-        });
+        // Step 2: Get native tools from NativeToolRegistry
+        // MCP tools are now handled via AgentTool infrastructure
+        let mcp_tools: Option<Vec<McpToolInfo>> = {
+            let definitions = self.get_native_tool_definitions();
+            if definitions.is_empty() {
+                None
+            } else {
+                Some(
+                    definitions
+                        .into_iter()
+                        .map(|def| McpToolInfo {
+                            name: def.name,
+                            description: def.description,
+                            input_schema: def.parameters,
+                            requires_confirmation: def.requires_confirmation,
+                        })
+                        .collect(),
+                )
+            }
+        };
 
-        let mcp_tool_count = mcp_tools.as_ref().map(|t| t.len()).unwrap_or(0);
+        let mcp_tool_count = mcp_tools.as_ref().map(|t: &Vec<McpToolInfo>| t.len()).unwrap_or(0);
 
         // Step 3: Build capability declarations (including MCP tools)
         let registry = CapabilityRegistry::with_all_capabilities(search_enabled, video_enabled, mcp_tools);

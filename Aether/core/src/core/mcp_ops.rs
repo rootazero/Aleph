@@ -70,7 +70,9 @@ impl AetherCore {
 
     /// List registered MCP services
     ///
-    /// Returns information about all registered MCP services (builtin and external).
+    /// Returns information about external MCP servers only.
+    /// Native tools (fs, git, shell, etc.) are now handled via the
+    /// `AgentTool` infrastructure and can be queried via `native_tool_count()`.
     ///
     /// # Returns
     /// * `Vec<McpServiceInfo>` - List of service information
@@ -79,28 +81,24 @@ impl AetherCore {
             return Vec::new();
         };
 
-        let mut services = Vec::new();
+        // Only list external MCP servers
+        // Native tools are now in NativeToolRegistry
+        let services = self.runtime.block_on(async {
+            let service_names = client.service_names().await;
+            let mut result = Vec::new();
 
-        // Get all builtin tools for counting
-        let builtin_tools = client.list_builtin_tools();
+            for name in service_names {
+                result.push(crate::mcp::McpServiceInfo {
+                    name: name.clone(),
+                    description: Self::get_service_description(&name),
+                    is_builtin: false,
+                    is_running: true, // External servers that are listed are running
+                    tool_count: 0,    // Will be populated from external server
+                });
+            }
 
-        // Get builtin service names
-        let builtin_names = client.builtin_service_names();
-        for name in builtin_names {
-            // Get tool count for this service (tools have format "service:tool_name")
-            let tool_count = builtin_tools
-                .iter()
-                .filter(|t| t.name.starts_with(&format!("{}:", name)))
-                .count() as u32;
-
-            services.push(crate::mcp::McpServiceInfo {
-                name: name.to_string(),
-                description: Self::get_service_description(name),
-                is_builtin: true,
-                is_running: true, // Builtin services are always running
-                tool_count,
-            });
-        }
+            result
+        });
 
         services
     }

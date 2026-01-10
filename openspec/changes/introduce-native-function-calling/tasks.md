@@ -81,7 +81,7 @@
 - [x] 6.1.3 Bridge `execute()` to existing MCP JSON-RPC calls (via McpClient::call_tool)
 - [x] 6.1.4 Add unit tests for MCP bridge (16 tests)
 
-## Phase 7: Integration and Cleanup ⏳ IN PROGRESS
+## Phase 7: Integration and Cleanup ✅ COMPLETED
 
 ### 7.1 Dispatcher Integration
 - [x] 7.1.1 Update `dispatcher/registry.rs` to use `AgentTool`
@@ -92,21 +92,19 @@
   - Added `from_tool_definition()` method with `icon_for_category()` helper
 - [x] 7.1.4 Add integration test for AgentTools registration flow
 
-### 7.2 Remove Old SystemTool Infrastructure (DEFERRED - Backward Compatibility)
-> **Note**: Old SystemTool infrastructure kept for backward compatibility.
-> Both `refresh_all()` (SystemTool) and `refresh_with_agent_tools()` (AgentTool) are available.
-> Cleanup can be done in a future PR after Swift UI fully migrates to new API.
+### 7.2 Remove Old SystemTool Infrastructure ✅ COMPLETED
+> Swift UI was already migrated to new API. Old SystemTool infrastructure has been removed.
 
-- [ ] 7.2.1 Remove `services/tools/traits.rs` (SystemTool trait)
-- [ ] 7.2.2 Remove `services/tools/fs_tool.rs`
-- [ ] 7.2.3 Remove `services/tools/git_tool.rs`
-- [ ] 7.2.4 Remove `services/tools/shell_tool.rs`
-- [ ] 7.2.5 Remove `services/tools/sys_tool.rs`
-- [ ] 7.2.6 Remove `services/tools/clipboard_tool.rs`
-- [ ] 7.2.7 Remove `services/tools/screen_tool.rs`
-- [ ] 7.2.8 Remove `services/tools/search_tool.rs`
-- [ ] 7.2.9 Update `services/tools/mod.rs` exports
-- [ ] 7.2.10 Update `mcp/mod.rs` to remove SystemTool re-exports
+- [x] 7.2.1 Remove `services/tools/traits.rs` (SystemTool trait)
+- [x] 7.2.2 Remove `services/tools/fs_tool.rs`
+- [x] 7.2.3 Remove `services/tools/git_tool.rs`
+- [x] 7.2.4 Remove `services/tools/shell_tool.rs`
+- [x] 7.2.5 Remove `services/tools/sys_tool.rs`
+- [x] 7.2.6 Remove `services/tools/clipboard_tool.rs`
+- [x] 7.2.7 Remove `services/tools/screen_tool.rs`
+- [x] 7.2.8 Remove `services/tools/search_tool.rs`
+- [x] 7.2.9 Update `services/mod.rs` exports
+- [x] 7.2.10 Update `mcp/mod.rs` to remove SystemTool re-exports
 
 ### 7.3 Core Module Updates ✅ COMPLETED
 - [x] 7.3.1 Update `core.rs` to initialize new tool registry
@@ -142,7 +140,7 @@
 - [x] 8.1.4 Add integration tests for tool registry
   - Tests: multiple_tool_types, openai_format, anthropic_format, tool_not_found, confirmation_tools
 - [x] 8.1.5 Verify all existing functionality preserved
-  - All 1109 unit tests pass
+  - All 1079 unit tests pass
   - 17 new integration tests pass
 
 ### 8.2 Documentation
@@ -155,10 +153,34 @@
 
 ## Verification Checklist
 
-- [x] All `cargo test` passes (1109 tests + 17 integration tests)
-- [x] All `cargo clippy` warnings resolved (removed unused ToolPriority import)
+- [x] All `cargo test --lib` passes (1079 unit tests + 17 integration tests)
+- [x] `cargo clippy` runs with minimal warnings (one deprecated function warning)
 - [x] `cargo build --release` succeeds
 - [ ] Swift UI still displays tools correctly (requires manual testing)
 - [ ] Tool execution works end-to-end (requires manual testing)
 - [ ] MCP external servers still function (requires manual testing)
 - [x] No regression in existing features (verified via tests)
+
+## Summary of Changes
+
+### Files Removed
+- `services/tools/traits.rs` - Old SystemTool trait
+- `services/tools/fs_tool.rs` - Old filesystem tool
+- `services/tools/git_tool.rs` - Old git tool
+- `services/tools/shell_tool.rs` - Old shell tool
+- `services/tools/sys_tool.rs` - Old system info tool
+- `services/tools/clipboard_tool.rs` - Old clipboard tool
+- `services/tools/screen_tool.rs` - Old screen capture tool
+- `services/tools/search_tool.rs` - Old search tool
+- `services/tools/mod.rs` - Old module exports
+
+### Files Modified
+- `core/src/core/mod.rs` - Removed SystemTool registration
+- `core/src/core/tools.rs` - Removed legacy system tool registration
+- `core/src/core/mcp_ops.rs` - Updated to use new API
+- `core/src/core/processing.rs` - Updated to use NativeToolRegistry
+- `core/src/mcp/client.rs` - Removed system_tools storage, simplified to external servers only
+- `core/src/mcp/bridge.rs` - Updated to external MCP servers only
+- `core/src/mcp/mod.rs` - Removed SystemTool re-exports
+- `core/src/services/mod.rs` - Removed tools module
+- `core/src/dispatcher/registry.rs` - Removed SystemTool methods

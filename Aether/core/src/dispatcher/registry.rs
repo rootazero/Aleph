@@ -5,7 +5,6 @@
 
 use crate::config::RoutingRuleConfig;
 use crate::mcp::types::McpToolInfo;
-use crate::services::tools::SystemTool;
 use crate::skills::SkillInfo;
 use crate::tools::AgentTool;
 use std::collections::HashMap;
@@ -15,6 +14,8 @@ use tracing::{debug, info, warn};
 
 use super::builtin_defs::BUILTIN_COMMANDS;
 use super::types::{ConflictInfo, ConflictResolution, ToolSource, UnifiedTool};
+#[cfg(test)]
+use super::types::ToolPriority;
 
 /// Unified Tool Registry
 ///
@@ -110,15 +111,12 @@ impl ToolRegistry {
     /// Native tools are for registering operating system command tools
     /// that directly invoke OS-level commands (e.g., shell commands, OS utilities).
     ///
-    /// Note: This is different from System Tools which are Rust-implemented
-    /// tools wrapped via MCP protocol (e.g., fs, git, shell from SystemTool trait).
+    /// Note: Native tools are now implemented via the `AgentTool` trait
+    /// in the `tools` module. Use `register_agent_tools()` to register them.
     ///
-    /// Currently empty - native tools will be added when OS command integration
-    /// is implemented.
+    /// This method is reserved for future direct OS command integration.
     pub async fn register_native_tools(&self) {
         // Reserved for future OS command tools registration
-        // Native tools should invoke OS-level commands directly
-        // Examples: system shell, OS utilities, hardware interfaces
         debug!("Native tools registration reserved for OS command tools");
     }
 
@@ -182,50 +180,6 @@ impl ToolRegistry {
             "Registered {} MCP tools from server '{}' (flat namespace)",
             mcp_tools.len(),
             server_name
-        );
-    }
-
-    /// Register MCP tools from SystemTool instances (Flat Namespace Mode)
-    ///
-    /// Converts SystemTool's McpTool list to UnifiedTool entries and registers
-    /// them as root-level commands with automatic conflict resolution.
-    ///
-    /// System tools are registered with the same priority as external MCP tools.
-    pub async fn register_system_tools(&self, system_tools: &[Arc<dyn SystemTool>]) {
-        for service in system_tools {
-            let service_name = service.name();
-            let mcp_tools = service.list_tools();
-
-            for mcp_tool in mcp_tools {
-                let id = format!("mcp:{}:{}", service_name, mcp_tool.name);
-
-                let tool = UnifiedTool::new(
-                    &id,
-                    &mcp_tool.name,
-                    &mcp_tool.description,
-                    ToolSource::Mcp {
-                        server: service_name.to_string(),
-                    },
-                )
-                .with_display_name(&mcp_tool.name)
-                .with_service_name(service_name)
-                .with_parameters_schema(mcp_tool.input_schema.clone())
-                .with_requires_confirmation(mcp_tool.requires_confirmation)
-                .with_icon("bolt.fill") // Default MCP icon
-                .with_usage(format!("/{} [args]", mcp_tool.name))
-                // Generate routing regex for flat namespace
-                .with_routing_regex(format!(r"^/{}\s*", regex::escape(&mcp_tool.name)))
-                .with_routing_intent_type(format!("mcp:{}", mcp_tool.name))
-                .with_routing_strip_prefix(true);
-
-                // Register with automatic conflict resolution
-                self.register_with_conflict_resolution(tool).await;
-            }
-        }
-
-        debug!(
-            "Registered system tools from {} services (flat namespace)",
-            system_tools.len()
         );
     }
 
@@ -563,55 +517,9 @@ impl ToolRegistry {
         debug!("Cleared all tools from registry");
     }
 
-    /// Refresh all tools (clear and re-register)
+    /// Refresh all tools from all sources
     ///
-    /// This is a convenience method that should be called when configuration
-    /// changes or MCP connections are updated.
-    ///
-    /// Registration order:
-    /// 1. Builtin commands (single source of truth for /search, /mcp, etc.)
-    /// 2. Native capabilities (search, video execution logic)
-    /// 3. System tools (MCP builtin servers)
-    /// 4. External MCP tools
-    /// 5. Skills
-    /// 6. Custom commands from config
-    pub async fn refresh_all(
-        &self,
-        system_tools: &[Arc<dyn SystemTool>],
-        mcp_tools: &[(String, Vec<McpToolInfo>)], // (server_name, tools)
-        skills: &[SkillInfo],
-        rules: &[RoutingRuleConfig],
-    ) {
-        self.clear().await;
-
-        // 1. Builtin commands first (these are the entry points)
-        self.register_builtin_tools().await;
-
-        // 2. Native capabilities (execution logic)
-        self.register_native_tools().await;
-
-        // 3. System MCP tools
-        self.register_system_tools(system_tools).await;
-
-        // 4. External MCP tools
-        for (server_name, tools) in mcp_tools {
-            self.register_mcp_tools(tools, server_name, false).await;
-        }
-
-        // 5. Skills
-        self.register_skills(skills).await;
-
-        // 6. Custom commands from user config
-        self.register_custom_commands(rules).await;
-
-        let count = self.tools.read().await.len();
-        info!("Tool registry refreshed: {} total tools", count);
-    }
-
-    /// Refresh all tools using native AgentTool interface
-    ///
-    /// This is the new preferred method for refreshing tools. It uses the
-    /// `AgentTool` trait instead of the legacy `SystemTool` trait.
+    /// This method aggregates tools from all sources into a unified registry.
     ///
     /// # Arguments
     ///
@@ -1464,84 +1372,6 @@ mod tests {
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-    use crate::config::Config;
-    use crate::mcp::{FsService, FsServiceConfig, GitService, GitServiceConfig, McpClient};
-    use std::sync::Arc;
-
-    #[tokio::test]
-    async fn test_system_tools_registration_flow() {
-        // Create registry
-        let registry = ToolRegistry::new();
-        
-        // Create MCP client with system tools
-        let mut client = McpClient::new();
-        
-        // Register FsService
-        let fs_config = FsServiceConfig { 
-            allowed_roots: vec![] 
-        };
-        let fs_service = FsService::new(fs_config);
-        client.register_system_tool(Arc::new(fs_service));
-        
-        // Register GitService
-        let git_config = GitServiceConfig { 
-            allowed_repos: vec![] 
-        };
-        let git_service = GitService::new(git_config);
-        client.register_system_tool(Arc::new(git_service));
-        
-        // Check client has tools
-        let services = client.list_builtin_tools_by_service();
-        println!("MCP client has {} services", services.len());
-        for (name, tools) in &services {
-            println!("  Service '{}': {} tools", name, tools.len());
-            for tool in tools {
-                println!("    - {}", tool.name);
-            }
-        }
-        assert!(services.len() >= 2, "Should have at least fs and git services");
-        
-        // Register builtin tools first
-        registry.register_builtin_tools().await;
-        
-        // Register system tools (same logic as refresh_tool_registry)
-        for (service_name, tools) in services {
-            let mcp_tool_infos: Vec<crate::mcp::McpToolInfo> = tools
-                .into_iter()
-                .map(|tool| crate::mcp::McpToolInfo {
-                    name: tool.name,
-                    description: tool.description,
-                    requires_confirmation: tool.requires_confirmation,
-                    service_name: service_name.clone(),
-                })
-                .collect();
-            registry.register_mcp_tools(&mcp_tool_infos, &service_name, true).await;
-        }
-        
-        // Check registry
-        let all_tools = registry.list_all().await;
-        println!("\nRegistry has {} total tools:", all_tools.len());
-        for tool in &all_tools {
-            println!("  [{:?}] {} - {}", tool.source, tool.name, tool.id);
-        }
-        
-        // Check root commands
-        let root_commands = registry.list_root_commands().await;
-        println!("\nRoot commands ({}):", root_commands.len());
-        for tool in &root_commands {
-            println!("  [{:?}] {}", tool.source, tool.name);
-        }
-        
-        // Assertions
-        assert!(all_tools.len() > 3, "Should have more than 3 builtin tools");
-        assert!(root_commands.len() > 3, "Root commands should include system tools");
-        
-        // Check that fs tools are in root commands
-        let has_fs_tools = root_commands.iter().any(|t|
-            matches!(&t.source, ToolSource::Mcp { server } if server == "fs")
-        );
-        assert!(has_fs_tools, "Should have fs tools in root commands");
-    }
 
     #[tokio::test]
     async fn test_agent_tools_registration() {
