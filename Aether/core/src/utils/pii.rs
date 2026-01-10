@@ -13,6 +13,10 @@ struct PiiPatterns {
     ssn: Regex,
     credit_card: Regex,
     api_key: Regex,
+    // Extended patterns for Chinese users
+    china_mobile: Regex,
+    china_id: Regex,
+    bank_card: Regex,
 }
 
 /// Global PII patterns (lazy-initialized)
@@ -44,6 +48,21 @@ fn get_patterns() -> &'static PiiPatterns {
         // - AIza[...]{30,}: Google API keys
         // - Bearer [token]: OAuth/JWT tokens
         api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|Bearer\s+[a-zA-Z0-9._\-]{20,})\b").unwrap(),
+
+        // Chinese mobile phone numbers
+        // Matches: 13812345678, 15987654321, 18612345678
+        // Pattern: 1 followed by 3-9, then 9 more digits
+        china_mobile: Regex::new(r"\b1[3-9]\d{9}\b").unwrap(),
+
+        // Chinese ID card numbers
+        // Matches: 310101199001011234, 31010119900101123X
+        // Pattern: 17 digits + check digit (digit or X/x)
+        china_id: Regex::new(r"\b\d{17}[\dXx]\b").unwrap(),
+
+        // Bank card numbers (16-19 digits)
+        // Matches: 6222021234567890123, 4111111111111111
+        // Note: Applied after credit_card to avoid overlap
+        bank_card: Regex::new(r"\b\d{16,19}\b").unwrap(),
     })
 }
 
@@ -79,17 +98,45 @@ pub fn scrub_pii(text: &str) -> String {
 
     let mut scrubbed = text.to_string();
 
-    // Apply scrubbing in order (API keys first to avoid partial matches)
+    // Apply scrubbing in order (more specific patterns first to avoid partial matches)
+    // 1. API keys first (most specific, longest patterns)
     scrubbed = patterns
         .api_key
         .replace_all(&scrubbed, "[REDACTED]")
         .to_string();
+
+    // 2. Chinese ID cards (18 digits, more specific than bank cards)
+    scrubbed = patterns
+        .china_id
+        .replace_all(&scrubbed, "[ID_CARD]")
+        .to_string();
+
+    // 3. Email addresses
     scrubbed = patterns.email.replace_all(&scrubbed, "[EMAIL]").to_string();
+
+    // 4. Chinese mobile numbers (11 digits starting with 1[3-9])
+    scrubbed = patterns
+        .china_mobile
+        .replace_all(&scrubbed, "[PHONE]")
+        .to_string();
+
+    // 5. US/International phone numbers
     scrubbed = patterns.phone.replace_all(&scrubbed, "[PHONE]").to_string();
+
+    // 6. SSN (Social Security Number)
     scrubbed = patterns.ssn.replace_all(&scrubbed, "[SSN]").to_string();
+
+    // 7. Credit card numbers (16 digits with optional separators)
     scrubbed = patterns
         .credit_card
         .replace_all(&scrubbed, "[CREDIT_CARD]")
+        .to_string();
+
+    // 8. Bank card numbers (16-19 consecutive digits, applied last)
+    // Note: This may catch some false positives, but privacy > accuracy
+    scrubbed = patterns
+        .bank_card
+        .replace_all(&scrubbed, "[BANK_CARD]")
         .to_string();
 
     scrubbed
@@ -252,5 +299,134 @@ mod tests {
             "Scrubbing took too long: {:?}",
             elapsed
         );
+    }
+
+    // ==========================================================================
+    // Extended PII Pattern Tests (Chinese users)
+    // ==========================================================================
+
+    #[test]
+    fn test_scrub_china_mobile_13x() {
+        let text = "Call me at 13812345678";
+        let scrubbed = scrub_pii(text);
+        assert_eq!(scrubbed, "Call me at [PHONE]");
+    }
+
+    #[test]
+    fn test_scrub_china_mobile_15x() {
+        let text = "Phone: 15987654321";
+        let scrubbed = scrub_pii(text);
+        assert_eq!(scrubbed, "Phone: [PHONE]");
+    }
+
+    #[test]
+    fn test_scrub_china_mobile_18x() {
+        let text = "Contact: 18612345678";
+        let scrubbed = scrub_pii(text);
+        assert_eq!(scrubbed, "Contact: [PHONE]");
+    }
+
+    #[test]
+    fn test_scrub_china_mobile_19x() {
+        let text = "Mobile: 19912345678";
+        let scrubbed = scrub_pii(text);
+        assert_eq!(scrubbed, "Mobile: [PHONE]");
+    }
+
+    #[test]
+    fn test_scrub_china_mobile_not_10x() {
+        // Test that the China mobile regex specifically doesn't match 10x numbers
+        // Note: 10812345678 might still be matched by US phone regex
+        // This test focuses on the China mobile pattern behavior
+        let patterns = get_patterns();
+
+        // 10x is NOT a valid Chinese mobile prefix (valid: 13x-19x)
+        // The regex 1[3-9]\d{9} should NOT match numbers starting with 10, 11, or 12
+        assert!(!patterns.china_mobile.is_match("10812345678")); // 10x - invalid
+        assert!(!patterns.china_mobile.is_match("11812345678")); // 11x - invalid
+        assert!(!patterns.china_mobile.is_match("12812345678")); // 12x - invalid
+
+        // Valid prefixes should match
+        assert!(patterns.china_mobile.is_match("13812345678")); // 13x - valid
+        assert!(patterns.china_mobile.is_match("19912345678")); // 19x - valid
+    }
+
+    #[test]
+    fn test_scrub_china_id_card() {
+        let text = "ID: 310101199001011234";
+        let scrubbed = scrub_pii(text);
+        assert_eq!(scrubbed, "ID: [ID_CARD]");
+    }
+
+    #[test]
+    fn test_scrub_china_id_card_with_x() {
+        let text = "ID number: 31010119900101123X";
+        let scrubbed = scrub_pii(text);
+        assert_eq!(scrubbed, "ID number: [ID_CARD]");
+    }
+
+    #[test]
+    fn test_scrub_china_id_card_lowercase_x() {
+        let text = "身份证号: 31010119900101123x";
+        let scrubbed = scrub_pii(text);
+        assert_eq!(scrubbed, "身份证号: [ID_CARD]");
+    }
+
+    #[test]
+    fn test_scrub_bank_card_16_digits() {
+        let text = "Card: 6222021234567890";
+        let scrubbed = scrub_pii(text);
+        // 16 digits should match bank_card pattern
+        assert!(scrubbed.contains("[BANK_CARD]") || scrubbed.contains("[CREDIT_CARD]"));
+    }
+
+    #[test]
+    fn test_scrub_bank_card_19_digits() {
+        let text = "Account: 6222021234567890123";
+        let scrubbed = scrub_pii(text);
+        assert_eq!(scrubbed, "Account: [BANK_CARD]");
+    }
+
+    #[test]
+    fn test_scrub_multiple_chinese_pii() {
+        let text = "手机: 13812345678, 身份证: 310101199001011234, 银行卡: 6222021234567890123";
+        let scrubbed = scrub_pii(text);
+
+        assert!(scrubbed.contains("[PHONE]"));
+        assert!(scrubbed.contains("[ID_CARD]"));
+        assert!(scrubbed.contains("[BANK_CARD]"));
+
+        assert!(!scrubbed.contains("13812345678"));
+        assert!(!scrubbed.contains("310101199001011234"));
+        assert!(!scrubbed.contains("6222021234567890123"));
+    }
+
+    #[test]
+    fn test_scrub_mixed_chinese_and_us_pii() {
+        let text = "Chinese phone: 13812345678, US phone: 123-456-7890, Email: test@example.com";
+        let scrubbed = scrub_pii(text);
+
+        // Both phones should be scrubbed
+        assert!(!scrubbed.contains("13812345678"));
+        assert!(!scrubbed.contains("123-456-7890"));
+        assert!(!scrubbed.contains("test@example.com"));
+
+        assert!(scrubbed.contains("[PHONE]"));
+        assert!(scrubbed.contains("[EMAIL]"));
+    }
+
+    #[test]
+    fn test_scrub_normal_numbers_not_affected() {
+        // Short numbers should not be scrubbed
+        let text = "Version 123, count 456789";
+        let scrubbed = scrub_pii(text);
+        assert_eq!(scrubbed, text);
+    }
+
+    #[test]
+    fn test_scrub_chinese_text_preserved() {
+        let text = "用户信息已更新";
+        let scrubbed = scrub_pii(text);
+        assert_eq!(scrubbed, text);
     }
 }

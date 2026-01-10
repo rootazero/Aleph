@@ -79,7 +79,10 @@ pub use confirmation::{
     ConfirmationAction, ConfirmationConfig, ConfirmationDecision, ToolConfirmation,
     OPTION_CANCEL, OPTION_EDIT, OPTION_EXECUTE,
 };
-pub use integration::{DispatcherAction, DispatcherConfig, DispatcherIntegration, DispatcherResult};
+pub use integration::{
+    ConfidenceAction, ConfidenceThresholds, DispatcherAction, DispatcherConfig,
+    DispatcherIntegration, DispatcherResult,
+};
 pub use l3_router::{L3Router, L3RoutingOptions, L3RoutingResult};
 pub use prompt_builder::{L3RoutingResponse, PromptBuilder, PromptFormat, ToolFilter};
 pub use registry::ToolRegistry;

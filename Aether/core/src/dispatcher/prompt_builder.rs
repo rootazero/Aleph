@@ -24,6 +24,7 @@
 //! ```
 
 use super::types::{ToolSource, UnifiedTool};
+use crate::utils::json_extract::extract_json_robust;
 
 /// Prompt format options for tool list generation
 #[derive(Debug, Clone, Copy, Default)]
@@ -361,6 +362,12 @@ If a required parameter cannot be extracted, use null."#,
 
     /// Parse L3 routing response JSON
     ///
+    /// Uses the centralized `extract_json_robust()` utility which handles:
+    /// - Pure JSON responses
+    /// - JSON in markdown code blocks
+    /// - JSON mixed with explanatory text
+    /// - Multiple JSON objects (extracts the first complete one)
+    ///
     /// # Arguments
     ///
     /// * `response` - Raw LLM response text
@@ -369,10 +376,11 @@ If a required parameter cannot be extracted, use null."#,
     ///
     /// Parsed routing decision or None if parsing failed
     pub fn parse_l3_response(response: &str) -> Option<L3RoutingResponse> {
-        // Try to extract JSON from response (may have markdown code blocks)
-        let json_str = extract_json_from_response(response)?;
+        // Use centralized robust JSON extraction
+        let json_value = extract_json_robust(response)?;
 
-        serde_json::from_str(&json_str).ok()
+        // Try to deserialize into L3RoutingResponse
+        serde_json::from_value(json_value).ok()
     }
 }
 
@@ -419,48 +427,9 @@ fn escape_xml(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-/// Extract JSON from LLM response that may contain markdown code blocks
-fn extract_json_from_response(response: &str) -> Option<String> {
-    let response = response.trim();
-
-    // If it looks like raw JSON, return as-is
-    if response.starts_with('{') && response.ends_with('}') {
-        return Some(response.to_string());
-    }
-
-    // Try to extract from markdown code block
-    if let Some(start) = response.find("```json") {
-        let json_start = start + 7; // Skip "```json"
-        if let Some(end) = response[json_start..].find("```") {
-            return Some(response[json_start..json_start + end].trim().to_string());
-        }
-    }
-
-    // Try generic code block
-    if let Some(start) = response.find("```") {
-        let block_start = start + 3;
-        // Skip language identifier if present
-        let content_start = response[block_start..]
-            .find('\n')
-            .map(|i| block_start + i + 1)
-            .unwrap_or(block_start);
-
-        if let Some(end) = response[content_start..].find("```") {
-            return Some(response[content_start..content_start + end].trim().to_string());
-        }
-    }
-
-    // Try to find JSON object anywhere in response
-    if let Some(start) = response.find('{') {
-        if let Some(end) = response.rfind('}') {
-            if end > start {
-                return Some(response[start..=end].to_string());
-            }
-        }
-    }
-
-    None
-}
+// Note: The old `extract_json_from_response()` function has been removed.
+// JSON extraction is now handled by the centralized `crate::utils::json_extract::extract_json_robust()`
+// which uses proper brace-matching instead of the vulnerable greedy `rfind('}')` approach.
 
 #[cfg(test)]
 mod tests {
@@ -682,26 +651,19 @@ Here is my analysis:
     }
 
     #[test]
-    fn test_extract_json_from_response() {
-        // Raw JSON
-        let raw = r#"{"key": "value"}"#;
-        assert_eq!(
-            extract_json_from_response(raw),
-            Some(r#"{"key": "value"}"#.to_string())
-        );
+    fn test_parse_l3_response_multiple_objects() {
+        // This is the key test case - should extract FIRST complete JSON object
+        // The old greedy rfind('}') would have incorrectly extracted the second object
+        let multiple = r#"First: {"tool": "a", "confidence": 0.9, "parameters": {}, "reason": "first"} Second: {"tool": "b", "confidence": 0.8, "parameters": {}, "reason": "second"}"#;
+        let result = PromptBuilder::parse_l3_response(multiple);
+        assert!(result.is_some());
+        let response = result.unwrap();
+        // Should get the FIRST one, not the second
+        assert_eq!(response.tool, Some("a".to_string()));
+    }
 
-        // With markdown
-        let markdown = "```json\n{\"key\": \"value\"}\n```";
-        assert_eq!(
-            extract_json_from_response(markdown),
-            Some(r#"{"key": "value"}"#.to_string())
-        );
-
-        // Mixed text
-        let mixed = "The result is {\"key\": \"value\"} as shown.";
-        assert_eq!(
-            extract_json_from_response(mixed),
-            Some(r#"{"key": "value"}"#.to_string())
-        );
+    #[test]
+    fn test_parse_l3_response_invalid() {
+        assert!(PromptBuilder::parse_l3_response("not json").is_none());
     }
 }

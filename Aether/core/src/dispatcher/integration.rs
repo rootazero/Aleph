@@ -129,6 +129,209 @@ impl DispatcherConfig {
     pub fn full() -> Self {
         Self::default()
     }
+
+    /// Get the confidence thresholds from this config
+    pub fn confidence_thresholds(&self) -> ConfidenceThresholds {
+        ConfidenceThresholds {
+            no_match: self.l3_confidence_threshold,
+            requires_confirmation: self.confirmation.threshold,
+            auto_execute: 0.9,
+        }
+    }
+}
+
+// =============================================================================
+// Confidence Thresholds
+// =============================================================================
+
+/// Action to take based on confidence level
+///
+/// The confidence score determines what action the dispatcher should take:
+/// - Very low confidence: No tool match, fall back to general chat
+/// - Low confidence: Tool match but requires user confirmation
+/// - Medium confidence: Tool match with optional confirmation (based on config)
+/// - High confidence: Auto-execute without confirmation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfidenceAction {
+    /// Confidence too low - no tool matched, fall back to general chat
+    NoMatch,
+
+    /// Tool matched but confidence is low - requires user confirmation
+    RequiresConfirmation,
+
+    /// Tool matched with medium confidence - confirmation is optional
+    OptionalConfirmation,
+
+    /// Tool matched with high confidence - auto-execute without confirmation
+    AutoExecute,
+}
+
+/// Unified confidence threshold configuration
+///
+/// Provides a single source of truth for all confidence thresholds used
+/// in the Dispatcher Layer. This eliminates scattered threshold definitions
+/// and ensures consistent behavior across L1/L2/L3 routing.
+///
+/// # Threshold Ordering
+///
+/// The thresholds must be ordered: `no_match < requires_confirmation <= auto_execute`
+///
+/// # Default Values
+///
+/// - `no_match`: 0.3 - Below this, no tool is considered matched
+/// - `requires_confirmation`: 0.7 - Below this, confirmation is required
+/// - `auto_execute`: 0.9 - Above this, auto-execute without confirmation
+///
+/// # Confidence Ranges
+///
+/// ```text
+/// 0.0 ─────────── no_match ─────────── requires_confirmation ─────────── auto_execute ─────────── 1.0
+///      NoMatch              RequiresConfirmation              OptionalConfirmation       AutoExecute
+/// ```
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use aethecore::dispatcher::ConfidenceThresholds;
+///
+/// let thresholds = ConfidenceThresholds::default();
+///
+/// // Classify confidence scores
+/// assert_eq!(thresholds.classify(0.2), ConfidenceAction::NoMatch);
+/// assert_eq!(thresholds.classify(0.5), ConfidenceAction::RequiresConfirmation);
+/// assert_eq!(thresholds.classify(0.8), ConfidenceAction::OptionalConfirmation);
+/// assert_eq!(thresholds.classify(0.95), ConfidenceAction::AutoExecute);
+/// ```
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ConfidenceThresholds {
+    /// Minimum confidence for a tool to be considered matched (default: 0.3)
+    /// Below this threshold, the input falls back to general chat.
+    pub no_match: f32,
+
+    /// Confidence below which confirmation is always required (default: 0.7)
+    /// Between `no_match` and this threshold, confirmation is mandatory.
+    pub requires_confirmation: f32,
+
+    /// Confidence above which auto-execute is allowed (default: 0.9)
+    /// Above this threshold, tools execute without confirmation.
+    pub auto_execute: f32,
+}
+
+impl Default for ConfidenceThresholds {
+    fn default() -> Self {
+        Self {
+            no_match: 0.3,
+            requires_confirmation: 0.7,
+            auto_execute: 0.9,
+        }
+    }
+}
+
+impl ConfidenceThresholds {
+    /// Create thresholds with custom values
+    pub fn new(no_match: f32, requires_confirmation: f32, auto_execute: f32) -> Self {
+        Self {
+            no_match,
+            requires_confirmation,
+            auto_execute,
+        }
+    }
+
+    /// Validate the threshold ordering
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - Thresholds are valid
+    /// * `Err(String)` - Validation error message
+    ///
+    /// # Validation Rules
+    ///
+    /// 1. All thresholds must be in range [0.0, 1.0]
+    /// 2. no_match < requires_confirmation <= auto_execute
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        // Check range
+        if self.no_match < 0.0 || self.no_match > 1.0 {
+            return Err(format!(
+                "no_match threshold must be in [0.0, 1.0], got {}",
+                self.no_match
+            ));
+        }
+        if self.requires_confirmation < 0.0 || self.requires_confirmation > 1.0 {
+            return Err(format!(
+                "requires_confirmation threshold must be in [0.0, 1.0], got {}",
+                self.requires_confirmation
+            ));
+        }
+        if self.auto_execute < 0.0 || self.auto_execute > 1.0 {
+            return Err(format!(
+                "auto_execute threshold must be in [0.0, 1.0], got {}",
+                self.auto_execute
+            ));
+        }
+
+        // Check ordering
+        if self.no_match >= self.requires_confirmation {
+            return Err(format!(
+                "no_match ({}) must be less than requires_confirmation ({})",
+                self.no_match, self.requires_confirmation
+            ));
+        }
+        if self.requires_confirmation > self.auto_execute {
+            return Err(format!(
+                "requires_confirmation ({}) must not exceed auto_execute ({})",
+                self.requires_confirmation, self.auto_execute
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Classify a confidence score into an action
+    ///
+    /// # Arguments
+    ///
+    /// * `confidence` - The confidence score (0.0 to 1.0)
+    ///
+    /// # Returns
+    ///
+    /// The appropriate `ConfidenceAction` for the given confidence level.
+    pub fn classify(&self, confidence: f32) -> ConfidenceAction {
+        if confidence < self.no_match {
+            ConfidenceAction::NoMatch
+        } else if confidence < self.requires_confirmation {
+            ConfidenceAction::RequiresConfirmation
+        } else if confidence < self.auto_execute {
+            ConfidenceAction::OptionalConfirmation
+        } else {
+            ConfidenceAction::AutoExecute
+        }
+    }
+
+    /// Check if confirmation is needed for a given confidence
+    ///
+    /// This is a convenience method that returns true if the confidence
+    /// falls in the RequiresConfirmation or OptionalConfirmation range.
+    ///
+    /// # Arguments
+    ///
+    /// * `confidence` - The confidence score
+    /// * `confirmation_enabled` - Whether confirmation is enabled in config
+    ///
+    /// # Returns
+    ///
+    /// `true` if confirmation should be shown, `false` otherwise
+    pub fn needs_confirmation(&self, confidence: f32, confirmation_enabled: bool) -> bool {
+        if !confirmation_enabled {
+            return false;
+        }
+
+        match self.classify(confidence) {
+            ConfidenceAction::NoMatch => false, // No match = no confirmation (fall back to chat)
+            ConfidenceAction::RequiresConfirmation => true,
+            ConfidenceAction::OptionalConfirmation => false, // Optional = don't require
+            ConfidenceAction::AutoExecute => false,
+        }
+    }
 }
 
 // =============================================================================
@@ -1435,5 +1638,115 @@ mod tests {
         let integration = DispatcherIntegration::default();
 
         assert!(!integration.is_confirmation_pending("non-existent"));
+    }
+
+    // =========================================================================
+    // ConfidenceThresholds Tests
+    // =========================================================================
+
+    #[test]
+    fn test_confidence_thresholds_default() {
+        let thresholds = ConfidenceThresholds::default();
+        assert!((thresholds.no_match - 0.3).abs() < 0.001);
+        assert!((thresholds.requires_confirmation - 0.7).abs() < 0.001);
+        assert!((thresholds.auto_execute - 0.9).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_confidence_thresholds_validate_pass() {
+        let thresholds = ConfidenceThresholds::new(0.3, 0.7, 0.9);
+        assert!(thresholds.validate().is_ok());
+
+        // Edge case: requires_confirmation == auto_execute
+        let thresholds = ConfidenceThresholds::new(0.3, 0.9, 0.9);
+        assert!(thresholds.validate().is_ok());
+    }
+
+    #[test]
+    fn test_confidence_thresholds_validate_fail_reversed() {
+        // no_match > requires_confirmation
+        let thresholds = ConfidenceThresholds::new(0.8, 0.5, 0.9);
+        let result = thresholds.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be less than"));
+    }
+
+    #[test]
+    fn test_confidence_thresholds_validate_fail_out_of_range() {
+        // no_match < 0
+        let thresholds = ConfidenceThresholds::new(-0.1, 0.7, 0.9);
+        assert!(thresholds.validate().is_err());
+
+        // auto_execute > 1
+        let thresholds = ConfidenceThresholds::new(0.3, 0.7, 1.1);
+        assert!(thresholds.validate().is_err());
+    }
+
+    #[test]
+    fn test_confidence_thresholds_classify_no_match() {
+        let thresholds = ConfidenceThresholds::default();
+        assert_eq!(thresholds.classify(0.0), ConfidenceAction::NoMatch);
+        assert_eq!(thresholds.classify(0.2), ConfidenceAction::NoMatch);
+        assert_eq!(thresholds.classify(0.29), ConfidenceAction::NoMatch);
+    }
+
+    #[test]
+    fn test_confidence_thresholds_classify_requires_confirmation() {
+        let thresholds = ConfidenceThresholds::default();
+        assert_eq!(thresholds.classify(0.3), ConfidenceAction::RequiresConfirmation);
+        assert_eq!(thresholds.classify(0.5), ConfidenceAction::RequiresConfirmation);
+        assert_eq!(thresholds.classify(0.69), ConfidenceAction::RequiresConfirmation);
+    }
+
+    #[test]
+    fn test_confidence_thresholds_classify_optional_confirmation() {
+        let thresholds = ConfidenceThresholds::default();
+        assert_eq!(thresholds.classify(0.7), ConfidenceAction::OptionalConfirmation);
+        assert_eq!(thresholds.classify(0.8), ConfidenceAction::OptionalConfirmation);
+        assert_eq!(thresholds.classify(0.89), ConfidenceAction::OptionalConfirmation);
+    }
+
+    #[test]
+    fn test_confidence_thresholds_classify_auto_execute() {
+        let thresholds = ConfidenceThresholds::default();
+        assert_eq!(thresholds.classify(0.9), ConfidenceAction::AutoExecute);
+        assert_eq!(thresholds.classify(0.95), ConfidenceAction::AutoExecute);
+        assert_eq!(thresholds.classify(1.0), ConfidenceAction::AutoExecute);
+    }
+
+    #[test]
+    fn test_confidence_thresholds_needs_confirmation() {
+        let thresholds = ConfidenceThresholds::default();
+
+        // When confirmation is enabled
+        assert!(!thresholds.needs_confirmation(0.2, true)); // NoMatch - no confirmation
+        assert!(thresholds.needs_confirmation(0.5, true));  // RequiresConfirmation - yes
+        assert!(!thresholds.needs_confirmation(0.8, true)); // OptionalConfirmation - no
+        assert!(!thresholds.needs_confirmation(0.95, true)); // AutoExecute - no
+
+        // When confirmation is disabled
+        assert!(!thresholds.needs_confirmation(0.5, false)); // Always false
+    }
+
+    #[test]
+    fn test_dispatcher_config_confidence_thresholds() {
+        let config = DispatcherConfig {
+            enabled: true,
+            l3_enabled: true,
+            l3_timeout_ms: 5000,
+            l3_confidence_threshold: 0.4,
+            confirmation: ConfirmationConfig {
+                enabled: true,
+                threshold: 0.8,
+                timeout_ms: 30000,
+                show_parameters: true,
+                skip_native_tools: false,
+            },
+        };
+
+        let thresholds = config.confidence_thresholds();
+        assert!((thresholds.no_match - 0.4).abs() < 0.001);
+        assert!((thresholds.requires_confirmation - 0.8).abs() < 0.001);
+        assert!((thresholds.auto_execute - 0.9).abs() < 0.001);
     }
 }
