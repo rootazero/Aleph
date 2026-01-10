@@ -55,11 +55,13 @@ private class WindowDragDisablerView: NSView {
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         // Restore original state when view is removed
         if let window = window, newWindow == nil {
-            // Use async to match the async disable operation
-            let capturedWindow = window
+            // Use weak reference to avoid crash when window is deallocated
+            // before async block executes
             let originalValue = originalWindowDraggable
-            DispatchQueue.main.async {
-                capturedWindow.isMovableByWindowBackground = originalValue
+            DispatchQueue.main.async { [weak window] in
+                // Only restore if window still exists and is valid
+                guard let window = window else { return }
+                window.isMovableByWindowBackground = originalValue
             }
         }
 
