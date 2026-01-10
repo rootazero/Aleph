@@ -5,6 +5,69 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+// =============================================================================
+// Conflict Resolution System (Flat Namespace)
+// =============================================================================
+
+/// Tool priority for conflict resolution
+///
+/// When multiple tools have the same name, the higher priority tool wins
+/// and the lower priority tool is renamed with a suffix.
+///
+/// Priority order (highest to lowest):
+/// 1. Builtin (5) - System commands like /search, /video, /chat
+/// 2. Native (4) - System capabilities implementations
+/// 3. Custom (3) - User-defined rules from config.toml
+/// 4. Mcp (2) - External MCP server tools
+/// 5. Skill (1) - Claude Agent skills
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ToolPriority {
+    /// Lowest priority - Claude Agent skills
+    Skill = 1,
+    /// External MCP server tools
+    Mcp = 2,
+    /// User-defined custom rules
+    Custom = 3,
+    /// System native capabilities
+    Native = 4,
+    /// Highest priority - System builtin commands
+    Builtin = 5,
+}
+
+/// Information about an existing tool that conflicts with a new registration
+#[derive(Debug, Clone)]
+pub struct ConflictInfo {
+    /// ID of the existing tool
+    pub existing_id: String,
+    /// Name of the existing tool
+    pub existing_name: String,
+    /// Source of the existing tool
+    pub existing_source: ToolSource,
+    /// Priority of the existing tool
+    pub existing_priority: ToolPriority,
+}
+
+/// Resolution strategy for naming conflicts
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConflictResolution {
+    /// Rename the existing tool (new tool has higher priority)
+    RenameExisting {
+        /// Original name before renaming
+        original_name: String,
+        /// New name after renaming (with suffix)
+        new_name: String,
+    },
+    /// Rename the new tool (existing tool has higher priority)
+    RenameNew {
+        /// Original name before renaming
+        original_name: String,
+        /// New name after renaming (with suffix)
+        new_name: String,
+    },
+    /// No conflict - tool can be registered with original name
+    NoConflict,
+}
+
 /// Tool source origin
 ///
 /// Identifies where a tool comes from, enabling proper routing
@@ -64,6 +127,49 @@ impl ToolSource {
             ToolSource::Skill { .. } => "lightbulb.fill",
             ToolSource::Custom { .. } => "command",
         }
+    }
+
+    /// Get the priority level for conflict resolution
+    ///
+    /// Higher priority tools win name conflicts and lower priority tools
+    /// are renamed with a suffix.
+    pub fn priority(&self) -> ToolPriority {
+        match self {
+            ToolSource::Builtin => ToolPriority::Builtin,
+            ToolSource::Native => ToolPriority::Native,
+            ToolSource::Custom { .. } => ToolPriority::Custom,
+            ToolSource::Mcp { .. } => ToolPriority::Mcp,
+            ToolSource::Skill { .. } => ToolPriority::Skill,
+        }
+    }
+
+    /// Get the suffix used when renaming a conflicting tool
+    ///
+    /// When a tool loses a name conflict, it's renamed to `{name}-{suffix}`.
+    /// For example, an MCP tool named "search" becomes "search-mcp".
+    pub fn suffix(&self) -> &'static str {
+        match self {
+            ToolSource::Builtin => "system",
+            ToolSource::Native => "native",
+            ToolSource::Custom { .. } => "custom",
+            ToolSource::Mcp { .. } => "mcp",
+            ToolSource::Skill { .. } => "skill",
+        }
+    }
+
+    /// Check if this source is a builtin command
+    pub fn is_builtin(&self) -> bool {
+        matches!(self, ToolSource::Builtin)
+    }
+
+    /// Check if this source is an MCP tool
+    pub fn is_mcp(&self) -> bool {
+        matches!(self, ToolSource::Mcp { .. })
+    }
+
+    /// Check if this source is a skill
+    pub fn is_skill(&self) -> bool {
+        matches!(self, ToolSource::Skill { .. })
     }
 }
 
@@ -183,6 +289,23 @@ pub struct UnifiedTool {
     /// Default: "markdown"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub routing_context_format: Option<String>,
+
+    // =========================================================================
+    // Conflict Resolution Fields (Flat Namespace)
+    // =========================================================================
+
+    /// Original name before conflict resolution renaming
+    ///
+    /// If this tool was renamed due to a conflict, this field stores the
+    /// original name. For example, if an MCP tool "search" was renamed to
+    /// "search-mcp" because it conflicts with the builtin /search, this
+    /// field would be "search".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_name: Option<String>,
+
+    /// Whether this tool was renamed due to a conflict
+    #[serde(default)]
+    pub was_renamed: bool,
 }
 
 impl UnifiedTool {
@@ -221,6 +344,9 @@ impl UnifiedTool {
             routing_intent_type: None,
             routing_strip_prefix: false,
             routing_context_format: None,
+            // Conflict resolution defaults
+            original_name: None,
+            was_renamed: false,
         }
     }
 
@@ -349,6 +475,23 @@ impl UnifiedTool {
     /// Builder method: set routing context format
     pub fn with_routing_context_format(mut self, format: impl Into<String>) -> Self {
         self.routing_context_format = Some(format.into());
+        self
+    }
+
+    // =========================================================================
+    // Conflict Resolution Builder Methods
+    // =========================================================================
+
+    /// Builder method: set original name (before conflict resolution renaming)
+    pub fn with_original_name(mut self, name: impl Into<String>) -> Self {
+        self.original_name = Some(name.into());
+        self.was_renamed = true;
+        self
+    }
+
+    /// Builder method: mark as renamed due to conflict
+    pub fn with_was_renamed(mut self, renamed: bool) -> Self {
+        self.was_renamed = renamed;
         self
     }
 
@@ -687,5 +830,106 @@ mod tests {
         let json = serde_json::to_string(&mcp).unwrap();
         assert!(json.contains("Mcp"));
         assert!(json.contains("test"));
+    }
+
+    // =========================================================================
+    // Conflict Resolution Tests
+    // =========================================================================
+
+    #[test]
+    fn test_tool_priority_ordering() {
+        // Verify priority ordering: Builtin > Native > Custom > Mcp > Skill
+        assert!(ToolPriority::Builtin > ToolPriority::Native);
+        assert!(ToolPriority::Native > ToolPriority::Custom);
+        assert!(ToolPriority::Custom > ToolPriority::Mcp);
+        assert!(ToolPriority::Mcp > ToolPriority::Skill);
+    }
+
+    #[test]
+    fn test_tool_source_priority() {
+        assert_eq!(ToolSource::Builtin.priority(), ToolPriority::Builtin);
+        assert_eq!(ToolSource::Native.priority(), ToolPriority::Native);
+        assert_eq!(
+            ToolSource::Custom { rule_index: 0 }.priority(),
+            ToolPriority::Custom
+        );
+        assert_eq!(
+            ToolSource::Mcp {
+                server: "test".into()
+            }
+            .priority(),
+            ToolPriority::Mcp
+        );
+        assert_eq!(
+            ToolSource::Skill { id: "test".into() }.priority(),
+            ToolPriority::Skill
+        );
+    }
+
+    #[test]
+    fn test_tool_source_suffix() {
+        assert_eq!(ToolSource::Builtin.suffix(), "system");
+        assert_eq!(ToolSource::Native.suffix(), "native");
+        assert_eq!(ToolSource::Custom { rule_index: 0 }.suffix(), "custom");
+        assert_eq!(
+            ToolSource::Mcp {
+                server: "test".into()
+            }
+            .suffix(),
+            "mcp"
+        );
+        assert_eq!(ToolSource::Skill { id: "test".into() }.suffix(), "skill");
+    }
+
+    #[test]
+    fn test_tool_source_type_checks() {
+        assert!(ToolSource::Builtin.is_builtin());
+        assert!(!ToolSource::Native.is_builtin());
+
+        assert!(ToolSource::Mcp {
+            server: "test".into()
+        }
+        .is_mcp());
+        assert!(!ToolSource::Builtin.is_mcp());
+
+        assert!(ToolSource::Skill { id: "test".into() }.is_skill());
+        assert!(!ToolSource::Builtin.is_skill());
+    }
+
+    #[test]
+    fn test_unified_tool_with_original_name() {
+        let tool = UnifiedTool::new(
+            "mcp:server:search-mcp",
+            "search-mcp",
+            "Search via MCP",
+            ToolSource::Mcp {
+                server: "server".into(),
+            },
+        )
+        .with_original_name("search");
+
+        assert_eq!(tool.name, "search-mcp");
+        assert_eq!(tool.original_name, Some("search".to_string()));
+        assert!(tool.was_renamed);
+    }
+
+    #[test]
+    fn test_conflict_resolution_variants() {
+        let rename_existing = ConflictResolution::RenameExisting {
+            original_name: "search".to_string(),
+            new_name: "search-mcp".to_string(),
+        };
+
+        let rename_new = ConflictResolution::RenameNew {
+            original_name: "search".to_string(),
+            new_name: "search-skill".to_string(),
+        };
+
+        let no_conflict = ConflictResolution::NoConflict;
+
+        // Verify they are distinct
+        assert_ne!(rename_existing, rename_new);
+        assert_ne!(rename_existing, no_conflict);
+        assert_ne!(rename_new, no_conflict);
     }
 }

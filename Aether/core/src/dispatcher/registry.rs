@@ -14,7 +14,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use super::builtin_defs::BUILTIN_COMMANDS;
-use super::types::{ToolSource, UnifiedTool};
+use super::types::{ConflictInfo, ConflictResolution, ToolPriority, ToolSource, UnifiedTool};
 
 /// Unified Tool Registry
 ///
@@ -323,6 +323,193 @@ impl ToolRegistry {
         }
 
         debug!("Registered {} custom commands", count);
+    }
+
+    // =========================================================================
+    // Conflict Resolution (Flat Namespace)
+    // =========================================================================
+
+    /// Check if a command name conflicts with an existing tool
+    ///
+    /// Returns conflict information if a tool with the same name already exists.
+    /// The name comparison is case-insensitive.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The command name to check
+    ///
+    /// # Returns
+    ///
+    /// `Some(ConflictInfo)` if a conflict exists, `None` otherwise
+    pub async fn check_conflict(&self, name: &str) -> Option<ConflictInfo> {
+        let tools = self.tools.read().await;
+        let name_lower = name.to_lowercase();
+
+        for tool in tools.values() {
+            if tool.name.to_lowercase() == name_lower {
+                return Some(ConflictInfo {
+                    existing_id: tool.id.clone(),
+                    existing_name: tool.name.clone(),
+                    existing_source: tool.source.clone(),
+                    existing_priority: tool.source.priority(),
+                });
+            }
+        }
+        None
+    }
+
+    /// Resolve a naming conflict between two tools
+    ///
+    /// Determines which tool wins (keeps original name) and which tool
+    /// gets renamed with a suffix based on priority.
+    ///
+    /// Priority order (highest to lowest):
+    /// 1. Builtin - System commands (/search, /video, /chat)
+    /// 2. Native - System capabilities
+    /// 3. Custom - User-defined rules
+    /// 4. MCP - External MCP tools
+    /// 5. Skill - Claude Agent skills
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The original command name
+    /// * `conflict` - Information about the existing conflicting tool
+    /// * `new_source` - The source of the new tool being registered
+    ///
+    /// # Returns
+    ///
+    /// `ConflictResolution` indicating which tool should be renamed
+    pub fn resolve_conflict(
+        &self,
+        name: &str,
+        conflict: &ConflictInfo,
+        new_source: &ToolSource,
+    ) -> ConflictResolution {
+        let new_priority = new_source.priority();
+
+        if new_priority > conflict.existing_priority {
+            // New tool wins, rename existing
+            ConflictResolution::RenameExisting {
+                original_name: name.to_string(),
+                new_name: format!("{}-{}", name, conflict.existing_source.suffix()),
+            }
+        } else if new_priority < conflict.existing_priority {
+            // Existing wins, rename new
+            ConflictResolution::RenameNew {
+                original_name: name.to_string(),
+                new_name: format!("{}-{}", name, new_source.suffix()),
+            }
+        } else {
+            // Same priority - new tool gets renamed (first registered wins)
+            ConflictResolution::RenameNew {
+                original_name: name.to_string(),
+                new_name: format!("{}-{}", name, new_source.suffix()),
+            }
+        }
+    }
+
+    /// Apply conflict resolution by renaming an existing tool
+    ///
+    /// This is called when a higher-priority tool needs to take over
+    /// a name from an existing lower-priority tool.
+    ///
+    /// # Arguments
+    ///
+    /// * `existing_id` - The ID of the existing tool to rename
+    /// * `new_name` - The new name for the existing tool
+    ///
+    /// # Returns
+    ///
+    /// `true` if the tool was found and renamed, `false` otherwise
+    pub async fn rename_existing_tool(&self, existing_id: &str, new_name: &str) -> bool {
+        let mut tools = self.tools.write().await;
+
+        if let Some(mut tool) = tools.remove(existing_id) {
+            let original_name = tool.name.clone();
+            tool.original_name = Some(original_name.clone());
+            tool.was_renamed = true;
+            tool.name = new_name.to_string();
+            tool.display_name = format!("{} (renamed)", new_name);
+
+            // Update ID to reflect new name
+            let new_id = match &tool.source {
+                ToolSource::Native => format!("native:{}", new_name),
+                ToolSource::Builtin => format!("builtin:{}", new_name),
+                ToolSource::Mcp { server } => format!("mcp:{}:{}", server, new_name),
+                ToolSource::Skill { id } => format!("skill:{}", id), // Keep skill ID
+                ToolSource::Custom { rule_index } => format!("custom:{}:{}", rule_index, new_name),
+            };
+
+            warn!(
+                "Tool conflict: renamed '{}' (id: {}) to '{}' (new id: {})",
+                original_name, existing_id, new_name, new_id
+            );
+
+            tool.id = new_id.clone();
+            tools.insert(new_id, tool);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Register a tool with automatic conflict resolution
+    ///
+    /// This is the preferred way to register tools in flat namespace mode.
+    /// It automatically handles name conflicts according to priority rules.
+    ///
+    /// # Arguments
+    ///
+    /// * `tool` - The tool to register
+    ///
+    /// # Returns
+    ///
+    /// The final tool ID after registration (may differ from input if renamed)
+    pub async fn register_with_conflict_resolution(&self, mut tool: UnifiedTool) -> String {
+        // Check for conflict
+        if let Some(conflict) = self.check_conflict(&tool.name).await {
+            let resolution = self.resolve_conflict(&tool.name, &conflict, &tool.source);
+
+            match resolution {
+                ConflictResolution::RenameExisting { original_name, new_name } => {
+                    // Rename the existing tool
+                    self.rename_existing_tool(&conflict.existing_id, &new_name).await;
+                    info!(
+                        "Conflict resolved: existing tool '{}' renamed to '{}', new tool '{}' takes priority",
+                        original_name, new_name, tool.name
+                    );
+                }
+                ConflictResolution::RenameNew { original_name, new_name } => {
+                    // Rename the new tool
+                    tool.original_name = Some(original_name.clone());
+                    tool.was_renamed = true;
+                    tool.name = new_name.clone();
+                    tool.display_name = format!("{} ({})", new_name, tool.source.label());
+
+                    // Update tool ID
+                    tool.id = match &tool.source {
+                        ToolSource::Native => format!("native:{}", new_name),
+                        ToolSource::Builtin => format!("builtin:{}", new_name),
+                        ToolSource::Mcp { server } => format!("mcp:{}:{}", server, new_name),
+                        ToolSource::Skill { id } => format!("skill:{}", id),
+                        ToolSource::Custom { rule_index } => format!("custom:{}:{}", rule_index, new_name),
+                    };
+
+                    warn!(
+                        "Conflict resolved: new tool '{}' renamed to '{}' (existing '{}' has priority)",
+                        original_name, new_name, conflict.existing_name
+                    );
+                }
+                ConflictResolution::NoConflict => {
+                    // Should not happen if check_conflict returned Some
+                }
+            }
+        }
+
+        let id = tool.id.clone();
+        let mut tools = self.tools.write().await;
+        tools.insert(id.clone(), tool);
+        id
     }
 
     /// Clear all registered tools
@@ -878,5 +1065,217 @@ mod tests {
             truncate_description("This is a very long description that should be truncated", 20),
             "This is a very lo..."
         );
+    }
+
+    // =========================================================================
+    // Conflict Resolution Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_check_conflict_no_conflict() {
+        let registry = ToolRegistry::new();
+        registry.register_builtin_tools().await;
+
+        // No conflict for a new unique name
+        let conflict = registry.check_conflict("git").await;
+        assert!(conflict.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_check_conflict_exists() {
+        let registry = ToolRegistry::new();
+        registry.register_builtin_tools().await;
+
+        // Conflict with builtin "search"
+        let conflict = registry.check_conflict("search").await;
+        assert!(conflict.is_some());
+
+        let info = conflict.unwrap();
+        assert_eq!(info.existing_name, "search");
+        assert_eq!(info.existing_priority, ToolPriority::Builtin);
+    }
+
+    #[tokio::test]
+    async fn test_check_conflict_case_insensitive() {
+        let registry = ToolRegistry::new();
+        registry.register_builtin_tools().await;
+
+        // Should find conflict even with different case
+        let conflict = registry.check_conflict("SEARCH").await;
+        assert!(conflict.is_some());
+        assert_eq!(conflict.unwrap().existing_name, "search");
+    }
+
+    #[test]
+    fn test_resolve_conflict_new_wins() {
+        let registry = ToolRegistry::new();
+
+        // MCP tool exists, Builtin tries to register
+        let conflict = ConflictInfo {
+            existing_id: "mcp:server:search".to_string(),
+            existing_name: "search".to_string(),
+            existing_source: ToolSource::Mcp { server: "server".into() },
+            existing_priority: ToolPriority::Mcp,
+        };
+
+        let resolution = registry.resolve_conflict(
+            "search",
+            &conflict,
+            &ToolSource::Builtin,
+        );
+
+        // Builtin has higher priority, should rename existing
+        match resolution {
+            ConflictResolution::RenameExisting { original_name, new_name } => {
+                assert_eq!(original_name, "search");
+                assert_eq!(new_name, "search-mcp");
+            }
+            _ => panic!("Expected RenameExisting"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_conflict_existing_wins() {
+        let registry = ToolRegistry::new();
+
+        // Builtin exists, MCP tries to register
+        let conflict = ConflictInfo {
+            existing_id: "builtin:search".to_string(),
+            existing_name: "search".to_string(),
+            existing_source: ToolSource::Builtin,
+            existing_priority: ToolPriority::Builtin,
+        };
+
+        let resolution = registry.resolve_conflict(
+            "search",
+            &conflict,
+            &ToolSource::Mcp { server: "server".into() },
+        );
+
+        // Builtin has higher priority, should rename new
+        match resolution {
+            ConflictResolution::RenameNew { original_name, new_name } => {
+                assert_eq!(original_name, "search");
+                assert_eq!(new_name, "search-mcp");
+            }
+            _ => panic!("Expected RenameNew"),
+        }
+    }
+
+    #[test]
+    fn test_resolve_conflict_same_priority() {
+        let registry = ToolRegistry::new();
+
+        // Two MCP tools with same priority
+        let conflict = ConflictInfo {
+            existing_id: "mcp:server1:status".to_string(),
+            existing_name: "status".to_string(),
+            existing_source: ToolSource::Mcp { server: "server1".into() },
+            existing_priority: ToolPriority::Mcp,
+        };
+
+        let resolution = registry.resolve_conflict(
+            "status",
+            &conflict,
+            &ToolSource::Mcp { server: "server2".into() },
+        );
+
+        // Same priority - new tool gets renamed (first registered wins)
+        match resolution {
+            ConflictResolution::RenameNew { original_name, new_name } => {
+                assert_eq!(original_name, "status");
+                assert_eq!(new_name, "status-mcp");
+            }
+            _ => panic!("Expected RenameNew"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_register_with_conflict_resolution_no_conflict() {
+        let registry = ToolRegistry::new();
+
+        let tool = UnifiedTool::new(
+            "mcp:server:git",
+            "git",
+            "Git operations",
+            ToolSource::Mcp { server: "server".into() },
+        );
+
+        let id = registry.register_with_conflict_resolution(tool).await;
+
+        // No conflict, original ID used
+        assert_eq!(id, "mcp:server:git");
+
+        let registered = registry.get_by_id(&id).await;
+        assert!(registered.is_some());
+        assert_eq!(registered.unwrap().name, "git");
+    }
+
+    #[tokio::test]
+    async fn test_register_with_conflict_resolution_new_renamed() {
+        let registry = ToolRegistry::new();
+
+        // Register builtin first
+        registry.register_builtin_tools().await;
+
+        // Try to register MCP tool with same name as builtin
+        let mcp_tool = UnifiedTool::new(
+            "mcp:server:search",
+            "search",
+            "MCP Search",
+            ToolSource::Mcp { server: "server".into() },
+        );
+
+        let id = registry.register_with_conflict_resolution(mcp_tool).await;
+
+        // MCP tool should be renamed
+        assert_eq!(id, "mcp:server:search-mcp");
+
+        let registered = registry.get_by_id(&id).await.unwrap();
+        assert_eq!(registered.name, "search-mcp");
+        assert_eq!(registered.original_name, Some("search".to_string()));
+        assert!(registered.was_renamed);
+
+        // Builtin should still have original name
+        let builtin = registry.get_by_id("builtin:search").await.unwrap();
+        assert_eq!(builtin.name, "search");
+        assert!(!builtin.was_renamed);
+    }
+
+    #[tokio::test]
+    async fn test_register_with_conflict_resolution_existing_renamed() {
+        let registry = ToolRegistry::new();
+
+        // Register MCP tool first
+        let mcp_tool = UnifiedTool::new(
+            "mcp:server:test",
+            "test",
+            "MCP Test",
+            ToolSource::Mcp { server: "server".into() },
+        );
+        registry.register_with_conflict_resolution(mcp_tool).await;
+
+        // Register Custom tool with same name (higher priority)
+        let custom_tool = UnifiedTool::new(
+            "custom:test",
+            "test",
+            "Custom Test",
+            ToolSource::Custom { rule_index: 0 },
+        );
+        let id = registry.register_with_conflict_resolution(custom_tool).await;
+
+        // Custom tool takes the name
+        assert_eq!(id, "custom:test");
+        let custom = registry.get_by_id(&id).await.unwrap();
+        assert_eq!(custom.name, "test");
+        assert!(!custom.was_renamed);
+
+        // MCP tool should be renamed
+        let mcp = registry.get_by_id("mcp:server:test-mcp").await;
+        assert!(mcp.is_some());
+        let mcp = mcp.unwrap();
+        assert_eq!(mcp.name, "test-mcp");
+        assert_eq!(mcp.original_name, Some("test".to_string()));
+        assert!(mcp.was_renamed);
     }
 }
