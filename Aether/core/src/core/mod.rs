@@ -269,7 +269,7 @@ impl AetherCore {
         // Initialize async confirmation handler
         let async_confirmation = Arc::new(AsyncConfirmationHandler::new());
 
-        Ok(Self {
+        let core = Self {
             event_handler,
             runtime: Arc::new(runtime),
             last_request: Arc::new(Mutex::new(None)),
@@ -287,7 +287,13 @@ impl AetherCore {
             conversation_manager: Arc::new(Mutex::new(ConversationManager::new())),
             tool_registry,
             async_confirmation,
-        })
+        };
+
+        // Initialize tool registry with builtin tools and configured tools
+        // This populates the registry that the UI will query for commands
+        core.refresh_tool_registry();
+
+        Ok(core)
     }
 
     // ========================================================================
