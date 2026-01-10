@@ -283,6 +283,11 @@ impl ToolRegistry {
         let mut count = 0;
 
         for (index, rule) in rules.iter().enumerate() {
+            // Skip builtin rules - they are registered via register_builtin_tools()
+            if rule.is_builtin {
+                continue;
+            }
+
             // Only register slash commands as tools
             if !rule.regex.starts_with("^/") {
                 continue;
