@@ -911,16 +911,18 @@ dictionary MediaAttachment {
   u64 size_bytes;       // Original size in bytes for logging/validation
 };
 
-// Command node for command completion UI (add-command-completion-system)
-// Represents a command in the command tree (root or child)
+// Command node for command completion UI (Flat Namespace Mode)
+// In flat namespace mode, all commands are at root level.
+// Tool source is indicated by source_type for badge display.
 dictionary CommandNode {
-  string key;           // Unique identifier (e.g., "search", "en", "mcp")
-  string description;   // Human-readable description for display
-  string icon;          // SF Symbol name for visual representation
-  string? hint;         // Short hint text (max ~80px width, localized)
-  CommandType node_type;  // Action, Prompt, or Namespace
-  boolean has_children; // Whether this node has child commands
-  string? source_id;    // Optional source identifier (e.g., "rule:search", "mcp:git")
+  string key;             // Unique identifier (e.g., "search", "git", "refine-text")
+  string description;     // Human-readable description for display
+  string icon;            // SF Symbol name for visual representation
+  string? hint;           // Short hint text (max ~80px width, localized)
+  CommandType node_type;  // Action, Prompt, or Namespace (deprecated in flat namespace)
+  boolean has_children;   // Whether this node has child commands (always false in flat namespace)
+  string? source_id;      // Optional source identifier (e.g., "builtin:search", "mcp:git")
+  ToolSourceType source_type;  // Tool source for UI badge display (flat namespace mode)
 };
 
 // ===== Dispatcher Layer Types (implement-dispatcher-layer) =====

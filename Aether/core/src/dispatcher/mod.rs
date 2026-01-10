@@ -83,7 +83,10 @@ pub use integration::{DispatcherAction, DispatcherConfig, DispatcherIntegration,
 pub use l3_router::{L3Router, L3RoutingOptions, L3RoutingResult};
 pub use prompt_builder::{L3RoutingResponse, PromptBuilder, PromptFormat, ToolFilter};
 pub use registry::ToolRegistry;
-pub use types::{RoutingLayer, ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo};
+pub use types::{
+    ConflictInfo, ConflictResolution, RoutingLayer, ToolPriority, ToolSource, ToolSourceType,
+    UnifiedTool, UnifiedToolInfo,
+};
 
 #[cfg(test)]
 mod tests {

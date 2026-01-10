@@ -180,6 +180,30 @@ After implementation, verify:
 - ✅ Updated CLAUDE.md with new architecture documentation
 - ✅ Added unit tests for builtin definitions (3 tests in builtin_defs.rs)
 
+### Flat Namespace Implementation (2026-01-10)
+- ✅ **Phase 1**: Added conflict resolution system (ToolPriority, ConflictInfo, ConflictResolution)
+- ✅ **Phase 2**: Flattened MCP tool registration (tools registered directly, e.g., `/git`)
+- ✅ **Phase 3**: Flattened Skill registration (skills registered directly, e.g., `/refine-text`)
+- ✅ **Phase 4**: Removed `/mcp` and `/skill` from BUILTIN_COMMANDS (3 builtins remain: search, video, chat)
+- ✅ **Phase 5**: Updated Swift UI with source badges instead of namespace navigation
+  - Updated SubPanelCommandRow to show source icon and badge
+  - Updated CommandCompletionManager with sourceIcon, sourceColor, sourceBadgeText
+  - Removed namespace-specific code from CommandRegistry
+- ✅ Updated all unit tests for flat namespace (944 tests passing)
+- ✅ Regenerated UniFFI bindings with source_type in CommandNode
+
 ### Remaining Future Work
 - Add integration tests for UniFFI APIs
 - Add unit tests for CommandRegistry query methods
+
+### Skipped Phases
+- ~~Phase 6: Dynamic routing rules from registry~~ - Not needed, L3 AI routing handles MCP/Skill tools
+- ~~Phase 7: Backward compatibility~~ - **强制扁平化**: `/mcp` 和 `/skill` 前缀不再支持，用户必须直接使用工具名称（如 `/git` 而不是 `/mcp git`）
+
+### Design Decision: Forced Flat Namespace
+用户不应该关心工具是来自 MCP 还是 Skill，只需要知道工具名称即可。
+- ✅ `/git status` - 正确
+- ❌ `/mcp git status` - 不再支持
+- ❌ `/skill refine-text` - 不再支持
+
+工具来源通过 UI badges 显示，而不是命令前缀。

@@ -765,31 +765,41 @@ User Input
 - L3 tries if L2 fails or confidence too low → AI decides tool + params
 - Default provider if all layers fail
 
-**Tool Sources:**
+**Tool Sources (Flat Namespace Mode):**
 
 | Source | Description | Example |
 |--------|-------------|---------|
-| `Builtin` | System builtin commands | `/search`, `/mcp`, `/skill`, `/video`, `/chat` |
+| `Builtin` | System builtin commands (3 only) | `/search`, `/video`, `/chat` |
 | `Native` | Built-in capabilities | Search, Video transcript |
-| `Mcp` | MCP server tools | `github:git_status`, `filesystem:read_file` |
-| `Skill` | Claude Agent Skills | `refine-text`, `code-review` |
+| `Mcp` | MCP server tools (flat) | `/git`, `/filesystem` |
+| `Skill` | Claude Agent Skills (flat) | `/refine-text`, `/code-review` |
 | `Custom` | User-defined rules | `[[rules]]` in config.toml |
+
+**Flat Namespace Design (强制扁平化):**
+
+All tools are registered as root-level commands. Users invoke tools directly by name:
+- ✅ `/git status` - Correct (MCP tool invoked directly)
+- ✅ `/refine-text` - Correct (Skill invoked directly)
+- ❌ `/mcp git status` - NOT supported (namespace prefix removed)
+- ❌ `/skill refine-text` - NOT supported (namespace prefix removed)
+
+Tool source is indicated via UI badges (System, MCP, Skill, Custom), not command prefixes.
+This eliminates "Leaky Implementation" where users had to remember which namespace contains which tool.
 
 **Single Source of Truth (BUILTIN_COMMANDS):**
 
-The 5 builtin commands are defined in `dispatcher/builtin_defs.rs` and serve as the single source of truth for:
+The 3 builtin commands are defined in `dispatcher/builtin_defs.rs` and serve as the single source of truth for:
 - Tool metadata (UI display, command completion, L3 router awareness)
 - Routing rules (system_prompt, capabilities, regex patterns)
 
 ```rust
-// dispatcher/builtin_defs.rs
+// dispatcher/builtin_defs.rs (Flat Namespace Mode)
 pub const BUILTIN_COMMANDS: &[BuiltinCommandDef] = &[
     BuiltinCommandDef { name: "search", ... },
-    BuiltinCommandDef { name: "mcp", ... },
-    BuiltinCommandDef { name: "skill", ... },
     BuiltinCommandDef { name: "video", ... },
     BuiltinCommandDef { name: "chat", ... },
 ];
+// Note: /mcp and /skill removed - tools registered directly as root commands
 
 // Used by:
 // - ToolRegistry.register_builtin_tools() - for tool metadata

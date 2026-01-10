@@ -196,7 +196,11 @@ struct SubPanelCommandList: View {
     }
 }
 
-/// Single command row in SubPanel
+/// Single command row in SubPanel (Flat Namespace Mode)
+///
+/// In flat namespace mode:
+/// - Icon and badge color indicate tool source (System, MCP, Skill, Custom)
+/// - No namespace chevrons (hasChildren is always false)
 struct SubPanelCommandRow: View {
     let command: CommandNode
     let isSelected: Bool
@@ -212,10 +216,10 @@ struct SubPanelCommandRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            // Icon - white on dark background
-            Image(systemName: "text.quote")
+            // Source icon - indicates tool origin (flat namespace mode)
+            Image(systemName: command.sourceIcon)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(isSelected ? .white : .white.opacity(0.5))
+                .foregroundColor(isSelected ? .white : command.sourceColor.opacity(0.8))
                 .frame(width: 18)
 
             // Command key - white on dark background
@@ -235,12 +239,16 @@ struct SubPanelCommandRow: View {
 
             Spacer(minLength: 4)
 
-            // Chevron for namespaces
-            if command.hasChildren {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(isSelected ? .white.opacity(0.6) : .white.opacity(0.4))
-            }
+            // Source badge (flat namespace mode)
+            Text(command.sourceBadgeText)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundColor(isSelected ? .white.opacity(0.8) : command.sourceColor)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(isSelected ? Color.white.opacity(0.2) : command.sourceColor.opacity(0.15))
+                )
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

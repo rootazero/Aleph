@@ -384,34 +384,32 @@ impl AetherCore {
         }
     }
 
-    /// Convert UnifiedToolInfo to CommandNode for UI compatibility
+    /// Convert UnifiedToolInfo to CommandNode for UI compatibility (Flat Namespace Mode)
     ///
-    /// This allows the command completion UI to use ToolRegistry data
-    /// while maintaining backward compatibility with CommandNode.
+    /// This allows the command completion UI to use ToolRegistry data.
+    /// In flat namespace mode:
+    /// - All tools are root-level commands (has_children is always false)
+    /// - source_type indicates tool origin for badge display
     pub fn tool_to_command_node(tool: &crate::dispatcher::UnifiedToolInfo) -> crate::command::CommandNode {
-        use crate::command::{CommandNode, CommandType};
+        use crate::command::CommandNode;
 
-        let node_type = if tool.has_subtools {
-            CommandType::Namespace
-        } else {
-            CommandType::Action
-        };
-
-        let mut node = CommandNode::new(
+        // In flat namespace mode, use new_with_source for proper source_type
+        let mut node = CommandNode::new_with_source(
             tool.name.clone(),
             tool.description.clone(),
-            node_type,
+            tool.source_type,
         );
 
         if let Some(icon) = &tool.icon {
             node = node.with_icon(icon.clone());
         }
 
-        // Use source_id for tracking
+        // Use id for source_id tracking
         node = node.with_source_id(tool.id.clone());
 
-        // Set has_children based on has_subtools
-        node.has_children = tool.has_subtools;
+        // In flat namespace mode, has_children is always false
+        // (MCP subtools are registered as separate root commands)
+        node.has_children = false;
 
         node
     }

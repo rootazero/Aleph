@@ -1651,8 +1651,9 @@ mod tests {
         let router = Router::new(&config).unwrap();
 
         assert_eq!(router.provider_count(), 1);
-        // Config::default() includes 5 preset rules (/search, /mcp, /skill, /video, /chat)
-        assert_eq!(router.rule_count(), 5);
+        // Config::default() includes 3 preset rules (flat namespace: /search, /video, /chat)
+        // /mcp and /skill removed - MCP tools and Skills are registered directly
+        assert_eq!(router.rule_count(), 3);
         assert!(router.has_provider("openai"));
         assert!(!router.has_provider("claude"));
         assert_eq!(router.default_provider_name(), Some("openai"));
@@ -1703,8 +1704,8 @@ mod tests {
 
         let router = Router::new(&config).unwrap();
 
-        // 5 preset rules + 2 custom rules = 7 total
-        assert_eq!(router.rule_count(), 7);
+        // 3 preset rules (flat namespace) + 2 custom rules = 5 total
+        assert_eq!(router.rule_count(), 5);
     }
 
     #[test]
@@ -2203,7 +2204,9 @@ mod tests {
     }
 
     #[test]
-    fn test_match_rules_skill_command() {
+    fn test_flat_namespace_no_skill_command() {
+        // In flat namespace mode, /skill is NOT a builtin command
+        // Skills are invoked directly (e.g., /refine-text) via ToolRegistry
         let mut config = Config::default();
 
         // Add provider
@@ -2214,17 +2217,14 @@ mod tests {
 
         let router = Router::new(&config).unwrap();
 
-        // Match /skill command (should use builtin /skill rule)
+        // /skill should NOT match any builtin rule in flat namespace mode
         let result = router.match_rules("/skill refine-text Improve this text");
 
-        // Should have command rule matched with skill_id extracted
-        assert!(result.command_rule.is_some());
-        let cmd = result.command_rule.unwrap();
-
-        // Skill ID should be extracted
-        assert_eq!(cmd.skill_id, Some("refine-text".to_string()));
-        // Cleaned input should have both /skill and skill_name stripped
-        assert_eq!(cmd.cleaned_input, "Improve this text");
+        // Should NOT have command rule matched (no /skill builtin)
+        assert!(
+            result.command_rule.is_none(),
+            "/skill command should not exist in flat namespace mode"
+        );
     }
 
     #[test]
@@ -2245,7 +2245,9 @@ mod tests {
     }
 
     #[test]
-    fn test_routing_match_to_intent_with_skill() {
+    fn test_flat_namespace_routing_intent() {
+        // In flat namespace mode, skills are registered directly in ToolRegistry
+        // This test verifies the routing behavior for builtin commands
         let mut config = Config::default();
 
         // Add provider
@@ -2256,13 +2258,16 @@ mod tests {
 
         let router = Router::new(&config).unwrap();
 
-        // Match /skill command
-        let result = router.match_rules("/skill pdf Extract text from document");
+        // /search should still work as a builtin
+        let result = router.match_rules("/search weather forecast");
+        assert!(result.command_rule.is_some());
 
-        // Should create Intent::Skills with skill_id
-        let intent = result.to_intent(router.rule_configs());
-        assert!(intent.is_skills());
-        assert_eq!(intent.skills_id(), Some("pdf"));
+        // /skill should NOT exist - no match
+        let result = router.match_rules("/skill pdf Extract text");
+        assert!(
+            result.command_rule.is_none(),
+            "/skill command should not exist in flat namespace mode"
+        );
     }
 
     #[test]

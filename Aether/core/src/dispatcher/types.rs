@@ -618,6 +618,30 @@ impl From<&ToolSource> for ToolSourceType {
     }
 }
 
+impl ToolSourceType {
+    /// Get default SF Symbol icon for this source type
+    ///
+    /// Used for UI display in command completion and settings.
+    pub fn default_icon(&self) -> &'static str {
+        match self {
+            ToolSourceType::Native | ToolSourceType::Builtin => "command.circle.fill",
+            ToolSourceType::Mcp => "bolt.fill",
+            ToolSourceType::Skill => "lightbulb.fill",
+            ToolSourceType::Custom => "command",
+        }
+    }
+
+    /// Get badge label for this source type
+    pub fn badge_label(&self) -> &'static str {
+        match self {
+            ToolSourceType::Native | ToolSourceType::Builtin => "System",
+            ToolSourceType::Mcp => "MCP",
+            ToolSourceType::Skill => "Skill",
+            ToolSourceType::Custom => "Custom",
+        }
+    }
+}
+
 /// Unified tool representation for FFI
 ///
 /// This is a simplified version of UnifiedTool for Swift/Kotlin interop.

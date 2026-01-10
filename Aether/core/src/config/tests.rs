@@ -515,8 +515,8 @@ fn test_config_toml_round_trip() {
     );
     assert_eq!(deserialized.behavior.as_ref().unwrap().input_mode, "copy");
     assert_eq!(deserialized.providers.len(), 1);
-    // 5 builtin rules + 1 custom rule = 6 total
-    assert_eq!(deserialized.rules.len(), 6);
+    // 3 builtin rules (flat namespace: search, video, chat) + 1 custom rule = 4 total
+    assert_eq!(deserialized.rules.len(), 4);
     // Verify custom rule is present
     assert!(deserialized
         .rules

@@ -1,6 +1,13 @@
 // Command Types
 //
 // Data structures for the command completion system.
+//
+// ## Flat Namespace Mode
+//
+// In flat namespace mode, all commands are at root level.
+// CommandType::Namespace is deprecated - use source_type for categorization.
+
+use crate::dispatcher::ToolSourceType;
 
 /// Command type determining behavior on selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -49,7 +56,11 @@ impl std::fmt::Display for CommandType {
     }
 }
 
-/// A node in the command tree
+/// A node in the command tree (Flat Namespace Mode)
+///
+/// In flat namespace mode, all commands are at root level.
+/// The `source_type` field indicates where the command comes from
+/// (System, MCP, Skill, Custom) for UI badge display.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommandNode {
     /// Unique identifier within parent namespace (e.g., "search", "git", "commit")
@@ -68,10 +79,20 @@ pub struct CommandNode {
     pub node_type: CommandType,
 
     /// Whether this node has child commands
+    /// Note: In flat namespace mode, this is always false
     pub has_children: bool,
 
     /// Optional identifier for dynamic loading (e.g., "mcp:git", "builtin:search")
     pub source_id: Option<String>,
+
+    /// Tool source type for UI badge display (flat namespace mode)
+    ///
+    /// Indicates where the command comes from:
+    /// - Builtin/Native: System commands (/search, /video, /chat)
+    /// - Mcp: MCP server tools
+    /// - Skill: Claude Agent skills
+    /// - Custom: User-defined rules
+    pub source_type: ToolSourceType,
 }
 
 impl CommandNode {
@@ -88,8 +109,27 @@ impl CommandNode {
             icon: node_type_copy.default_icon().to_string(),
             hint: None,
             node_type,
-            has_children: matches!(node_type, CommandType::Namespace),
+            has_children: false, // Flat namespace: no children
             source_id: None,
+            source_type: ToolSourceType::Custom, // Default, should be set explicitly
+        }
+    }
+
+    /// Create a new command node with source type (flat namespace mode)
+    pub fn new_with_source(
+        key: impl Into<String>,
+        description: impl Into<String>,
+        source_type: ToolSourceType,
+    ) -> Self {
+        Self {
+            key: key.into(),
+            description: description.into(),
+            icon: source_type.default_icon().to_string(),
+            hint: None,
+            node_type: CommandType::Prompt, // Default for flat namespace
+            has_children: false,
+            source_id: None,
+            source_type,
         }
     }
 
@@ -112,12 +152,20 @@ impl CommandNode {
     }
 
     /// Builder: set has_children
+    #[deprecated(note = "In flat namespace mode, commands don't have children")]
     pub fn with_children(mut self, has_children: bool) -> Self {
         self.has_children = has_children;
         self
     }
 
+    /// Builder: set source_type
+    pub fn with_source_type(mut self, source_type: ToolSourceType) -> Self {
+        self.source_type = source_type;
+        self
+    }
+
     /// Check if this is a namespace node
+    #[deprecated(note = "In flat namespace mode, there are no namespace nodes")]
     pub fn is_namespace(&self) -> bool {
         matches!(self.node_type, CommandType::Namespace)
     }
@@ -130,6 +178,26 @@ impl CommandNode {
     /// Check if this is a prompt node
     pub fn is_prompt(&self) -> bool {
         matches!(self.node_type, CommandType::Prompt)
+    }
+
+    /// Check if this is a system builtin command
+    pub fn is_system(&self) -> bool {
+        matches!(self.source_type, ToolSourceType::Builtin | ToolSourceType::Native)
+    }
+
+    /// Check if this is an MCP tool
+    pub fn is_mcp(&self) -> bool {
+        matches!(self.source_type, ToolSourceType::Mcp)
+    }
+
+    /// Check if this is a skill
+    pub fn is_skill(&self) -> bool {
+        matches!(self.source_type, ToolSourceType::Skill)
+    }
+
+    /// Check if this is a custom command
+    pub fn is_custom(&self) -> bool {
+        matches!(self.source_type, ToolSourceType::Custom)
     }
 }
 
@@ -200,20 +268,54 @@ mod tests {
         let node = CommandNode::new("test", "Test command", CommandType::Action)
             .with_icon("star")
             .with_hint("测试")
-            .with_source_id("builtin:test");
+            .with_source_id("builtin:test")
+            .with_source_type(ToolSourceType::Builtin);
 
         assert_eq!(node.key, "test");
         assert_eq!(node.icon, "star");
         assert_eq!(node.hint, Some("测试".to_string()));
         assert_eq!(node.source_id, Some("builtin:test".to_string()));
-        assert!(!node.has_children);
+        assert_eq!(node.source_type, ToolSourceType::Builtin);
+        assert!(!node.has_children); // Flat namespace: no children
     }
 
     #[test]
-    fn test_namespace_has_children() {
-        let ns = CommandNode::new("mcp", "MCP tools", CommandType::Namespace);
-        assert!(ns.has_children);
-        assert!(ns.is_namespace());
+    fn test_command_node_with_source() {
+        let node = CommandNode::new_with_source("git", "Git operations", ToolSourceType::Mcp);
+
+        assert_eq!(node.key, "git");
+        assert_eq!(node.source_type, ToolSourceType::Mcp);
+        assert_eq!(node.icon, "bolt.fill"); // Default MCP icon
+        assert!(!node.has_children);
+        assert!(node.is_mcp());
+        assert!(!node.is_system());
+    }
+
+    #[test]
+    fn test_source_type_checks() {
+        let builtin = CommandNode::new_with_source("search", "Search", ToolSourceType::Builtin);
+        assert!(builtin.is_system());
+        assert!(!builtin.is_mcp());
+
+        let mcp = CommandNode::new_with_source("git", "Git", ToolSourceType::Mcp);
+        assert!(mcp.is_mcp());
+        assert!(!mcp.is_system());
+
+        let skill = CommandNode::new_with_source("refine", "Refine", ToolSourceType::Skill);
+        assert!(skill.is_skill());
+
+        let custom = CommandNode::new_with_source("en", "English", ToolSourceType::Custom);
+        assert!(custom.is_custom());
+    }
+
+    #[test]
+    fn test_flat_namespace_no_children() {
+        // In flat namespace mode, all nodes have has_children = false
+        let node = CommandNode::new("test", "Test", CommandType::Prompt);
+        assert!(!node.has_children);
+
+        let node2 = CommandNode::new_with_source("test2", "Test2", ToolSourceType::Mcp);
+        assert!(!node2.has_children);
     }
 
     #[test]

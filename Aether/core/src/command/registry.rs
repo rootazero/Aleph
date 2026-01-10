@@ -18,12 +18,11 @@ use super::types::{CommandExecutionResult, CommandNode, CommandType};
 /// Returns the hint for a builtin command in the specified language.
 /// Falls back to English if the language is not supported.
 pub fn get_builtin_hint(command_key: &str, language: &str) -> Option<String> {
-    // Builtin hints table
+    // Builtin hints table (Flat Namespace Mode)
     // Format: (command_key, english_hint, chinese_hint)
+    // Note: /mcp and /skill removed - tools are registered directly
     static BUILTIN_HINTS: &[(&str, &str, &str)] = &[
         ("search", "Web search", "网页搜索"),
-        ("mcp", "MCP tools", "MCP工具"),
-        ("skill", "Skills", "技能"),
         ("video", "Video info", "视频信息"),
         ("chat", "Chat", "对话"),
     ];
@@ -83,31 +82,8 @@ impl CommandRegistry {
             .builtin_commands
             .sort_by(|a, b| a.key.cmp(&b.key));
 
-        // Add MCP namespace if not already present
-        let has_mcp = registry.builtin_commands.iter().any(|n| n.key == "mcp");
-        if !has_mcp {
-            let mcp_hint = if registry.show_hints {
-                get_builtin_hint("mcp", language)
-            } else {
-                None
-            };
-
-            let mcp_node = CommandNode::new("mcp", "MCP Tools", CommandType::Namespace)
-                .with_icon("wrench.and.screwdriver")
-                .with_source_id("mcp:root");
-
-            let mcp_node = if let Some(hint) = mcp_hint {
-                mcp_node.with_hint(hint)
-            } else {
-                mcp_node
-            };
-
-            registry.builtin_commands.push(mcp_node);
-            // Re-sort after adding MCP
-            registry
-                .builtin_commands
-                .sort_by(|a, b| a.key.cmp(&b.key));
-        }
+        // NOTE: In flat namespace mode, MCP namespace is NOT added.
+        // MCP tools are registered directly as root commands via ToolRegistry.
 
         registry
     }
@@ -201,15 +177,11 @@ impl CommandRegistry {
 
     /// Get children of a namespace command
     pub fn get_children(&self, parent_key: &str) -> Vec<CommandNode> {
-        // First check static children map
+        // In flat namespace mode, there are no namespace hierarchies.
+        // All tools are root-level commands.
+        // This method is kept for backward compatibility but returns empty.
         if let Some(children) = self.children_map.get(parent_key) {
             return children.clone();
-        }
-
-        // For MCP namespace, return empty for now (future: query MCP clients)
-        if parent_key == "mcp" {
-            // Placeholder for MCP integration
-            return Vec::new();
         }
 
         Vec::new()
@@ -482,7 +454,8 @@ mod tests {
 
         let commands = registry.get_root_commands();
 
-        // Should have: en, mcp, search (sorted alphabetically)
+        // In flat namespace mode: en, search, video, chat (sorted alphabetically)
+        // No /mcp namespace - MCP tools are registered directly
         assert!(commands.len() >= 2);
 
         let search = commands.iter().find(|c| c.key == "search");
@@ -584,29 +557,33 @@ mod tests {
     }
 
     #[test]
-    fn test_mcp_namespace() {
-        // Use empty config (no builtin rules) to test namespace auto-addition
-        let mut config = Config::default();
-        config.rules.clear(); // Remove all rules including /mcp
-        let registry = CommandRegistry::from_config(&config, "en");
-
-        // MCP namespace should be added automatically when no /mcp rule exists
-        let commands = registry.get_root_commands();
-        let mcp = commands.iter().find(|c| c.key == "mcp");
-        assert!(mcp.is_some());
-        assert_eq!(mcp.unwrap().node_type, CommandType::Namespace);
-    }
-
-    #[test]
-    fn test_mcp_from_builtin_rule() {
-        // With default config, /mcp is a builtin command (Prompt type)
+    fn test_flat_namespace_no_mcp_builtin() {
+        // In flat namespace mode, /mcp is NOT a builtin command
+        // MCP tools are registered directly as root commands (e.g., /git)
         let config = Config::default();
         let registry = CommandRegistry::from_config(&config, "en");
 
         let commands = registry.get_root_commands();
         let mcp = commands.iter().find(|c| c.key == "mcp");
-        assert!(mcp.is_some());
-        // /mcp builtin rule has no capabilities, so it's a Prompt type
-        assert_eq!(mcp.unwrap().node_type, CommandType::Prompt);
+        // /mcp should NOT exist in flat namespace mode
+        assert!(mcp.is_none(), "/mcp namespace should not exist in flat namespace mode");
+    }
+
+    #[test]
+    fn test_flat_namespace_builtins() {
+        // In flat namespace mode, only 3 builtins: search, video, chat
+        let config = Config::default();
+        let registry = CommandRegistry::from_config(&config, "en");
+
+        let commands = registry.get_root_commands();
+
+        // Verify the 3 builtins exist
+        assert!(commands.iter().any(|c| c.key == "search"), "search should exist");
+        assert!(commands.iter().any(|c| c.key == "video"), "video should exist");
+        assert!(commands.iter().any(|c| c.key == "chat"), "chat should exist");
+
+        // Verify no /mcp or /skill namespace
+        assert!(!commands.iter().any(|c| c.key == "mcp"), "/mcp should not exist");
+        assert!(!commands.iter().any(|c| c.key == "skill"), "/skill should not exist");
     }
 }

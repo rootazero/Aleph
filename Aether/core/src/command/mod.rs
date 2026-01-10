@@ -20,6 +20,7 @@ pub use registry::get_builtin_hint;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dispatcher::ToolSourceType;
 
     #[test]
     fn test_command_type_display() {
@@ -30,19 +31,17 @@ mod tests {
 
     #[test]
     fn test_command_node_creation() {
-        let node = CommandNode {
-            key: "search".to_string(),
-            description: "Web search".to_string(),
-            icon: "magnifyingglass".to_string(),
-            hint: Some("网页搜索".to_string()),
-            node_type: CommandType::Action,
-            has_children: false,
-            source_id: Some("builtin:search".to_string()),
-        };
+        // In flat namespace mode, use new_with_source for proper initialization
+        let node = CommandNode::new_with_source("search", "Web search", ToolSourceType::Builtin)
+            .with_icon("magnifyingglass")
+            .with_hint("网页搜索")
+            .with_source_id("builtin:search");
 
         assert_eq!(node.key, "search");
         assert!(node.hint.is_some());
-        assert!(!node.has_children);
+        assert!(!node.has_children); // Flat namespace: no children
+        assert_eq!(node.source_type, ToolSourceType::Builtin);
+        assert!(node.is_system());
     }
 
     #[test]

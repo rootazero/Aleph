@@ -9,19 +9,29 @@
 //  It helps users type commands, but does NOT execute them.
 //  Users must still double-tap hotkey to execute after command input.
 //
+//  ## Flat Namespace Mode
+//
+//  All tools (MCP, Skill, Custom) are displayed as flat root-level commands.
+//  There is no namespace navigation (no /mcp or /skill prefixes).
+//  Tool source is shown via badges in the UI, not via command prefixes.
+//
 
 import Combine
 import Foundation
 import SwiftUI
 
-/// Manages command completion mode state and command list
+/// Manages command completion mode state and command list (Flat Namespace Mode)
 ///
 /// This class is responsible for:
 /// - Toggling command mode on/off (Cmd+Opt+/)
 /// - Fetching commands from ToolRegistry (single source of truth)
 /// - Filtering commands by prefix as user types
-/// - Supporting namespace navigation for /mcp and /skill
 /// - Listening for tool changes to auto-refresh
+///
+/// In flat namespace mode:
+/// - All commands are at root level
+/// - No namespace navigation needed
+/// - Source shown via badges (System, MCP, Skill, Custom)
 final class CommandCompletionManager: ObservableObject {
 
     // MARK: - Published State
@@ -42,15 +52,12 @@ final class CommandCompletionManager: ObservableObject {
         }
     }
 
-    /// Current parent command key for namespace navigation (e.g., "mcp", "skill")
-    @Published private(set) var currentParentKey: String?
-
     // MARK: - Private Properties
 
     /// Reference to Rust Core
     private weak var core: AetherCore?
 
-    /// All commands at current level (cached)
+    /// All commands (cached from ToolRegistry)
     private var allCommands: [CommandNode] = []
 
     /// Callback when user selects a command
@@ -103,7 +110,6 @@ final class CommandCompletionManager: ObservableObject {
         refreshCommands()
         inputPrefix = ""
         selectedIndex = 0
-        currentParentKey = nil
         isCommandModeActive = true
     }
 
@@ -113,7 +119,6 @@ final class CommandCompletionManager: ObservableObject {
         onCommandSelected = nil
         inputPrefix = ""
         selectedIndex = 0
-        currentParentKey = nil
     }
 
     /// Select the currently highlighted command
@@ -126,12 +131,8 @@ final class CommandCompletionManager: ObservableObject {
 
         let command = displayedCommands[selectedIndex]
 
-        // If namespace command with children, navigate into it
-        if command.nodeType == .namespace && command.hasChildren {
-            navigateIntoNamespace(command.key)
-            return
-        }
-
+        // In flat namespace mode, all commands are directly invocable
+        // No namespace navigation needed
         onCommandSelected?(command)
         deactivateCommandMode()
     }
@@ -148,27 +149,6 @@ final class CommandCompletionManager: ObservableObject {
         selectedIndex = (selectedIndex + 1) % displayedCommands.count
     }
 
-    /// Navigate into a namespace command (e.g., /mcp, /skill)
-    func navigateIntoNamespace(_ parentKey: String) {
-        currentParentKey = parentKey
-        refreshSubcommands()
-        inputPrefix = ""
-        selectedIndex = 0
-    }
-
-    /// Navigate back to root commands
-    func navigateToRoot() {
-        currentParentKey = nil
-        refreshCommands()
-        inputPrefix = ""
-        selectedIndex = 0
-    }
-
-    /// Check if currently in a namespace (for UI back button)
-    var isInNamespace: Bool {
-        currentParentKey != nil
-    }
-
     /// Refresh commands from ToolRegistry (single source of truth)
     func refreshCommands() {
         guard let core = core else {
@@ -179,28 +159,14 @@ final class CommandCompletionManager: ObservableObject {
         }
 
         // Use registry-based method (single source of truth)
+        // In flat namespace mode, all commands are at root level
         allCommands = core.getRootCommandsFromRegistry()
-        NSLog("[CommandCompletionManager] refreshCommands: loaded %d commands from registry", allCommands.count)
+        NSLog("[CommandCompletionManager] refreshCommands: loaded %d commands from registry (flat namespace)", allCommands.count)
+        #if DEBUG
         for cmd in allCommands {
-            NSLog("[CommandCompletionManager]   - /%@ (hasChildren: %@)", cmd.key, cmd.hasChildren ? "true" : "false")
+            NSLog("[CommandCompletionManager]   - /%@ [%@]", cmd.key, cmd.sourceId ?? "unknown")
         }
-        filterCommands()
-    }
-
-    /// Refresh subcommands for current namespace
-    private func refreshSubcommands() {
-        guard let core = core, let parentKey = currentParentKey else {
-            allCommands = []
-            displayedCommands = []
-            return
-        }
-
-        // Use registry-based method for subcommands
-        allCommands = core.getSubcommandsFromRegistry(parentKey: parentKey)
-        NSLog("[CommandCompletionManager] refreshSubcommands: loaded %d subcommands for /%@", allCommands.count, parentKey)
-        for cmd in allCommands {
-            NSLog("[CommandCompletionManager]   - %@", cmd.key)
-        }
+        #endif
         filterCommands()
     }
 
@@ -208,15 +174,18 @@ final class CommandCompletionManager: ObservableObject {
 
     /// Filter commands by current input prefix
     private func filterCommands() {
-        NSLog("[CommandCompletionManager] filterCommands: prefix='%@', parent=%@", inputPrefix, currentParentKey ?? "root")
+        NSLog("[CommandCompletionManager] filterCommands: prefix='%@'", inputPrefix)
 
         if inputPrefix.isEmpty {
             displayedCommands = allCommands
             NSLog("[CommandCompletionManager] Empty prefix, showing all %d commands", allCommands.count)
         } else {
-            // Local filtering by prefix
+            // Local filtering by prefix (case-insensitive)
             let lowercasedPrefix = inputPrefix.lowercased()
-            displayedCommands = allCommands.filter { $0.key.lowercased().hasPrefix(lowercasedPrefix) }
+            displayedCommands = allCommands.filter {
+                $0.key.lowercased().hasPrefix(lowercasedPrefix) ||
+                $0.description.lowercased().contains(lowercasedPrefix)
+            }
             NSLog("[CommandCompletionManager] Filtered by prefix: %d results", displayedCommands.count)
         }
 
@@ -227,10 +196,61 @@ final class CommandCompletionManager: ObservableObject {
     }
 }
 
-// MARK: - CommandNode Extensions
+// MARK: - CommandNode Extensions (Flat Namespace Mode)
 
 extension CommandNode {
+    /// SF Symbol name for command source (flat namespace mode)
+    ///
+    /// In flat namespace mode, icon represents the tool source:
+    /// - System (Builtin): command.circle.fill
+    /// - MCP: bolt.fill
+    /// - Skill: lightbulb.fill
+    /// - Custom: command
+    var sourceIcon: String {
+        switch sourceType {
+        case .builtin, .native:
+            return "command.circle.fill"
+        case .mcp:
+            return "bolt.fill"
+        case .skill:
+            return "lightbulb.fill"
+        case .custom:
+            return "command"
+        }
+    }
+
+    /// Color for command source (flat namespace mode)
+    var sourceColor: Color {
+        switch sourceType {
+        case .builtin, .native:
+            return .blue
+        case .mcp:
+            return .orange
+        case .skill:
+            return .purple
+        case .custom:
+            return .green
+        }
+    }
+
+    /// Badge text for command source
+    var sourceBadgeText: String {
+        switch sourceType {
+        case .builtin, .native:
+            return NSLocalizedString("source.system", comment: "System source badge")
+        case .mcp:
+            return "MCP"
+        case .skill:
+            return NSLocalizedString("source.skill", comment: "Skill source badge")
+        case .custom:
+            return NSLocalizedString("source.custom", comment: "Custom source badge")
+        }
+    }
+
+    // MARK: - Legacy type-based properties (deprecated in flat namespace)
+
     /// SF Symbol name for command type
+    @available(*, deprecated, message: "Use sourceIcon instead in flat namespace mode")
     var typeIcon: String {
         switch nodeType {
         case .action:
@@ -243,6 +263,7 @@ extension CommandNode {
     }
 
     /// Color for command type
+    @available(*, deprecated, message: "Use sourceColor instead in flat namespace mode")
     var typeColor: Color {
         switch nodeType {
         case .action:
@@ -255,6 +276,7 @@ extension CommandNode {
     }
 
     /// Localized type description
+    @available(*, deprecated, message: "Use sourceBadgeText instead in flat namespace mode")
     var typeDescription: String {
         switch nodeType {
         case .action:

@@ -1901,10 +1901,11 @@ public struct CommandNode {
     public var nodeType: CommandType
     public var hasChildren: Bool
     public var sourceId: String?
+    public var sourceType: ToolSourceType
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(key: String, description: String, icon: String, hint: String?, nodeType: CommandType, hasChildren: Bool, sourceId: String?) {
+    public init(key: String, description: String, icon: String, hint: String?, nodeType: CommandType, hasChildren: Bool, sourceId: String?, sourceType: ToolSourceType) {
         self.key = key
         self.description = description
         self.icon = icon
@@ -1912,6 +1913,7 @@ public struct CommandNode {
         self.nodeType = nodeType
         self.hasChildren = hasChildren
         self.sourceId = sourceId
+        self.sourceType = sourceType
     }
 }
 
@@ -1940,6 +1942,9 @@ extension CommandNode: Equatable, Hashable {
         if lhs.sourceId != rhs.sourceId {
             return false
         }
+        if lhs.sourceType != rhs.sourceType {
+            return false
+        }
         return true
     }
 
@@ -1951,6 +1956,7 @@ extension CommandNode: Equatable, Hashable {
         hasher.combine(nodeType)
         hasher.combine(hasChildren)
         hasher.combine(sourceId)
+        hasher.combine(sourceType)
     }
 }
 
@@ -1968,7 +1974,8 @@ public struct FfiConverterTypeCommandNode: FfiConverterRustBuffer {
                 hint: FfiConverterOptionString.read(from: &buf), 
                 nodeType: FfiConverterTypeCommandType.read(from: &buf), 
                 hasChildren: FfiConverterBool.read(from: &buf), 
-                sourceId: FfiConverterOptionString.read(from: &buf)
+                sourceId: FfiConverterOptionString.read(from: &buf), 
+                sourceType: FfiConverterTypeToolSourceType.read(from: &buf)
         )
     }
 
@@ -1980,6 +1987,7 @@ public struct FfiConverterTypeCommandNode: FfiConverterRustBuffer {
         FfiConverterTypeCommandType.write(value.nodeType, into: &buf)
         FfiConverterBool.write(value.hasChildren, into: &buf)
         FfiConverterOptionString.write(value.sourceId, into: &buf)
+        FfiConverterTypeToolSourceType.write(value.sourceType, into: &buf)
     }
 }
 
