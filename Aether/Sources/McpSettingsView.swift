@@ -75,26 +75,17 @@ struct McpSettingsView: View {
     private var serverListView: some View {
         VStack(spacing: 0) {
             List(selection: $selectedServerId) {
-                // System Tools section (Tier 1: native Rust tools)
-                Section(header: Text(L("settings.mcp.server_list.builtin"))) {
-                    ForEach(builtinServers, id: \.id) { server in
+                // MCP Extensions (external MCP servers)
+                // Note: Native tools (fs, git, shell, etc.) are now handled via AgentTool infrastructure
+                if servers.isEmpty {
+                    Text(L("settings.mcp.no_extensions"))
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                        .italic()
+                } else {
+                    ForEach(servers, id: \.id) { server in
                         ServerListRow(server: server, status: getServerStatus(server.id))
                             .tag(server.id)
-                    }
-                }
-
-                // MCP Extensions section (Tier 2: external MCP servers)
-                Section(header: Text(L("settings.mcp.server_list.extensions"))) {
-                    if externalServers.isEmpty {
-                        Text(L("settings.mcp.no_extensions"))
-                            .font(DesignTokens.Typography.caption)
-                            .foregroundColor(DesignTokens.Colors.textSecondary)
-                            .italic()
-                    } else {
-                        ForEach(externalServers, id: \.id) { server in
-                            ServerListRow(server: server, status: getServerStatus(server.id))
-                                .tag(server.id)
-                        }
                     }
                 }
             }
@@ -116,7 +107,7 @@ struct McpSettingsView: View {
 
                 Spacer()
 
-                if selectedServerId != nil, isExternalServer(selectedServerId!) {
+                if selectedServerId != nil {
                     Button(action: { showDeleteConfirmation = true }) {
                         Image(systemName: "trash")
                             .foregroundColor(.red)
@@ -359,33 +350,29 @@ struct McpSettingsView: View {
             }
             .toggleStyle(.switch)
 
-            // Allowed paths (for fs/git services)
-            if config.id == "fs" || config.id == "git" || config.serverType == .external {
-                PathsListEditor(
-                    title: L("settings.mcp.detail.allowed_paths"),
-                    paths: Binding(
-                        get: { editingConfig?.permissions.allowedPaths ?? [] },
-                        set: { newValue in
-                            editingConfig?.permissions.allowedPaths = newValue
-                            updateSaveBarState()
-                        }
-                    )
+            // Allowed paths (for external servers)
+            PathsListEditor(
+                title: L("settings.mcp.detail.allowed_paths"),
+                paths: Binding(
+                    get: { editingConfig?.permissions.allowedPaths ?? [] },
+                    set: { newValue in
+                        editingConfig?.permissions.allowedPaths = newValue
+                        updateSaveBarState()
+                    }
                 )
-            }
+            )
 
-            // Allowed commands (for shell service)
-            if config.id == "shell" {
-                CommandsListEditor(
-                    title: L("settings.mcp.detail.allowed_commands"),
-                    commands: Binding(
-                        get: { editingConfig?.permissions.allowedCommands ?? [] },
-                        set: { newValue in
-                            editingConfig?.permissions.allowedCommands = newValue
-                            updateSaveBarState()
-                        }
-                    )
+            // Allowed commands (for external servers)
+            CommandsListEditor(
+                title: L("settings.mcp.detail.allowed_commands"),
+                commands: Binding(
+                    get: { editingConfig?.permissions.allowedCommands ?? [] },
+                    set: { newValue in
+                        editingConfig?.permissions.allowedCommands = newValue
+                        updateSaveBarState()
+                    }
                 )
-            }
+            )
         }
         .padding(DesignTokens.Spacing.md)
         .background(DesignTokens.Colors.cardBackground)
@@ -448,14 +435,6 @@ struct McpSettingsView: View {
 
     // MARK: - Computed Properties
 
-    private var builtinServers: [McpServerConfig] {
-        servers.filter { $0.serverType == .builtin }
-    }
-
-    private var externalServers: [McpServerConfig] {
-        servers.filter { $0.serverType == .external }
-    }
-
     private var hasUnsavedChanges: Bool {
         guard let editing = editingConfig, let original = originalConfig else {
             return false
@@ -492,10 +471,6 @@ struct McpSettingsView: View {
 
     private func getServerStatus(_ id: String) -> McpServerStatus {
         core.getMcpServerStatus(id: id).status
-    }
-
-    private func isExternalServer(_ id: String) -> Bool {
-        servers.first(where: { $0.id == id })?.serverType == .external
     }
 
     private func updateSaveBarState() {
