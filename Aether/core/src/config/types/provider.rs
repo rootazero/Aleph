@@ -1,0 +1,178 @@
+//! Provider configuration types
+//!
+//! Contains AI provider configuration:
+//! - ProviderConfig: Individual provider settings (API key, model, etc.)
+//! - ProviderConfigEntry: Provider with name (for UniFFI)
+//! - TestConnectionResult: Connection test result
+
+use serde::{Deserialize, Serialize};
+
+// =============================================================================
+// ProviderConfigEntry
+// =============================================================================
+
+/// Provider config entry with name (for UniFFI)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderConfigEntry {
+    pub name: String,
+    #[serde(flatten)]
+    pub config: ProviderConfig,
+}
+
+// =============================================================================
+// TestConnectionResult
+// =============================================================================
+
+/// Test connection result (for provider connection testing)
+#[derive(Debug, Clone)]
+pub struct TestConnectionResult {
+    pub success: bool,
+    pub message: String,
+}
+
+// =============================================================================
+// ProviderConfig
+// =============================================================================
+
+/// AI Provider configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderConfig {
+    /// Provider type: "openai", "claude", "gemini", "ollama", or custom name
+    /// If not specified, inferred from provider name in config
+    #[serde(default)]
+    pub provider_type: Option<String>,
+    /// API key for cloud providers (required for OpenAI, Claude, Gemini)
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Model name (e.g., "gpt-4o", "claude-3-5-sonnet-20241022", "gemini-3-flash", "llama3.2")
+    pub model: String,
+    /// Base URL for API endpoint (optional, defaults to official API)
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Provider brand color for UI (hex string, e.g., "#10a37f")
+    #[serde(default = "default_provider_color")]
+    pub color: String,
+    /// Request timeout in seconds
+    #[serde(default = "default_timeout_seconds")]
+    pub timeout_seconds: u64,
+    /// Whether the provider is enabled/active
+    #[serde(default = "default_provider_enabled")]
+    pub enabled: bool,
+
+    // Common generation parameters
+    /// Maximum tokens in response (optional)
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    /// Temperature for response randomness (0.0-2.0 for OpenAI/Gemini, 0.0-1.0 for Claude)
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    /// Top-p nucleus sampling (0.0-1.0, optional)
+    #[serde(default)]
+    pub top_p: Option<f32>,
+    /// Top-k sampling (integer, optional, used by Claude, Gemini, Ollama)
+    #[serde(default)]
+    pub top_k: Option<u32>,
+
+    // OpenAI-specific parameters
+    /// Frequency penalty (-2.0 to 2.0, OpenAI only)
+    #[serde(default)]
+    pub frequency_penalty: Option<f32>,
+    /// Presence penalty (-2.0 to 2.0, OpenAI only)
+    #[serde(default)]
+    pub presence_penalty: Option<f32>,
+
+    // Claude/Gemini/Ollama-specific parameters
+    /// Stop sequences (comma-separated, Claude/Gemini/Ollama)
+    #[serde(default)]
+    pub stop_sequences: Option<String>,
+
+    // Gemini-specific parameters
+    /// Thinking level for Gemini 3 models (LOW or HIGH)
+    #[serde(default)]
+    pub thinking_level: Option<String>,
+    /// Media resolution for Gemini (LOW, MEDIUM, HIGH)
+    #[serde(default)]
+    pub media_resolution: Option<String>,
+
+    // Ollama-specific parameters
+    /// Repeat penalty for Ollama (default 1.1)
+    #[serde(default)]
+    pub repeat_penalty: Option<f32>,
+
+    // System prompt handling mode
+    /// How to send system prompts to the API:
+    /// - "prepend" (default): Prepend system prompt to user message (for APIs that ignore system role)
+    /// - "standard": Use a separate system message (for standard OpenAI-compatible APIs)
+    #[serde(default)]
+    pub system_prompt_mode: Option<String>,
+}
+
+pub fn default_provider_color() -> String {
+    "#808080".to_string() // Gray as default
+}
+
+pub fn default_timeout_seconds() -> u64 {
+    30 // 30 seconds default timeout
+}
+
+pub fn default_provider_enabled() -> bool {
+    false // Providers are disabled by default, user must explicitly enable them
+}
+
+impl ProviderConfig {
+    /// Infer provider type from config
+    ///
+    /// If `provider_type` is explicitly set, use it.
+    /// Otherwise, infer from provider name:
+    /// - "openai" -> "openai"
+    /// - "claude" -> "claude"
+    /// - "gemini" -> "gemini"
+    /// - "ollama" -> "ollama"
+    /// - anything with base_url -> "openai" (OpenAI-compatible)
+    /// - default -> "openai"
+    pub fn infer_provider_type(&self, provider_name: &str) -> String {
+        if let Some(ref provider_type) = self.provider_type {
+            return provider_type.clone();
+        }
+
+        // Infer from provider name
+        let name_lower = provider_name.to_lowercase();
+        if name_lower.contains("claude") {
+            "claude".to_string()
+        } else if name_lower.contains("gemini") || name_lower.contains("google") {
+            "gemini".to_string()
+        } else if name_lower.contains("ollama") {
+            "ollama".to_string()
+        } else {
+            // Default to OpenAI-compatible (covers OpenAI, DeepSeek, Moonshot, etc.)
+            "openai".to_string()
+        }
+    }
+
+    /// Create a minimal test configuration with only required fields
+    ///
+    /// This is a helper for tests to avoid specifying all optional fields.
+    /// All optional advanced parameters (like frequency_penalty, media_resolution, etc.) are set to None.
+    pub fn test_config(model: impl Into<String>) -> Self {
+        Self {
+            provider_type: None,
+            api_key: Some("test-key".to_string()),
+            model: model.into(),
+            base_url: None,
+            color: default_provider_color(),
+            timeout_seconds: default_timeout_seconds(),
+            enabled: true, // Tests need enabled providers
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop_sequences: None,
+            thinking_level: None,
+            media_resolution: None,
+            repeat_penalty: None,
+            system_prompt_mode: None,
+        }
+    }
+}
