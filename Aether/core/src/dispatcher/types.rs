@@ -16,6 +16,11 @@ pub enum ToolSource {
     /// These are always available without any configuration.
     Native,
 
+    /// System builtin commands (/search, /mcp, /skill, /video, /chat)
+    /// These are always-available slash commands that may or may not have
+    /// special capability execution logic.
+    Builtin,
+
     /// MCP (Model Context Protocol) server
     /// External or builtin MCP servers providing tools.
     Mcp {
@@ -43,6 +48,7 @@ impl ToolSource {
     pub fn label(&self) -> &'static str {
         match self {
             ToolSource::Native => "Native",
+            ToolSource::Builtin => "Builtin",
             ToolSource::Mcp { .. } => "MCP",
             ToolSource::Skill { .. } => "Skill",
             ToolSource::Custom { .. } => "Custom",
@@ -53,6 +59,7 @@ impl ToolSource {
     pub fn icon_hint(&self) -> &'static str {
         match self {
             ToolSource::Native => "star.fill",
+            ToolSource::Builtin => "command.circle.fill",
             ToolSource::Mcp { .. } => "bolt.fill",
             ToolSource::Skill { .. } => "lightbulb.fill",
             ToolSource::Custom { .. } => "command",
@@ -62,7 +69,7 @@ impl ToolSource {
 
 /// Unified tool representation
 ///
-/// All tools (Native, MCP, Skills, Custom) are normalized to this structure
+/// All tools (Native, MCP, Skills, Custom, Builtin) are normalized to this structure
 /// for consistent handling across routing, UI display, and prompt generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnifiedTool {
@@ -103,6 +110,45 @@ pub struct UnifiedTool {
     /// e.g., "fs" for "fs:read_file"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_name: Option<String>,
+
+    // =========================================================================
+    // UI Metadata Fields (for Settings UI and Command Completion)
+    // =========================================================================
+
+    /// SF Symbol icon name for UI display
+    /// e.g., "magnifyingglass", "puzzlepiece.extension"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+
+    /// Usage example for documentation
+    /// e.g., "/search <query>", "/mcp <tool> [params]"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<String>,
+
+    /// IDs of nested subtools (for namespace commands like /mcp, /skill)
+    /// Empty for leaf commands.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtools: Vec<String>,
+
+    /// Localization key for i18n lookup
+    /// e.g., "tool.search" maps to "tool.search.hint", "tool.search.description"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub localization_key: Option<String>,
+
+    /// Quick check for builtin status
+    /// True for system builtin commands (/search, /mcp, /skill, /video, /chat)
+    #[serde(default)]
+    pub is_builtin: bool,
+
+    /// Display sort order (lower = first)
+    /// Used to order commands in completion and UI lists.
+    #[serde(default)]
+    pub sort_order: i32,
+
+    /// Whether this tool has dynamic subtools
+    /// True for /mcp (has MCP server tools) and /skill (has installed skills)
+    #[serde(default)]
+    pub has_subtools: bool,
 }
 
 impl UnifiedTool {
@@ -115,6 +161,7 @@ impl UnifiedTool {
     ) -> Self {
         let name = name.into();
         let display_name = name.clone();
+        let is_builtin = matches!(source, ToolSource::Builtin);
         Self {
             id: id.into(),
             name,
@@ -125,12 +172,36 @@ impl UnifiedTool {
             is_active: true,
             requires_confirmation: false,
             service_name: None,
+            // UI metadata defaults
+            icon: None,
+            usage: None,
+            subtools: Vec::new(),
+            localization_key: None,
+            is_builtin,
+            sort_order: 100, // Default sort order (user commands come after builtins)
+            has_subtools: false,
         }
+    }
+
+    /// Create a builtin tool with standard prefix
+    ///
+    /// Convenience constructor for system builtin commands.
+    /// ID is automatically prefixed with "builtin:".
+    pub fn builtin(name: impl Into<String>) -> Self {
+        let name = name.into();
+        let id = format!("builtin:{}", name);
+        Self::new(id, name, "", ToolSource::Builtin).with_builtin(true)
     }
 
     /// Builder method: set display name
     pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
         self.display_name = display_name.into();
+        self
+    }
+
+    /// Builder method: set description
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
         self
     }
 
@@ -158,12 +229,55 @@ impl UnifiedTool {
         self
     }
 
+    /// Builder method: set icon (SF Symbol name)
+    pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    /// Builder method: set usage example
+    pub fn with_usage(mut self, usage: impl Into<String>) -> Self {
+        self.usage = Some(usage.into());
+        self
+    }
+
+    /// Builder method: set localization key
+    pub fn with_localization_key(mut self, key: impl Into<String>) -> Self {
+        self.localization_key = Some(key.into());
+        self
+    }
+
+    /// Builder method: set builtin flag
+    pub fn with_builtin(mut self, is_builtin: bool) -> Self {
+        self.is_builtin = is_builtin;
+        self
+    }
+
+    /// Builder method: set sort order
+    pub fn with_sort_order(mut self, order: i32) -> Self {
+        self.sort_order = order;
+        self
+    }
+
+    /// Builder method: set has_subtools flag
+    pub fn with_has_subtools(mut self, has: bool) -> Self {
+        self.has_subtools = has;
+        self
+    }
+
+    /// Builder method: add a subtool ID
+    pub fn with_subtool(mut self, subtool_id: impl Into<String>) -> Self {
+        self.subtools.push(subtool_id.into());
+        self
+    }
+
     /// Format tool for LLM prompt inclusion
     ///
     /// Returns a markdown-formatted line for system prompt injection.
     pub fn to_prompt_line(&self) -> String {
         let source_badge = match &self.source {
             ToolSource::Native => String::new(),
+            ToolSource::Builtin => " [Builtin]".to_string(),
             ToolSource::Mcp { server } => format!(" [MCP:{}]", server),
             ToolSource::Skill { id } => format!(" [Skill:{}]", id),
             ToolSource::Custom { .. } => " [Custom]".to_string(),
@@ -258,6 +372,8 @@ impl RoutingLayer {
 pub enum ToolSourceType {
     /// Built-in native capabilities (Search, Video)
     Native,
+    /// System builtin commands (/search, /mcp, /skill, /video, /chat)
+    Builtin,
     /// MCP server tool
     Mcp,
     /// Claude Agent Skill
@@ -270,6 +386,7 @@ impl From<&ToolSource> for ToolSourceType {
     fn from(source: &ToolSource) -> Self {
         match source {
             ToolSource::Native => ToolSourceType::Native,
+            ToolSource::Builtin => ToolSourceType::Builtin,
             ToolSource::Mcp { .. } => ToolSourceType::Mcp,
             ToolSource::Skill { .. } => ToolSourceType::Skill,
             ToolSource::Custom { .. } => ToolSourceType::Custom,
@@ -302,12 +419,27 @@ pub struct UnifiedToolInfo {
     pub requires_confirmation: bool,
     /// Parent service name (for MCP sub-tools)
     pub service_name: Option<String>,
+
+    // UI Metadata
+    /// SF Symbol icon name
+    pub icon: Option<String>,
+    /// Usage example
+    pub usage: Option<String>,
+    /// Localization key for i18n
+    pub localization_key: Option<String>,
+    /// Whether this is a system builtin command
+    pub is_builtin: bool,
+    /// Display sort order
+    pub sort_order: i32,
+    /// Whether has dynamic subtools
+    pub has_subtools: bool,
 }
 
 impl From<&UnifiedTool> for UnifiedToolInfo {
     fn from(tool: &UnifiedTool) -> Self {
         let (source_type, source_id) = match &tool.source {
             ToolSource::Native => (ToolSourceType::Native, None),
+            ToolSource::Builtin => (ToolSourceType::Builtin, None),
             ToolSource::Mcp { server } => (ToolSourceType::Mcp, Some(server.clone())),
             ToolSource::Skill { id } => (ToolSourceType::Skill, Some(id.clone())),
             ToolSource::Custom { rule_index } => {
@@ -331,6 +463,13 @@ impl From<&UnifiedTool> for UnifiedToolInfo {
             is_active: tool.is_active,
             requires_confirmation: tool.requires_confirmation,
             service_name: tool.service_name.clone(),
+            // UI metadata
+            icon: tool.icon.clone(),
+            usage: tool.usage.clone(),
+            localization_key: tool.localization_key.clone(),
+            is_builtin: tool.is_builtin,
+            sort_order: tool.sort_order,
+            has_subtools: tool.has_subtools,
         }
     }
 }
@@ -349,6 +488,7 @@ mod tests {
     #[test]
     fn test_tool_source_label() {
         assert_eq!(ToolSource::Native.label(), "Native");
+        assert_eq!(ToolSource::Builtin.label(), "Builtin");
         assert_eq!(
             ToolSource::Mcp {
                 server: "test".into()
@@ -361,6 +501,28 @@ mod tests {
             "Skill"
         );
         assert_eq!(ToolSource::Custom { rule_index: 0 }.label(), "Custom");
+    }
+
+    #[test]
+    fn test_builtin_tool_constructor() {
+        let tool = UnifiedTool::builtin("search")
+            .with_display_name("Web Search")
+            .with_description("Search the web")
+            .with_icon("magnifyingglass")
+            .with_usage("/search <query>")
+            .with_localization_key("tool.search")
+            .with_sort_order(1);
+
+        assert_eq!(tool.id, "builtin:search");
+        assert_eq!(tool.name, "search");
+        assert_eq!(tool.display_name, "Web Search");
+        assert_eq!(tool.description, "Search the web");
+        assert_eq!(tool.icon, Some("magnifyingglass".to_string()));
+        assert_eq!(tool.usage, Some("/search <query>".to_string()));
+        assert_eq!(tool.localization_key, Some("tool.search".to_string()));
+        assert_eq!(tool.sort_order, 1);
+        assert!(tool.is_builtin);
+        assert!(matches!(tool.source, ToolSource::Builtin));
     }
 
     #[test]

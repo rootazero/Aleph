@@ -728,3 +728,35 @@
 "subpanel.cli.completed" = "✓ Completed";
 "subpanel.confirmation.confirm" = "Confirm";
 "subpanel.confirmation.cancel" = "Cancel";
+
+// MARK: - Tool Registry Localization (unify-tool-registry)
+// Tool source type labels
+"tool.source.builtin" = "System";
+"tool.source.mcp" = "MCP";
+"tool.source.skill" = "Skill";
+"tool.source.custom" = "Custom";
+
+// /search tool
+"tool.search.description" = "Web search capability - Use search engines to find up-to-date information";
+"tool.search.hint" = "Web Search";
+"tool.search.usage" = "/search <query>";
+
+// /mcp tool
+"tool.mcp.description" = "Model Context Protocol integration - Connect to external tools and services";
+"tool.mcp.hint" = "MCP Tools";
+"tool.mcp.usage" = "/mcp <tool> [params]";
+
+// /skill tool
+"tool.skill.description" = "Claude Skills - Execute custom workflows and automations";
+"tool.skill.hint" = "Skills";
+"tool.skill.usage" = "/skill <name>";
+
+// /video tool
+"tool.video.description" = "YouTube Video Analysis - Extract and analyze video content via transcripts";
+"tool.video.hint" = "Video Analysis";
+"tool.video.usage" = "/video <YouTube URL>";
+
+// /chat tool
+"tool.chat.description" = "Multi-turn Conversation - Start a conversation session with follow-up questions";
+"tool.chat.hint" = "Conversation";
+"tool.chat.usage" = "/chat <message>";

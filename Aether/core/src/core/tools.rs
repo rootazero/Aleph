@@ -37,7 +37,13 @@ impl AetherCore {
 
         // Run refresh in tokio runtime
         self.runtime.spawn(async move {
-            // 1. Register native tools
+            // 0. Clear existing tools
+            registry.clear().await;
+
+            // 1. Register builtin commands (single source of truth)
+            registry.register_builtin_tools().await;
+
+            // 2. Register native tools (capabilities)
             registry.register_native_tools().await;
 
             // 2. Register system tools (from MCP client)
@@ -133,6 +139,30 @@ impl AetherCore {
     /// This is the UniFFI-exposed method that returns FFI-safe types.
     pub fn list_tools(&self) -> Vec<crate::dispatcher::UnifiedToolInfo> {
         self.list_unified_tools()
+            .into_iter()
+            .map(crate::dispatcher::UnifiedToolInfo::from)
+            .collect()
+    }
+
+    /// List builtin tools only (for Settings UI)
+    ///
+    /// Returns the 5 system builtin commands (/search, /mcp, /skill, /video, /chat)
+    /// sorted by sort_order. This is the single source of truth for preset rules.
+    pub fn list_builtin_tools(&self) -> Vec<crate::dispatcher::UnifiedToolInfo> {
+        self.runtime
+            .block_on(async { self.tool_registry.list_builtin_tools().await })
+            .into_iter()
+            .map(crate::dispatcher::UnifiedToolInfo::from)
+            .collect()
+    }
+
+    /// List root-level commands for command completion
+    ///
+    /// Returns builtin commands + custom commands (but not nested MCP/Skill tools),
+    /// sorted by sort_order then alphabetically.
+    pub fn list_root_tools(&self) -> Vec<crate::dispatcher::UnifiedToolInfo> {
+        self.runtime
+            .block_on(async { self.tool_registry.list_root_commands().await })
             .into_iter()
             .map(crate::dispatcher::UnifiedToolInfo::from)
             .collect()
@@ -320,5 +350,89 @@ impl AetherCore {
     pub fn filter_commands(&self, prefix: String) -> Vec<crate::command::CommandNode> {
         let commands = self.get_root_commands();
         crate::command::CommandRegistry::filter_by_prefix(&commands, &prefix)
+    }
+
+    // ========================================================================
+    // TOOL REGISTRY-BASED COMMAND COMPLETION (unify-tool-registry)
+    // ========================================================================
+
+    /// Get subtools for a namespace command from ToolRegistry
+    ///
+    /// For commands like /mcp and /skill that have dynamic subtools,
+    /// this queries the ToolRegistry to get the list of available subtools.
+    ///
+    /// # Arguments
+    /// * `parent_key` - The key of the parent command (e.g., "mcp", "skill")
+    ///
+    /// # Returns
+    /// * `Vec<UnifiedToolInfo>` - List of subtools, or empty if none
+    pub fn get_subtools_from_registry(&self, parent_key: String) -> Vec<crate::dispatcher::UnifiedToolInfo> {
+        use crate::dispatcher::ToolSourceType;
+
+        match parent_key.as_str() {
+            "mcp" => {
+                // Return all MCP tools
+                self.list_tools_by_source(ToolSourceType::Mcp)
+            }
+            "skill" => {
+                // Return all skill tools
+                self.list_tools_by_source(ToolSourceType::Skill)
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Convert UnifiedToolInfo to CommandNode for UI compatibility
+    ///
+    /// This allows the command completion UI to use ToolRegistry data
+    /// while maintaining backward compatibility with CommandNode.
+    pub fn tool_to_command_node(tool: &crate::dispatcher::UnifiedToolInfo) -> crate::command::CommandNode {
+        use crate::command::{CommandNode, CommandType};
+
+        let node_type = if tool.has_subtools {
+            CommandType::Namespace
+        } else {
+            CommandType::Action
+        };
+
+        let mut node = CommandNode::new(
+            tool.name.clone(),
+            tool.description.clone(),
+            node_type,
+        );
+
+        if let Some(icon) = &tool.icon {
+            node = node.with_icon(icon.clone());
+        }
+
+        // Use source_id for tracking
+        node = node.with_source_id(tool.id.clone());
+
+        // Set has_children based on has_subtools
+        node.has_children = tool.has_subtools;
+
+        node
+    }
+
+    /// Get command completions from ToolRegistry
+    ///
+    /// Returns all root-level commands as CommandNode for UI display.
+    /// This is an alternative to get_root_commands() that uses ToolRegistry as source.
+    pub fn get_root_commands_from_registry(&self) -> Vec<crate::command::CommandNode> {
+        self.list_root_tools()
+            .iter()
+            .map(Self::tool_to_command_node)
+            .collect()
+    }
+
+    /// Get subcommand completions from ToolRegistry
+    ///
+    /// Returns subcommands for a namespace command as CommandNode for UI display.
+    /// This is an alternative to get_command_children() that uses ToolRegistry as source.
+    pub fn get_subcommands_from_registry(&self, parent_key: String) -> Vec<crate::command::CommandNode> {
+        self.get_subtools_from_registry(parent_key)
+            .iter()
+            .map(Self::tool_to_command_node)
+            .collect()
     }
 }

@@ -1116,10 +1116,13 @@ struct RuleCard: View {
 // MARK: - Preset Rules List View (Popup)
 
 /// Popup view displaying all preset rules with expand/collapse support
+/// Now uses ToolRegistry as the single source of truth for builtin commands
 struct PresetRulesListView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var expandedRules: Set<String> = []
     @State private var expandedSubcommands: Set<String> = []
+    @State private var builtinTools: [UnifiedToolInfo] = []
+    @State private var isLoading = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1151,27 +1154,33 @@ struct PresetRulesListView: View {
             Divider()
 
             // Rules list with expand/collapse
-            ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(PresetRules.all, id: \.command) { preset in
-                        PresetRuleExpandableRow(
-                            preset: preset,
-                            isExpanded: expandedRules.contains(preset.command),
-                            expandedSubcommands: $expandedSubcommands,
-                            onToggle: {
-                                withAnimation(DesignTokens.Animation.quick) {
-                                    if expandedRules.contains(preset.command) {
-                                        expandedRules.remove(preset.command)
-                                    } else {
-                                        expandedRules.insert(preset.command)
+            if isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        // Use dynamic data from ToolRegistry
+                        ForEach(presetRules, id: \.command) { preset in
+                            PresetRuleExpandableRow(
+                                preset: preset,
+                                isExpanded: expandedRules.contains(preset.command),
+                                expandedSubcommands: $expandedSubcommands,
+                                onToggle: {
+                                    withAnimation(DesignTokens.Animation.quick) {
+                                        if expandedRules.contains(preset.command) {
+                                            expandedRules.remove(preset.command)
+                                        } else {
+                                            expandedRules.insert(preset.command)
+                                        }
                                     }
                                 }
-                            }
-                        )
+                            )
 
-                        if preset.command != PresetRules.all.last?.command {
-                            Divider()
-                                .padding(.leading, DesignTokens.Spacing.lg)
+                            if preset.command != presetRules.last?.command {
+                                Divider()
+                                    .padding(.leading, DesignTokens.Spacing.lg)
+                            }
                         }
                     }
                 }
@@ -1179,6 +1188,28 @@ struct PresetRulesListView: View {
         }
         .frame(width: 500, height: 450)
         .background(DesignTokens.Colors.contentBackground)
+        .onAppear {
+            loadBuiltinTools()
+        }
+    }
+
+    /// Convert UnifiedToolInfo to PresetRule for display
+    private var presetRules: [PresetRule] {
+        builtinTools.sortedByOrder().map { $0.toPresetRule() }
+    }
+
+    /// Load builtin tools from ToolRegistry
+    private func loadBuiltinTools() {
+        guard let appDelegate = NSApp.delegate as? AppDelegate,
+              let core = appDelegate.core else {
+            // Fallback to static list if core not available
+            isLoading = false
+            return
+        }
+
+        // Load from ToolRegistry (single source of truth)
+        builtinTools = core.listBuiltinTools()
+        isLoading = false
     }
 }
 

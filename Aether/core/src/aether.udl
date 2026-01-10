@@ -359,6 +359,18 @@ interface AetherCore {
   // Used for autocomplete as user types (e.g., "se" matches "search", "settings")
   sequence<CommandNode> filter_commands(string prefix);
 
+  // TOOL REGISTRY-BASED COMMAND COMPLETION (unify-tool-registry)
+
+  // Get subtools for a namespace command from ToolRegistry
+  // For /mcp returns MCP tools, for /skill returns installed skills
+  sequence<UnifiedToolInfo> get_subtools_from_registry(string parent_key);
+
+  // Get root commands from ToolRegistry (alternative to get_root_commands)
+  sequence<CommandNode> get_root_commands_from_registry();
+
+  // Get subcommands from ToolRegistry as CommandNodes (alternative to get_command_children)
+  sequence<CommandNode> get_subcommands_from_registry(string parent_key);
+
   // MULTI-TURN CONVERSATION METHODS (add-multi-turn-conversation)
 
   // Start a new conversation session
@@ -432,8 +444,17 @@ interface AetherCore {
   // DISPATCHER LAYER METHODS (implement-dispatcher-layer)
 
   // List all available tools from unified registry
-  // Returns tools from all sources: Native, MCP, Skills, Custom
+  // Returns tools from all sources: Native, MCP, Skills, Custom, Builtin
   sequence<UnifiedToolInfo> list_tools();
+
+  // List builtin tools only (for Settings UI)
+  // Returns the 5 system builtin commands sorted by sort_order
+  // This is the single source of truth for preset rules
+  sequence<UnifiedToolInfo> list_builtin_tools();
+
+  // List root-level commands for command completion
+  // Returns builtin + custom commands (but not nested MCP/Skill tools)
+  sequence<UnifiedToolInfo> list_root_tools();
 
   // List tools filtered by source type
   sequence<UnifiedToolInfo> list_tools_by_source(ToolSourceType source_type);
@@ -903,15 +924,16 @@ dictionary CommandNode {
 // Tool source type for unified tool registry
 enum ToolSourceType {
   "Native",   // Built-in native capabilities (Search, Video)
+  "Builtin",  // System builtin commands (/search, /mcp, /skill, /video, /chat)
   "Mcp",      // MCP server tool
   "Skill",    // Claude Agent Skill
   "Custom",   // User-defined custom command
 };
 
 // Unified tool representation for FFI
-// All tools (Native, MCP, Skills, Custom) are normalized to this structure
+// All tools (Native, MCP, Skills, Custom, Builtin) are normalized to this structure
 dictionary UnifiedToolInfo {
-  string id;                    // Unique identifier (e.g., "native:search")
+  string id;                    // Unique identifier (e.g., "native:search", "builtin:mcp")
   string name;                  // Command/tool name for invocation
   string display_name;          // Human-readable display name
   string description;           // Tool description
@@ -921,6 +943,14 @@ dictionary UnifiedToolInfo {
   boolean is_active;            // Whether tool is enabled
   boolean requires_confirmation; // Whether requires user confirmation
   string? service_name;         // Parent service name (for MCP sub-tools)
+
+  // UI Metadata (unify-tool-registry)
+  string? icon;                 // SF Symbol icon name for UI display
+  string? usage;                // Usage example (e.g., "/search <query>")
+  string? localization_key;     // Localization key for i18n (e.g., "tool.search")
+  boolean is_builtin;           // Whether this is a system builtin command
+  i32 sort_order;               // Display sort order (lower = first)
+  boolean has_subtools;         // Whether has dynamic subtools (e.g., /mcp, /skill)
 };
 
 // ===== MCP (Model Context Protocol) Types (implement-mcp-capability) =====

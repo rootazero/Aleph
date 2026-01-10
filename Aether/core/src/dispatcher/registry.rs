@@ -67,6 +67,76 @@ impl ToolRegistry {
     // Registration Methods
     // =========================================================================
 
+    /// Register system builtin commands (/search, /mcp, /skill, /video, /chat)
+    ///
+    /// These are always-available slash commands that serve as the entry points
+    /// for various capabilities. They are the single source of truth for:
+    /// - Settings UI preset rules list
+    /// - Command completion root commands
+    /// - L3 router tool awareness
+    pub async fn register_builtin_tools(&self) {
+        let mut tools = self.tools.write().await;
+
+        // /search - Web search capability
+        let search = UnifiedTool::builtin("search")
+            .with_display_name("Web Search")
+            .with_description("Search the web for real-time information, news, and facts")
+            .with_icon("magnifyingglass")
+            .with_usage("/search <query>")
+            .with_localization_key("tool.search")
+            .with_sort_order(1)
+            .with_requires_confirmation(false);
+        tools.insert(search.id.clone(), search);
+
+        // /mcp - MCP tools namespace
+        let mcp = UnifiedTool::builtin("mcp")
+            .with_display_name("MCP Tools")
+            .with_description("Invoke Model Context Protocol tools for extended capabilities")
+            .with_icon("puzzlepiece.extension")
+            .with_usage("/mcp <tool> [params]")
+            .with_localization_key("tool.mcp")
+            .with_sort_order(2)
+            .with_has_subtools(true) // Dynamic subtools from MCP servers
+            .with_requires_confirmation(false);
+        tools.insert(mcp.id.clone(), mcp);
+
+        // /skill - Skills namespace
+        let skill = UnifiedTool::builtin("skill")
+            .with_display_name("Skills")
+            .with_description("Execute predefined skill workflows")
+            .with_icon("wand.and.stars")
+            .with_usage("/skill <name>")
+            .with_localization_key("tool.skill")
+            .with_sort_order(3)
+            .with_has_subtools(true) // Dynamic subtools from installed skills
+            .with_requires_confirmation(false);
+        tools.insert(skill.id.clone(), skill);
+
+        // /video - Video transcript capability
+        let video = UnifiedTool::builtin("video")
+            .with_display_name("Video Transcript")
+            .with_description("Analyze YouTube video content via transcript extraction")
+            .with_icon("play.rectangle")
+            .with_usage("/video <YouTube URL>")
+            .with_localization_key("tool.video")
+            .with_sort_order(4)
+            .with_requires_confirmation(false);
+        tools.insert(video.id.clone(), video);
+
+        // /chat - Multi-turn conversation
+        let chat = UnifiedTool::builtin("chat")
+            .with_display_name("Chat")
+            .with_description("Start a multi-turn conversation session")
+            .with_icon("bubble.left.and.bubble.right")
+            .with_usage("/chat <message>")
+            .with_localization_key("tool.chat")
+            .with_sort_order(5)
+            .with_requires_confirmation(false);
+        tools.insert(chat.id.clone(), chat);
+
+        debug!("Registered 5 builtin tools");
+    }
+
     /// Register built-in native tools (Search, Video)
     ///
     /// These are always-available capabilities that don't require
@@ -298,6 +368,14 @@ impl ToolRegistry {
     ///
     /// This is a convenience method that should be called when configuration
     /// changes or MCP connections are updated.
+    ///
+    /// Registration order:
+    /// 1. Builtin commands (single source of truth for /search, /mcp, etc.)
+    /// 2. Native capabilities (search, video execution logic)
+    /// 3. System tools (MCP builtin servers)
+    /// 4. External MCP tools
+    /// 5. Skills
+    /// 6. Custom commands from config
     pub async fn refresh_all(
         &self,
         system_tools: &[Arc<dyn SystemTool>],
@@ -306,14 +384,25 @@ impl ToolRegistry {
         rules: &[RoutingRuleConfig],
     ) {
         self.clear().await;
+
+        // 1. Builtin commands first (these are the entry points)
+        self.register_builtin_tools().await;
+
+        // 2. Native capabilities (execution logic)
         self.register_native_tools().await;
+
+        // 3. System MCP tools
         self.register_system_tools(system_tools).await;
 
+        // 4. External MCP tools
         for (server_name, tools) in mcp_tools {
             self.register_mcp_tools(tools, server_name, false).await;
         }
 
+        // 5. Skills
         self.register_skills(skills).await;
+
+        // 6. Custom commands from user config
         self.register_custom_commands(rules).await;
 
         let count = self.tools.read().await.len();
@@ -334,6 +423,57 @@ impl ToolRegistry {
             .filter(|t| t.is_active)
             .cloned()
             .collect()
+    }
+
+    /// List builtin tools only
+    ///
+    /// Returns the 5 system builtin commands (/search, /mcp, /skill, /video, /chat)
+    /// sorted by sort_order.
+    pub async fn list_builtin_tools(&self) -> Vec<UnifiedTool> {
+        let tools = self.tools.read().await;
+        let mut builtins: Vec<_> = tools
+            .values()
+            .filter(|t| t.is_builtin && t.is_active)
+            .cloned()
+            .collect();
+        builtins.sort_by_key(|t| t.sort_order);
+        builtins
+    }
+
+    /// List all tools for UI display (sorted by sort_order, then name)
+    ///
+    /// Returns all active tools suitable for Settings UI display.
+    pub async fn list_all_for_ui(&self) -> Vec<UnifiedTool> {
+        let tools = self.tools.read().await;
+        let mut result: Vec<_> = tools
+            .values()
+            .filter(|t| t.is_active)
+            .cloned()
+            .collect();
+        result.sort_by(|a, b| {
+            a.sort_order.cmp(&b.sort_order).then(a.name.cmp(&b.name))
+        });
+        result
+    }
+
+    /// List root-level commands for completion
+    ///
+    /// Returns builtin commands + custom commands (but not nested MCP/Skill tools).
+    pub async fn list_root_commands(&self) -> Vec<UnifiedTool> {
+        let tools = self.tools.read().await;
+        let mut result: Vec<_> = tools
+            .values()
+            .filter(|t| {
+                t.is_active
+                    && (t.is_builtin
+                        || matches!(t.source, ToolSource::Custom { .. }))
+            })
+            .cloned()
+            .collect();
+        result.sort_by(|a, b| {
+            a.sort_order.cmp(&b.sort_order).then(a.name.cmp(&b.name))
+        });
+        result
     }
 
     /// List all tools including inactive ones
@@ -523,6 +663,57 @@ mod tests {
     async fn test_registry_new() {
         let registry = ToolRegistry::new();
         assert_eq!(registry.count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_register_builtin_tools() {
+        let registry = ToolRegistry::new();
+        registry.register_builtin_tools().await;
+
+        assert_eq!(registry.count().await, 5);
+
+        // Check all 5 builtins are registered
+        let builtins = registry.list_builtin_tools().await;
+        assert_eq!(builtins.len(), 5);
+
+        // Verify sorted by sort_order
+        let names: Vec<_> = builtins.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["search", "mcp", "skill", "video", "chat"]);
+
+        // Check metadata
+        let search = registry.get_by_id("builtin:search").await.unwrap();
+        assert!(search.is_builtin);
+        assert_eq!(search.icon, Some("magnifyingglass".to_string()));
+        assert_eq!(search.localization_key, Some("tool.search".to_string()));
+        assert_eq!(search.sort_order, 1);
+
+        // Check namespace tools have has_subtools
+        let mcp = registry.get_by_id("builtin:mcp").await.unwrap();
+        assert!(mcp.has_subtools);
+
+        let skill = registry.get_by_id("builtin:skill").await.unwrap();
+        assert!(skill.has_subtools);
+    }
+
+    #[tokio::test]
+    async fn test_list_root_commands() {
+        let registry = ToolRegistry::new();
+        registry.register_builtin_tools().await;
+
+        let rules = vec![RoutingRuleConfig {
+            regex: "^/en".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Translate to English".to_string()),
+            ..Default::default()
+        }];
+        registry.register_custom_commands(&rules).await;
+
+        let roots = registry.list_root_commands().await;
+        // 5 builtins + 1 custom
+        assert_eq!(roots.len(), 6);
+
+        // Builtins should come first (lower sort_order)
+        assert!(roots[0].is_builtin);
     }
 
     #[tokio::test]

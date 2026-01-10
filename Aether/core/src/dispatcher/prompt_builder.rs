@@ -180,6 +180,7 @@ impl PromptBuilder {
         for tool in tools {
             let source = match &tool.source {
                 ToolSource::Native => "native".to_string(),
+                ToolSource::Builtin => "builtin".to_string(),
                 ToolSource::Mcp { server } => format!("mcp:{}", server),
                 ToolSource::Skill { id } => format!("skill:{}", id),
                 ToolSource::Custom { rule_index } => format!("custom:{}", rule_index),

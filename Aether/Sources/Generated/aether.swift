@@ -431,6 +431,22 @@ fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterInt32: FfiConverterPrimitive {
+    typealias FfiType = Int32
+    typealias SwiftType = Int32
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Int32, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
     typealias FfiType = UInt64
     typealias SwiftType = UInt64
@@ -626,15 +642,25 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func getRootCommands()  -> [CommandNode]
     
+    func getRootCommandsFromRegistry()  -> [CommandNode]
+    
+    func getSubcommandsFromRegistry(parentKey: String)  -> [CommandNode]
+    
+    func getSubtoolsFromRegistry(parentKey: String)  -> [UnifiedToolInfo]
+    
     func hasActiveConversation()  -> Bool
     
     func importMcpConfigJson(json: String) throws 
+    
+    func listBuiltinTools()  -> [UnifiedToolInfo]
     
     func listMcpServers()  -> [McpServerConfig]
     
     func listMcpServices()  -> [McpServiceInfo]
     
     func listMcpTools()  -> [McpToolInfo]
+    
+    func listRootTools()  -> [UnifiedToolInfo]
     
     func listTools()  -> [UnifiedToolInfo]
     
@@ -998,6 +1024,29 @@ open func getRootCommands() -> [CommandNode] {
 })
 }
     
+open func getRootCommandsFromRegistry() -> [CommandNode] {
+    return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_root_commands_from_registry(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getSubcommandsFromRegistry(parentKey: String) -> [CommandNode] {
+    return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_subcommands_from_registry(self.uniffiClonePointer(),
+        FfiConverterString.lower(parentKey),$0
+    )
+})
+}
+    
+open func getSubtoolsFromRegistry(parentKey: String) -> [UnifiedToolInfo] {
+    return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_subtools_from_registry(self.uniffiClonePointer(),
+        FfiConverterString.lower(parentKey),$0
+    )
+})
+}
+    
 open func hasActiveConversation() -> Bool {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_has_active_conversation(self.uniffiClonePointer(),$0
@@ -1010,6 +1059,13 @@ open func importMcpConfigJson(json: String)throws  {try rustCallWithError(FfiCon
         FfiConverterString.lower(json),$0
     )
 }
+}
+    
+open func listBuiltinTools() -> [UnifiedToolInfo] {
+    return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_list_builtin_tools(self.uniffiClonePointer(),$0
+    )
+})
 }
     
 open func listMcpServers() -> [McpServerConfig] {
@@ -1029,6 +1085,13 @@ open func listMcpServices() -> [McpServiceInfo] {
 open func listMcpTools() -> [McpToolInfo] {
     return try!  FfiConverterSequenceTypeMcpToolInfo.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_list_mcp_tools(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func listRootTools() -> [UnifiedToolInfo] {
+    return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_list_root_tools(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -5367,10 +5430,16 @@ public struct UnifiedToolInfo {
     public var isActive: Bool
     public var requiresConfirmation: Bool
     public var serviceName: String?
+    public var icon: String?
+    public var usage: String?
+    public var localizationKey: String?
+    public var isBuiltin: Bool
+    public var sortOrder: Int32
+    public var hasSubtools: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, name: String, displayName: String, description: String, sourceType: ToolSourceType, sourceId: String?, parametersSchema: String?, isActive: Bool, requiresConfirmation: Bool, serviceName: String?) {
+    public init(id: String, name: String, displayName: String, description: String, sourceType: ToolSourceType, sourceId: String?, parametersSchema: String?, isActive: Bool, requiresConfirmation: Bool, serviceName: String?, icon: String?, usage: String?, localizationKey: String?, isBuiltin: Bool, sortOrder: Int32, hasSubtools: Bool) {
         self.id = id
         self.name = name
         self.displayName = displayName
@@ -5381,6 +5450,12 @@ public struct UnifiedToolInfo {
         self.isActive = isActive
         self.requiresConfirmation = requiresConfirmation
         self.serviceName = serviceName
+        self.icon = icon
+        self.usage = usage
+        self.localizationKey = localizationKey
+        self.isBuiltin = isBuiltin
+        self.sortOrder = sortOrder
+        self.hasSubtools = hasSubtools
     }
 }
 
@@ -5418,6 +5493,24 @@ extension UnifiedToolInfo: Equatable, Hashable {
         if lhs.serviceName != rhs.serviceName {
             return false
         }
+        if lhs.icon != rhs.icon {
+            return false
+        }
+        if lhs.usage != rhs.usage {
+            return false
+        }
+        if lhs.localizationKey != rhs.localizationKey {
+            return false
+        }
+        if lhs.isBuiltin != rhs.isBuiltin {
+            return false
+        }
+        if lhs.sortOrder != rhs.sortOrder {
+            return false
+        }
+        if lhs.hasSubtools != rhs.hasSubtools {
+            return false
+        }
         return true
     }
 
@@ -5432,6 +5525,12 @@ extension UnifiedToolInfo: Equatable, Hashable {
         hasher.combine(isActive)
         hasher.combine(requiresConfirmation)
         hasher.combine(serviceName)
+        hasher.combine(icon)
+        hasher.combine(usage)
+        hasher.combine(localizationKey)
+        hasher.combine(isBuiltin)
+        hasher.combine(sortOrder)
+        hasher.combine(hasSubtools)
     }
 }
 
@@ -5452,7 +5551,13 @@ public struct FfiConverterTypeUnifiedToolInfo: FfiConverterRustBuffer {
                 parametersSchema: FfiConverterOptionString.read(from: &buf), 
                 isActive: FfiConverterBool.read(from: &buf), 
                 requiresConfirmation: FfiConverterBool.read(from: &buf), 
-                serviceName: FfiConverterOptionString.read(from: &buf)
+                serviceName: FfiConverterOptionString.read(from: &buf), 
+                icon: FfiConverterOptionString.read(from: &buf), 
+                usage: FfiConverterOptionString.read(from: &buf), 
+                localizationKey: FfiConverterOptionString.read(from: &buf), 
+                isBuiltin: FfiConverterBool.read(from: &buf), 
+                sortOrder: FfiConverterInt32.read(from: &buf), 
+                hasSubtools: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -5467,6 +5572,12 @@ public struct FfiConverterTypeUnifiedToolInfo: FfiConverterRustBuffer {
         FfiConverterBool.write(value.isActive, into: &buf)
         FfiConverterBool.write(value.requiresConfirmation, into: &buf)
         FfiConverterOptionString.write(value.serviceName, into: &buf)
+        FfiConverterOptionString.write(value.icon, into: &buf)
+        FfiConverterOptionString.write(value.usage, into: &buf)
+        FfiConverterOptionString.write(value.localizationKey, into: &buf)
+        FfiConverterBool.write(value.isBuiltin, into: &buf)
+        FfiConverterInt32.write(value.sortOrder, into: &buf)
+        FfiConverterBool.write(value.hasSubtools, into: &buf)
     }
 }
 
@@ -6177,6 +6288,7 @@ extension ProcessingState: Equatable, Hashable {}
 public enum ToolSourceType {
     
     case native
+    case builtin
     case mcp
     case skill
     case custom
@@ -6195,11 +6307,13 @@ public struct FfiConverterTypeToolSourceType: FfiConverterRustBuffer {
         
         case 1: return .native
         
-        case 2: return .mcp
+        case 2: return .builtin
         
-        case 3: return .skill
+        case 3: return .mcp
         
-        case 4: return .custom
+        case 4: return .skill
+        
+        case 5: return .custom
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -6213,16 +6327,20 @@ public struct FfiConverterTypeToolSourceType: FfiConverterRustBuffer {
             writeInt(&buf, Int32(1))
         
         
-        case .mcp:
+        case .builtin:
             writeInt(&buf, Int32(2))
         
         
-        case .skill:
+        case .mcp:
             writeInt(&buf, Int32(3))
         
         
-        case .custom:
+        case .skill:
             writeInt(&buf, Int32(4))
+        
+        
+        case .custom:
+            writeInt(&buf, Int32(5))
         
         }
     }
@@ -8190,10 +8308,22 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_get_root_commands() != 47120) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_get_root_commands_from_registry() != 64284) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_subcommands_from_registry() != 57765) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_subtools_from_registry() != 34499) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_has_active_conversation() != 19478) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_import_mcp_config_json() != 36470) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_list_builtin_tools() != 62441) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_list_mcp_servers() != 29913) {
@@ -8203,6 +8333,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_list_mcp_tools() != 7193) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_list_root_tools() != 53812) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_list_tools() != 25812) {

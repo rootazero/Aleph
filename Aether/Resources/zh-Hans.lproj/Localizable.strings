@@ -730,3 +730,35 @@
 "subpanel.cli.completed" = "✓ 完成";
 "subpanel.confirmation.confirm" = "确认";
 "subpanel.confirmation.cancel" = "取消";
+
+// MARK: - Tool Registry Localization (unify-tool-registry)
+// Tool source type labels
+"tool.source.builtin" = "系统";
+"tool.source.mcp" = "MCP";
+"tool.source.skill" = "技能";
+"tool.source.custom" = "自定义";
+
+// /search tool
+"tool.search.description" = "网络搜索功能 - 使用搜索引擎查找最新信息";
+"tool.search.hint" = "网络搜索";
+"tool.search.usage" = "/search <查询内容>";
+
+// /mcp tool
+"tool.mcp.description" = "模型上下文协议集成 - 连接到外部工具和服务";
+"tool.mcp.hint" = "MCP 工具";
+"tool.mcp.usage" = "/mcp <工具名> [参数]";
+
+// /skill tool
+"tool.skill.description" = "Claude 技能 - 执行自定义工作流和自动化";
+"tool.skill.hint" = "技能";
+"tool.skill.usage" = "/skill <技能名>";
+
+// /video tool
+"tool.video.description" = "YouTube 视频分析 - 通过字幕提取和分析视频内容";
+"tool.video.hint" = "视频分析";
+"tool.video.usage" = "/video <YouTube 链接>";
+
+// /chat tool
+"tool.chat.description" = "多轮对话 - 开始支持追问的对话会话";
+"tool.chat.hint" = "对话";
+"tool.chat.usage" = "/chat <消息>";
