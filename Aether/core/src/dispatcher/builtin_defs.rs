@@ -1,4 +1,4 @@
-//! Builtin Command Definitions
+//! Builtin Command Definitions (Flat Namespace Mode)
 //!
 //! This module is the SINGLE SOURCE OF TRUTH for builtin command definitions.
 //! Both ToolRegistry and Config derive their builtin data from here.
@@ -6,6 +6,21 @@
 //! This ensures consistency between:
 //! - Tool metadata (for UI, command completion, L3 router)
 //! - Routing rules (for request processing)
+//!
+//! ## Flat Namespace Architecture
+//!
+//! In flat namespace mode, MCP tools and Skills are registered as root-level
+//! commands directly (e.g., `/git`, `/refine-text`), not under `/mcp` or `/skill`
+//! namespaces. This eliminates "implementation detail leakage" where users
+//! had to remember which namespace contains which tool.
+//!
+//! Only 3 system builtin commands remain:
+//! - `/search` - Web search capability
+//! - `/video` - Video transcript analysis
+//! - `/chat` - Multi-turn conversation
+//!
+//! MCP tools and Skills are now registered dynamically via ToolRegistry with
+//! automatic conflict resolution based on priority.
 
 use crate::config::RoutingRuleConfig;
 
@@ -29,9 +44,16 @@ pub struct BuiltinCommandDef {
     pub routing_intent_type: &'static str,
 }
 
-/// All builtin command definitions
+/// All builtin command definitions (Flat Namespace Mode)
 ///
-/// These are the 5 system builtin commands that are always available.
+/// These are the 3 system builtin commands that are always available.
+/// In flat namespace mode:
+/// - `/mcp` namespace removed - MCP tools registered directly as root commands
+/// - `/skill` namespace removed - Skills registered directly as root commands
+///
+/// Users now invoke tools by name without namespace prefixes:
+/// - Before: `/mcp git status` → After: `/git status`
+/// - Before: `/skill refine-text` → After: `/refine-text`
 pub const BUILTIN_COMMANDS: &[BuiltinCommandDef] = &[
     // /search - Web search capability
     BuiltinCommandDef {
@@ -48,36 +70,6 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommandDef] = &[
         routing_capabilities: &["search"],
         routing_intent_type: "builtin_search",
     },
-    // /mcp - MCP tools namespace
-    BuiltinCommandDef {
-        name: "mcp",
-        display_name: "MCP Tools",
-        description: "Invoke Model Context Protocol tools for extended capabilities",
-        icon: "puzzlepiece.extension",
-        usage: "/mcp <tool> [params]",
-        localization_key: "tool.mcp",
-        sort_order: 2,
-        has_subtools: true,
-        routing_regex: r"^/mcp\s+",
-        routing_system_prompt: "You are an MCP integration assistant. Use the available MCP tools to help the user.",
-        routing_capabilities: &[],
-        routing_intent_type: "builtin_mcp",
-    },
-    // /skill - Skills namespace
-    BuiltinCommandDef {
-        name: "skill",
-        display_name: "Skills",
-        description: "Execute predefined skill workflows",
-        icon: "wand.and.stars",
-        usage: "/skill <name>",
-        localization_key: "tool.skill",
-        sort_order: 3,
-        has_subtools: true,
-        routing_regex: r"^/skill\s+",
-        routing_system_prompt: "You are a helpful AI assistant. Follow the skill instructions provided in the context to complete the task.",
-        routing_capabilities: &["skills", "memory"],
-        routing_intent_type: "skills",
-    },
     // /video - Video transcript capability
     BuiltinCommandDef {
         name: "video",
@@ -86,7 +78,7 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommandDef] = &[
         icon: "play.rectangle",
         usage: "/video <YouTube URL>",
         localization_key: "tool.video",
-        sort_order: 4,
+        sort_order: 2,
         has_subtools: false,
         routing_regex: r"^/video\s+",
         routing_system_prompt: "You are a video content analyst. A video transcript will be provided in the context section below if available. Analyze the transcript and provide insights, summaries, or answer questions about the video content. If no transcript is provided, explain that the video may not have captions enabled or transcript extraction failed.",
@@ -101,7 +93,7 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommandDef] = &[
         icon: "bubble.left.and.bubble.right",
         usage: "/chat <message>",
         localization_key: "tool.chat",
-        sort_order: 5,
+        sort_order: 3,
         has_subtools: false,
         routing_regex: r"^/chat\s+",
         routing_system_prompt: "You are a helpful AI assistant. Engage in natural conversation and provide helpful responses.",
@@ -148,23 +140,59 @@ mod tests {
 
     #[test]
     fn test_builtin_commands_count() {
-        assert_eq!(BUILTIN_COMMANDS.len(), 5);
+        // Flat namespace mode: only 3 builtin commands
+        // /mcp and /skill namespaces removed
+        assert_eq!(BUILTIN_COMMANDS.len(), 3);
     }
 
     #[test]
     fn test_builtin_routing_rules() {
         let rules = get_builtin_routing_rules();
-        assert_eq!(rules.len(), 5);
+        assert_eq!(rules.len(), 3);
 
         // Verify search rule
         let search = rules.iter().find(|r| r.regex.contains("/search")).unwrap();
         assert!(search.is_builtin);
         assert_eq!(search.capabilities, Some(vec!["search".to_string()]));
+
+        // Verify video rule
+        let video = rules.iter().find(|r| r.regex.contains("/video")).unwrap();
+        assert!(video.is_builtin);
+        assert_eq!(
+            video.capabilities,
+            Some(vec!["video".to_string(), "memory".to_string()])
+        );
+
+        // Verify chat rule
+        let chat = rules.iter().find(|r| r.regex.contains("/chat")).unwrap();
+        assert!(chat.is_builtin);
+        assert_eq!(chat.capabilities, Some(vec!["memory".to_string()]));
     }
 
     #[test]
     fn test_builtin_command_names() {
         let names: Vec<_> = BUILTIN_COMMANDS.iter().map(|c| c.name).collect();
-        assert_eq!(names, vec!["search", "mcp", "skill", "video", "chat"]);
+        // Flat namespace: no /mcp or /skill
+        assert_eq!(names, vec!["search", "video", "chat"]);
+    }
+
+    #[test]
+    fn test_no_namespace_commands() {
+        // Verify /mcp and /skill are NOT in builtin commands
+        let names: Vec<_> = BUILTIN_COMMANDS.iter().map(|c| c.name).collect();
+        assert!(!names.contains(&"mcp"), "/mcp should not be a builtin in flat namespace mode");
+        assert!(!names.contains(&"skill"), "/skill should not be a builtin in flat namespace mode");
+    }
+
+    #[test]
+    fn test_no_subtools_in_flat_namespace() {
+        // In flat namespace mode, no builtin should have subtools
+        for cmd in BUILTIN_COMMANDS {
+            assert!(
+                !cmd.has_subtools,
+                "Builtin '{}' should not have subtools in flat namespace mode",
+                cmd.name
+            );
+        }
     }
 }

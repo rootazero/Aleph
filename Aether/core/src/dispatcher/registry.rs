@@ -164,21 +164,31 @@ impl ToolRegistry {
         debug!("Registered {} native tools", 2);
     }
 
-    /// Register MCP tools from tool info list
+    /// Register MCP tools from tool info list (Flat Namespace Mode)
+    ///
+    /// In flat namespace mode, MCP tools are registered as root-level commands
+    /// with automatic conflict resolution. Users can invoke them directly
+    /// via `/{tool_name}` without the `/mcp` prefix.
     ///
     /// # Arguments
     ///
     /// * `mcp_tools` - List of MCP tool info from McpClient
     /// * `server_name` - Name of the MCP server (e.g., "fs", "git", "github")
     /// * `is_builtin` - Whether this is a builtin System Tool
+    ///
+    /// # Conflict Resolution
+    ///
+    /// If an MCP tool name conflicts with an existing tool:
+    /// - Higher priority tools keep the original name
+    /// - Lower priority tools are renamed with `-mcp` suffix
+    ///
+    /// Priority: Builtin > Native > Custom > MCP > Skill
     pub async fn register_mcp_tools(
         &self,
         mcp_tools: &[McpToolInfo],
         server_name: &str,
         is_builtin: bool,
     ) {
-        let mut tools = self.tools.write().await;
-
         for tool_info in mcp_tools {
             let id = format!("mcp:{}:{}", server_name, tool_info.name);
 
@@ -191,31 +201,39 @@ impl ToolRegistry {
                 },
             )
             .with_service_name(&tool_info.service_name)
-            .with_requires_confirmation(tool_info.requires_confirmation);
+            .with_requires_confirmation(tool_info.requires_confirmation)
+            .with_icon("bolt.fill") // Default MCP icon
+            .with_usage(format!("/{} [args]", tool_info.name))
+            // Generate routing regex for flat namespace
+            .with_routing_regex(format!(r"^/{}\s*", regex::escape(&tool_info.name)))
+            .with_routing_intent_type(format!("mcp:{}", tool_info.name))
+            .with_routing_strip_prefix(true);
 
             // Mark builtin system tools for clarity
             let tool = if is_builtin {
                 tool.with_display_name(format!("{} (System)", tool_info.name))
             } else {
-                tool
+                tool.with_display_name(&tool_info.name)
             };
 
-            tools.insert(id, tool);
+            // Register with automatic conflict resolution
+            self.register_with_conflict_resolution(tool).await;
         }
 
         debug!(
-            "Registered {} MCP tools from server '{}'",
+            "Registered {} MCP tools from server '{}' (flat namespace)",
             mcp_tools.len(),
             server_name
         );
     }
 
-    /// Register MCP tools from SystemTool instances
+    /// Register MCP tools from SystemTool instances (Flat Namespace Mode)
     ///
-    /// Converts SystemTool's McpTool list to UnifiedTool entries.
+    /// Converts SystemTool's McpTool list to UnifiedTool entries and registers
+    /// them as root-level commands with automatic conflict resolution.
+    ///
+    /// System tools are registered with the same priority as external MCP tools.
     pub async fn register_system_tools(&self, system_tools: &[Arc<dyn SystemTool>]) {
-        let mut tools = self.tools.write().await;
-
         for service in system_tools {
             let service_name = service.name();
             let mcp_tools = service.list_tools();
@@ -231,29 +249,45 @@ impl ToolRegistry {
                         server: service_name.to_string(),
                     },
                 )
-                .with_display_name(format!("{}:{}", service_name, mcp_tool.name))
+                .with_display_name(&mcp_tool.name)
                 .with_service_name(service_name)
                 .with_parameters_schema(mcp_tool.input_schema.clone())
-                .with_requires_confirmation(mcp_tool.requires_confirmation);
+                .with_requires_confirmation(mcp_tool.requires_confirmation)
+                .with_icon("bolt.fill") // Default MCP icon
+                .with_usage(format!("/{} [args]", mcp_tool.name))
+                // Generate routing regex for flat namespace
+                .with_routing_regex(format!(r"^/{}\s*", regex::escape(&mcp_tool.name)))
+                .with_routing_intent_type(format!("mcp:{}", mcp_tool.name))
+                .with_routing_strip_prefix(true);
 
-                tools.insert(id, tool);
+                // Register with automatic conflict resolution
+                self.register_with_conflict_resolution(tool).await;
             }
         }
 
         debug!(
-            "Registered system tools from {} services",
+            "Registered system tools from {} services (flat namespace)",
             system_tools.len()
         );
     }
 
-    /// Register skills from SkillInfo list
+    /// Register skills from SkillInfo list (Flat Namespace Mode)
+    ///
+    /// In flat namespace mode, skills are registered as root-level commands
+    /// with automatic conflict resolution. Users can invoke them directly
+    /// via `/{skill_id}` without the `/skill` prefix.
     ///
     /// # Arguments
     ///
     /// * `skills` - List of installed skill info
+    ///
+    /// # Conflict Resolution
+    ///
+    /// Skills have the lowest priority, so they will be renamed if they
+    /// conflict with any other tool type.
+    ///
+    /// Priority: Builtin > Native > Custom > MCP > Skill
     pub async fn register_skills(&self, skills: &[SkillInfo]) {
-        let mut tools = self.tools.write().await;
-
         for skill in skills {
             let id = format!("skill:{}", skill.id);
 
@@ -265,12 +299,20 @@ impl ToolRegistry {
                     id: skill.id.clone(),
                 },
             )
-            .with_display_name(&skill.name);
+            .with_display_name(&skill.name)
+            .with_icon("lightbulb.fill") // Default Skill icon
+            .with_usage(format!("/{} [input]", skill.id))
+            // Generate routing regex for flat namespace
+            .with_routing_regex(format!(r"^/{}\s*", regex::escape(&skill.id)))
+            .with_routing_intent_type("skills")
+            .with_routing_capabilities(vec!["skills".to_string(), "memory".to_string()])
+            .with_routing_strip_prefix(true);
 
-            tools.insert(id, tool);
+            // Register with automatic conflict resolution
+            self.register_with_conflict_resolution(tool).await;
         }
 
-        debug!("Registered {} skills", skills.len());
+        debug!("Registered {} skills (flat namespace)", skills.len());
     }
 
     /// Register custom commands from config rules
@@ -647,22 +689,51 @@ impl ToolRegistry {
         result
     }
 
-    /// List root-level commands for completion
+    /// List root-level commands for completion (Flat Namespace Mode)
     ///
-    /// Returns builtin commands + custom commands (but not nested MCP/Skill tools).
+    /// In flat namespace mode, ALL tools are root-level commands.
+    /// Returns all active tools sorted by source priority then alphabetically.
+    ///
+    /// Source priority order for display:
+    /// 1. Builtin (system commands)
+    /// 2. Custom (user-defined rules)
+    /// 3. MCP (external tools)
+    /// 4. Skill (Claude Agent skills)
+    /// 5. Native (internal capabilities - usually not shown)
     pub async fn list_root_commands(&self) -> Vec<UnifiedTool> {
         let tools = self.tools.read().await;
         let mut result: Vec<_> = tools
             .values()
             .filter(|t| {
                 t.is_active
-                    && (t.is_builtin
-                        || matches!(t.source, ToolSource::Custom { .. }))
+                    // Exclude native capabilities (internal implementations)
+                    && !matches!(t.source, ToolSource::Native)
             })
             .cloned()
             .collect();
+
+        // Sort by source priority (builtin first), then sort_order, then name
         result.sort_by(|a, b| {
-            a.sort_order.cmp(&b.sort_order).then(a.name.cmp(&b.name))
+            // Custom sort order: Builtin > Custom > MCP > Skill
+            let priority_a = match &a.source {
+                ToolSource::Builtin => 0,
+                ToolSource::Custom { .. } => 1,
+                ToolSource::Mcp { .. } => 2,
+                ToolSource::Skill { .. } => 3,
+                ToolSource::Native => 4,
+            };
+            let priority_b = match &b.source {
+                ToolSource::Builtin => 0,
+                ToolSource::Custom { .. } => 1,
+                ToolSource::Mcp { .. } => 2,
+                ToolSource::Skill { .. } => 3,
+                ToolSource::Native => 4,
+            };
+
+            priority_a
+                .cmp(&priority_b)
+                .then(a.sort_order.cmp(&b.sort_order))
+                .then(a.name.cmp(&b.name))
         });
         result
     }
@@ -861,15 +932,16 @@ mod tests {
         let registry = ToolRegistry::new();
         registry.register_builtin_tools().await;
 
-        assert_eq!(registry.count().await, 5);
+        // Flat namespace mode: only 3 builtin commands
+        assert_eq!(registry.count().await, 3);
 
-        // Check all 5 builtins are registered
+        // Check all 3 builtins are registered
         let builtins = registry.list_builtin_tools().await;
-        assert_eq!(builtins.len(), 5);
+        assert_eq!(builtins.len(), 3);
 
-        // Verify sorted by sort_order
+        // Verify sorted by sort_order (no /mcp or /skill)
         let names: Vec<_> = builtins.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, vec!["search", "mcp", "skill", "video", "chat"]);
+        assert_eq!(names, vec!["search", "video", "chat"]);
 
         // Check metadata
         let search = registry.get_by_id("builtin:search").await.unwrap();
@@ -878,12 +950,18 @@ mod tests {
         assert_eq!(search.localization_key, Some("tool.search".to_string()));
         assert_eq!(search.sort_order, 1);
 
-        // Check namespace tools have has_subtools
-        let mcp = registry.get_by_id("builtin:mcp").await.unwrap();
-        assert!(mcp.has_subtools);
+        // In flat namespace mode, no builtins have subtools
+        for builtin in &builtins {
+            assert!(
+                !builtin.has_subtools,
+                "Builtin '{}' should not have subtools in flat namespace",
+                builtin.name
+            );
+        }
 
-        let skill = registry.get_by_id("builtin:skill").await.unwrap();
-        assert!(skill.has_subtools);
+        // Verify /mcp and /skill are NOT registered
+        assert!(registry.get_by_id("builtin:mcp").await.is_none());
+        assert!(registry.get_by_id("builtin:skill").await.is_none());
     }
 
     #[tokio::test]
@@ -900,11 +978,16 @@ mod tests {
         registry.register_custom_commands(&rules).await;
 
         let roots = registry.list_root_commands().await;
-        // 5 builtins + 1 custom
-        assert_eq!(roots.len(), 6);
+        // Flat namespace: 3 builtins + 1 custom = 4
+        assert_eq!(roots.len(), 4);
 
-        // Builtins should come first (lower sort_order)
+        // Builtins should come first (higher priority in sort)
         assert!(roots[0].is_builtin);
+        assert_eq!(roots[0].name, "search");
+
+        // Custom commands come after builtins
+        let custom_idx = roots.iter().position(|t| t.name == "en").unwrap();
+        assert!(custom_idx >= 3, "Custom commands should come after builtins");
     }
 
     #[tokio::test]
