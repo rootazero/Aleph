@@ -122,6 +122,15 @@ class ClipboardMonitor {
             return nil // No recorded change
         }
 
+        // CRITICAL: Check if clipboard has changed since we recorded this change.
+        // If user copied non-text content (e.g., image) after the text was recorded,
+        // changeCount will be different, meaning our recorded content is stale.
+        let currentChangeCount = ClipboardManager.shared.changeCount()
+        if change.changeCount != currentChangeCount {
+            print("[ClipboardMonitor] Clipboard changeCount mismatch (\(change.changeCount) vs \(currentChangeCount)) - content is stale")
+            return nil
+        }
+
         let elapsed = Date().timeIntervalSince(change.timestamp)
 
         guard elapsed <= recentThresholdSeconds else {
@@ -141,13 +150,19 @@ class ClipboardMonitor {
     /// - Returns: true if clipboard was changed within `recentThresholdSeconds`
     func isClipboardRecent() -> Bool {
         guard let change = lastChange else {
-            // No recorded change - check if current clipboard state is "fresh"
-            // by comparing changeCount (if it changed since init, it's recent)
-            let currentCount = ClipboardManager.shared.changeCount()
-            if currentCount != lastChangeCount {
-                // Clipboard changed but we haven't recorded it yet - treat as recent
-                return true
-            }
+            // No recorded text change - cannot determine recency without timestamp
+            return false
+        }
+
+        // CRITICAL: Check if clipboard has changed since we recorded this change.
+        // If user copied non-text content (e.g., image) after the text was recorded,
+        // changeCount will be different, meaning our recorded timestamp is stale.
+        let currentChangeCount = ClipboardManager.shared.changeCount()
+        if change.changeCount != currentChangeCount {
+            // Clipboard changed since last text recording - we don't have
+            // timestamp for the new content, so we can't determine recency.
+            // To be safe, return false to avoid including stale content.
+            print("[ClipboardMonitor] Clipboard changeCount mismatch - cannot determine recency")
             return false
         }
 
