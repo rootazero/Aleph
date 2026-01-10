@@ -691,48 +691,43 @@ impl ToolRegistry {
         result
     }
 
-    /// List root-level commands for completion (Flat Namespace Mode)
+    /// List root-level commands for UI (Flat Namespace Mode)
     ///
-    /// In flat namespace mode, ALL tools are root-level commands.
-    /// Returns all active tools sorted by source priority then alphabetically.
+    /// Returns all active tools from all sources for command completion.
+    /// This is the primary method for UI command completion display.
     ///
-    /// Native tools are EXCLUDED to prevent exposing internal capabilities to L3 AI router.
-    /// Native capabilities are implementation details, not user-facing commands.
+    /// Includes: Builtin + Native + Custom + MCP + Skill
     ///
     /// Source priority order for display:
     /// 1. Builtin (system commands)
-    /// 2. Custom (user-defined rules)
-    /// 3. MCP (external tools)
-    /// 4. Skill (Claude Agent skills)
+    /// 2. Native (system capabilities)
+    /// 3. Custom (user-defined rules)
+    /// 4. MCP (external tools)
+    /// 5. Skill (Claude Agent skills)
     pub async fn list_root_commands(&self) -> Vec<UnifiedTool> {
         let tools = self.tools.read().await;
         let mut result: Vec<_> = tools
             .values()
-            .filter(|t| {
-                t.is_active
-                    // Exclude native capabilities (internal implementations)
-                    // They should not be exposed to L3 AI router
-                    && !matches!(t.source, ToolSource::Native)
-            })
+            .filter(|t| t.is_active)
             .cloned()
             .collect();
 
-        // Sort by source priority (builtin first), then sort_order, then name
+        // Sort by source priority, then sort_order, then name
         result.sort_by(|a, b| {
-            // Custom sort order: Builtin > Custom > MCP > Skill
+            // Sort order: Builtin > Native > Custom > MCP > Skill
             let priority_a = match &a.source {
                 ToolSource::Builtin => 0,
-                ToolSource::Custom { .. } => 1,
-                ToolSource::Mcp { .. } => 2,
-                ToolSource::Skill { .. } => 3,
-                ToolSource::Native => 4,
+                ToolSource::Native => 1,
+                ToolSource::Custom { .. } => 2,
+                ToolSource::Mcp { .. } => 3,
+                ToolSource::Skill { .. } => 4,
             };
             let priority_b = match &b.source {
                 ToolSource::Builtin => 0,
-                ToolSource::Custom { .. } => 1,
-                ToolSource::Mcp { .. } => 2,
-                ToolSource::Skill { .. } => 3,
-                ToolSource::Native => 4,
+                ToolSource::Native => 1,
+                ToolSource::Custom { .. } => 2,
+                ToolSource::Mcp { .. } => 3,
+                ToolSource::Skill { .. } => 4,
             };
 
             priority_a
