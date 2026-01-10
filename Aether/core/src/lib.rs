@@ -101,6 +101,10 @@ pub mod dispatcher; // NEW: Intelligent tool routing (Dispatcher Layer)
 pub mod routing; // NEW: Unified multi-layer routing framework
 pub mod tools; // NEW: Native function calling tools (AgentTool trait)
 
+// Integration tests module
+#[cfg(test)]
+mod tests;
+
 // Re-export public types
 // NOTE: ImageData/ImageFormat still exported for AI provider image encoding
 pub use crate::clipboard::{ImageData, ImageFormat};
