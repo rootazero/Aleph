@@ -153,98 +153,17 @@ impl AetherCore {
     // MCP Server Management Methods (redesign-mcp-settings-ui)
     // ========================================================================
 
-    /// List all MCP servers (builtin and external)
+    /// List all external MCP servers
     ///
-    /// Returns a unified list of all configured MCP servers with their
-    /// current configuration for the Master-Detail UI.
+    /// Returns a list of configured external MCP servers for the Settings UI.
+    /// Note: Native tools (fs, git, shell, etc.) are now handled via the
+    /// `AgentTool` infrastructure and are NOT included in this list.
     pub fn list_mcp_servers(&self) -> Vec<crate::mcp::McpServerConfig> {
         let config = self.lock_config();
         let mut servers = Vec::new();
 
-        // Add system tools (Tier 1)
-        let tools = &config.tools;
-
-        // System Info service
-        servers.push(crate::mcp::McpServerConfig {
-            id: "system_info".to_string(),
-            name: "System Info".to_string(),
-            server_type: crate::mcp::McpServerType::Builtin,
-            enabled: tools.system_info_enabled,
-            command: None,
-            args: Vec::new(),
-            env: Vec::new(),
-            working_directory: None,
-            trigger_command: Some("/sys".to_string()),
-            permissions: crate::mcp::McpServerPermissions {
-                requires_confirmation: false,
-                allowed_paths: Vec::new(),
-                allowed_commands: Vec::new(),
-            },
-            icon: "info.circle".to_string(),
-            color: "#007AFF".to_string(),
-        });
-
-        // Filesystem service
-        servers.push(crate::mcp::McpServerConfig {
-            id: "fs".to_string(),
-            name: "File System".to_string(),
-            server_type: crate::mcp::McpServerType::Builtin,
-            enabled: tools.fs_enabled,
-            command: None,
-            args: Vec::new(),
-            env: Vec::new(),
-            working_directory: None,
-            trigger_command: Some("/fs".to_string()),
-            permissions: crate::mcp::McpServerPermissions {
-                requires_confirmation: true,
-                allowed_paths: tools.allowed_roots.clone(),
-                allowed_commands: Vec::new(),
-            },
-            icon: "folder".to_string(),
-            color: "#34C759".to_string(),
-        });
-
-        // Git service
-        servers.push(crate::mcp::McpServerConfig {
-            id: "git".to_string(),
-            name: "Git".to_string(),
-            server_type: crate::mcp::McpServerType::Builtin,
-            enabled: tools.git_enabled,
-            command: None,
-            args: Vec::new(),
-            env: Vec::new(),
-            working_directory: None,
-            trigger_command: Some("/git".to_string()),
-            permissions: crate::mcp::McpServerPermissions {
-                requires_confirmation: true,
-                allowed_paths: tools.allowed_repos.clone(),
-                allowed_commands: Vec::new(),
-            },
-            icon: "arrow.triangle.branch".to_string(),
-            color: "#F05032".to_string(),
-        });
-
-        // Shell service
-        servers.push(crate::mcp::McpServerConfig {
-            id: "shell".to_string(),
-            name: "Shell".to_string(),
-            server_type: crate::mcp::McpServerType::Builtin,
-            enabled: tools.shell_enabled,
-            command: None,
-            args: Vec::new(),
-            env: Vec::new(),
-            working_directory: None,
-            trigger_command: Some("/shell".to_string()),
-            permissions: crate::mcp::McpServerPermissions {
-                requires_confirmation: true,
-                allowed_paths: Vec::new(),
-                allowed_commands: tools.allowed_commands.clone(),
-            },
-            icon: "terminal".to_string(),
-            color: "#5856D6".to_string(),
-        });
-
-        // Add external servers
+        // Only add external servers
+        // Native tools (fs, git, shell, system_info) are now in NativeToolRegistry
         for ext in &config.mcp.external_servers {
             servers.push(crate::mcp::McpServerConfig {
                 id: ext.name.clone(),
@@ -363,88 +282,59 @@ impl AetherCore {
         Ok(())
     }
 
-    /// Update an MCP server configuration
+    /// Update an external MCP server configuration
+    ///
+    /// Note: Native tools (fs, git, shell, etc.) are now managed via
+    /// `update_mcp_config()` and are NOT managed via this method.
     pub fn update_mcp_server(&self, config: crate::mcp::McpServerConfig) -> Result<()> {
-        match config.server_type {
-            crate::mcp::McpServerType::Builtin => {
-                // Update builtin server settings
-                let mut cfg = self.lock_config();
+        // Only external servers can be updated via this method
+        if config.server_type == crate::mcp::McpServerType::Builtin {
+            return Err(AetherError::config(
+                "Builtin servers are no longer supported. Native tools are managed via AgentTool infrastructure.",
+            ));
+        }
 
-                match config.id.as_str() {
-                    "system_info" => {
-                        cfg.tools.system_info_enabled = config.enabled;
-                    }
-                    "fs" => {
-                        cfg.tools.fs_enabled = config.enabled;
-                        cfg.tools.allowed_roots = config.permissions.allowed_paths;
-                    }
-                    "git" => {
-                        cfg.tools.git_enabled = config.enabled;
-                        cfg.tools.allowed_repos = config.permissions.allowed_paths;
-                    }
-                    "shell" => {
-                        cfg.tools.shell_enabled = config.enabled;
-                        cfg.tools.allowed_commands = config.permissions.allowed_commands;
-                    }
-                    _ => {
-                        return Err(AetherError::config(format!(
-                            "Unknown builtin server: {}",
-                            config.id
-                        )));
-                    }
-                }
-                cfg.save()?;
-                drop(cfg);
-                self.event_handler.on_config_changed();
-                Ok(())
+        let command = config
+            .command
+            .as_ref()
+            .ok_or_else(|| AetherError::config("External server requires a command"))?;
+
+        let mut cfg = self.lock_config();
+
+        // Find and update the server
+        let server = cfg
+            .mcp
+            .external_servers
+            .iter_mut()
+            .find(|s| s.name == config.id);
+
+        match server {
+            Some(s) => {
+                s.command = command.clone();
+                s.args = config.args;
+                s.env = config.env.into_iter().map(|e| (e.key, e.value)).collect();
+                s.cwd = config.working_directory;
             }
-            crate::mcp::McpServerType::External => {
-                // Update external server
-                let command = config
-                    .command
-                    .as_ref()
-                    .ok_or_else(|| AetherError::config("External server requires a command"))?;
-
-                let mut cfg = self.lock_config();
-
-                // Find and update the server
-                let server = cfg
-                    .mcp
-                    .external_servers
-                    .iter_mut()
-                    .find(|s| s.name == config.id);
-
-                match server {
-                    Some(s) => {
-                        s.command = command.clone();
-                        s.args = config.args;
-                        s.env = config.env.into_iter().map(|e| (e.key, e.value)).collect();
-                        s.cwd = config.working_directory;
-                    }
-                    None => {
-                        return Err(AetherError::config(format!(
-                            "External server '{}' not found",
-                            config.id
-                        )));
-                    }
-                }
-
-                cfg.save()?;
-                drop(cfg);
-                self.event_handler.on_config_changed();
-                Ok(())
+            None => {
+                return Err(AetherError::config(format!(
+                    "External server '{}' not found",
+                    config.id
+                )));
             }
         }
+
+        cfg.save()?;
+        drop(cfg);
+        self.event_handler.on_config_changed();
+        Ok(())
     }
 
     /// Delete an external MCP server
+    ///
+    /// Note: Only external servers can be deleted. Native tools are managed
+    /// via the AgentTool infrastructure.
     pub fn delete_mcp_server(&self, id: String) -> Result<()> {
         let mut cfg = self.lock_config();
-
-        // Check if it's a builtin server (cannot delete)
-        if ["system_info", "fs", "git", "shell"].contains(&id.as_str()) {
-            return Err(AetherError::config("Cannot delete builtin servers"));
-        }
 
         // Find and remove the external server
         let initial_len = cfg.mcp.external_servers.len();
