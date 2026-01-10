@@ -146,13 +146,25 @@ impl AetherCore {
             .collect()
     }
 
-    /// List builtin tools only (for Settings UI)
+    /// List builtin tools only
     ///
-    /// Returns the 5 system builtin commands (/search, /mcp, /skill, /video, /chat)
-    /// sorted by sort_order. This is the single source of truth for preset rules.
+    /// Returns the 3 system builtin commands (/search, /video, /chat)
+    /// sorted by sort_order.
     pub fn list_builtin_tools(&self) -> Vec<crate::dispatcher::UnifiedToolInfo> {
         self.runtime
             .block_on(async { self.tool_registry.list_builtin_tools().await })
+            .into_iter()
+            .map(crate::dispatcher::UnifiedToolInfo::from)
+            .collect()
+    }
+
+    /// List preset tools for Settings UI (Flat Namespace Mode)
+    ///
+    /// Returns all non-Custom tools: Builtin + MCP + Skill + Native
+    /// These are the "preset" tools displayed in Settings > Routing.
+    pub fn list_preset_tools(&self) -> Vec<crate::dispatcher::UnifiedToolInfo> {
+        self.runtime
+            .block_on(async { self.tool_registry.list_preset_tools().await })
             .into_iter()
             .map(crate::dispatcher::UnifiedToolInfo::from)
             .collect()
@@ -306,12 +318,10 @@ impl AetherCore {
     pub fn get_root_commands(&self) -> Vec<crate::command::CommandNode> {
         let config = self.lock_config();
         let language = config.general.language.as_deref().unwrap_or("en");
-        let mut registry = crate::command::CommandRegistry::from_config(&config, language);
+        let registry = crate::command::CommandRegistry::from_config(&config, language);
 
-        // Inject installed skills as /skill subcommands
-        if let Ok(skills) = crate::list_installed_skills() {
-            registry.inject_skills(&skills);
-        }
+        // NOTE: Flat namespace mode - skills are registered directly in ToolRegistry
+        // No longer inject /skill namespace here
 
         registry.get_root_commands()
     }
@@ -329,12 +339,10 @@ impl AetherCore {
     pub fn get_command_children(&self, parent_key: String) -> Vec<crate::command::CommandNode> {
         let config = self.lock_config();
         let language = config.general.language.as_deref().unwrap_or("en");
-        let mut registry = crate::command::CommandRegistry::from_config(&config, language);
+        let registry = crate::command::CommandRegistry::from_config(&config, language);
 
-        // Inject installed skills as /skill subcommands
-        if let Ok(skills) = crate::list_installed_skills() {
-            registry.inject_skills(&skills);
-        }
+        // NOTE: Flat namespace mode - no namespace subcommands
+        // /mcp and /skill are no longer supported as namespaces
 
         registry.get_children(&parent_key)
     }

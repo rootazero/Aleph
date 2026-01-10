@@ -660,6 +660,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func listMcpTools()  -> [McpToolInfo]
     
+    func listPresetTools()  -> [UnifiedToolInfo]
+    
     func listRootTools()  -> [UnifiedToolInfo]
     
     func listTools()  -> [UnifiedToolInfo]
@@ -1085,6 +1087,13 @@ open func listMcpServices() -> [McpServiceInfo] {
 open func listMcpTools() -> [McpToolInfo] {
     return try!  FfiConverterSequenceTypeMcpToolInfo.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_list_mcp_tools(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func listPresetTools() -> [UnifiedToolInfo] {
+    return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_list_preset_tools(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -8367,6 +8376,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_list_mcp_tools() != 7193) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_list_preset_tools() != 9252) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_list_root_tools() != 53812) {

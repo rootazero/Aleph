@@ -37,7 +37,11 @@ struct RoutingView: View {
     @State private var ruleEditorState: RuleEditorState?
     @State private var showingDeleteConfirmation: Bool = false
     @State private var deletingRuleIndex: Int?
-    @State private var showingPresetRulesList: Bool = false
+
+    // Preset commands state (collapsible, inline display)
+    @State private var isPresetExpanded: Bool = false
+    @State private var builtinTools: [UnifiedToolInfo] = []
+    @State private var expandedPresetRules: Set<String> = []
 
     var body: some View {
         ScrollView {
@@ -76,6 +80,7 @@ struct RoutingView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             loadRules()
+            loadBuiltinTools()
             // Set save bar to disabled state for instant-save view
             saveBarState.update(
                 hasUnsavedChanges: false,
@@ -106,46 +111,99 @@ struct RoutingView: View {
         }
     }
 
-    // MARK: - Preset Commands Section (Hardcoded)
+    // MARK: - Preset Commands Section (Collapsible, Inline)
 
     private var presetCommandsSection: some View {
-        HStack(alignment: .top, spacing: DesignTokens.Spacing.md) {
-            // Section header
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
-                Text(L("settings.routing.preset_commands"))
-                    .font(DesignTokens.Typography.heading)
-                    .foregroundColor(DesignTokens.Colors.textPrimary)
-                    .fontWeight(.semibold)
-
-                Text(L("settings.routing.preset_commands_subtitle"))
-                    .font(DesignTokens.Typography.caption)
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
-            }
-
-            Spacer()
-
-            // View button to open preset rules list
-            Button(action: { showingPresetRulesList = true }) {
-                HStack(spacing: DesignTokens.Spacing.xs) {
-                    Text(L("common.view"))
-                        .font(DesignTokens.Typography.body)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12))
+        VStack(alignment: .leading, spacing: 0) {
+            // Collapsible header
+            Button(action: {
+                withAnimation(DesignTokens.Animation.quick) {
+                    isPresetExpanded.toggle()
                 }
-                .foregroundColor(DesignTokens.Colors.accentPurple)
+            }) {
+                HStack(spacing: DesignTokens.Spacing.md) {
+                    // Expand/collapse indicator
+                    Image(systemName: isPresetExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                        .frame(width: 16)
+
+                    // Section header
+                    VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                        HStack(spacing: DesignTokens.Spacing.sm) {
+                            Text(L("settings.routing.preset_commands"))
+                                .font(DesignTokens.Typography.heading)
+                                .foregroundColor(DesignTokens.Colors.textPrimary)
+                                .fontWeight(.semibold)
+
+                            // Count badge
+                            Text("\(builtinTools.count)")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(DesignTokens.Colors.accentPurple)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(DesignTokens.Colors.accentPurple.opacity(0.15))
+                                .cornerRadius(DesignTokens.CornerRadius.small)
+                        }
+
+                        Text(L("settings.routing.preset_commands_subtitle"))
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                    }
+
+                    Spacer()
+                }
+                .padding(DesignTokens.Spacing.md)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+
+            // Expanded content - preset rules list
+            if isPresetExpanded {
+                VStack(spacing: 0) {
+                    Divider()
+                        .padding(.leading, DesignTokens.Spacing.md)
+
+                    ForEach(presetRules, id: \.command) { preset in
+                        PresetRuleInlineRow(
+                            preset: preset,
+                            isExpanded: expandedPresetRules.contains(preset.command),
+                            onToggle: {
+                                withAnimation(DesignTokens.Animation.quick) {
+                                    if expandedPresetRules.contains(preset.command) {
+                                        expandedPresetRules.remove(preset.command)
+                                    } else {
+                                        expandedPresetRules.insert(preset.command)
+                                    }
+                                }
+                            }
+                        )
+
+                        if preset.command != presetRules.last?.command {
+                            Divider()
+                                .padding(.leading, DesignTokens.Spacing.lg)
+                        }
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
-        .padding(DesignTokens.Spacing.md)
         .background(DesignTokens.Colors.accentPurple.opacity(0.03))
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.large, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.large, style: .continuous)
                 .stroke(DesignTokens.Colors.accentPurple.opacity(0.15), lineWidth: 1)
         )
-        .sheet(isPresented: $showingPresetRulesList) {
-            PresetRulesListView()
-        }
+    }
+
+    /// Convert UnifiedToolInfo to PresetRule for display
+    private var presetRules: [PresetRule] {
+        builtinTools.sortedByOrder().map { $0.toPresetRule() }
+    }
+
+    /// Load builtin tools from ToolRegistry
+    private func loadBuiltinTools() {
+        builtinTools = core.listBuiltinTools()
     }
 
     // MARK: - Custom Rules Section
@@ -1029,10 +1087,104 @@ struct RuleCard: View {
     }
 }
 
-// MARK: - Preset Rules List View (Popup)
+// MARK: - Preset Rule Inline Row (for collapsible section)
+
+/// Inline row for preset rule display (used in collapsible preset section)
+struct PresetRuleInlineRow: View {
+    let preset: PresetRule
+    let isExpanded: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Main row (always visible)
+            Button(action: onToggle) {
+                HStack(spacing: DesignTokens.Spacing.md) {
+                    // Icon
+                    ZStack {
+                        Circle()
+                            .fill(DesignTokens.Colors.accentPurple.opacity(0.15))
+                            .frame(width: 32, height: 32)
+
+                        Image(systemName: preset.icon)
+                            .font(.system(size: 14))
+                            .foregroundColor(DesignTokens.Colors.accentPurple)
+                    }
+
+                    // Title and description
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: DesignTokens.Spacing.sm) {
+                            Text(preset.command)
+                                .font(DesignTokens.Typography.code)
+                                .fontWeight(.medium)
+                                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                            // Status badge
+                            if preset.isImplemented {
+                                HStack(spacing: 2) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .font(.system(size: 8))
+                                    Text(L("settings.routing.implemented"))
+                                        .font(.system(size: 10))
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(DesignTokens.Colors.success)
+                                .cornerRadius(DesignTokens.CornerRadius.small)
+                            }
+                        }
+
+                        Text(L(preset.descriptionKey))
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+
+                    // Expand/collapse indicator
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .padding(.vertical, DesignTokens.Spacing.sm)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            // Expanded content - usage info
+            if isExpanded {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+                    Text(L("settings.routing.usage"))
+                        .font(DesignTokens.Typography.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                    Text(preset.usage)
+                        .font(DesignTokens.Typography.code)
+                        .foregroundColor(DesignTokens.Colors.accentBlue)
+                        .padding(DesignTokens.Spacing.sm)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(DesignTokens.Colors.cardBackground)
+                        .cornerRadius(DesignTokens.CornerRadius.small)
+                }
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .padding(.bottom, DesignTokens.Spacing.sm)
+                .padding(.leading, 44)  // Align with text after icon
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .background(isExpanded ? DesignTokens.Colors.accentPurple.opacity(0.02) : Color.clear)
+    }
+}
+
+// MARK: - Preset Rules List View (Legacy - can be removed)
 
 /// Popup view displaying all preset rules with expand/collapse support
-/// Now uses ToolRegistry as the single source of truth for builtin commands
+/// NOTE: This view is no longer used - preset rules are now displayed inline
+/// Keep for reference or remove in future cleanup
 struct PresetRulesListView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var expandedRules: Set<String> = []

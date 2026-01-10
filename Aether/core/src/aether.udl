@@ -447,13 +447,15 @@ interface AetherCore {
   // Returns tools from all sources: Native, MCP, Skills, Custom, Builtin
   sequence<UnifiedToolInfo> list_tools();
 
-  // List builtin tools only (for Settings UI)
-  // Returns the 5 system builtin commands sorted by sort_order
-  // This is the single source of truth for preset rules
+  // List builtin tools only (3 commands: search, video, chat)
   sequence<UnifiedToolInfo> list_builtin_tools();
 
+  // List preset tools for Settings UI (Flat Namespace Mode)
+  // Returns all non-Custom tools: Builtin + MCP + Skill + Native
+  sequence<UnifiedToolInfo> list_preset_tools();
+
   // List root-level commands for command completion
-  // Returns builtin + custom commands (but not nested MCP/Skill tools)
+  // Returns all active tools except Native (internal implementations)
   sequence<UnifiedToolInfo> list_root_tools();
 
   // List tools filtered by source type

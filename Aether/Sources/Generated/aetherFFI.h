@@ -685,6 +685,11 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_list_mcp_services(void*_Nonnull
 RustBuffer uniffi_aethecore_fn_method_aethercore_list_mcp_tools(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_PRESET_TOOLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_PRESET_TOOLS
+RustBuffer uniffi_aethecore_fn_method_aethercore_list_preset_tools(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_ROOT_TOOLS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_ROOT_TOOLS
 RustBuffer uniffi_aethecore_fn_method_aethercore_list_root_tools(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -1502,6 +1507,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_list_mcp_services(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_MCP_TOOLS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_MCP_TOOLS
 uint16_t uniffi_aethecore_checksum_method_aethercore_list_mcp_tools(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_PRESET_TOOLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_PRESET_TOOLS
+uint16_t uniffi_aethecore_checksum_method_aethercore_list_preset_tools(void
     
 );
 #endif
