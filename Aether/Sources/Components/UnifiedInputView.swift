@@ -148,6 +148,14 @@ struct UnifiedInputView: View {
             onEscape: { handleCancel() },
             onTextChange: { newText in
                 handleTextChange(newText)
+            },
+            onArrowUp: {
+                // Move selection up in command completion
+                subPanelState.moveSelectionUp()
+            },
+            onArrowDown: {
+                // Move selection down in command completion
+                subPanelState.moveSelectionDown()
             }
         )
         .frame(height: 26)
@@ -214,12 +222,22 @@ struct UnifiedInputView: View {
             let prefix = String(newText.dropFirst())
             NSLog("[UnifiedInputView] Command prefix detected: '%@'", prefix)
 
-            // Get filtered commands from core
+            // Get filtered commands from ToolRegistry (single source of truth)
             if let core = core {
-                NSLog("[UnifiedInputView] Core available, fetching commands...")
-                let commands = prefix.isEmpty ?
-                    core.getRootCommands() :
-                    core.filterCommands(prefix: prefix)
+                NSLog("[UnifiedInputView] Core available, fetching commands from registry...")
+                // Use registry-based method for all tools (Builtin, MCP, Skill, Custom)
+                let allCommands = core.getRootCommandsFromRegistry()
+                let commands: [CommandNode]
+                if prefix.isEmpty {
+                    commands = allCommands
+                } else {
+                    // Filter locally by prefix
+                    let lowercasedPrefix = prefix.lowercased()
+                    commands = allCommands.filter {
+                        $0.key.lowercased().hasPrefix(lowercasedPrefix) ||
+                        $0.description.lowercased().contains(lowercasedPrefix)
+                    }
+                }
 
                 NSLog("[UnifiedInputView] Got %d commands", commands.count)
 

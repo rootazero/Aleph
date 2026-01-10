@@ -36,6 +36,8 @@ struct IMETextField: NSViewRepresentable {
     var onSubmit: (() -> Void)?
     var onEscape: (() -> Void)?
     var onTextChange: ((String) -> Void)?
+    var onArrowUp: (() -> Void)?
+    var onArrowDown: (() -> Void)?
 
     func makeNSView(context: Context) -> NSTextField {
         NSLog("[IMETextField] makeNSView called")
@@ -69,6 +71,8 @@ struct IMETextField: NSViewRepresentable {
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onEscape = onEscape
         context.coordinator.onTextChange = onTextChange
+        context.coordinator.onArrowUp = onArrowUp
+        context.coordinator.onArrowDown = onArrowDown
         context.coordinator.textField = textField
 
         // Set direct callback on IMETextFieldView (most reliable method)
@@ -140,6 +144,8 @@ struct IMETextField: NSViewRepresentable {
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onEscape = onEscape
         context.coordinator.onTextChange = onTextChange
+        context.coordinator.onArrowUp = onArrowUp
+        context.coordinator.onArrowDown = onArrowDown
 
         // Update direct callback on IMETextFieldView
         if let imeTextField = nsView as? IMETextFieldView {
@@ -171,6 +177,8 @@ struct IMETextField: NSViewRepresentable {
         var onSubmit: (() -> Void)?
         var onEscape: (() -> Void)?
         var onTextChange: ((String) -> Void)?
+        var onArrowUp: (() -> Void)?
+        var onArrowDown: (() -> Void)?
         weak var textField: NSTextField?
 
         init(_ parent: IMETextField) {
@@ -218,6 +226,18 @@ struct IMETextField: NSViewRepresentable {
                 // Escape pressed
                 onEscape?()
                 return true
+            } else if commandSelector == #selector(NSResponder.moveUp(_:)) {
+                // Up arrow pressed
+                if let callback = onArrowUp {
+                    callback()
+                    return true
+                }
+            } else if commandSelector == #selector(NSResponder.moveDown(_:)) {
+                // Down arrow pressed
+                if let callback = onArrowDown {
+                    callback()
+                    return true
+                }
             }
             return false
         }
