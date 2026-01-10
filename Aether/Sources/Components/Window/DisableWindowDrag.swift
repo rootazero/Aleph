@@ -34,13 +34,19 @@ private struct WindowDragDisabler: NSViewRepresentable {
 /// Custom NSView that disables window dragging when added to the view hierarchy
 private class WindowDragDisablerView: NSView {
     private var originalWindowDraggable: Bool = true
+    // Store weak reference to avoid crash when accessing window during deallocation
+    private weak var attachedWindow: NSWindow?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
 
         guard let window = window else {
+            attachedWindow = nil
             return
         }
+
+        // Store weak reference for later use in viewWillMove
+        attachedWindow = window
 
         // Defer window property modification to avoid KVO notification during SwiftUI's
         // AttributeGraph update cycle. Synchronous modification can crash SwiftUI internals.
@@ -53,13 +59,12 @@ private class WindowDragDisablerView: NSView {
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
-        // Restore original state when view is removed
-        if let window = window, newWindow == nil {
-            // Use weak reference to avoid crash when window is deallocated
-            // before async block executes
+        // Restore original state when view is removed from window
+        // Use stored weak reference instead of self.window to avoid crash
+        // when the window is being deallocated
+        if newWindow == nil, let window = attachedWindow {
             let originalValue = originalWindowDraggable
             DispatchQueue.main.async { [weak window] in
-                // Only restore if window still exists and is valid
                 guard let window = window else { return }
                 window.isMovableByWindowBackground = originalValue
             }
