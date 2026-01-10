@@ -13,14 +13,14 @@ use serde::{Deserialize, Serialize};
 ///
 /// Aether supports two types of routing rules:
 ///
-/// ## Command Rules (指令规则)
+/// ## Command Rules
 /// - Pattern starts with `^/` (e.g., `^/draw`, `^/translate`)
 /// - First-match-stops: only one command rule matches per request
 /// - Requires `provider` field to specify which AI to use
 /// - Command prefix is automatically stripped before sending to AI
 ///
-/// ## Keyword Rules (关键词规则)
-/// - Pattern does not start with `/` (e.g., `翻译成英文`, `代码优化`)
+/// ## Keyword Rules
+/// - Pattern does not start with `/` (e.g., `translate to English`, `code optimization`)
 /// - All-match: multiple keyword rules can match simultaneously
 /// - No `provider` field (uses default_provider)
 /// - Multiple matched prompts are combined with `\n\n`
@@ -33,13 +33,13 @@ use serde::{Deserialize, Serialize};
 /// rule_type = "command"
 /// regex = "^/draw\\s+"
 /// provider = "gemini"
-/// system_prompt = "请根据提示画一幅画"
+/// system_prompt = "Draw a picture based on the prompt"
 ///
 /// # Keyword rule - prompt only, no provider
 /// [[rules]]
 /// rule_type = "keyword"
-/// regex = "翻译成英文"
-/// system_prompt = "翻译目标语言为英文"
+/// regex = "translate to English"
+/// system_prompt = "Translate the target language to English"
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RoutingRuleConfig {

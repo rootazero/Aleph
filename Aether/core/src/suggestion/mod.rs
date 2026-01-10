@@ -7,10 +7,10 @@
 //!
 //! ```ignore
 //! let parser = SuggestionParser::new();
-//! let result = parser.parse("这是天气信息。你还需要我帮你查看：
-//! 1. 明天天气
-//! 2. 穿衣建议
-//! 3. 空气质量");
+//! let result = parser.parse("Here is the weather information. Would you also like to check:
+//! 1. Tomorrow's weather
+//! 2. Clothing suggestions
+//! 3. Air quality");
 //!
 //! if result.has_suggestions {
 //!     // Present options to user via clarification

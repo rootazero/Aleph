@@ -72,7 +72,7 @@ enum FocusDetectionResult {
 /// case .focused(let info):
 ///     showHalo(at: info.caretPosition)
 /// case .notFocused:
-///     showToast("请先点击输入框")
+///     showToast("Please click an input field first")
 /// case .accessibilityDenied:
 ///     requestAccessibilityPermission()
 /// case .unknownError(let error):

@@ -261,7 +261,7 @@ struct PermissionGateView: View {
                 .contentShape(Rectangle())
             }
 
-            // "进入 Aether" button - shown when BOTH permissions are granted
+            // "Enter Aether" button - shown when BOTH permissions are granted
             // User manually clicks this button to restart the app (not automatic)
             if manager.accessibilityGranted && manager.inputMonitoringGranted {
                 Button(action: restartApp) {
@@ -340,13 +340,13 @@ struct PermissionGateView: View {
             }
             .store(in: &cancellables)
 
-        // When both permissions are granted, the user will see "进入 Aether" button
+        // When both permissions are granted, the user will see "Enter Aether" button
         // User manually clicks the button to restart (NO automatic restart)
     }
 
     /// Restart the application (user-triggered only, not automatic)
     private func restartApp() {
-        print("[PermissionGateView] User clicked '进入 Aether' - restarting application")
+        print("[PermissionGateView] User clicked 'Enter Aether' - restarting application")
 
         let url = URL(fileURLWithPath: Bundle.main.bundlePath)
         let config = NSWorkspace.OpenConfiguration()

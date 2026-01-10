@@ -727,7 +727,7 @@ final class UnifiedInputCoordinator {
     /// 1. Saved cursor position from target app (targetAppInfo.caretPosition)
     /// 2. Fallback: Top-left corner of unified input window
     ///
-    /// Note: SubPanel remains visible to show status messages (e.g., "发送请求")
+    /// Note: SubPanel remains visible to show status messages (e.g., "Sending request")
     private func showProcessingIndicator() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }

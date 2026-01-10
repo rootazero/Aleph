@@ -19,11 +19,11 @@ import AppKit
 /// Layout:
 /// ```
 /// ┌─────────────────────────────────────────┐
-/// │  Turn 1                      ESC 退出    │  ← Header
+/// │  Turn 1                      ESC Exit    │  ← Header
 /// │ ┌─────────────────────────────────────┐ │
-/// │ │ 输入对话或命令...                    │ │  ← Main Input
+/// │ │ Enter conversation or command...    │ │  ← Main Input
 /// │ └─────────────────────────────────────┘ │
-/// │  Enter 发送                             │  ← Hints
+/// │  Enter to send                          │  ← Hints
 /// ├─────────────────────────────────────────┤
 /// │                                         │
 /// │         SubPanel (dynamic)              │  ← SubPanel

@@ -289,7 +289,7 @@ impl RoutingRule {
 /// # Example
 ///
 /// ```rust,ignore
-/// let result = router.match_rules("/draw 一幅山水画");
+/// let result = router.match_rules("/draw a landscape painting");
 ///
 /// // Command rule matched: provider + cleaned input
 /// if let Some(cmd) = &result.command_rule {
@@ -966,7 +966,7 @@ impl Router {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let result = router.match_rules("/draw 一幅山水画");
+    /// let result = router.match_rules("/draw a landscape painting");
     ///
     /// // Get provider from command rule
     /// let provider_name = result.provider_name().unwrap_or("default");
