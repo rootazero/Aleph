@@ -200,6 +200,18 @@ impl McpClient {
         tools
     }
 
+    /// List builtin tools grouped by service name (sync version)
+    ///
+    /// Returns a list of (service_name, tools) pairs for correct tool registration.
+    /// This preserves the service name that would otherwise be lost when tools
+    /// are collected into a flat list.
+    pub fn list_builtin_tools_by_service(&self) -> Vec<(String, Vec<McpTool>)> {
+        self.system_tools
+            .iter()
+            .map(|service| (service.name().to_string(), service.list_tools()))
+            .collect()
+    }
+
     /// Get tools as a formatted list for context injection
     pub async fn get_tools_for_context(&self) -> Vec<(String, String, serde_json::Value)> {
         self.list_tools()

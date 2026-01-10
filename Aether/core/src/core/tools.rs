@@ -48,39 +48,21 @@ impl AetherCore {
             registry.register_native_tools().await;
 
             // 2. Register system tools (from MCP client)
+            // Use list_builtin_tools_by_service() to preserve correct service names
             if let Some(client) = &mcp_client {
-                let tools = client.list_builtin_tools();
-                let mcp_tool_infos: Vec<crate::mcp::McpToolInfo> = tools
-                    .into_iter()
-                    .map(|tool| {
-                        let service_name = tool
-                            .name
-                            .split(':')
-                            .next()
-                            .unwrap_or("unknown")
-                            .to_string();
-                        crate::mcp::McpToolInfo {
+                for (service_name, tools) in client.list_builtin_tools_by_service() {
+                    let mcp_tool_infos: Vec<crate::mcp::McpToolInfo> = tools
+                        .into_iter()
+                        .map(|tool| crate::mcp::McpToolInfo {
                             name: tool.name,
                             description: tool.description,
                             requires_confirmation: tool.requires_confirmation,
-                            service_name,
-                        }
-                    })
-                    .collect();
+                            service_name: service_name.clone(),
+                        })
+                        .collect();
 
-                // Group by service name
-                let mut by_service: std::collections::HashMap<String, Vec<crate::mcp::McpToolInfo>> =
-                    std::collections::HashMap::new();
-                for tool in mcp_tool_infos {
-                    by_service
-                        .entry(tool.service_name.clone())
-                        .or_default()
-                        .push(tool);
-                }
-
-                for (service_name, tools) in by_service {
                     registry
-                        .register_mcp_tools(&tools, &service_name, true)
+                        .register_mcp_tools(&mcp_tool_infos, &service_name, true)
                         .await;
                 }
             }
