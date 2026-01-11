@@ -699,6 +699,7 @@ mod tests {
             .collect();
 
         let context = AgentContext {
+            memory_facts: None,
             memory_snippets: Some(memories),
             search_results: None,
             mcp_resources: None,

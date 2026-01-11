@@ -100,6 +100,49 @@ impl CleanupService {
         })
     }
 
+    /// Start background cleanup task with external runtime
+    ///
+    /// This method is used during AetherCore initialization when we have a runtime
+    /// but are not yet inside its context (so tokio::spawn won't work).
+    ///
+    /// # Arguments
+    /// * `runtime` - Tokio runtime for spawning the task
+    ///
+    /// # Returns
+    /// A JoinHandle to the background task
+    pub fn start_background_task_with_runtime(
+        self: &Arc<Self>,
+        runtime: &tokio::runtime::Runtime,
+    ) -> tokio::task::JoinHandle<()> {
+        let service = Arc::clone(self);
+        let retention_days = self.retention_days;
+
+        runtime.spawn(async move {
+            let mut interval = interval(Duration::from_secs(86400)); // 24 hours
+
+            log::info!(
+                "[Memory Cleanup] Started daily cleanup task (retention: {} days)",
+                retention_days
+            );
+
+            loop {
+                interval.tick().await;
+
+                match service.cleanup_old_memories() {
+                    Ok(count) => {
+                        log::info!(
+                            "[Memory Cleanup] Daily cleanup completed: {} memories deleted",
+                            count
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("[Memory Cleanup] Daily cleanup failed: {}", e);
+                    }
+                }
+            }
+        })
+    }
+
     /// Update retention policy
     ///
     /// # Arguments

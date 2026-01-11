@@ -255,6 +255,53 @@ impl CompressionService {
         })
     }
 
+    /// Start background compression task with external runtime
+    ///
+    /// This method is used during AetherCore initialization when we have a runtime
+    /// but are not yet inside its context (so tokio::spawn won't work).
+    ///
+    /// Triggers:
+    /// - Every hour: checks if compression is needed
+    /// - Turn threshold (20): triggers when conversation turns accumulate
+    pub fn start_background_task_with_runtime(
+        self: &Arc<Self>,
+        runtime: &tokio::runtime::Runtime,
+    ) -> JoinHandle<()> {
+        let service = Arc::clone(self);
+        let interval_secs = self.config.background_interval_seconds;
+        let turn_threshold = self.config.scheduler.turn_threshold;
+
+        runtime.spawn(async move {
+            let mut hourly_interval = interval(Duration::from_secs(interval_secs as u64));
+
+            tracing::info!(
+                interval_seconds = interval_secs,
+                turn_threshold = turn_threshold,
+                "Started background compression task (hourly + turn threshold)"
+            );
+
+            loop {
+                hourly_interval.tick().await;
+
+                match service.check_and_compress().await {
+                    Ok(Some(result)) => {
+                        tracing::info!(
+                            facts = result.facts_extracted,
+                            duration_ms = result.duration_ms,
+                            "Compression completed"
+                        );
+                    }
+                    Ok(None) => {
+                        tracing::debug!("Compression check: no action needed");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Compression failed");
+                    }
+                }
+            }
+        })
+    }
+
     /// Record user activity (for idle detection)
     pub fn record_activity(&self) {
         self.scheduler.record_activity();

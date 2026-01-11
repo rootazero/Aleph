@@ -15,7 +15,7 @@ pub use capability::Capability;
 pub use context_format::ContextFormat;
 pub use intent::Intent;
 
-use crate::memory::MemoryEntry;
+use crate::memory::{MemoryEntry, MemoryFact};
 use crate::search::SearchResult;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -119,7 +119,12 @@ pub struct PayloadConfig {
 /// Agent context (extension area)
 #[derive(Debug, Clone, Default)]
 pub struct AgentContext {
-    /// Memory retrieval results
+    /// Compressed memory facts (Layer 2 - priority)
+    /// These are extracted facts from past conversations, more concise than raw memories
+    pub memory_facts: Option<Vec<MemoryFact>>,
+
+    /// Raw memory retrieval results (Layer 1 - fallback)
+    /// Used when facts are insufficient
     pub memory_snippets: Option<Vec<MemoryEntry>>,
 
     /// Search results (None in Stage 1)

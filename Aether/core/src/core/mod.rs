@@ -206,6 +206,7 @@ impl AetherCore {
         };
 
         // Initialize memory database and cleanup service if enabled
+        // Note: We pass runtime reference to start background tasks properly
         let (memory_db, cleanup_service, cleanup_task_handle) = {
             let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
             if cfg.memory.enabled {
@@ -219,18 +220,15 @@ impl AetherCore {
                             Ok(cleanup) => {
                                 let cleanup_arc = Arc::new(cleanup);
 
-                                // Start background cleanup task (only in non-test environment)
+                                // Start background cleanup task using the runtime
+                                // This fixes the issue where try_current() would fail
                                 #[cfg(not(test))]
                                 let task_handle = {
-                                    match tokio::runtime::Handle::try_current() {
-                                        Ok(_) => {
-                                            Some(Arc::clone(&cleanup_arc).start_background_task())
-                                        }
-                                        Err(_) => {
-                                            eprintln!("[Memory] Warning: No tokio runtime, skipping background cleanup task");
-                                            None
-                                        }
-                                    }
+                                    info!(
+                                        retention_days = cfg.memory.retention_days,
+                                        "Starting daily memory cleanup task"
+                                    );
+                                    Some(cleanup_arc.start_background_task_with_runtime(&runtime))
                                 };
 
                                 #[cfg(test)]
@@ -255,8 +253,9 @@ impl AetherCore {
         };
 
         // Initialize compression service if enabled
+        // Pass runtime reference so background tasks can be spawned properly
         let (compression_service, compression_task_handle) =
-            Self::init_compression_service(&config, &memory_db);
+            Self::init_compression_service(&config, &memory_db, &runtime);
 
         // Initialize MCP client with system tools
         let mcp_client = Self::init_mcp_client(&config);
@@ -315,9 +314,15 @@ impl AetherCore {
     // ========================================================================
 
     /// Initialize compression service
+    ///
+    /// # Arguments
+    /// * `config` - Configuration
+    /// * `memory_db` - Memory database (if enabled)
+    /// * `runtime` - Tokio runtime for spawning background tasks
     fn init_compression_service(
         config: &Arc<Mutex<Config>>,
         memory_db: &Option<Arc<VectorDatabase>>,
+        runtime: &tokio::runtime::Runtime,
     ) -> (Option<Arc<CompressionService>>, Option<JoinHandle<()>>) {
         let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -353,6 +358,11 @@ impl AetherCore {
             return (None, None);
         };
 
+        info!(
+            provider = cfg.general.default_provider.as_deref().unwrap_or("unknown"),
+            "Compression service using AI provider"
+        );
+
         // Get embedding model directory
         let model_dir = match Self::get_embedding_model_dir() {
             Ok(dir) => dir,
@@ -378,17 +388,19 @@ impl AetherCore {
         };
 
         // Build compression config from memory config
+        let idle_timeout = cfg.memory.compression_idle_timeout_seconds;
+        let interval = cfg.memory.compression_interval_seconds;
         let compression_config = CompressionConfig {
             batch_size: cfg.memory.compression_batch_size,
             scheduler: SchedulerConfig {
-                idle_timeout_seconds: cfg.memory.compression_idle_timeout_seconds,
+                idle_timeout_seconds: idle_timeout,
                 turn_threshold: cfg.memory.compression_turn_threshold,
-                ..Default::default()
+                background_interval_seconds: interval,
             },
             conflict: ConflictConfig {
                 similarity_threshold: cfg.memory.conflict_similarity_threshold,
             },
-            background_interval_seconds: cfg.memory.compression_interval_seconds,
+            background_interval_seconds: interval,
         };
 
         let service = Arc::new(CompressionService::new(
@@ -398,19 +410,17 @@ impl AetherCore {
             compression_config,
         ));
 
-        // Start background compression task (only in non-test environment)
+        // Start background compression task using the provided runtime
+        // This fixes the issue where try_current() would fail because we're not
+        // inside the runtime context yet during initialization
         #[cfg(not(test))]
         let task_handle = {
-            match tokio::runtime::Handle::try_current() {
-                Ok(_) => {
-                    info!("Starting background compression task");
-                    Some(Arc::clone(&service).start_background_task())
-                }
-                Err(_) => {
-                    warn!("[Compression] No tokio runtime, skipping background task");
-                    None
-                }
-            }
+            info!(
+                interval_seconds = interval,
+                turn_threshold = cfg.memory.compression_turn_threshold,
+                "Starting background compression task"
+            );
+            Some(service.start_background_task_with_runtime(runtime))
         };
 
         #[cfg(test)]

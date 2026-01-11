@@ -4,7 +4,7 @@
 /// using different formats (Markdown, XML, JSON).
 use super::{AgentContext, AgentPayload, ContextFormat};
 use crate::capability::CapabilityDeclaration;
-use crate::memory::MemoryEntry;
+use crate::memory::{MemoryEntry, MemoryFact};
 use crate::search::SearchResult;
 
 /// Prompt assembler that converts AgentPayload to LLM message format
@@ -267,7 +267,15 @@ impl PromptAssembler {
     fn format_markdown(&self, context: &AgentContext) -> Option<String> {
         let mut sections = Vec::new();
 
-        // Memory section
+        // Facts section (Layer 2 - priority, more concise)
+        if let Some(facts) = &context.memory_facts {
+            if !facts.is_empty() {
+                let facts_section = self.format_facts_markdown(facts);
+                sections.push(facts_section);
+            }
+        }
+
+        // Memory section (Layer 1 - fallback, full conversation history)
         if let Some(memories) = &context.memory_snippets {
             if !memories.is_empty() {
                 let memory_section = self.format_memory_markdown(memories);
@@ -318,9 +326,29 @@ impl PromptAssembler {
         }
     }
 
-    /// Format memory entries as Markdown
+    /// Format compressed facts as Markdown (Layer 2 - priority)
+    ///
+    /// Facts are pre-extracted key information from past conversations,
+    /// more concise and directly relevant than raw conversation history.
+    fn format_facts_markdown(&self, facts: &[MemoryFact]) -> String {
+        let mut lines = vec!["**Known User Information**:".to_string()];
+
+        for fact in facts {
+            // Format as bullet point with fact content
+            lines.push(format!("- {}", fact.content));
+
+            // Optionally show confidence if it's notably high or low
+            if fact.confidence < 0.7 {
+                lines.push(format!("  _(confidence: {:.0}%)_", fact.confidence * 100.0));
+            }
+        }
+
+        lines.join("\n")
+    }
+
+    /// Format memory entries as Markdown (Layer 1 - fallback)
     fn format_memory_markdown(&self, memories: &[MemoryEntry]) -> String {
-        let mut lines = vec!["**Relevant History**:".to_string()];
+        let mut lines = vec!["**Related Conversation History**:".to_string()];
 
         for (i, entry) in memories.iter().enumerate() {
             lines.push(format!(
@@ -957,6 +985,7 @@ mod tests {
         }];
 
         let context = AgentContext {
+            memory_facts: None,
             memory_snippets: Some(memories),
             search_results: None,
             mcp_resources: None,

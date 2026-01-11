@@ -37,7 +37,7 @@ pub use system::{
 use crate::config::{McpConfig, MemoryConfig, SkillsConfig, VideoConfig};
 use crate::mcp::McpClient;
 use crate::error::{AetherError, Result};
-use crate::memory::{EmbeddingModel, MemoryRetrieval, VectorDatabase};
+use crate::memory::{EmbeddingModel, FactRetrieval, FactRetrievalConfig, VectorDatabase};
 use crate::payload::{AgentPayload, Capability};
 use crate::search::{SearchOptions, SearchRegistry};
 use crate::skills::SkillsRegistry;
@@ -270,9 +270,9 @@ impl CapabilityExecutor {
 
     /// Execute Memory capability
     ///
-    /// Retrieves relevant memory snippets using either:
-    /// - AI-based selection (when `use_ai_retrieval` is true and provider available)
-    /// - Embedding-based vector similarity (fallback)
+    /// Uses a "Fact-First" retrieval strategy:
+    /// 1. First retrieve compressed facts (Layer 2) - more concise and informative
+    /// 2. If facts are insufficient, fallback to raw memories (Layer 1)
     ///
     /// # Arguments
     ///
@@ -280,11 +280,8 @@ impl CapabilityExecutor {
     ///
     /// # Returns
     ///
-    /// The payload with memory_snippets populated (if any found)
+    /// The payload with memory_facts and/or memory_snippets populated
     async fn execute_memory(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
-        use crate::memory::ai_retrieval::AiMemoryRetriever;
-        use crate::memory::ContextAnchor as MemoryContextAnchor;
-
         // Check if memory database and config are available
         let Some(db) = &self.memory_db else {
             warn!("Memory capability requested but no memory database configured");
@@ -303,95 +300,57 @@ impl CapabilityExecutor {
             query_length = query.len(),
             app = %anchor.app_bundle_id,
             window = ?anchor.window_title,
-            use_ai_retrieval = self.use_ai_retrieval,
-            "Retrieving memory snippets"
+            max_facts = config.max_facts_in_context,
+            raw_fallback = config.raw_memory_fallback_count,
+            "Retrieving memory (fact-first strategy)"
         );
 
-        // Convert payload::ContextAnchor to memory::ContextAnchor
-        let memory_anchor = MemoryContextAnchor::with_timestamp(
-            anchor.app_bundle_id.clone(),
-            anchor.window_title.clone().unwrap_or_default(),
-            payload.meta.timestamp,
-        );
-
-        // Initialize embedding model (needed for both paths)
+        // Initialize embedding model
         let model_dir = Self::get_embedding_model_dir()?;
         let embedding_model = Arc::new(EmbeddingModel::new(model_dir).map_err(|e| {
             AetherError::config(format!("Failed to initialize embedding model: {}", e))
         })?);
 
-        // Choose retrieval strategy
-        let memories = if self.use_ai_retrieval {
-            // AI-based memory selection
-            if let Some(ai_provider) = &self.ai_provider {
-                info!("Using AI-based memory retrieval");
-
-                // First, fetch candidate memories using embedding search
-                let retrieval = MemoryRetrieval::new(
-                    Arc::clone(db),
-                    Arc::clone(&embedding_model),
-                    Arc::clone(config),
-                );
-
-                // Get more candidates than needed for AI to select from
-                let candidates = retrieval
-                    .retrieve_memories_with_limit(&memory_anchor, query, self.ai_retrieval_max_candidates as usize)
-                    .await
-                    .unwrap_or_else(|e| {
-                        warn!(error = %e, "Failed to fetch memory candidates, returning empty");
-                        Vec::new()
-                    });
-
-                if candidates.is_empty() {
-                    debug!("No memory candidates found for AI selection");
-                    Vec::new()
-                } else {
-                    // Use AI to select relevant memories
-                    let retriever = AiMemoryRetriever::new(Arc::clone(ai_provider))
-                        .with_timeout(std::time::Duration::from_millis(self.ai_retrieval_timeout_ms))
-                        .with_max_candidates(self.ai_retrieval_max_candidates)
-                        .with_fallback_count(self.ai_retrieval_fallback_count);
-
-                    retriever
-                        .retrieve(query, candidates, &self.memory_exclusion_set)
-                        .await
-                        .unwrap_or_else(|e| {
-                            warn!(error = %e, "AI memory selection failed, returning empty");
-                            Vec::new()
-                        })
-                }
-            } else {
-                warn!("AI retrieval enabled but no provider configured, falling back to embedding");
-                // Fallback to embedding-based retrieval
-                let retrieval = MemoryRetrieval::new(
-                    Arc::clone(db),
-                    Arc::clone(&embedding_model),
-                    Arc::clone(config),
-                );
-                retrieval.retrieve_memories(&memory_anchor, query).await?
-            }
-        } else {
-            // Traditional embedding-based vector similarity
-            debug!("Using embedding-based memory retrieval");
-            let retrieval = MemoryRetrieval::new(
-                Arc::clone(db),
-                Arc::clone(&embedding_model),
-                Arc::clone(config),
-            );
-            retrieval.retrieve_memories(&memory_anchor, query).await?
+        // Configure fact retrieval with user settings
+        let retrieval_config = FactRetrievalConfig {
+            max_facts: config.max_facts_in_context,
+            max_raw_fallback: config.raw_memory_fallback_count,
+            similarity_threshold: config.similarity_threshold,
         };
 
-        if memories.is_empty() {
-            info!("No relevant memories found");
+        // Create fact retrieval service
+        let fact_retrieval = FactRetrieval::new(
+            Arc::clone(db),
+            Arc::clone(&embedding_model),
+            retrieval_config,
+        );
+
+        // Retrieve using fact-first strategy
+        let result = fact_retrieval.retrieve(query).await?;
+
+        // Log retrieval results
+        if result.is_empty() {
+            info!("No relevant memory context found");
         } else {
-            info!(count = memories.len(), "Retrieved relevant memory snippets");
+            info!(
+                facts_count = result.facts.len(),
+                raw_memories_count = result.raw_memories.len(),
+                "Retrieved memory context (facts + fallback)"
+            );
         }
 
-        // Store in payload context
-        payload.context.memory_snippets = if memories.is_empty() {
+        // Store facts in payload context
+        payload.context.memory_facts = if result.facts.is_empty() {
             None
         } else {
-            Some(memories)
+            Some(result.facts)
+        };
+
+        // Store raw memories as fallback
+        payload.context.memory_snippets = if result.raw_memories.is_empty() {
+            None
+        } else {
+            Some(result.raw_memories)
         };
 
         Ok(payload)
