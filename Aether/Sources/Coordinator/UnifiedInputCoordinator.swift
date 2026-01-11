@@ -519,7 +519,7 @@ final class UnifiedInputCoordinator {
         DispatchQueue.mainAsync(weakRef: self) { slf in
             slf.startCLIOutput()
             slf.appendCLIOutput("/\(commandKey)", type: .command)
-            slf.appendThinkingOutput(L("subpanel.cli.routing"))
+            slf.appendThinkingOutput("Routing...")
         }
 
         // Show processing indicator at cursor position
@@ -577,7 +577,7 @@ final class UnifiedInputCoordinator {
             guard let self = self else { return }
 
             // Update CLI: connecting to AI
-            self.appendThinkingOutput(L("subpanel.cli.connecting"))
+            self.appendThinkingOutput("Connecting...")
 
             do {
                 let response = try core.processInput(
@@ -588,7 +588,7 @@ final class UnifiedInputCoordinator {
                 print("[UnifiedInputCoordinator] Command response received (\(response.count) chars)")
 
                 // Update CLI: response received
-                self.appendCLIOutput(L("subpanel.cli.response_received"), type: .success)
+                self.appendCLIOutput("Response received", type: .success)
 
                 // Output the response
                 self.outputResponse(response)
@@ -609,14 +609,14 @@ final class UnifiedInputCoordinator {
         hideProcessingIndicator()
 
         // Update CLI output status
-        appendCLIOutput(L("subpanel.cli.outputting"), type: .info)
+        appendCLIOutput("Outputting...", type: .info)
         completeCLIOutput()
 
         // If useCLIOutputMode is true, display in SubPanel instead of target app
         if useCLIOutputMode {
             // Show full response in CLI mode
             appendStreamingOutput(response)
-            showCLISuccess(L("subpanel.cli.completed"))
+            showCLISuccess("Completed")
             return
         }
 
@@ -677,7 +677,7 @@ final class UnifiedInputCoordinator {
     private func startCLIOutput() {
         DispatchQueue.mainAsync(weakRef: self) { slf in
             slf.subPanelState.showCLIOutput(initialLines: [
-                CLIOutputLine(type: .info, content: L("subpanel.cli.processing"))
+                CLIOutputLine(type: .info, content: "Processing...")
             ])
         }
     }
@@ -783,18 +783,10 @@ private func L(_ key: String) -> String {
 
 private func fallbackString(for key: String) -> String {
     switch key {
-    case "unified.focus_warning.title": return "请先点击输入框"
-    case "unified.focus_warning.message": return "将光标移动到输入框后再呼出 Aether"
-    case "unified.accessibility_warning.title": return "需要辅助功能权限"
-    case "unified.accessibility_warning.message": return "请在系统设置中授予辅助功能权限以获得更好的体验"
-    // CLI output strings
-    case "subpanel.cli.processing": return "处理中..."
-    case "subpanel.cli.sending": return "发送请求..."
-    case "subpanel.cli.routing": return "路由到 AI..."
-    case "subpanel.cli.connecting": return "连接中..."
-    case "subpanel.cli.response_received": return "✓ 收到响应"
-    case "subpanel.cli.outputting": return "输出中..."
-    case "subpanel.cli.completed": return "✓ 完成"
+    case "unified.focus_warning.title": return "Click an input field first"
+    case "unified.focus_warning.message": return "Move cursor to an input field before summoning Aether"
+    case "unified.accessibility_warning.title": return "Accessibility permission required"
+    case "unified.accessibility_warning.message": return "Please grant accessibility permission in System Settings for better experience"
     default: return key
     }
 }
