@@ -392,15 +392,17 @@ struct SubPanelCLIOutput: View {
                             .id(line.id)
                     }
 
-                    // Streaming indicator
+                    // Streaming indicator - bright color for dark background
                     if isStreaming {
-                        HStack(spacing: 4) {
+                        HStack(spacing: 6) {
                             ProgressView()
                                 .scaleEffect(0.6)
+                                .tint(.white.opacity(0.7))
                             Text(L("cli.processing"))
                                 .font(.system(size: 11, design: .monospaced))
-                                .foregroundColor(.secondary)
+                                .foregroundColor(.white.opacity(0.6))
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .id("streaming-indicator")
                     }
                 }
@@ -421,56 +423,47 @@ struct SubPanelCLIOutput: View {
     }
 }
 
-/// Single CLI output line
+/// Single CLI output line - terminal-like display with left alignment
 struct CLIOutputLineView: View {
     let line: CLIOutputLine
 
-    private var timeString: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter.string(from: line.timestamp)
-    }
-
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
-            // Timestamp
-            Text(timeString)
-                .foregroundColor(.secondary.opacity(0.5))
-                .frame(width: 55, alignment: .leading)
-
-            // Type indicator
+            // Type indicator with consistent color
             typeIndicator
-                .frame(width: 8)
+                .frame(width: 12, alignment: .leading)
 
-            // Content
+            // Content - left aligned, uses type-specific color
             Text(line.content)
                 .foregroundColor(line.type.color)
                 .fontWeight(line.type.fontWeight)
                 .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     @ViewBuilder
     private var typeIndicator: some View {
+        // Use type-specific colors for indicators (bright colors for dark bg)
         switch line.type {
         case .success:
             Text("✓")
-                .foregroundColor(.green)
+                .foregroundColor(Color(red: 0.4, green: 0.9, blue: 0.4))
         case .error:
             Text("✗")
-                .foregroundColor(.red)
+                .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
         case .warning:
             Text("!")
-                .foregroundColor(.orange)
+                .foregroundColor(Color(red: 1.0, green: 0.7, blue: 0.2))
         case .command:
             Text("$")
-                .foregroundColor(.cyan)
+                .foregroundColor(Color(red: 0.4, green: 0.9, blue: 1.0))
         case .thinking:
             Text("…")
-                .foregroundColor(.secondary)
+                .foregroundColor(.white.opacity(0.5))
         default:
             Text("›")
-                .foregroundColor(.secondary)
+                .foregroundColor(.white.opacity(0.6))
         }
     }
 }

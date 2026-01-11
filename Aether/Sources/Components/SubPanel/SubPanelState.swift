@@ -147,21 +147,27 @@ enum CLIOutputType: Equatable {
     /// Thinking/processing indicator (dimmed)
     case thinking
 
-    /// Color for this output type
+    /// Color for this output type (optimized for dark background ~0.12 gray)
     var color: Color {
         switch self {
         case .info:
-            return .secondary
+            // Bright white for high contrast on dark background
+            return .white.opacity(0.9)
         case .success:
-            return .green
+            // Bright green for visibility
+            return Color(red: 0.4, green: 0.9, blue: 0.4)
         case .warning:
-            return .orange
+            // Bright orange/yellow for visibility
+            return Color(red: 1.0, green: 0.7, blue: 0.2)
         case .error:
-            return .red
+            // Bright red for visibility
+            return Color(red: 1.0, green: 0.4, blue: 0.4)
         case .command:
-            return .cyan
+            // Bright cyan for visibility
+            return Color(red: 0.4, green: 0.9, blue: 1.0)
         case .thinking:
-            return .secondary.opacity(0.6)
+            // Dimmed but still readable
+            return .white.opacity(0.5)
         }
     }
 
