@@ -409,14 +409,16 @@ struct SubPanelCLIOutput: View {
 }
 
 /// Single CLI output line - terminal-like display with left alignment
+/// Styled like Claude Code CLI with distinctive markers
 struct CLIOutputLineView: View {
     let line: CLIOutputLine
 
     var body: some View {
-        HStack(alignment: .top, spacing: 6) {
-            // Type indicator with consistent color
+        HStack(alignment: .top, spacing: 8) {
+            // Type indicator badge (Claude Code CLI style)
             typeIndicator
-                .frame(width: 12, alignment: .leading)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .frame(width: 14, alignment: .center)
 
             // Content - left aligned, uses type-specific color
             Text(line.content)
@@ -429,27 +431,48 @@ struct CLIOutputLineView: View {
 
     @ViewBuilder
     private var typeIndicator: some View {
-        // Use type-specific colors for indicators (bright colors for dark bg)
+        // Claude Code CLI style markers with bright colors for dark bg
         switch line.type {
         case .success:
+            // Green checkmark for success
             Text("✓")
                 .foregroundColor(Color(red: 0.4, green: 0.9, blue: 0.4))
         case .error:
+            // Red X for error
             Text("✗")
                 .foregroundColor(Color(red: 1.0, green: 0.4, blue: 0.4))
         case .warning:
-            Text("!")
+            // Orange warning triangle
+            Text("⚠")
                 .foregroundColor(Color(red: 1.0, green: 0.7, blue: 0.2))
         case .command:
-            Text("$")
+            // Cyan arrow for command
+            Text("❯")
                 .foregroundColor(Color(red: 0.4, green: 0.9, blue: 1.0))
         case .thinking:
-            Text("…")
-                .foregroundColor(.white.opacity(0.5))
-        default:
-            Text("›")
-                .foregroundColor(.white.opacity(0.6))
+            // Spinning dot indicator for thinking/processing
+            ThinkingIndicator()
+        case .info:
+            // Blue dot for info
+            Text("●")
+                .foregroundColor(Color(red: 0.4, green: 0.7, blue: 1.0))
         }
+    }
+}
+
+/// Animated thinking indicator (like Claude Code CLI spinner)
+private struct ThinkingIndicator: View {
+    @State private var rotation: Double = 0
+
+    var body: some View {
+        Text("◐")
+            .foregroundColor(Color(red: 0.6, green: 0.6, blue: 1.0))
+            .rotationEffect(.degrees(rotation))
+            .onAppear {
+                withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
+                    rotation = 360
+                }
+            }
     }
 }
 
