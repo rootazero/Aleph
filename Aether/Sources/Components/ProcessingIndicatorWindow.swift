@@ -27,9 +27,11 @@ class ProcessingIndicatorWindow: NSWindow {
 
     // MARK: - Initialization
 
+    private static let windowSize: CGFloat = 32  // Enough space for 16px spinner + stroke + padding
+
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 24, height: 24),  // 16px + 4px padding each side
+            contentRect: NSRect(x: 0, y: 0, width: Self.windowSize, height: Self.windowSize),
             styleMask: .borderless,
             backing: .buffered,
             defer: false
@@ -44,11 +46,11 @@ class ProcessingIndicatorWindow: NSWindow {
         ignoresMouseEvents = true  // Click-through
         hidesOnDeactivate = false
 
-        // Setup spinner view
+        // Setup spinner view with explicit frame to ensure centering
         let spinnerView = SpinnerView()
         hostingView = NSHostingView(rootView: spinnerView)
         if let hostingView = hostingView {
-            hostingView.frame = NSRect(x: 0, y: 0, width: 24, height: 24)
+            hostingView.frame = NSRect(x: 0, y: 0, width: Self.windowSize, height: Self.windowSize)
             contentView = hostingView
         }
 
@@ -133,9 +135,10 @@ class ProcessingIndicatorWindow: NSWindow {
 
 // MARK: - Spinner View
 
-/// Simple 16x16 rotating arc spinner with gradient fade effect
+/// Simple 16x16 rotating arc spinner with gradient fade effect, centered in container
 private struct SpinnerView: View {
     var body: some View {
         ArcSpinner()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
