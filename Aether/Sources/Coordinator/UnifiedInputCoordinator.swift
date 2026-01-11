@@ -414,14 +414,12 @@ final class UnifiedInputCoordinator {
             return
         }
 
-        // Start CLI output in SubPanel
+        // Start CLI output in SubPanel (Claude Code CLI style)
+        // Note: We only use SubPanel for progress display, no HaloWindow processing indicator
         DispatchQueue.mainAsync(weakRef: self) { slf in
             slf.startCLIOutput()
             slf.appendCLIOutput(L("subpanel.cli.sending"), type: .command)
         }
-
-        // Show processing indicator at cursor position
-        showProcessingIndicator()
 
         // CRITICAL: Read clipboard content (images, files, text context)
         // Only include clipboard content if it was changed within 10 seconds
