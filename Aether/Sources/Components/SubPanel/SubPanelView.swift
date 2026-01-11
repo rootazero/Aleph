@@ -398,9 +398,6 @@ struct SubPanelCLIOutput: View {
                             ProgressView()
                                 .scaleEffect(0.6)
                                 .tint(.white.opacity(0.7))
-                            Text(L("cli.processing"))
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.6))
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .id("streaming-indicator")
@@ -540,7 +537,6 @@ private func fallbackString(for key: String) -> String {
     case "command.mode.no_results": return "No commands found"
     case "button.cancel": return "Cancel"
     case "button.confirm": return "Confirm"
-    case "cli.processing": return "Processing..."
     default: return key
     }
 }
