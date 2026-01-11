@@ -96,22 +96,9 @@ class HaloViewModel: ObservableObject {
 /// 16x16 purple spinner for processing states (no background)
 struct HaloProcessingView: View {
     var text: String?
-    @State private var rotation: Double = 0
 
     var body: some View {
-        Circle()
-            .trim(from: 0, to: 0.75)
-            .stroke(
-                Color.purple,
-                style: StrokeStyle(lineWidth: 2, lineCap: .round)
-            )
-            .frame(width: 16, height: 16)
-            .rotationEffect(.degrees(rotation))
-            .onAppear {
-                withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {
-                    rotation = 360
-                }
-            }
+        ArcSpinner()
     }
 }
 
