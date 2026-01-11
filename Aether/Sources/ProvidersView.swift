@@ -36,9 +36,6 @@ struct ProvidersView: View {
     // Add new provider state
     @State private var isAddingNew: Bool = false
 
-    // Toast notification state
-    @State private var toastData: ToastData?
-
     // Test connection state (per provider)
     @State private var testingProviders: Set<String> = []  // Provider IDs currently being tested
     @State private var testResults: [String: SimpleProviderCard.TestResult] = [:]  // Provider ID -> Test result
@@ -155,7 +152,6 @@ struct ProvidersView: View {
             .padding(.bottom, DesignTokens.Spacing.lg)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .toast($toastData)
         .onAppear {
             loadProviders()
             loadDefaultProvider()

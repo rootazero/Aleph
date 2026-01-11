@@ -246,45 +246,4 @@ extension CommandNode {
             return NSLocalizedString("source.custom", comment: "Custom source badge")
         }
     }
-
-    // MARK: - Legacy type-based properties (deprecated in flat namespace)
-
-    /// SF Symbol name for command type
-    @available(*, deprecated, message: "Use sourceIcon instead in flat namespace mode")
-    var typeIcon: String {
-        switch nodeType {
-        case .action:
-            return "bolt.fill"
-        case .prompt:
-            return "text.quote"
-        case .namespace:
-            return "folder.fill"
-        }
-    }
-
-    /// Color for command type
-    @available(*, deprecated, message: "Use sourceColor instead in flat namespace mode")
-    var typeColor: Color {
-        switch nodeType {
-        case .action:
-            return .orange
-        case .prompt:
-            return .blue
-        case .namespace:
-            return .purple
-        }
-    }
-
-    /// Localized type description
-    @available(*, deprecated, message: "Use sourceBadgeText instead in flat namespace mode")
-    var typeDescription: String {
-        switch nodeType {
-        case .action:
-            return NSLocalizedString("command.type.action", comment: "Action command type")
-        case .prompt:
-            return NSLocalizedString("command.type.prompt", comment: "Prompt command type")
-        case .namespace:
-            return NSLocalizedString("command.type.namespace", comment: "Namespace command type")
-        }
-    }
 }

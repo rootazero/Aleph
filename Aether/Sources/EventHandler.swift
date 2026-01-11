@@ -614,24 +614,6 @@ class EventHandler: AetherEventHandler {
         }
     }
 
-    /// Show permission prompt in Halo window
-    /// DEPRECATED: Now using PermissionGateView instead of Halo for permission prompts
-    /// Kept for backward compatibility but does not show any UI
-    func showPermissionPrompt(type: HaloPermissionType) {
-        print("[EventHandler] showPermissionPrompt called (DEPRECATED) - Permission gate should be used instead")
-        print("[EventHandler] Permission type: \(type)")
-
-        // NOTE: This method is now deprecated in favor of the PermissionGateView
-        // which is shown automatically on app launch if permissions are missing.
-        // The old implementation that showed permission prompts in the Halo window
-        // has been removed because it's incompatible with the mandatory permission gate approach.
-
-        // No-op: Permission prompts are now handled by PermissionGateView in AppDelegate
-    }
-
-    // REMOVED: handleHotkeyDetected() - hotkey handling now in Swift layer (AppDelegate.handleHotkeyPressed)
-    // The entire hotkey flow is now: GlobalHotkeyMonitor → AppDelegate → Core.processInput() → KeyboardSimulator
-
     // MARK: - Error Notification
 
     private func showErrorNotification(message: String, suggestion: String?) {
