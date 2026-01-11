@@ -414,13 +414,12 @@ final class UnifiedInputCoordinator {
             return
         }
 
-        // Start CLI output in SubPanel
+        // Start CLI output in SubPanel (shows "处理中...")
         DispatchQueue.mainAsync(weakRef: self) { slf in
             slf.startCLIOutput()
-            slf.appendCLIOutput(L("subpanel.cli.sending"), type: .command)
         }
 
-        // Show processing indicator at cursor position
+        // Show processing indicator at cursor position (spinner only)
         showProcessingIndicator()
 
         // CRITICAL: Read clipboard content (images, files, text context)
