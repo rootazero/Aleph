@@ -425,8 +425,7 @@ final class UnifiedInputCoordinator {
             slf.startCLIOutput()
         }
 
-        // Show processing indicator at cursor position (spinner only)
-        showProcessingIndicator()
+        // Multi-turn mode: No spinner displayed, SubPanel shows status
 
         // CRITICAL: Read clipboard content (images, files, text context)
         // Only include clipboard content if it was changed within 10 seconds
