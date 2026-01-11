@@ -424,15 +424,15 @@ class EventHandler: AetherEventHandler {
             announceToVoiceOver("Retrieving memories")
 
         case .processingWithAi:
-            // Show HaloWindow with processing with AI state
+            // Show HaloWindow with processing with AI state at current mouse position
             haloWindow?.updateState(.processingWithAI(providerColor: .purple, providerName: nil))
-            haloWindow?.showAtCurrentPosition()
+            haloWindow?.show(at: NSEvent.mouseLocation)
             announceToVoiceOver("Processing with AI")
 
         case .processing:
-            // Show HaloWindow with processing state
+            // Show HaloWindow with processing state at current mouse position
             haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
-            haloWindow?.showAtCurrentPosition()
+            haloWindow?.show(at: NSEvent.mouseLocation)
             announceToVoiceOver("Processing request")
 
         case .success:
