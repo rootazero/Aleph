@@ -49,6 +49,11 @@ struct ArcSpinner: View {
         self.rotationDuration = rotationDuration
     }
 
+    /// Total size including stroke width (stroke extends half lineWidth outward)
+    private var totalSize: CGFloat {
+        size + lineWidth
+    }
+
     var body: some View {
         Circle()
             .trim(from: 0, to: 0.7)
@@ -68,6 +73,7 @@ struct ArcSpinner: View {
                 style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
             )
             .frame(width: size, height: size)
+            .frame(width: totalSize, height: totalSize)  // Outer frame prevents clipping
             .rotationEffect(.degrees(rotation))
             .onAppear {
                 withAnimation(

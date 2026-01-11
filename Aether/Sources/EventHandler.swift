@@ -420,12 +420,24 @@ class EventHandler: AetherEventHandler {
             announceToVoiceOver("Retrieving memories")
 
         case .processingWithAi:
+            // Skip halo spinner in multi-turn conversation mode
+            // SubPanel handles UI feedback instead
+            if conversationManager.sessionId != nil {
+                print("[EventHandler] Skipping processing state (multi-turn mode)")
+                return
+            }
             // Update state only - position is controlled by UnifiedInputCoordinator
             haloWindow?.updateState(.processingWithAI(providerName: nil))
             haloWindow?.showAtCurrentPosition()
             announceToVoiceOver("Processing with AI")
 
         case .processing:
+            // Skip halo spinner in multi-turn conversation mode
+            // SubPanel handles UI feedback instead
+            if conversationManager.sessionId != nil {
+                print("[EventHandler] Skipping processing state (multi-turn mode)")
+                return
+            }
             // Update state only - position is controlled by UnifiedInputCoordinator
             haloWindow?.updateState(.processing(streamingText: nil))
             haloWindow?.showAtCurrentPosition()
@@ -460,6 +472,11 @@ class EventHandler: AetherEventHandler {
         // Accumulate text for potential future use
         accumulatedText = text
 
+        // Skip halo update in multi-turn conversation mode
+        if conversationManager.sessionId != nil {
+            return
+        }
+
         // Update HaloWindow with streaming text
         haloWindow?.updateState(.processing(streamingText: text))
 
@@ -487,6 +504,11 @@ class EventHandler: AetherEventHandler {
     private func handleAiResponseReceived(responsePreview: String) {
         // Store the response preview for potential future use
         accumulatedText = responsePreview
+
+        // Skip halo update in multi-turn conversation mode
+        if conversationManager.sessionId != nil {
+            return
+        }
 
         // Update HaloWindow with response preview
         haloWindow?.updateState(.processing(streamingText: responsePreview))
