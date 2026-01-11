@@ -392,25 +392,13 @@ struct SubPanelCLIOutput: View {
                             .id(line.id)
                     }
 
-                    // Streaming indicator - bright color for dark background
-                    if isStreaming {
-                        HStack(spacing: 6) {
-                            ProgressView()
-                                .scaleEffect(0.6)
-                                .tint(.white.opacity(0.7))
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .id("streaming-indicator")
-                    }
                 }
                 .padding(10)
             }
             .onChange(of: lines.count) { _, _ in
                 // Auto-scroll to bottom
                 withAnimation(.easeOut(duration: 0.1)) {
-                    if isStreaming {
-                        proxy.scrollTo("streaming-indicator", anchor: .bottom)
-                    } else if let lastLine = lines.last {
+                    if let lastLine = lines.last {
                         proxy.scrollTo(lastLine.id, anchor: .bottom)
                     }
                 }
