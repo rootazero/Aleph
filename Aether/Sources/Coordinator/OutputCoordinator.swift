@@ -290,13 +290,9 @@ final class OutputCoordinator {
                 }
             }
 
-            // Show success state and auto-hide
-            print("[OutputCoordinator] ✅ Output complete, showing success state")
-            haloWindowController?.showAtCurrentPosition()
-            haloWindowController?.updateState(.success(finalText: responsePreview))
-            DispatchQueue.mainAsyncAfter(delay: 1.5, weakRef: self) { slf in
-                slf.haloWindowController?.hide()
-            }
+            // Output complete - hide Halo immediately (success state removed)
+            print("[OutputCoordinator] ✅ Output complete, hiding Halo")
+            haloWindowController?.hide()
 
         case .multiTurn:
             // Post continuation notification
@@ -406,12 +402,9 @@ final class OutputCoordinator {
         // Clear the cancellation token immediately
         typewriterCancellation = nil
 
-        // Show brief feedback
+        // Hide Halo immediately (success state removed)
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.haloWindowController?.updateState(.success(finalText: "⏸ Typewriter cancelled"))
-            DispatchQueue.mainAsyncAfter(delay: 1.0, weakRef: slf) { innerSlf in
-                innerSlf.haloWindowController?.hide()
-            }
+            slf.haloWindowController?.hide()
         }
     }
 }

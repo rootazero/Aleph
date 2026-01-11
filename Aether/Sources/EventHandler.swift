@@ -101,7 +101,7 @@ class EventHandler: AetherEventHandler {
                 // This handles the race condition where error fires before Halo shows
                 // Use .processing state with purple to show the theme's processing animation
                 // (purple + 3 arcs for Zen theme)
-                slf.haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
+                slf.haloWindow?.updateState(.processing(streamingText: nil))
                 slf.haloWindow?.showCentered()
                 print("[EventHandler] Showing Halo animation before error toast")
             }
@@ -226,12 +226,8 @@ class EventHandler: AetherEventHandler {
 
         DispatchQueue.mainAsync(weakRef: self) { slf in
             // Show brief notification or just hide progress
-            slf.haloWindow?.updateState(.success(finalText: nil))
-
-            // Auto-hide after 1 second
-            DispatchQueue.mainAsyncAfter(delay: 1.0, weakRef: slf) { innerSlf in
-                innerSlf.haloWindow?.hide()
-            }
+            // Success state removed - just hide
+            slf.haloWindow?.hide()
         }
     }
 
@@ -425,25 +421,23 @@ class EventHandler: AetherEventHandler {
 
         case .processingWithAi:
             // Update state only - position is controlled by UnifiedInputCoordinator
-            haloWindow?.updateState(.processingWithAI(providerColor: .purple, providerName: nil))
+            haloWindow?.updateState(.processingWithAI(providerName: nil))
             haloWindow?.showAtCurrentPosition()
             announceToVoiceOver("Processing with AI")
 
         case .processing:
             // Update state only - position is controlled by UnifiedInputCoordinator
-            haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
+            haloWindow?.updateState(.processing(streamingText: nil))
             haloWindow?.showAtCurrentPosition()
             announceToVoiceOver("Processing request")
 
         case .success:
+            // Success state removed from HaloState - just hide and announce
             // Skip in conversation mode - the conversation input UI should remain visible
             if case .conversationInput = haloWindow?.viewModel.state {
                 print("[EventHandler] Skipping success state - conversation input mode active")
                 return
             }
-
-            // Simply hide Halo on success - the AI response is already visible in the target window
-            // No need to show a success icon, it just adds visual noise
             haloWindow?.hide()
             announceToVoiceOver("Request completed successfully")
 
@@ -467,7 +461,7 @@ class EventHandler: AetherEventHandler {
         accumulatedText = text
 
         // Update HaloWindow with streaming text
-        haloWindow?.updateState(.processing(providerColor: .purple, streamingText: text))
+        haloWindow?.updateState(.processing(streamingText: text))
 
         // Update timestamp
         lastUpdateTime = Date()
@@ -476,11 +470,9 @@ class EventHandler: AetherEventHandler {
     // MARK: - AI Processing Handling
 
     private func handleAiProcessingStarted(providerName: String, providerColor: String) {
-        // Parse the color string to SwiftUI Color
-        let color = Color(hex: providerColor) ?? .purple
-
-        // Update HaloWindow with AI processing state
-        haloWindow?.updateState(.processingWithAI(providerColor: color, providerName: providerName))
+        // Update HaloWindow with AI processing state (color removed, using unified purple)
+        _ = providerColor  // Unused parameter
+        haloWindow?.updateState(.processingWithAI(providerName: providerName))
         haloWindow?.showAtCurrentPosition()
         print("[EventHandler] AI processing started: \(providerName)")
     }
@@ -490,7 +482,7 @@ class EventHandler: AetherEventHandler {
         accumulatedText = responsePreview
 
         // Update HaloWindow with response preview
-        haloWindow?.updateState(.processing(providerColor: .purple, streamingText: responsePreview))
+        haloWindow?.updateState(.processing(streamingText: responsePreview))
     }
 
     // MARK: - Typed Error Handling
@@ -596,7 +588,7 @@ class EventHandler: AetherEventHandler {
     /// Show permission prompt in Halo window
     /// DEPRECATED: Now using PermissionGateView instead of Halo for permission prompts
     /// Kept for backward compatibility but does not show any UI
-    func showPermissionPrompt(type: PermissionType) {
+    func showPermissionPrompt(type: HaloPermissionType) {
         print("[EventHandler] showPermissionPrompt called (DEPRECATED) - Permission gate should be used instead")
         print("[EventHandler] Permission type: \(type)")
 

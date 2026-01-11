@@ -52,8 +52,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // First-time initialization window
     private var initializationWindow: NSWindow?
 
-    // Theme engine (accessible for settings UI)
-    var themeEngine: ThemeEngine?
+    // Theme engine removed - using unified visual style
 
     // Global hotkey monitor (Swift layer)
     private var hotkeyMonitor: GlobalHotkeyMonitor?
@@ -488,7 +487,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Show Halo animation immediately on startup (better UX feedback)
         // Only show on first attempt to avoid repeated animations during retries
         if coreInitRetryCount == 0 {
-            haloWindow?.updateState(.processing(providerColor: .blue, streamingText: nil))
+            haloWindow?.updateState(.processing(streamingText: nil))
             haloWindow?.showCentered()
             print("[Aether] Showing Halo startup animation")
         }
@@ -772,11 +771,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func initializeAppComponents() {
         print("[Aether] Initializing app components")
 
-        // Initialize theme engine
-        themeEngine = ThemeEngine()
-
-        // Create Halo window controller (new architecture)
-        haloWindowController = HaloWindowController(themeEngine: themeEngine!)
+        // Create Halo window controller (simplified, no theme engine)
+        haloWindowController = HaloWindowController()
         haloWindowController?.createWindow()
 
         // Keep reference to raw haloWindow for gradual migration

@@ -491,7 +491,7 @@ final class InputCoordinator {
             guard let self = self else { return }
             // Try cursor position first, fall back to mouse position
             let position = CaretPositionHelper.getBestPosition()
-            self.haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
+            self.haloWindowController?.updateState(.processing(streamingText: nil))
             self.haloWindowController?.show(at: position)
         }
     }

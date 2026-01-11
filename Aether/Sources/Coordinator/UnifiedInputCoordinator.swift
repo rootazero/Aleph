@@ -767,7 +767,7 @@ final class UnifiedInputCoordinator {
                 print("[UnifiedInputCoordinator] Processing indicator at window fallback: \(position)")
             }
 
-            window.updateState(.processing(providerColor: .purple, streamingText: nil))
+            window.updateState(.processing(streamingText: nil))
             window.show(at: position)
         }
     }

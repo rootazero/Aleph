@@ -271,7 +271,7 @@ final class ConversationCoordinator {
         // Show processing state in HaloWindow
         // Note: UnifiedInputWindow is now independent and coexists with HaloWindow
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.haloWindowController?.updateState(.processing(providerColor: .purple, streamingText: nil))
+            slf.haloWindowController?.updateState(.processing(streamingText: nil))
             slf.haloWindowController?.showCentered()
         }
 

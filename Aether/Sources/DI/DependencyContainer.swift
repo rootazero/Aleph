@@ -186,8 +186,7 @@ final class DependencyContainer: ObservableObject {
     /// Event handler for Rust callbacks
     private(set) var eventHandler: EventHandler?
 
-    /// Theme management engine
-    private(set) var themeEngine: ThemeEngine?
+    // Theme engine removed - using unified visual style
 
     // MARK: - Managers (lazy-loaded, protocol-based for testability)
 
@@ -265,8 +264,7 @@ final class DependencyContainer: ObservableObject {
 
         print("[DependencyContainer] Initializing core services...")
 
-        // Create theme engine first (no dependencies)
-        themeEngine = ThemeEngine()
+        // Theme engine removed - using unified visual style
 
         // Create event handler (haloWindow set later via setHaloWindow)
         eventHandler = EventHandler(haloWindow: nil)
@@ -298,21 +296,19 @@ final class DependencyContainer: ObservableObject {
 
         print("[DependencyContainer] Initializing coordinators...")
 
-        // Create HaloWindowController
-        if let themeEngine = themeEngine {
-            _haloWindowController = HaloWindowController(themeEngine: themeEngine)
-            _haloWindowController?.createWindow()
+        // Create HaloWindowController (no theme engine required)
+        _haloWindowController = HaloWindowController()
+        _haloWindowController?.createWindow()
 
-            // Connect event handler to Halo window
-            if let eventHandler = eventHandler {
-                _haloWindowController?.setEventHandler(eventHandler)
-                eventHandler.setHaloWindow(_haloWindowController?.window)
-            }
+        // Connect event handler to Halo window
+        if let eventHandler = eventHandler {
+            _haloWindowController?.setEventHandler(eventHandler)
+            eventHandler.setHaloWindow(_haloWindowController?.window)
+        }
 
-            // Configure command manager with core
-            if let core = core {
-                _haloWindowController?.configureCore(core)
-            }
+        // Configure command manager with core
+        if let core = core {
+            _haloWindowController?.configureCore(core)
         }
 
         // TODO: Create other coordinators as they are extracted from AppDelegate
@@ -344,7 +340,6 @@ final class DependencyContainer: ObservableObject {
         // Clear core services
         core = nil
         eventHandler = nil
-        themeEngine = nil
 
         isCoreInitialized = false
         areCoordinatorsInitialized = false
@@ -370,13 +365,7 @@ final class DependencyContainer: ObservableObject {
         return eventHandler
     }
 
-    /// Get theme engine, throwing if not initialized
-    func requireThemeEngine() throws -> ThemeEngine {
-        guard let themeEngine = themeEngine else {
-            throw DependencyError.themeEngineNotInitialized
-        }
-        return themeEngine
-    }
+    // Theme engine removed - using unified visual style
 }
 
 // MARK: - Dependency Errors
@@ -385,7 +374,6 @@ final class DependencyContainer: ObservableObject {
 enum DependencyError: LocalizedError {
     case coreNotInitialized
     case eventHandlerNotInitialized
-    case themeEngineNotInitialized
     case coordinatorNotInitialized(String)
     case notRegistered(String)
 
@@ -395,8 +383,6 @@ enum DependencyError: LocalizedError {
             return "AetherCore has not been initialized. Call initializeCoreServices() first."
         case .eventHandlerNotInitialized:
             return "EventHandler has not been initialized. Call initializeCoreServices() first."
-        case .themeEngineNotInitialized:
-            return "ThemeEngine has not been initialized. Call initializeCoreServices() first."
         case .coordinatorNotInitialized(let name):
             return "\(name) has not been initialized. Call initializeCoordinators() first."
         case .notRegistered(let typeName):

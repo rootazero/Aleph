@@ -2,213 +2,95 @@
 //  HaloWindowController.swift
 //  Aether
 //
-//  Controller for managing the Halo overlay window.
-//  Extracted from AppDelegate to improve separation of concerns.
+//  Simplified controller for HaloWindow (no theme support).
 //
 
-import AppKit
+import Cocoa
 import SwiftUI
 
-/// Controller for managing the Halo overlay window
-///
-/// Provides a simplified interface for:
-/// - Creating and configuring the Halo window
-/// - Showing/hiding the window at various positions
-/// - Updating window state
-/// - Managing event handler connections
+/// Controller for managing HaloWindow lifecycle
 final class HaloWindowController {
 
     // MARK: - Properties
 
-    /// The managed Halo window instance
+    /// The managed HaloWindow instance
     private(set) var window: HaloWindow?
 
-    /// Theme engine for styling
-    private let themeEngine: ThemeEngine
+    /// Event handler reference for callbacks
+    private weak var eventHandler: EventHandler?
 
-    /// Whether the window has been initialized
-    var isInitialized: Bool {
-        window != nil
-    }
-
-    /// Direct access to the view model (convenience)
-    var viewModel: HaloViewModel? {
-        window?.viewModel
-    }
-
-    /// Direct access to the command manager (convenience)
-    var commandManager: CommandCompletionManager? {
-        window?.viewModel.commandManager
-    }
+    /// Core reference for command completion
+    private weak var core: AetherCore?
 
     // MARK: - Initialization
 
-    /// Initialize the controller with a theme engine
-    ///
-    /// - Parameter themeEngine: The theme engine for styling the Halo
-    init(themeEngine: ThemeEngine) {
-        self.themeEngine = themeEngine
+    /// Initialize controller (no theme engine required)
+    init() {
+        // Window is created lazily
     }
 
-    /// Create and configure the Halo window
-    ///
-    /// Call this after initialization to create the actual window.
-    /// This is separate from init to allow for lazy creation.
+    /// Initialize with theme engine (deprecated, ignored)
+    convenience init(themeEngine: Any?) {
+        self.init()
+    }
+
+    // MARK: - Window Management
+
+    /// Create the HaloWindow
     func createWindow() {
-        guard window == nil else {
-            print("[HaloWindowController] Window already created")
-            return
-        }
-
-        window = HaloWindow(themeEngine: themeEngine)
-        print("[HaloWindowController] Halo window created")
+        window = HaloWindow()
     }
 
-    // MARK: - Event Handler Connection
-
-    /// Connect an event handler to the Halo window
-    ///
-    /// - Parameter handler: The event handler for Rust callbacks
+    /// Set the event handler for callbacks
     func setEventHandler(_ handler: EventHandler) {
-        window?.setEventHandler(handler)
+        self.eventHandler = handler
     }
 
-    // MARK: - Core Configuration
-
-    /// Configure the command manager with the Rust core
-    ///
-    /// - Parameter core: The AetherCore instance
+    /// Configure with AetherCore reference
     func configureCore(_ core: AetherCore) {
-        window?.viewModel.commandManager.configure(core: core)
+        self.core = core
     }
 
-    // MARK: - Display Methods
+    // MARK: - State Forwarding
 
-    /// Show the Halo at a specific position
-    ///
-    /// - Parameter position: The screen position to show at
-    func show(at position: NSPoint) {
-        window?.show(at: position)
-    }
-
-    /// Show the Halo below a specific position (for command mode)
-    ///
-    /// - Parameter position: The screen position to show below
-    func showBelow(at position: NSPoint) {
-        window?.showBelow(at: position)
-    }
-
-    /// Show the Halo at the current cursor position
-    func showAtCurrentPosition() {
-        window?.showAtCurrentPosition()
-    }
-
-    /// Show the Halo centered on screen
-    func showCentered() {
-        window?.showCentered()
-    }
-
-    /// Show a toast notification centered on screen
-    func showToastCentered() {
-        window?.showToastCentered()
-    }
-
-    /// Hide the Halo window with animation
-    func hide() {
-        window?.hide()
-    }
-
-    /// Force hide the Halo window immediately
-    func forceHide() {
-        window?.forceHide()
-    }
-
-    // MARK: - State Management
-
-    /// Update the Halo state
-    ///
-    /// - Parameter state: The new state to display
+    /// Update Halo state
     func updateState(_ state: HaloState) {
         window?.updateState(state)
     }
 
-    /// Update typewriter progress
-    ///
-    /// - Parameter progress: Progress value (0.0 to 1.0)
-    func updateTypewriterProgress(_ progress: Float) {
-        window?.updateTypewriterProgress(progress)
-    }
-
-    // MARK: - Command Mode
-
-    /// Enable mouse events for command mode
-    func enableMouseEvents() {
-        window?.ignoresMouseEvents = false
-    }
-
-    /// Disable mouse events (default transparent mode)
-    func disableMouseEvents() {
-        window?.ignoresMouseEvents = true
-    }
-
-    // MARK: - Command Completion (via UnifiedInputCoordinator)
-
-    /// Get the current input prefix from command mode
-    var inputPrefix: String {
-        window?.viewModel.commandManager.inputPrefix ?? ""
-    }
-
-    // MARK: - Convenience Methods
-
-    /// Show processing state at a position
-    ///
-    /// - Parameters:
-    ///   - position: Position to show at
-    ///   - color: Provider color
-    func showProcessing(at position: NSPoint, color: Color = .purple) {
+    /// Show Halo at position
+    func show(at position: NSPoint) {
         window?.show(at: position)
-        window?.updateState(.processing(providerColor: color, streamingText: nil))
     }
 
-    /// Show processing state centered
-    ///
-    /// - Parameter color: Provider color
-    func showProcessingCentered(color: Color = .purple) {
+    /// Show Halo centered
+    func showCentered() {
         window?.showCentered()
-        window?.updateState(.processing(providerColor: color, streamingText: nil))
     }
 
-    /// Show error state
-    ///
-    /// - Parameters:
-    ///   - type: Error type
-    ///   - message: Error message
-    ///   - suggestion: Optional suggestion
-    ///   - position: Optional position (uses current if nil)
-    func showError(type: ErrorType, message: String, suggestion: String? = nil, at position: NSPoint? = nil) {
-        if let position = position {
-            window?.show(at: position)
-        }
-        window?.updateState(.error(type: type, message: message, suggestion: suggestion))
-    }
-
-    /// Show success state
-    ///
-    /// - Parameter message: Optional success message
-    func showSuccess(message: String? = nil) {
+    /// Show at current tracked position
+    func showAtCurrentPosition() {
         window?.showAtCurrentPosition()
-        window?.updateState(.success(finalText: message))
     }
 
-    /// Show success then hide after delay
-    ///
-    /// - Parameters:
-    ///   - message: Optional success message
-    ///   - delay: Delay before hiding (default 1.5 seconds)
-    func showSuccessThenHide(message: String? = nil, delay: TimeInterval = 1.5) {
-        showSuccess(message: message)
-        DispatchQueue.mainAsyncAfter(delay: delay, weakRef: self) { slf in
-            slf.hide()
-        }
+    /// Hide Halo
+    func hide() {
+        window?.hide()
+    }
+
+    /// Show below a position
+    func showBelow(at position: NSPoint) {
+        window?.showBelow(at: position)
+    }
+
+    /// Force hide immediately
+    func forceHide() {
+        window?.forceHide()
+    }
+
+    /// Show toast notification
+    func showToast(type: ToastType, title: String, message: String, autoDismiss: Bool) {
+        window?.updateState(.toast(type: type, title: title, message: message, autoDismiss: autoDismiss))
+        window?.showToastCentered()
     }
 }

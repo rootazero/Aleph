@@ -2,417 +2,316 @@
 //  HaloView.swift
 //  Aether
 //
-//  SwiftUI view for Halo animations with state machine and theme support.
+//  Simplified Halo overlay view without theme support.
+//  Uses unified visual style with 16x16 purple spinner.
 //
 
 import SwiftUI
+import Combine
 
+// MARK: - HaloView
+
+/// Main Halo overlay view (simplified, no themes)
 struct HaloView: View {
     @ObservedObject var viewModel: HaloViewModel
-    @ObservedObject var themeEngine: ThemeEngine
-
-    private var theme: any HaloTheme {
-        themeEngine.activeTheme
-    }
-
-    private var state: HaloState {
-        viewModel.state
-    }
-
-    private var eventHandler: EventHandler? {
-        viewModel.eventHandler
-    }
 
     var body: some View {
-        ZStack {
+        Group {
             switch viewModel.state {
             case .idle:
                 EmptyView()
 
             case .listening:
-                theme.listeningView()
-                    .transition(.scale.combined(with: .opacity))
+                HaloListeningView()
 
             case .retrievingMemory:
-                theme.retrievingMemoryView()
-                    .transition(.scale.combined(with: .opacity))
+                HaloProcessingView(text: L("halo.retrieving_memory"))
 
-            case .processingWithAI(let providerColor, let providerName):
-                theme.processingWithAIView(providerColor: providerColor, providerName: providerName)
-                    .transition(.scale.combined(with: .opacity))
+            case .processingWithAI(let providerName):
+                HaloProcessingView(text: providerName)
 
-            case .processing(let providerColor, let streamingText):
-                theme.processingView(providerColor: providerColor, streamingText: streamingText)
-                    .transition(.scale.combined(with: .opacity))
+            case .processing(let streamingText):
+                HaloProcessingView(text: streamingText)
 
             case .typewriting(let progress):
-                theme.typewritingView(progress: progress)
-                    .transition(.scale.combined(with: .opacity))
-
-            case .success(let finalText):
-                theme.successView(finalText: finalText)
-                    .transition(.scale.combined(with: .opacity))
+                HaloTypewritingView(progress: progress)
 
             case .error(let type, let message, let suggestion):
-                theme.errorView(
-                    type: type,
+                HaloErrorView(
+                    errorType: type,
                     message: message,
                     suggestion: suggestion,
-                    onRetry: eventHandler?.handleRetry,
-                    onOpenSettings: eventHandler?.handleOpenSettings,
-                    onDismiss: eventHandler?.handleDismiss
+                    onRetry: viewModel.callbacks.toolConfirmationOnExecute,
+                    onDismiss: viewModel.callbacks.toastOnDismiss
                 )
-                .transition(.scale.combined(with: .opacity))
 
-            case .permissionRequired(let permissionType):
-                PermissionPromptView(
-                    permissionType: permissionType,
-                    onOpenSettings: {
-                        // Open System Settings to the appropriate permission pane
-                        if let url = URL(string: permissionType.systemSettingsURL) {
-                            NSWorkspace.shared.open(url)
-                        }
-                    },
-                    onDismiss: {
-                        // Dismiss permission prompt
-                        eventHandler?.handleDismiss()
-                    }
-                )
-                .transition(.scale.combined(with: .opacity))
+            case .permissionRequired:
+                // Deprecated - use PermissionGateView
+                EmptyView()
 
             case .toast(let type, let title, let message, _):
-                theme.toastView(
+                HaloToastView(
                     type: type,
                     title: title,
                     message: message,
                     onDismiss: viewModel.callbacks.toastOnDismiss
                 )
-                .transition(.scale.combined(with: .opacity))
 
             case .clarification(let request):
-                ClarificationView(request: request)
-                    .transition(.scale.combined(with: .opacity))
-
-            case .conversationInput(let sessionId, let turnCount):
-                ConversationInputView(sessionId: sessionId, turnCount: turnCount)
-                    .transition(.scale.combined(with: .opacity))
-
-            case .toolConfirmation(let id, let name, let desc, let reason, let conf):
-                ToolConfirmationView(
-                    confirmationId: id,
-                    toolName: name,
-                    toolDescription: desc,
-                    reason: reason,
-                    confidence: conf,
-                    onExecute: viewModel.callbacks.toolConfirmationOnExecute ?? {},
-                    onCancel: viewModel.callbacks.toolConfirmationOnCancel ?? {}
+                HaloClarificationView(
+                    request: request,
+                    onSubmit: { _ in },
+                    onCancel: viewModel.callbacks.toastOnDismiss
                 )
-                .transition(.scale.combined(with: .opacity))
+
+            case .conversationInput:
+                // Handled by UnifiedInputWindow, not HaloView
+                EmptyView()
+
+            case .toolConfirmation(_, let toolName, let toolDescription, let reason, let confidence):
+                HaloToolConfirmationView(
+                    toolName: toolName,
+                    toolDescription: toolDescription,
+                    reason: reason,
+                    confidence: confidence,
+                    onExecute: viewModel.callbacks.toolConfirmationOnExecute,
+                    onCancel: viewModel.callbacks.toolConfirmationOnCancel
+                )
             }
         }
-        .frame(width: dynamicWidth, height: dynamicHeight)
-        .animation(.spring(response: 0.4), value: state)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(accessibilityLabelForState)
-        .accessibilityValue(accessibilityValueForState ?? "")
-        .accessibilityAddTraits(accessibilityTraitsForState)
-    }
-
-    // MARK: - Accessibility Support
-
-    /// Accessibility label describing current state
-    private var accessibilityLabelForState: String {
-        switch state {
-        case .idle:
-            return "Aether is idle"
-        case .listening:
-            return "Listening for input"
-        case .retrievingMemory:
-            return "Retrieving memories"
-        case .processingWithAI(_, let providerName):
-            if let name = providerName {
-                return "Processing with \(name)"
-            }
-            return "Processing with AI"
-        case .processing:
-            return "Processing request"
-        case .typewriting(_):
-            return "Typewriter animation in progress"
-        case .success:
-            return "Request completed successfully"
-        case .error(let type, _, _):
-            let errorTypeString: String
-            switch type {
-            case .network:
-                errorTypeString = "Network"
-            case .permission:
-                errorTypeString = "Permission"
-            case .quota:
-                errorTypeString = "Quota"
-            case .timeout:
-                errorTypeString = "Timeout"
-            case .unknown:
-                errorTypeString = "Unknown"
-            }
-            return "\(errorTypeString) error occurred"
-        case .permissionRequired(let permissionType):
-            return permissionType.title
-        case .toast(let type, let title, _, _):
-            return "\(type.displayName): \(title)"
-        case .clarification(let request):
-            return "Clarification: \(request.prompt)"
-        case .conversationInput(_, let turnCount):
-            return "Conversation input, turn \(turnCount + 1)"
-        case .toolConfirmation(_, let name, _, _, _):
-            return "Tool confirmation: \(name)"
-        }
-    }
-
-    /// Accessibility value for dynamic states
-    private var accessibilityValueForState: String? {
-        switch state {
-        case .typewriting(let progress):
-            return "\(Int(progress * 100)) percent complete"
-        case .processing(_, let text):
-            return text
-        case .success(let text):
-            return text
-        case .toast(_, _, let message, _):
-            return message
-        case .clarification(let request):
-            if let options = request.options {
-                return "\(options.count) options available"
-            }
-            return "Text input required"
-        case .conversationInput(_, let turnCount):
-            return "Turn \(turnCount + 1), text input required"
-        case .toolConfirmation(_, _, let desc, let reason, let conf):
-            return "\(desc). \(reason). Confidence: \(Int(conf * 100))%"
-        default:
-            return nil
-        }
-    }
-
-    /// Accessibility traits for state
-    private var accessibilityTraitsForState: AccessibilityTraits {
-        switch state {
-        case .typewriting:
-            return [.updatesFrequently]
-        case .processing, .retrievingMemory, .processingWithAI:
-            return [.updatesFrequently]
-        case .error, .permissionRequired, .toast:
-            return [.isStaticText]
-        case .clarification:
-            return [.allowsDirectInteraction]
-        case .conversationInput:
-            return [.allowsDirectInteraction]
-        case .toolConfirmation:
-            return [.allowsDirectInteraction]
-        default:
-            return []
-        }
-    }
-
-    // Dynamic sizing based on state
-    private var dynamicWidth: CGFloat {
-        switch state {
-        case .retrievingMemory, .processingWithAI:
-            return 120
-        case .processing(_, let text):
-            return text != nil ? 300 : 120
-        case .success:
-            return 120
-        case .typewriting:
-            return 120
-        case .error:
-            return 300
-        case .permissionRequired:
-            return 480  // Wider for permission prompt
-        case .toast:
-            return 400  // Max width for toast
-        case .clarification:
-            return 320  // Width for clarification options
-        case .conversationInput:
-            return 320  // Width for conversation input
-        case .toolConfirmation:
-            return 380  // Width for tool confirmation
-        default:
-            return 120
-        }
-    }
-
-    private var dynamicHeight: CGFloat {
-        switch state {
-        case .retrievingMemory, .processingWithAI:
-            return 120
-        case .processing(_, let text):
-            return text != nil ? 200 : 120
-        case .typewriting:
-            return 120
-        case .success:
-            return 120
-        case .error:
-            return 180
-        case .permissionRequired:
-            return 450  // Taller for permission prompt
-        case .toast(_, _, let message, _):
-            // Dynamic height based on message length
-            let lineCount = min(5, max(1, message.count / 50 + 1))
-            return CGFloat(80 + lineCount * 16)
-        case .clarification(let request):
-            // Dynamic height based on options count or text input
-            if let options = request.options {
-                let optionCount = options.count
-                return CGFloat(80 + optionCount * 48)
-            }
-            return 140  // Height for text input
-        case .conversationInput:
-            return 130  // Height for conversation input (header + input + hint + padding)
-        case .toolConfirmation:
-            return 220  // Height for tool confirmation (header + confidence + reason + buttons + hints)
-        default:
-            return 120
-        }
+        .animation(.easeInOut(duration: 0.2), value: viewModel.state)
     }
 }
 
-// MARK: - Listening State: Pulsing Ring
+// MARK: - HaloViewModel
 
-struct PulsingRingView: View {
-    @State private var isPulsing = false
-
-    var body: some View {
-        Circle()
-            .stroke(lineWidth: 4)
-            .foregroundColor(.blue)
-            .frame(width: 60, height: 60)
-            .scaleEffect(isPulsing ? 1.2 : 1.0)
-            .opacity(isPulsing ? 0.5 : 1.0)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
-                    isPulsing = true
-                }
-            }
-    }
+/// View model for HaloView state management
+class HaloViewModel: ObservableObject {
+    @Published var state: HaloState = .idle
+    let callbacks = HaloStateCallbacks()
 }
 
-// MARK: - Processing State: Spinner
+// MARK: - Component Views
 
-struct SpinnerView: View {
-    let color: Color
+/// 16x16 purple spinner for processing states
+struct HaloProcessingView: View {
+    var text: String?
     @State private var rotation: Double = 0
 
     var body: some View {
+        VStack(spacing: 8) {
+            Circle()
+                .trim(from: 0, to: 0.75)
+                .stroke(
+                    Color.purple,
+                    style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                )
+                .frame(width: 16, height: 16)
+                .rotationEffect(.degrees(rotation))
+                .onAppear {
+                    withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {
+                        rotation = 360
+                    }
+                }
+
+            if let text = text, !text.isEmpty {
+                Text(text)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(12)
+        .background(.ultraThinMaterial)
+        .cornerRadius(8)
+    }
+}
+
+/// Listening state view (pulsing circle)
+struct HaloListeningView: View {
+    @State private var scale: CGFloat = 1.0
+
+    var body: some View {
         Circle()
-            .trim(from: 0, to: 0.7)
-            .stroke(color, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-            .frame(width: 60, height: 60)
-            .rotationEffect(.degrees(rotation))
+            .fill(Color.purple.opacity(0.6))
+            .frame(width: 12, height: 12)
+            .scaleEffect(scale)
             .onAppear {
-                withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
-                    rotation = 360
+                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                    scale = 1.3
                 }
             }
+            .padding(12)
+            .background(.ultraThinMaterial)
+            .cornerRadius(8)
     }
 }
 
-// MARK: - Success State: Checkmark
-
-struct CheckmarkView: View {
-    @State private var showCheckmark = false
+/// Typewriting progress view
+struct HaloTypewritingView: View {
+    let progress: Float
 
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(Color.green.opacity(0.2))
-                .frame(width: 80, height: 80)
+        VStack(spacing: 4) {
+            Image(systemName: "keyboard")
+                .font(.system(size: 14))
+                .foregroundColor(.purple)
 
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 50))
-                .foregroundColor(.green)
-                .scaleEffect(showCheckmark ? 1.0 : 0.5)
-                .opacity(showCheckmark ? 1.0 : 0.0)
+            ProgressView(value: Double(progress))
+                .progressViewStyle(.linear)
+                .frame(width: 60)
         }
-        .onAppear {
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.6)) {
-                showCheckmark = true
-            }
-        }
+        .padding(12)
+        .background(.ultraThinMaterial)
+        .cornerRadius(8)
     }
 }
 
-// MARK: - Error State: X Icon with Shake
-
-struct ErrorView: View {
-    @State private var showError = false
-    @State private var shake = false
+/// Error view with action buttons
+struct HaloErrorView: View {
+    let errorType: ErrorType
+    let message: String
+    let suggestion: String?
+    let onRetry: (() -> Void)?
+    let onDismiss: (() -> Void)?
 
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(Color.red.opacity(0.2))
-                .frame(width: 80, height: 80)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.red)
+                Text(L("error.aether"))
+                    .font(.headline)
+            }
 
-            Image(systemName: "xmark.circle.fill")
-                .font(.system(size: 50))
-                .foregroundColor(.red)
-                .scaleEffect(showError ? 1.0 : 0.5)
-                .opacity(showError ? 1.0 : 0.0)
-                .offset(x: shake ? -8 : 8)
-        }
-        .onAppear {
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.6)) {
-                showError = true
+            Text(message)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .lineLimit(3)
+
+            if let suggestion = suggestion {
+                Text(suggestion)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
             }
-            withAnimation(.easeInOut(duration: 0.1).repeatCount(3, autoreverses: true)) {
-                shake.toggle()
+
+            HStack(spacing: 8) {
+                if onRetry != nil {
+                    Button(L("button.retry")) {
+                        onRetry?()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+
+                Button(L("button.dismiss")) {
+                    onDismiss?()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
         }
+        .padding(12)
+        .frame(maxWidth: 280)
+        .background(.ultraThinMaterial)
+        .cornerRadius(8)
     }
 }
 
-// MARK: - Preview
+/// Tool confirmation view
+struct HaloToolConfirmationView: View {
+    let toolName: String
+    let toolDescription: String
+    let reason: String
+    let confidence: Float
+    let onExecute: (() -> Void)?
+    let onCancel: (() -> Void)?
 
-struct HaloView_Previews: PreviewProvider {
-    static var previews: some View {
-        let themeEngine = ThemeEngine()
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "wrench.and.screwdriver.fill")
+                    .foregroundColor(.purple)
+                Text(toolName)
+                    .font(.headline)
+            }
 
-        Group {
-            HaloView(viewModel: {
-                let vm = HaloViewModel()
-                vm.state = .listening
-                return vm
-            }(), themeEngine: themeEngine)
-                .previewDisplayName("Listening")
-                .frame(width: 120, height: 120)
-                .background(Color.black.opacity(0.3))
+            Text(toolDescription)
+                .font(.caption)
+                .foregroundColor(.secondary)
 
-            HaloView(viewModel: {
-                let vm = HaloViewModel()
-                vm.state = .processing(providerColor: .green, streamingText: nil)
-                return vm
-            }(), themeEngine: themeEngine)
-                .previewDisplayName("Processing")
-                .frame(width: 120, height: 120)
-                .background(Color.black.opacity(0.3))
+            Text(reason)
+                .font(.caption2)
+                .foregroundColor(.secondary)
 
-            HaloView(viewModel: {
-                let vm = HaloViewModel()
-                vm.state = .success(finalText: nil)
-                return vm
-            }(), themeEngine: themeEngine)
-                .previewDisplayName("Success")
-                .frame(width: 120, height: 120)
-                .background(Color.black.opacity(0.3))
+            HStack(spacing: 8) {
+                Button(L("button.execute")) {
+                    onExecute?()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
 
-            HaloView(viewModel: {
-                let vm = HaloViewModel()
-                vm.state = .error(type: .unknown, message: "Test error", suggestion: nil)
-                return vm
-            }(), themeEngine: themeEngine)
-                .previewDisplayName("Error")
-                .frame(width: 120, height: 120)
-                .background(Color.black.opacity(0.3))
+                Button(L("button.cancel")) {
+                    onCancel?()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
         }
+        .padding(12)
+        .frame(maxWidth: 280)
+        .background(.ultraThinMaterial)
+        .cornerRadius(8)
+    }
+}
+
+/// Clarification input view
+struct HaloClarificationView: View {
+    let request: ClarificationRequest
+    let onSubmit: (String) -> Void
+    let onCancel: (() -> Void)?
+
+    @State private var inputText = ""
+    @State private var selectedIndex: Int?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(request.prompt)
+                .font(.headline)
+
+            if request.clarificationType == .select, let options = request.options {
+                ForEach(Array(options.enumerated()), id: \.offset) { index, option in
+                    Button(action: {
+                        selectedIndex = index
+                        onSubmit(option.value)
+                    }) {
+                        HStack {
+                            Text(option.label)
+                            Spacer()
+                            if selectedIndex == index {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+            } else {
+                TextField(request.placeholder ?? "", text: $inputText)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit {
+                        onSubmit(inputText)
+                    }
+            }
+
+            Button(L("button.cancel")) {
+                onCancel?()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(12)
+        .frame(maxWidth: 280)
+        .background(.ultraThinMaterial)
+        .cornerRadius(8)
     }
 }
