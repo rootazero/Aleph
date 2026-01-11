@@ -728,34 +728,37 @@ final class UnifiedInputCoordinator {
     ///
     /// Note: SubPanel remains visible to show status messages
     private func showProcessingIndicator() {
+        // Get mouse position immediately (before async dispatch)
+        let mousePosition = NSEvent.mouseLocation
+
         DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+            guard let self = self,
+                  let controller = self.haloWindowController,
+                  let window = controller.window else {
+                print("[UnifiedInputCoordinator] ⚠️ Cannot show processing indicator: controller or window is nil")
+                return
+            }
 
             // Position priority:
             // 1. Current mouse position (tracks cursor movement)
             // 2. Fallback: Near unified input window (top-left corner)
-            let mousePosition = NSEvent.mouseLocation
             let position: NSPoint
 
-            // Check if mouse is in a reasonable screen area
             if let screen = NSScreen.main, screen.frame.contains(mousePosition) {
                 position = mousePosition
-                print("[UnifiedInputCoordinator] Processing indicator at mouse position: \(position)")
-            } else if let windowFrame = self.unifiedInputWindow.frame as NSRect? {
+                print("[UnifiedInputCoordinator] Processing indicator at mouse: \(position)")
+            } else {
                 // Fallback: Top-left corner of unified input window
+                let windowFrame = self.unifiedInputWindow.frame
                 position = NSPoint(
                     x: windowFrame.minX - 60,
                     y: windowFrame.maxY - 40
                 )
                 print("[UnifiedInputCoordinator] Processing indicator at window fallback: \(position)")
-            } else {
-                // Final fallback: Screen center
-                position = mousePosition
-                print("[UnifiedInputCoordinator] Processing indicator at final fallback: \(position)")
             }
 
-            self.haloWindowController?.window?.updateState(.processing(providerColor: .purple, streamingText: nil))
-            self.haloWindowController?.window?.show(at: position)
+            window.updateState(.processing(providerColor: .purple, streamingText: nil))
+            window.show(at: position)
         }
     }
 
