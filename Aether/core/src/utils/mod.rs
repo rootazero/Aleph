@@ -2,3 +2,4 @@
 pub mod json_extract;
 pub mod pii;
 pub mod prompt_sanitize;
+pub mod text_format;

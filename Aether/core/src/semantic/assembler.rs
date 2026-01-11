@@ -11,6 +11,7 @@ use super::template::{PromptTemplate, TemplateRegistry};
 use crate::memory::MemoryEntry;
 use crate::payload::{AgentContext, ContextFormat};
 use crate::search::SearchResult;
+use crate::utils::text_format::{format_timestamp, truncate_text};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -611,30 +612,6 @@ fn format_search_markdown(results: &[SearchResult]) -> String {
     }
 
     lines.join("\n")
-}
-
-/// Format Unix timestamp
-fn format_timestamp(timestamp: i64) -> String {
-    use chrono::{DateTime, Utc};
-
-    DateTime::<Utc>::from_timestamp(timestamp, 0)
-        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| "Unknown".to_string())
-}
-
-/// Truncate text to max characters
-fn truncate_text(text: &str, max_chars: usize) -> String {
-    let char_count = text.chars().count();
-    if char_count <= max_chars {
-        text.to_string()
-    } else {
-        let truncate_at = text
-            .char_indices()
-            .nth(max_chars)
-            .map(|(idx, _)| idx)
-            .unwrap_or(text.len());
-        format!("{}...", &text[..truncate_at])
-    }
 }
 
 #[cfg(test)]

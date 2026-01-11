@@ -141,18 +141,6 @@ impl McpToolBridge {
         bridges
     }
 
-    /// Create bridges for builtin tools only (sync version)
-    ///
-    /// Note: Native tools are now handled via the `AgentTool` infrastructure
-    /// in the `tools` module. McpClient no longer stores builtin services.
-    /// This method returns an empty vector for backward compatibility.
-    #[deprecated(note = "Native tools are now handled via AgentTool. Use tools module instead.")]
-    pub fn from_client_builtin_only(_client: Arc<McpClient>) -> Vec<Self> {
-        // No builtin tools in McpClient anymore
-        // Native tools are handled via AgentTool infrastructure
-        Vec::new()
-    }
-
     /// Get the tool source
     pub fn source(&self) -> &McpToolSource {
         &self.source
@@ -261,17 +249,6 @@ pub async fn create_bridges(client: &Arc<McpClient>) -> Vec<Arc<dyn AgentTool>> 
         .into_iter()
         .map(|b| Arc::new(b) as Arc<dyn AgentTool>)
         .collect()
-}
-
-/// Helper to create builtin-only bridges (sync)
-///
-/// Note: Native tools are now handled via the `AgentTool` infrastructure
-/// in the `tools` module. This function returns an empty vector.
-#[deprecated(note = "Native tools are now handled via AgentTool. Use tools module instead.")]
-pub fn create_builtin_bridges(_client: &Arc<McpClient>) -> Vec<Arc<dyn AgentTool>> {
-    // No builtin tools in McpClient anymore
-    // Native tools are handled via AgentTool infrastructure
-    Vec::new()
 }
 
 #[cfg(test)]
@@ -458,16 +435,6 @@ mod tests {
         assert!(bridge.requires_confirmation());
     }
 
-    #[test]
-    #[allow(deprecated)]
-    fn test_from_client_builtin_only_empty() {
-        let client = Arc::new(McpClient::new());
-        let bridges = McpToolBridge::from_client_builtin_only(client);
-
-        // Empty client has no builtin tools (deprecated - native tools now via AgentTool)
-        assert!(bridges.is_empty());
-    }
-
     #[tokio::test]
     async fn test_from_client_empty() {
         let client = Arc::new(McpClient::new());
@@ -482,16 +449,6 @@ mod tests {
         let client = Arc::new(McpClient::new());
         let bridges = create_bridges(&client).await;
 
-        assert!(bridges.is_empty());
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_create_builtin_bridges_empty() {
-        let client = Arc::new(McpClient::new());
-        let bridges = create_builtin_bridges(&client);
-
-        // Deprecated - native tools now via AgentTool
         assert!(bridges.is_empty());
     }
 }

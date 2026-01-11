@@ -25,6 +25,7 @@
 
 use super::types::{ToolSource, UnifiedTool};
 use crate::utils::json_extract::extract_json_robust;
+use crate::utils::text_format::escape_xml;
 
 /// Prompt format options for tool list generation
 #[derive(Debug, Clone, Copy, Default)]
@@ -412,19 +413,6 @@ impl L3RoutingResponse {
     pub fn needs_confirmation(&self, threshold: f32) -> bool {
         self.has_match() && self.confidence < threshold
     }
-}
-
-// =============================================================================
-// Helper Functions
-// =============================================================================
-
-/// Escape XML special characters
-fn escape_xml(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 // Note: The old `extract_json_from_response()` function has been removed.

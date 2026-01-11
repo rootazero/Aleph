@@ -57,5 +57,4 @@ pub use types::{
 };
 
 // MCP Tool Bridge - implements AgentTool for MCP tools
-#[allow(deprecated)]
-pub use bridge::{create_bridges, create_builtin_bridges, McpToolBridge, McpToolSource};
+pub use bridge::{create_bridges, McpToolBridge, McpToolSource};

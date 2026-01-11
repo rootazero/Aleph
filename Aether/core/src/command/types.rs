@@ -151,23 +151,10 @@ impl CommandNode {
         self
     }
 
-    /// Builder: set has_children
-    #[deprecated(note = "In flat namespace mode, commands don't have children")]
-    pub fn with_children(mut self, has_children: bool) -> Self {
-        self.has_children = has_children;
-        self
-    }
-
     /// Builder: set source_type
     pub fn with_source_type(mut self, source_type: ToolSourceType) -> Self {
         self.source_type = source_type;
         self
-    }
-
-    /// Check if this is a namespace node
-    #[deprecated(note = "In flat namespace mode, there are no namespace nodes")]
-    pub fn is_namespace(&self) -> bool {
-        matches!(self.node_type, CommandType::Namespace)
     }
 
     /// Check if this is an action node

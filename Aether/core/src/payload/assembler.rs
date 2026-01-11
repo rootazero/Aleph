@@ -6,6 +6,7 @@ use super::{AgentContext, AgentPayload, ContextFormat};
 use crate::capability::CapabilityDeclaration;
 use crate::memory::{MemoryEntry, MemoryFact};
 use crate::search::SearchResult;
+use crate::utils::text_format::{escape_markdown, format_timestamp, truncate_text};
 
 /// Prompt assembler that converts AgentPayload to LLM message format
 ///
@@ -547,45 +548,6 @@ impl PromptAssembler {
     }
 }
 
-/// Format Unix timestamp as human-readable string
-fn format_timestamp(timestamp: i64) -> String {
-    use chrono::{DateTime, Utc};
-
-    DateTime::<Utc>::from_timestamp(timestamp, 0)
-        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| "Unknown".to_string())
-}
-
-/// Truncate text to max length (character-safe, not byte-based)
-fn truncate_text(text: &str, max_chars: usize) -> String {
-    let char_count = text.chars().count();
-    if char_count <= max_chars {
-        text.to_string()
-    } else {
-        // Find the byte index of the max_chars-th character boundary
-        let truncate_at = text
-            .char_indices()
-            .nth(max_chars)
-            .map(|(idx, _)| idx)
-            .unwrap_or(text.len());
-        format!("{}...", &text[..truncate_at])
-    }
-}
-
-/// Escape Markdown special characters
-///
-/// Escapes characters that have special meaning in Markdown to prevent
-/// formatting issues when displaying user-provided text.
-fn escape_markdown(text: &str) -> String {
-    text.replace('[', "\\[")
-        .replace(']', "\\]")
-        .replace('(', "\\(")
-        .replace(')', "\\)")
-        .replace('*', "\\*")
-        .replace('_', "\\_")
-        .replace('`', "\\`")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,7 +601,7 @@ mod tests {
 
         assert!(prompt.starts_with("You are helpful."));
         assert!(prompt.contains("### Context Information"));
-        assert!(prompt.contains("**Relevant History**"));
+        assert!(prompt.contains("**Related Conversation History**"));
         assert!(prompt.contains("Previous question"));
         assert!(prompt.contains("Previous answer"));
     }
@@ -665,7 +627,7 @@ mod tests {
 
         let formatted = assembler.format_memory_markdown(&memories);
 
-        assert!(formatted.contains("**Relevant History**"));
+        assert!(formatted.contains("**Related Conversation History**"));
         assert!(formatted.contains("Test input"));
         assert!(formatted.contains("Test output"));
         assert!(formatted.contains("85%")); // Relevance score
@@ -891,7 +853,7 @@ mod tests {
         let prompt = assembler.assemble_system_prompt("You are helpful.", &payload);
 
         // Should contain both memory and search sections
-        assert!(prompt.contains("**Relevant History**"));
+        assert!(prompt.contains("**Related Conversation History**"));
         assert!(prompt.contains("Previous question"));
         assert!(prompt.contains("**Web Search Results** (Retrieved by your search capability)"));
         assert!(prompt.contains("Search Result"));
@@ -1002,7 +964,7 @@ mod tests {
         assert!(prompt.contains("Base prompt."));
         assert!(prompt.contains("## CRITICAL: Proactive Search Decision System"));
         assert!(prompt.contains("### Context Information"));
-        assert!(prompt.contains("**Relevant History**"));
+        assert!(prompt.contains("**Related Conversation History**"));
         assert!(prompt.contains("Previous question"));
     }
 }
