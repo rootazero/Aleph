@@ -27,7 +27,7 @@ class ProcessingIndicatorWindow: NSWindow {
 
     // MARK: - Initialization
 
-    private static let windowSize: CGFloat = 32  // Enough space for 16px spinner + stroke + padding
+    private static let windowSize: CGFloat = 24  // Enough space for 16px spinner + 2px stroke + padding
 
     init() {
         super.init(
