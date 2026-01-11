@@ -111,9 +111,10 @@ final class HaloWindow: NSWindow {
         case .idle:
             size = NSSize(width: 0, height: 0)
         case .listening, .processing, .processingWithAI, .retrievingMemory:
-            size = NSSize(width: 80, height: 60)
+            // Minimal size: 16x16 spinner + 4px padding each side
+            size = NSSize(width: 24, height: 24)
         case .typewriting:
-            size = NSSize(width: 100, height: 60)
+            size = NSSize(width: 80, height: 30)
         case .error, .toast, .clarification, .toolConfirmation:
             size = NSSize(width: 320, height: 200)
         case .permissionRequired, .conversationInput:
