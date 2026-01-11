@@ -93,41 +93,29 @@ class HaloViewModel: ObservableObject {
 
 // MARK: - Component Views
 
-/// 16x16 purple spinner for processing states
+/// 16x16 purple spinner for processing states (no background)
 struct HaloProcessingView: View {
     var text: String?
     @State private var rotation: Double = 0
 
     var body: some View {
-        VStack(spacing: 8) {
-            Circle()
-                .trim(from: 0, to: 0.75)
-                .stroke(
-                    Color.purple,
-                    style: StrokeStyle(lineWidth: 2, lineCap: .round)
-                )
-                .frame(width: 16, height: 16)
-                .rotationEffect(.degrees(rotation))
-                .onAppear {
-                    withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {
-                        rotation = 360
-                    }
+        Circle()
+            .trim(from: 0, to: 0.75)
+            .stroke(
+                Color.purple,
+                style: StrokeStyle(lineWidth: 2, lineCap: .round)
+            )
+            .frame(width: 16, height: 16)
+            .rotationEffect(.degrees(rotation))
+            .onAppear {
+                withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) {
+                    rotation = 360
                 }
-
-            if let text = text, !text.isEmpty {
-                Text(text)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
             }
-        }
-        .padding(12)
-        .background(.ultraThinMaterial)
-        .cornerRadius(8)
     }
 }
 
-/// Listening state view (pulsing circle)
+/// Listening state view (pulsing circle, no background)
 struct HaloListeningView: View {
     @State private var scale: CGFloat = 1.0
 
@@ -141,13 +129,10 @@ struct HaloListeningView: View {
                     scale = 1.3
                 }
             }
-            .padding(12)
-            .background(.ultraThinMaterial)
-            .cornerRadius(8)
     }
 }
 
-/// Typewriting progress view
+/// Typewriting progress view (no background)
 struct HaloTypewritingView: View {
     let progress: Float
 
@@ -161,9 +146,6 @@ struct HaloTypewritingView: View {
                 .progressViewStyle(.linear)
                 .frame(width: 60)
         }
-        .padding(12)
-        .background(.ultraThinMaterial)
-        .cornerRadius(8)
     }
 }
 
