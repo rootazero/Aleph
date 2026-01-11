@@ -268,12 +268,7 @@ final class ConversationCoordinator {
         let attachmentCount = context?.attachments?.count ?? 0
         print("[ConversationCoordinator] 🎭 Continuing conversation with: \(followUpInput.prefix(50))... + \(attachmentCount) attachment(s)")
 
-        // Show processing state in HaloWindow
-        // Note: UnifiedInputWindow is now independent and coexists with HaloWindow
-        DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.haloWindowController?.updateState(.processing(streamingText: nil))
-            slf.haloWindowController?.showCentered()
-        }
+        // Multi-turn mode: No spinner displayed, UnifiedInputWindow handles UI
 
         DispatchQueue.global(qos: .userInitiated).async {
             do {
