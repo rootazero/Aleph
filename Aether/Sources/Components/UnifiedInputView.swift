@@ -115,7 +115,6 @@ struct UnifiedInputView: View {
             .opacity(0.95)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 6)
         // Smooth spring animation for background expansion
         .animation(.spring(response: 0.25, dampingFraction: 0.85), value: subPanelState.calculatedHeight)
     }
