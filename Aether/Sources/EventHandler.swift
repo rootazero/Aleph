@@ -470,6 +470,13 @@ class EventHandler: AetherEventHandler {
     // MARK: - AI Processing Handling
 
     private func handleAiProcessingStarted(providerName: String, providerColor: String) {
+        // Skip halo spinner in multi-turn conversation mode
+        // SubPanel handles UI feedback instead
+        if conversationManager.sessionId != nil {
+            print("[EventHandler] AI processing started (multi-turn, no halo): \(providerName)")
+            return
+        }
+
         // Update HaloWindow with AI processing state (color removed, using unified purple)
         _ = providerColor  // Unused parameter
         haloWindow?.updateState(.processingWithAI(providerName: providerName))
