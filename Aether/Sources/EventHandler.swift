@@ -424,15 +424,15 @@ class EventHandler: AetherEventHandler {
             announceToVoiceOver("Retrieving memories")
 
         case .processingWithAi:
-            // Show HaloWindow with processing with AI state at current mouse position
+            // Update state only - position is controlled by UnifiedInputCoordinator
             haloWindow?.updateState(.processingWithAI(providerColor: .purple, providerName: nil))
-            haloWindow?.show(at: NSEvent.mouseLocation)
+            haloWindow?.showAtCurrentPosition()
             announceToVoiceOver("Processing with AI")
 
         case .processing:
-            // Show HaloWindow with processing state at current mouse position
+            // Update state only - position is controlled by UnifiedInputCoordinator
             haloWindow?.updateState(.processing(providerColor: .purple, streamingText: nil))
-            haloWindow?.show(at: NSEvent.mouseLocation)
+            haloWindow?.showAtCurrentPosition()
             announceToVoiceOver("Processing request")
 
         case .success:

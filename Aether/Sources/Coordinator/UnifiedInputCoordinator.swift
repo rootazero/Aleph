@@ -723,14 +723,11 @@ final class UnifiedInputCoordinator {
     /// Show processing indicator using HaloWindow's .processing state
     ///
     /// Position priority:
-    /// 1. Current mouse position (tracks cursor)
+    /// 1. Saved caret position from target app (text cursor position)
     /// 2. Fallback: Top-left corner of unified input window
     ///
     /// Note: SubPanel remains visible to show status messages
     private func showProcessingIndicator() {
-        // Get mouse position immediately (before async dispatch)
-        let mousePosition = NSEvent.mouseLocation
-
         DispatchQueue.main.async { [weak self] in
             guard let self = self,
                   let controller = self.haloWindowController,
@@ -740,13 +737,14 @@ final class UnifiedInputCoordinator {
             }
 
             // Position priority:
-            // 1. Current mouse position (tracks cursor movement)
-            // 2. Fallback: Near unified input window (top-left corner)
+            // 1. Saved caret position from target app (text input cursor)
+            // 2. Fallback: Top-left corner of unified input window
             let position: NSPoint
 
-            if let screen = NSScreen.main, screen.frame.contains(mousePosition) {
-                position = mousePosition
-                print("[UnifiedInputCoordinator] Processing indicator at mouse: \(position)")
+            if let caretPosition = self.targetAppInfo?.caretPosition {
+                // Use saved caret position from target app
+                position = caretPosition
+                print("[UnifiedInputCoordinator] Processing indicator at caret: \(position)")
             } else {
                 // Fallback: Top-left corner of unified input window
                 let windowFrame = self.unifiedInputWindow.frame
