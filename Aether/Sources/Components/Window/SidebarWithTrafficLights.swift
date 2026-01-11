@@ -258,6 +258,7 @@ private struct SidebarNavigationItem: View {
             }
             .padding(.vertical, 8)
             .padding(.horizontal, 10)
+            .contentShape(Rectangle())  // Expand hit area to entire background
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(backgroundColor)
