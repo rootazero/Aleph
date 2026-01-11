@@ -71,6 +71,10 @@ final class UnifiedInputCoordinator {
     /// Store target app info from focus detection
     private(set) var targetAppInfo: TargetAppInfo?
 
+    /// Fallback position for HaloWindow when accessibility detection fails
+    /// Used when targetAppInfo is nil (e.g., accessibility denied)
+    private var fallbackHaloPosition: NSPoint?
+
     /// Whether permission gate is active (blocks input)
     var isPermissionGateActive: Bool = false
 
@@ -304,12 +308,14 @@ final class UnifiedInputCoordinator {
             print("[UnifiedInputCoordinator] ⚠️ Accessibility permission denied, using mouse position")
             showAccessibilityWarningToast()
             let mousePosition = NSEvent.mouseLocation
+            fallbackHaloPosition = mousePosition  // Store for HaloWindow positioning
             showUnifiedInput(at: mousePosition)
 
         case .unknownError(let error):
             // Error during detection - fall back to mouse position
             print("[UnifiedInputCoordinator] ⚠️ Focus detection error: \(error.localizedDescription), using mouse position")
             let mousePosition = NSEvent.mouseLocation
+            fallbackHaloPosition = mousePosition  // Store for HaloWindow positioning
             showUnifiedInput(at: mousePosition)
         }
     }
@@ -663,6 +669,7 @@ final class UnifiedInputCoordinator {
         currentSessionId = nil
         currentTurnCount = 0
         targetAppInfo = nil
+        fallbackHaloPosition = nil
 
         // Hide unified input window
         unifiedInputWindow.hideWindow()
@@ -738,15 +745,20 @@ final class UnifiedInputCoordinator {
 
             // Position priority:
             // 1. Saved caret position from target app (text input cursor)
-            // 2. Fallback: Top-left corner of unified input window
+            // 2. Saved mouse position (when accessibility failed)
+            // 3. Fallback: Top-left corner of unified input window
             let position: NSPoint
 
             if let caretPosition = self.targetAppInfo?.caretPosition {
                 // Use saved caret position from target app
                 position = caretPosition
                 print("[UnifiedInputCoordinator] Processing indicator at caret: \(position)")
+            } else if let fallbackPosition = self.fallbackHaloPosition {
+                // Use saved mouse position (when accessibility detection failed)
+                position = fallbackPosition
+                print("[UnifiedInputCoordinator] Processing indicator at fallback (mouse): \(position)")
             } else {
-                // Fallback: Top-left corner of unified input window
+                // Final fallback: Top-left corner of unified input window
                 let windowFrame = self.unifiedInputWindow.frame
                 position = NSPoint(
                     x: windowFrame.minX - 60,
