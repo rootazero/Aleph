@@ -619,11 +619,12 @@ impl AetherCore {
     ///
     /// This increments the pending turns counter in the compression scheduler.
     /// When the counter reaches the threshold (default: 20), automatic compression
-    /// will be triggered on the next background check.
+    /// will be triggered immediately instead of waiting for the next hourly check.
     pub(crate) fn record_conversation_turn(&self) {
         if let Some(ref compression) = self.compression_service {
-            compression.record_turn();
             compression.record_activity();
+            // Use record_turn_and_check to trigger immediate compression when threshold reached
+            compression.record_turn_and_check();
             tracing::trace!("Recorded conversation turn for compression scheduling");
         }
     }

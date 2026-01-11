@@ -312,6 +312,45 @@ impl CompressionService {
         self.scheduler.increment_turns();
     }
 
+    /// Record a conversation turn and trigger compression if threshold reached
+    ///
+    /// This method checks if the turn threshold is reached after incrementing,
+    /// and if so, spawns a compression task immediately instead of waiting
+    /// for the next hourly background check.
+    pub fn record_turn_and_check(self: &Arc<Self>) {
+        self.scheduler.increment_turns();
+        let turns = self.scheduler.get_pending_turns();
+        let threshold = self.config.scheduler.turn_threshold;
+
+        if turns >= threshold {
+            tracing::info!(
+                turns = turns,
+                threshold = threshold,
+                "Turn threshold reached, triggering immediate compression"
+            );
+
+            // Spawn compression task
+            let service = Arc::clone(self);
+            tokio::spawn(async move {
+                match service.check_and_compress().await {
+                    Ok(Some(result)) => {
+                        tracing::info!(
+                            facts = result.facts_extracted,
+                            duration_ms = result.duration_ms,
+                            "Immediate compression completed (turn threshold)"
+                        );
+                    }
+                    Ok(None) => {
+                        tracing::debug!("Immediate compression: no action needed");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Immediate compression failed");
+                    }
+                }
+            });
+        }
+    }
+
     /// Get the scheduler for external monitoring
     pub fn get_scheduler(&self) -> Arc<CompressionScheduler> {
         Arc::clone(&self.scheduler)
