@@ -258,6 +258,7 @@ mod tests {
             app_bundle_id: "com.apple.Notes".to_string(),
             window_title: Some("Test Note".to_string()),
             attachments: None,
+            topic_id: None,
         }
     }
 

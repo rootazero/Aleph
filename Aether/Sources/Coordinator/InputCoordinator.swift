@@ -26,17 +26,14 @@ final class InputCoordinator {
     /// Reference to core for processing
     private weak var core: AetherCore?
 
-    /// Reference to Halo window controller for state updates
-    private weak var haloWindowController: HaloWindowController?
+    /// Reference to Halo window for state updates
+    private weak var haloWindow: HaloWindow?
 
     /// Reference to event handler for error callbacks
     private weak var eventHandler: EventHandler?
 
     /// Reference to output coordinator for response output
     private weak var outputCoordinator: OutputCoordinator?
-
-    /// Reference to conversation coordinator for multi-turn conversations
-    private weak var conversationCoordinator: ConversationCoordinator?
 
     /// Clipboard manager for clipboard operations
     private let clipboardManager: any ClipboardManagerProtocol
@@ -71,22 +68,19 @@ final class InputCoordinator {
     ///
     /// - Parameters:
     ///   - core: AetherCore instance
-    ///   - haloWindowController: HaloWindowController for state updates
+    ///   - haloWindow: HaloWindow for state updates
     ///   - eventHandler: EventHandler for error callbacks
     ///   - outputCoordinator: OutputCoordinator for response output
-    ///   - conversationCoordinator: ConversationCoordinator for multi-turn conversations
     func configure(
         core: AetherCore,
-        haloWindowController: HaloWindowController?,
+        haloWindow: HaloWindow?,
         eventHandler: EventHandler?,
-        outputCoordinator: OutputCoordinator? = nil,
-        conversationCoordinator: ConversationCoordinator? = nil
+        outputCoordinator: OutputCoordinator? = nil
     ) {
         self.core = core
-        self.haloWindowController = haloWindowController
+        self.haloWindow = haloWindow
         self.eventHandler = eventHandler
         self.outputCoordinator = outputCoordinator
-        self.conversationCoordinator = conversationCoordinator
     }
 
     // MARK: - Trigger Handlers
@@ -151,7 +145,7 @@ final class InputCoordinator {
             print("[InputCoordinator] ⚠️ Core not initialized")
             // Show error in Halo
             DispatchQueue.mainAsync(weakRef: self) { slf in
-                slf.haloWindowController?.updateState(.error(
+                slf.haloWindow?.updateState(.error(
                     type: .unknown,
                     message: L("error.core_not_initialized"),
                     suggestion: L("error.core_not_initialized.suggestion")
@@ -247,16 +241,8 @@ final class InputCoordinator {
             case .noTextContent, .noFocusedElement, .unsupported:
                 // Accessibility API couldn't get text, fallback to Cmd+A
                 print("[InputCoordinator] ⚠️ Accessibility API failed, falling back to Cmd+A method...")
-                textSource = .selectAll  // Mark source as select all
-                KeyboardSimulator.shared.simulateSelectAll()
-                Thread.sleep(forTimeInterval: 0.05)  // 50ms delay
-
-                // Always COPY after selecting all (not cut)
-                // This keeps text visible during AI thinking, same as selectedText case.
-                // The selection remains active and will be replaced on output.
-                print("[InputCoordinator] Simulating Cmd+C to copy all text...")
-                KeyboardSimulator.shared.simulateCopy()
-                Thread.sleep(forTimeInterval: 0.1)  // 100ms delay
+                textSource = .selectAll
+                performSelectAllCopyFallback()
 
                 let afterSelectAllChangeCount = clipboardManager.changeCount()
                 if afterSelectAllChangeCount == afterCopyChangeCount {
@@ -269,15 +255,15 @@ final class InputCoordinator {
                     // Show error
                     let errorPosition = CaretPositionHelper.getBestPosition()
                     DispatchQueue.mainAsync(weakRef: self) { slf in
-                        slf.haloWindowController?.show(at: errorPosition)
-                        slf.haloWindowController?.updateState(.error(
+                        slf.haloWindow?.show(at: errorPosition)
+                        slf.haloWindow?.updateState(.error(
                             type: .unknown,
                             message: L("error.no_text_in_window"),
                             suggestion: L("error.no_text_in_window.suggestion")
                         ))
                         // Auto-hide after 2 seconds
                         DispatchQueue.mainAsyncAfter(delay: 2.0, weakRef: slf) { innerSlf in
-                            innerSlf.haloWindowController?.hide()
+                            innerSlf.haloWindow?.hide()
                         }
                     }
                     return
@@ -286,23 +272,14 @@ final class InputCoordinator {
                 }
 
             case .accessibilityDenied:
-                // This shouldn't happen as we check permissions at startup
                 print("[InputCoordinator] ❌ Accessibility permission denied, using Cmd+A fallback")
                 textSource = .selectAll
-                KeyboardSimulator.shared.simulateSelectAll()
-                Thread.sleep(forTimeInterval: 0.05)
-                print("[InputCoordinator] Simulating Cmd+C to copy all text...")
-                KeyboardSimulator.shared.simulateCopy()
-                Thread.sleep(forTimeInterval: 0.1)
+                performSelectAllCopyFallback()
 
             case .error(let message):
                 print("[InputCoordinator] ❌ Accessibility error: \(message), using Cmd+A fallback")
                 textSource = .selectAll
-                KeyboardSimulator.shared.simulateSelectAll()
-                Thread.sleep(forTimeInterval: 0.05)
-                print("[InputCoordinator] Simulating Cmd+C to copy all text...")
-                KeyboardSimulator.shared.simulateCopy()
-                Thread.sleep(forTimeInterval: 0.1)
+                performSelectAllCopyFallback()
             }
         } else {
             print("[InputCoordinator] ✓ Detected selected text")
@@ -323,7 +300,7 @@ final class InputCoordinator {
             }
             // Hide Halo and show error toast to user
             DispatchQueue.mainAsync(weakRef: self) { slf in
-                slf.haloWindowController?.hide()
+                slf.haloWindow?.hide()
                 slf.eventHandler?.showToast(
                     type: .warning,
                     title: L("error.file_size"),
@@ -492,15 +469,15 @@ final class InputCoordinator {
             guard let self = self else { return }
             // Try cursor position first, fall back to mouse position
             let position = CaretPositionHelper.getBestPosition()
-            self.haloWindowController?.updateState(.processing(streamingText: nil))
-            self.haloWindowController?.show(at: position)
+            self.haloWindow?.updateState(.processing(streamingText: nil))
+            self.haloWindow?.show(at: position)
         }
     }
 
     /// Hide processing indicator
     private func hideProcessingIndicator() {
         DispatchQueue.main.async { [weak self] in
-            self?.haloWindowController?.hide()
+            self?.haloWindow?.hide()
         }
     }
 
@@ -509,5 +486,19 @@ final class InputCoordinator {
     /// Clear the previous frontmost app reference
     func clearPreviousFrontmostApp() {
         previousFrontmostApp = nil
+    }
+
+    // MARK: - Private Helpers
+
+    /// Perform select-all and copy fallback when accessibility API fails
+    ///
+    /// This method encapsulates the common keyboard simulation pattern used
+    /// when we can't read text directly via Accessibility API.
+    private func performSelectAllCopyFallback() {
+        KeyboardSimulator.shared.simulateSelectAll()
+        Thread.sleep(forTimeInterval: 0.05)
+        print("[InputCoordinator] Simulating Cmd+C to copy all text...")
+        KeyboardSimulator.shared.simulateCopy()
+        Thread.sleep(forTimeInterval: 0.1)
     }
 }

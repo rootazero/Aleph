@@ -45,10 +45,6 @@ struct HaloView: View {
                     onDismiss: viewModel.callbacks.toastOnDismiss
                 )
 
-            case .permissionRequired:
-                // Deprecated - use PermissionGateView
-                EmptyView()
-
             case .toast(let type, let title, let message, _):
                 HaloToastView(
                     type: type,

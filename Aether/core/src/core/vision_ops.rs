@@ -87,6 +87,7 @@ impl AetherCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vision::{CaptureMode, VisionTask};
 
     // Note: Full integration tests require a mock provider setup
     // These tests verify the API structure only

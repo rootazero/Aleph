@@ -37,7 +37,6 @@ use crate::conversation::ConversationManager;
 use crate::dispatcher::{AsyncConfirmationHandler, ToolRegistry};
 use crate::tools::NativeToolRegistry;
 use crate::error::{AetherError, Result};
-use crate::event_handler::ErrorType;
 use crate::event_handler::{AetherEventHandler, ProcessingState};
 use crate::mcp::McpClient;
 use crate::memory::cleanup::CleanupService;
@@ -761,6 +760,7 @@ impl AetherCore {
     ///
     /// Implements exponential backoff: 2s, 4s, 8s
     /// Max 2 auto-retries, then manual retry only
+    #[deprecated(note = "Not used by Swift layer, may be removed in future")]
     pub fn retry_last_request(&self) -> Result<()> {
         use std::thread;
         use std::time::Duration;
@@ -840,6 +840,7 @@ impl AetherCore {
     // ========================================================================
 
     /// Set the current context (called from Swift when user triggers action)
+    #[deprecated(note = "Not used by Swift layer, may be removed in future")]
     pub fn set_current_context(&self, context: CapturedContext) {
         let mut ctx = self
             .current_context
@@ -847,55 +848,4 @@ impl AetherCore {
             .unwrap_or_else(|e| e.into_inner());
         *ctx = Some(context);
     }
-
-    // ========================================================================
-    // TEST METHODS
-    // ========================================================================
-
-    /// Test method: Simulate streaming AI response (for development/testing only)
-    #[cfg(debug_assertions)]
-    pub fn test_streaming_response(&self) {
-        use std::thread;
-        use std::time::Duration;
-
-        let chunks = vec![
-            "Hello, ",
-            "this is ",
-            "a streaming ",
-            "AI response. ",
-            "Each chunk ",
-            "appears with ",
-            "a slight delay ",
-            "to demonstrate ",
-            "the streaming ",
-            "text feature.",
-        ];
-
-        self.event_handler
-            .on_state_changed(ProcessingState::Processing);
-
-        for i in 0..chunks.len() {
-            thread::sleep(Duration::from_millis(100));
-            let accumulated: String = chunks[..=i].concat();
-            self.event_handler.on_response_chunk(accumulated);
-        }
-
-        thread::sleep(Duration::from_millis(500));
-        self.event_handler
-            .on_state_changed(ProcessingState::Success);
-    }
-
-    /// Test method: Simulate typed error (for development/testing only)
-    #[cfg(debug_assertions)]
-    pub fn test_typed_error(&self, error_type: ErrorType, message: String) {
-        self.event_handler.on_error_typed(error_type, message);
-    }
-
-    /// Test method: No-op in release mode
-    #[cfg(not(debug_assertions))]
-    pub fn test_streaming_response(&self) {}
-
-    /// Test method: No-op in release mode
-    #[cfg(not(debug_assertions))]
-    pub fn test_typed_error(&self, _error_type: ErrorType, _message: String) {}
 }

@@ -31,17 +31,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Halo overlay window
     private var haloWindow: HaloWindow?
 
-    // Halo window controller (new architecture - will replace direct haloWindow access)
-    private var haloWindowController: HaloWindowController?
-
     // Output coordinator for managing AI response output
     private var outputCoordinator: OutputCoordinator?
 
     // Input coordinator for managing input capture
     private var inputCoordinator: InputCoordinator?
-
-    // Conversation coordinator for managing multi-turn conversations
-    private var conversationCoordinator: ConversationCoordinator?
 
     // Settings window (used by legacy Settings scene and WindowGroup)
     private var settingsWindow: NSWindow?
@@ -56,6 +50,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     // Global hotkey monitor (Swift layer)
     private var hotkeyMonitor: GlobalHotkeyMonitor?
+
+    // Vision hotkey manager for screen capture OCR
+    private var visionHotkeyManager: VisionHotkeyManager?
 
     // Multi-turn conversation hotkey monitors (Cmd+Opt+/)
     // Global monitor for when other apps are active
@@ -130,6 +127,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     func applicationWillTerminate(_ notification: Notification) {
         // Stop hotkey monitoring
         hotkeyMonitor?.stopMonitoring()
+
+        // Stop vision hotkey monitoring
+        visionHotkeyManager?.unregisterHotkeys()
 
         // Stop multi-turn hotkey monitoring
         if let monitor = multiTurnHotkeyGlobalMonitor {
@@ -542,6 +542,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             print("[Aether] Initializing trigger-based hotkey system...")
             initializeTriggerSystem()
 
+            // Initialize vision hotkey manager for screen capture OCR
+            // Hotkeys: Cmd+Shift+Ctrl+3 (full screen), Cmd+Shift+Ctrl+4 (region), Cmd+Shift+Ctrl+5 (window)
+            initializeVisionHotkeys()
+
             // Check if monitoring started successfully
             guard hotkeyMonitor != nil else {
                 print("[Aether] ❌ Failed to initialize trigger system")
@@ -555,20 +559,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // Reset retry count on success
             coreInitRetryCount = 0
 
-            // Configure command completion manager with core reference
+            // Configure coordinators with core reference
             if let core = core {
-                haloWindowController?.configureCore(core)
-                // Configure output coordinator with core and halo window controller
-                outputCoordinator?.configure(core: core, haloWindowController: haloWindowController)
-                // Configure conversation coordinator with core, output coordinator, and halo window controller
-                conversationCoordinator?.configure(core: core, outputCoordinator: outputCoordinator, haloWindowController: haloWindowController)
-                // Configure input coordinator with all dependencies (must be after outputCoordinator and conversationCoordinator)
+                // Configure output coordinator with core and halo window
+                outputCoordinator?.configure(core: core, haloWindow: haloWindow)
+                // Configure input coordinator with all dependencies
                 inputCoordinator?.configure(
                     core: core,
-                    haloWindowController: haloWindowController,
+                    haloWindow: haloWindow,
                     eventHandler: eventHandler,
-                    outputCoordinator: outputCoordinator,
-                    conversationCoordinator: conversationCoordinator
+                    outputCoordinator: outputCoordinator
                 )
             }
             print("[Aether] All coordinators configured")
@@ -773,18 +773,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func initializeAppComponents() {
         print("[Aether] Initializing app components")
 
-        // Create Halo window controller (simplified, no theme engine)
-        haloWindowController = HaloWindowController()
-        haloWindowController?.createWindow()
+        // Create Halo window directly (simplified, no controller wrapper needed)
+        haloWindow = HaloWindow()
 
-        // Keep reference to raw haloWindow for gradual migration
-        haloWindow = haloWindowController?.window
-
-        // Initialize event handler
+        // Initialize event handler with halo window
         eventHandler = EventHandler(haloWindow: haloWindow)
-
-        // Connect event handler to halo window for error action callbacks
-        haloWindowController?.setEventHandler(eventHandler!)
 
         // Initialize output coordinator (will configure with core after Rust core init)
         outputCoordinator = OutputCoordinator()
@@ -792,10 +785,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Initialize input coordinator (will configure with core after Rust core init)
         inputCoordinator = InputCoordinator()
-
-        // Initialize conversation coordinator
-        conversationCoordinator = ConversationCoordinator()
-        conversationCoordinator?.startObserving()
 
         // Start clipboard monitoring for context tracking
         clipboardMonitor.startMonitoring()
@@ -1015,6 +1004,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         hotkeyMonitor?.configureTrigger(replaceKey: replaceKey, appendKey: appendKey)
 
         print("[AppDelegate] Trigger config updated: replace=\(replaceKey.rawValue), append=\(appendKey.rawValue)")
+    }
+
+    // MARK: - Vision Hotkeys
+
+    /// Initialize vision hotkey manager for screen capture OCR
+    ///
+    /// Hotkeys:
+    /// - Cmd+Shift+Ctrl+3: Full screen capture + OCR
+    /// - Cmd+Shift+Ctrl+4: Region selection capture + OCR
+    /// - Cmd+Shift+Ctrl+5: Window capture + OCR
+    private func initializeVisionHotkeys() {
+        visionHotkeyManager = VisionHotkeyManager()
+        visionHotkeyManager?.registerHotkeys()
+        print("[AppDelegate] ✅ Vision hotkeys registered (Cmd+Shift+Ctrl+3/4/5)")
     }
 
     // MARK: - Language Preference

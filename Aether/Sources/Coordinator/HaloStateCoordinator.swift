@@ -53,74 +53,74 @@ protocol HaloStateCoordinatorProtocol: AnyObject {
 
 // MARK: - Default HaloStateCoordinator Implementation
 
-/// Default implementation of HaloStateCoordinator that delegates to HaloWindowController
+/// Default implementation of HaloStateCoordinator that delegates to HaloWindow
 final class DefaultHaloStateCoordinator: HaloStateCoordinatorProtocol {
-    /// Weak reference to HaloWindowController to avoid retain cycles
-    private weak var windowController: HaloWindowController?
+    /// Weak reference to HaloWindow to avoid retain cycles
+    private weak var haloWindow: HaloWindow?
 
-    /// Initialize with a HaloWindowController
-    /// - Parameter windowController: The window controller to coordinate
-    init(windowController: HaloWindowController?) {
-        self.windowController = windowController
+    /// Initialize with a HaloWindow
+    /// - Parameter haloWindow: The Halo window to coordinate
+    init(haloWindow: HaloWindow?) {
+        self.haloWindow = haloWindow
     }
 
-    /// Update the window controller reference
-    /// - Parameter controller: The new window controller
-    func setWindowController(_ controller: HaloWindowController?) {
-        self.windowController = controller
+    /// Update the Halo window reference
+    /// - Parameter haloWindow: The new Halo window
+    func setHaloWindow(_ haloWindow: HaloWindow?) {
+        self.haloWindow = haloWindow
     }
 
     // MARK: - HaloStateCoordinatorProtocol Implementation
 
     func updateState(_ state: HaloState) {
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.windowController?.updateState(state)
+            slf.haloWindow?.updateState(state)
         }
     }
 
     func showCentered() {
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.windowController?.showCentered()
+            slf.haloWindow?.showCentered()
         }
     }
 
     func showAtCurrentPosition() {
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.windowController?.showAtCurrentPosition()
+            slf.haloWindow?.showAtCurrentPosition()
         }
     }
 
     func show(at position: NSPoint) {
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.windowController?.show(at: position)
+            slf.haloWindow?.show(at: position)
         }
     }
 
     func showBelow(at position: NSPoint) {
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.windowController?.showBelow(at: position)
+            slf.haloWindow?.showBelow(at: position)
         }
     }
 
     func hide() {
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.windowController?.hide()
+            slf.haloWindow?.hide()
         }
     }
 
     func forceHide() {
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.windowController?.forceHide()
+            slf.haloWindow?.forceHide()
         }
     }
 
     var showTime: Date? {
-        return windowController?.window?.showTime
+        return haloWindow?.showTime
     }
 
     func updateTypewriterProgress(_ percent: Float) {
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.windowController?.window?.updateTypewriterProgress(percent)
+            slf.haloWindow?.updateTypewriterProgress(percent)
         }
     }
 }

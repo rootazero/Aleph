@@ -13,11 +13,6 @@ fn test_core_creation() {
     assert!(core.is_ok(), "AetherCore should be created successfully");
 }
 
-// REMOVED: test_start_stop_listening, test_multiple_start_stop_cycles
-// Hotkey monitoring has been migrated to Swift layer (GlobalHotkeyMonitor.swift)
-// The is_listening() method always returns false for backward compatibility.
-// See: refactor-native-api-separation proposal
-
 #[test]
 fn test_request_context_storage() {
     let handler = Box::new(MockEventHandler::new());
@@ -84,6 +79,7 @@ fn test_context_capture_and_storage() {
         app_bundle_id: "com.apple.Notes".to_string(),
         window_title: Some("Test Document.txt".to_string()),
         attachments: None,
+        topic_id: None,
     };
     core.set_current_context(context.clone());
 
@@ -188,6 +184,7 @@ fn test_full_aether_core_memory_pipeline() {
         app_bundle_id: "com.apple.Notes".to_string(),
         window_title: Some("Rust Learning.txt".to_string()),
         attachments: None,
+        topic_id: None,
     };
     core.set_current_context(context);
 

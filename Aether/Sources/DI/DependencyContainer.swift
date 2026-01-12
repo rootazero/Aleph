@@ -210,10 +210,10 @@ final class DependencyContainer: ObservableObject {
 
     // MARK: - Coordinators (initialized after core services)
 
-    /// Halo window controller (lazy, requires themeEngine and eventHandler)
-    private var _haloWindowController: HaloWindowController?
-    var haloWindowController: HaloWindowController? {
-        return _haloWindowController
+    /// Halo window (lazy, initialized during coordinator setup)
+    private var _haloWindow: HaloWindow?
+    var haloWindow: HaloWindow? {
+        return _haloWindow
     }
 
     /// Input coordinator (lazy, requires core)
@@ -226,12 +226,6 @@ final class DependencyContainer: ObservableObject {
     private var _outputCoordinator: OutputCoordinator?
     var outputCoordinator: OutputCoordinator? {
         return _outputCoordinator
-    }
-
-    /// Conversation coordinator (lazy, requires input and output coordinators)
-    private var _conversationCoordinator: ConversationCoordinator?
-    var conversationCoordinator: ConversationCoordinator? {
-        return _conversationCoordinator
     }
 
     // MARK: - State
@@ -296,25 +290,17 @@ final class DependencyContainer: ObservableObject {
 
         print("[DependencyContainer] Initializing coordinators...")
 
-        // Create HaloWindowController (no theme engine required)
-        _haloWindowController = HaloWindowController()
-        _haloWindowController?.createWindow()
+        // Create HaloWindow directly (no controller wrapper needed)
+        _haloWindow = HaloWindow()
 
         // Connect event handler to Halo window
         if let eventHandler = eventHandler {
-            _haloWindowController?.setEventHandler(eventHandler)
-            eventHandler.setHaloWindow(_haloWindowController?.window)
-        }
-
-        // Configure command manager with core
-        if let core = core {
-            _haloWindowController?.configureCore(core)
+            eventHandler.setHaloWindow(_haloWindow)
         }
 
         // TODO: Create other coordinators as they are extracted from AppDelegate
         // _inputCoordinator = InputCoordinator(...)
         // _outputCoordinator = OutputCoordinator(...)
-        // _conversationCoordinator = ConversationCoordinator(...)
 
         areCoordinatorsInitialized = true
         print("[DependencyContainer] Coordinators initialized successfully")
@@ -332,10 +318,9 @@ final class DependencyContainer: ObservableObject {
         clipboardMonitor.stopMonitoring()
 
         // Clear coordinators
-        _conversationCoordinator = nil
         _outputCoordinator = nil
         _inputCoordinator = nil
-        _haloWindowController = nil
+        _haloWindow = nil
 
         // Clear core services
         core = nil
@@ -398,5 +383,3 @@ enum DependencyError: LocalizedError {
 // InputCoordinator - Implemented in Coordinator/InputCoordinator.swift
 
 // OutputCoordinator - Implemented in Coordinator/OutputCoordinator.swift
-
-// ConversationCoordinator - Implemented in Coordinator/ConversationCoordinator.swift

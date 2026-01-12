@@ -2,6 +2,8 @@
 //!
 //! Defines configuration options for the vision capability.
 
+use super::prompt::{DEFAULT_DESCRIBE_PROMPT, DEFAULT_OCR_PROMPT, DEFAULT_OCR_WITH_CONTEXT_PROMPT};
+
 /// Vision service configuration
 #[derive(Debug, Clone)]
 pub struct VisionConfig {
@@ -28,9 +30,9 @@ impl Default for VisionConfig {
         Self {
             max_image_dimension: 2048,
             jpeg_quality: 85,
-            ocr_prompt: "Please extract all text from the image, preserving the original format and line breaks. Output only the extracted text without any explanations or additional commentary.".to_string(),
-            describe_prompt: "Please describe the content of this image in detail.".to_string(),
-            ocr_with_context_prompt: "Please extract the text from the image first, then answer the user's question based on the extracted content.\n\nUser question: {prompt}".to_string(),
+            ocr_prompt: DEFAULT_OCR_PROMPT.to_string(),
+            describe_prompt: DEFAULT_DESCRIBE_PROMPT.to_string(),
+            ocr_with_context_prompt: DEFAULT_OCR_WITH_CONTEXT_PROMPT.to_string(),
         }
     }
 }

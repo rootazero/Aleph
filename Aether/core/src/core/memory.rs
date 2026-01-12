@@ -155,6 +155,7 @@ impl AetherCore {
     ///
     /// # Returns
     /// * `Result<u64>` - Number of deleted memories, or error
+    #[deprecated(note = "Not used by Swift layer, may be removed in future")]
     pub fn cleanup_old_memories(&self) -> Result<u64> {
         let cleanup = self
             .cleanup_service
@@ -224,6 +225,7 @@ impl AetherCore {
     ///
     /// # Returns
     /// * `Result<String>` - Memory ID if stored successfully
+    #[deprecated(note = "Not used by Swift layer, may be removed in future")]
     pub fn store_interaction_memory(
         &self,
         user_input: String,
@@ -309,6 +311,7 @@ impl AetherCore {
     /// # Performance
     /// - Includes timing logs for monitoring memory operation overhead
     /// - Target: <150ms total (embedding + search + formatting)
+    #[deprecated(note = "Not used by Swift layer, may be removed in future")]
     pub fn retrieve_and_augment_prompt(
         &self,
         base_prompt: String,

@@ -266,6 +266,7 @@ impl AetherCore {
     ///
     /// This method triggers a refresh of the unified tool registry,
     /// re-aggregating tools from all sources.
+    #[deprecated(note = "Not used by Swift layer, may be removed in future")]
     pub fn refresh_tools(&self) -> Result<()> {
         self.refresh_tool_registry();
         Ok(())

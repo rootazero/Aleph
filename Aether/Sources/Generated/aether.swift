@@ -710,10 +710,6 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func testSearchProviderWithConfig(config: SearchProviderTestConfig) throws  -> ProviderTestResult
     
-    func testStreamingResponse() 
-    
-    func testTypedError(errorType: ErrorType, message: String) 
-    
     func triggerCompression() throws  -> CompressionResult
     
     func updateBehavior(behavior: BehaviorConfig) throws 
@@ -1312,20 +1308,6 @@ open func testSearchProviderWithConfig(config: SearchProviderTestConfig)throws  
         FfiConverterTypeSearchProviderTestConfig.lower(config),$0
     )
 })
-}
-    
-open func testStreamingResponse() {try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_test_streaming_response(self.uniffiClonePointer(),$0
-    )
-}
-}
-    
-open func testTypedError(errorType: ErrorType, message: String) {try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_test_typed_error(self.uniffiClonePointer(),
-        FfiConverterTypeErrorType.lower(errorType),
-        FfiConverterString.lower(message),$0
-    )
-}
 }
     
 open func triggerCompression()throws  -> CompressionResult {
@@ -9006,12 +8988,6 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_test_search_provider_with_config() != 47098) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_test_streaming_response() != 24597) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_test_typed_error() != 18445) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_trigger_compression() != 46260) {

@@ -38,6 +38,7 @@ pub mod ollama;
 pub mod openai;
 pub mod registry;
 pub mod retry;
+pub mod shared;
 
 // Re-exports
 pub use claude::ClaudeProvider;

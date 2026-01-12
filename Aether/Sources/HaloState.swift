@@ -33,9 +33,6 @@ enum HaloState {
     /// Error state with retry/dismiss actions
     case error(type: ErrorType, message: String, suggestion: String?)
 
-    /// Permission required (deprecated - use PermissionGateView)
-    case permissionRequired(type: HaloPermissionType)
-
     /// Toast notification
     case toast(type: ToastType, title: String, message: String, autoDismiss: Bool)
 
@@ -124,8 +121,6 @@ extension HaloState: Equatable {
             return lProgress == rProgress
         case (.error(let lType, let lMsg, let lSug), .error(let rType, let rMsg, let rSug)):
             return lType == rType && lMsg == rMsg && lSug == rSug
-        case (.permissionRequired(let lType), .permissionRequired(let rType)):
-            return lType == rType  // HaloPermissionType is Equatable
         case (.toast(let lType, let lTitle, let lMsg, let lAuto), .toast(let rType, let rTitle, let rMsg, let rAuto)):
             return lType == rType && lTitle == rTitle && lMsg == rMsg && lAuto == rAuto
         case (.clarification(let lReq), .clarification(let rReq)):
@@ -177,12 +172,6 @@ enum ToastType: Equatable {
         case .error: return .red
         }
     }
-}
-
-/// Permission types for Halo UI (deprecated, use PermissionGateView instead)
-enum HaloPermissionType: Equatable {
-    case accessibility
-    case inputMonitoring
 }
 
 /// Halo state callbacks (stored separately for Equatable synthesis)

@@ -173,8 +173,6 @@ dictionary ConversationTurn {
 
 // ===== END MULTI-TURN CONVERSATION =====
 
-// REMOVED: ImageFormat enum - image handling now in Swift layer (ClipboardManager)
-
 // Error types for typed error handling
 enum ErrorType {
   "Network",
@@ -197,24 +195,11 @@ interface AetherCore {
   [Throws=AetherException]
   constructor(AetherEventHandler handler);
 
-  // REMOVED: System API methods (now handled by Swift layer)
-  // - start_listening() / stop_listening() - handled by GlobalHotkeyMonitor
-  // - get_clipboard_text() - handled by ClipboardManager
-  // - has_clipboard_image() / read_clipboard_image() / write_clipboard_image() - handled by ClipboardManager
-  // - is_listening() - no longer needed
-
   // AI PROCESSING METHODS
   // Process input with AI using the complete pipeline: Memory → Router → Provider → Storage
   // This is the main entry point for the new architecture
   [Throws=AetherException]
   string process_input(string user_input, CapturedContext context);
-
-  // TEST METHODS (debug only - for Phase 3 development)
-  // Simulate streaming AI response
-  void test_streaming_response();
-
-  // Simulate typed error
-  void test_typed_error(ErrorType error_type, string message);
 
   // RETRY METHODS (Phase 3 - Error Handling)
   // Retry the last failed request with exponential backoff
@@ -279,8 +264,6 @@ interface AetherCore {
   // This is the main entry point for integrating memory into AI request pipeline
   [Throws=AetherException]
   string retrieve_and_augment_prompt(string base_prompt, string user_input);
-
-  // REMOVED: process_with_ai() - replaced by process_input()
 
   // Manually trigger memory cleanup
   [Throws=AetherException]
@@ -353,11 +336,6 @@ interface AetherCore {
 
   // Get list of all enabled provider names (sorted alphabetically)
   sequence<string> get_enabled_providers();
-
-  // REMOVED: Image clipboard methods - now handled by Swift ClipboardManager
-  // - has_clipboard_image()
-  // - read_clipboard_image()
-  // - write_clipboard_image()
 
   // LOGGING CONTROL METHODS (Phase 7.3 - Logging System)
 
@@ -552,8 +530,6 @@ interface AetherCore {
 callback interface AetherEventHandler {
   // Called when processing state changes
   void on_state_changed(ProcessingState state);
-
-  // REMOVED: on_hotkey_detected() - hotkey handling now in Swift layer
 
   // Called when an error occurs
   void on_error(string message, string? suggestion);

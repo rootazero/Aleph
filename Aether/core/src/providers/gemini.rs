@@ -16,6 +16,9 @@
 /// - `temperature`: Response randomness (0.0-2.0)
 use crate::config::ProviderConfig;
 use crate::error::{AetherError, Result};
+use crate::providers::shared::{
+    build_document_context, combine_with_document_context, separate_attachments,
+};
 use crate::providers::AiProvider;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -229,35 +232,11 @@ impl GeminiProvider {
         system_prompt: Option<&str>,
     ) -> GenerateContentRequest {
         // Separate images and documents
-        let images: Vec<_> = attachments
-            .iter()
-            .filter(|a| a.media_type == "image")
-            .collect();
-        let documents: Vec<_> = attachments
-            .iter()
-            .filter(|a| a.media_type == "document")
-            .collect();
+        let (images, documents) = separate_attachments(attachments);
 
-        // Build document context (prepend to user input)
-        let doc_context = if !documents.is_empty() {
-            documents
-                .iter()
-                .map(|d| {
-                    let name = d.filename.as_deref().unwrap_or("document");
-                    format!("--- {} ---\n{}", name, d.data)
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n")
-        } else {
-            String::new()
-        };
-
-        // Build final input with document context
-        let full_input = if doc_context.is_empty() {
-            input.to_string()
-        } else {
-            format!("{}\n\n{}", doc_context, input)
-        };
+        // Build document context and combine with user input
+        let doc_context = build_document_context(&documents);
+        let full_input = combine_with_document_context(&doc_context, input);
 
         let mut parts = Vec::new();
 
@@ -492,21 +471,9 @@ impl AiProvider for GeminiProvider {
 
             // If only documents (no images), inject document content into text and use text-only request
             if image_count == 0 && document_count > 0 {
-                let documents: Vec<_> = all_attachments
-                    .iter()
-                    .filter(|a| a.media_type == "document")
-                    .collect();
-
-                let doc_context = documents
-                    .iter()
-                    .map(|d| {
-                        let name = d.filename.as_deref().unwrap_or("document");
-                        format!("--- {} ---\n{}", name, d.data)
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-
-                let full_input = format!("{}\n\n{}", doc_context, input);
+                let (_, documents) = separate_attachments(all_attachments);
+                let doc_context = build_document_context(&documents);
+                let full_input = combine_with_document_context(&doc_context, &input);
 
                 debug!(
                     model = %self.config.model,

@@ -120,8 +120,8 @@ final class HaloWindow: NSWindow {
             size = NSSize(width: 360, height: 400)  // Plan confirmation needs more space
         case .planProgress:
             size = NSSize(width: 380, height: 420)  // Plan progress needs most space
-        case .permissionRequired, .conversationInput:
-            size = NSSize(width: 0, height: 0)  // Handled by other windows
+        case .conversationInput:
+            size = NSSize(width: 0, height: 0)  // Handled by MultiTurnInputWindow
         }
 
         setContentSize(size)
@@ -185,6 +185,12 @@ final class HaloWindow: NSWindow {
     /// Show toast centered on screen
     func showToastCentered() {
         showCentered()
+    }
+
+    /// Show toast notification (convenience method)
+    func showToast(type: ToastType, title: String, message: String, autoDismiss: Bool) {
+        updateState(.toast(type: type, title: title, message: message, autoDismiss: autoDismiss))
+        showToastCentered()
     }
 
     /// Show below a specific position

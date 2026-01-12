@@ -61,8 +61,8 @@ final class OutputCoordinator {
     /// Reference to core for config loading
     private weak var core: AetherCore?
 
-    /// Reference to Halo window controller for state updates
-    private weak var haloWindowController: HaloWindowController?
+    /// Reference to Halo window for state updates
+    private weak var haloWindow: HaloWindow?
 
     /// Clipboard manager for paste operations
     private let clipboardManager: any ClipboardManagerProtocol
@@ -100,10 +100,10 @@ final class OutputCoordinator {
     ///
     /// - Parameters:
     ///   - core: AetherCore instance
-    ///   - haloWindowController: HaloWindowController for state updates
-    func configure(core: AetherCore, haloWindowController: HaloWindowController?) {
+    ///   - haloWindow: HaloWindow for state updates
+    func configure(core: AetherCore, haloWindow: HaloWindow?) {
         self.core = core
-        self.haloWindowController = haloWindowController
+        self.haloWindow = haloWindow
     }
 
     // MARK: - Lifecycle
@@ -240,7 +240,7 @@ final class OutputCoordinator {
         print("[OutputCoordinator] ⌨️ Using typewriter mode at \(speed) chars/sec")
 
         typewriterCancellation = CancellationToken()
-        haloWindowController?.hide()
+        haloWindow?.hide()
 
         Task {
             let typedCount = await KeyboardSimulator.shared.typeText(
@@ -292,7 +292,7 @@ final class OutputCoordinator {
 
             // Output complete - hide Halo immediately (success state removed)
             print("[OutputCoordinator] ✅ Output complete, hiding Halo")
-            haloWindowController?.hide()
+            haloWindow?.hide()
 
         case .multiTurn:
             // Post continuation notification
@@ -404,7 +404,7 @@ final class OutputCoordinator {
 
         // Hide Halo immediately (success state removed)
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.haloWindowController?.hide()
+            slf.haloWindow?.hide()
         }
     }
 }

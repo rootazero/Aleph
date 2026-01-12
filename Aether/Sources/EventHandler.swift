@@ -25,6 +25,20 @@ class EventHandler: AetherEventHandler {
         DependencyContainer.shared.conversationManager
     }
 
+    // MARK: - Multi-Turn Mode Detection
+
+    /// Unified check for multi-turn conversation mode
+    ///
+    /// Returns true if either:
+    /// - ConversationManager has an active session (sessionId != nil)
+    /// - MultiTurnCoordinator is in active state
+    ///
+    /// Use this property instead of inline checks to ensure consistency
+    /// and simplify future logic changes.
+    private var isInMultiTurnMode: Bool {
+        conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive
+    }
+
     // Accumulated text for streaming responses
     private var accumulatedText: String = ""
 
@@ -84,9 +98,8 @@ class EventHandler: AetherEventHandler {
         }
 
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            // Skip halo spinner in multi-turn conversation mode
-            // SubPanel handles UI feedback instead
-            if slf.conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
+            // Skip halo in multi-turn mode - SubPanel handles UI feedback
+            guard !slf.isInMultiTurnMode else {
                 print("[EventHandler] Skipping halo error animation (multi-turn mode)")
                 slf.showErrorNotification(message: message, suggestion: suggestion)
                 return
@@ -332,12 +345,9 @@ class EventHandler: AetherEventHandler {
 
     /// Show tool confirmation dialog in Halo
     private func showToolConfirmation(_ confirmation: PendingConfirmationInfo) {
-        // Skip halo spinner in multi-turn conversation mode
-        // SubPanel handles UI feedback instead
-        if conversationManager.sessionId != nil {
+        // Skip halo in multi-turn mode - auto-execute for smoother conversation flow
+        guard !isInMultiTurnMode else {
             print("[EventHandler] Skipping tool confirmation halo (multi-turn mode)")
-            // In multi-turn mode, auto-execute tools without confirmation dialog
-            // This provides a smoother experience for conversation flow
             handleUserConfirmation(confirmationId: confirmation.id, decision: .execute)
             return
         }
@@ -385,8 +395,8 @@ class EventHandler: AetherEventHandler {
     private func handleConfirmationExpired(_ confirmationId: String) {
         print("[EventHandler] Handling expired confirmation: \(confirmationId)")
 
-        // Skip halo operations in multi-turn conversation mode
-        if conversationManager.sessionId != nil {
+        // Skip halo operations in multi-turn mode
+        guard !isInMultiTurnMode else {
             print("[EventHandler] Skipping confirmation expired handling (multi-turn mode)")
             return
         }
@@ -513,51 +523,42 @@ class EventHandler: AetherEventHandler {
             accumulatedText = ""
 
         case .listening:
-            // Skip halo spinner in multi-turn conversation mode
-            // MultiTurnInputWindow handles UI feedback instead
-            if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
+            // Skip halo in multi-turn mode - MultiTurnInputWindow handles UI
+            guard !isInMultiTurnMode else {
                 print("[EventHandler] Skipping listening state (multi-turn mode)")
                 return
             }
-            // Show HaloWindow with listening state
             haloWindow?.updateState(.listening)
             haloWindow?.show(at: NSEvent.mouseLocation)
-            // Reset accumulated text when starting new interaction
             accumulatedText = ""
             announceToVoiceOver("Listening for input")
 
         case .retrievingMemory:
-            // Skip halo spinner in multi-turn conversation mode
-            // MultiTurnInputWindow handles UI feedback instead
-            if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
+            // Skip halo in multi-turn mode
+            guard !isInMultiTurnMode else {
                 print("[EventHandler] Skipping retrievingMemory state (multi-turn mode)")
                 return
             }
-            // Show HaloWindow with retrieving memory state
             haloWindow?.updateState(.retrievingMemory)
             haloWindow?.showAtCurrentPosition()
             announceToVoiceOver("Retrieving memories")
 
         case .processingWithAi:
-            // Skip halo spinner in multi-turn conversation mode
-            // MultiTurnInputWindow handles UI feedback instead
-            if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
+            // Skip halo in multi-turn mode
+            guard !isInMultiTurnMode else {
                 print("[EventHandler] Skipping processing state (multi-turn mode)")
                 return
             }
-            // Update state only - position is controlled by InputCoordinator
             haloWindow?.updateState(.processingWithAI(providerName: nil))
             haloWindow?.showAtCurrentPosition()
             announceToVoiceOver("Processing with AI")
 
         case .processing:
-            // Skip halo spinner in multi-turn conversation mode
-            // MultiTurnInputWindow handles UI feedback instead
-            if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
+            // Skip halo in multi-turn mode
+            guard !isInMultiTurnMode else {
                 print("[EventHandler] Skipping processing state (multi-turn mode)")
                 return
             }
-            // Update state only - position is controlled by InputCoordinator
             haloWindow?.updateState(.processing(streamingText: nil))
             haloWindow?.showAtCurrentPosition()
             announceToVoiceOver("Processing request")
@@ -588,48 +589,36 @@ class EventHandler: AetherEventHandler {
     // MARK: - Streaming Response Handling
 
     private func handleResponseChunk(text: String) {
-        // Accumulate text for potential future use
         accumulatedText = text
 
-        // Skip halo update in multi-turn conversation mode
-        if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
-            return
-        }
+        // Skip halo update in multi-turn mode
+        guard !isInMultiTurnMode else { return }
 
-        // Update HaloWindow with streaming text
         haloWindow?.updateState(.processing(streamingText: text))
-
-        // Update timestamp
         lastUpdateTime = Date()
     }
 
     // MARK: - AI Processing Handling
 
     private func handleAiProcessingStarted(providerName: String, providerColor: String) {
-        // Skip halo spinner in multi-turn conversation mode
-        // SubPanel handles UI feedback instead
-        if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
+        // Skip halo in multi-turn mode - SubPanel handles UI
+        guard !isInMultiTurnMode else {
             print("[EventHandler] AI processing started (multi-turn, no halo): \(providerName)")
             return
         }
 
-        // Update HaloWindow with AI processing state (color removed, using unified purple)
-        _ = providerColor  // Unused parameter
+        _ = providerColor  // Unused (unified purple theme)
         haloWindow?.updateState(.processingWithAI(providerName: providerName))
         haloWindow?.showAtCurrentPosition()
         print("[EventHandler] AI processing started: \(providerName)")
     }
 
     private func handleAiResponseReceived(responsePreview: String) {
-        // Store the response preview for potential future use
         accumulatedText = responsePreview
 
-        // Skip halo update in multi-turn conversation mode
-        if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
-            return
-        }
+        // Skip halo update in multi-turn mode
+        guard !isInMultiTurnMode else { return }
 
-        // Update HaloWindow with response preview
         haloWindow?.updateState(.processing(streamingText: responsePreview))
     }
 

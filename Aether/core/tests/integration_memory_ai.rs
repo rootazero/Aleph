@@ -104,6 +104,7 @@ fn test_process_input_pipeline_structure() {
         app_bundle_id: "com.apple.Notes".to_string(),
         window_title: Some("Test.txt".to_string()),
         attachments: None,
+        topic_id: None,
     };
     core.set_current_context(context.clone());
 
@@ -130,6 +131,7 @@ fn test_memory_augmentation_integration() {
         app_bundle_id: "com.apple.Notes".to_string(),
         window_title: Some("Rust Learning.txt".to_string()),
         attachments: None,
+        topic_id: None,
     };
     core.set_current_context(context);
 
@@ -158,6 +160,7 @@ fn test_context_capture_and_retrieval() {
         app_bundle_id: "com.apple.Notes".to_string(),
         window_title: Some("Document1.txt".to_string()),
         attachments: None,
+        topic_id: None,
     };
     core.set_current_context(context1.clone());
 
@@ -166,6 +169,7 @@ fn test_context_capture_and_retrieval() {
         app_bundle_id: "com.google.Chrome".to_string(),
         window_title: Some("GitHub - Mozilla Firefox".to_string()),
         attachments: None,
+        topic_id: None,
     };
     core.set_current_context(context2.clone());
 
@@ -232,6 +236,7 @@ fn test_ai_pipeline_error_handling() {
         app_bundle_id: "com.test.app".to_string(),
         window_title: Some("Test".to_string()),
         attachments: None,
+        topic_id: None,
     };
     core.set_current_context(context.clone());
 
@@ -261,6 +266,7 @@ fn test_full_pipeline_flow() {
         app_bundle_id: "com.apple.TextEdit".to_string(),
         window_title: Some("Project Notes.txt".to_string()),
         attachments: None,
+        topic_id: None,
     };
     core.set_current_context(context.clone());
 
@@ -309,6 +315,7 @@ fn test_concurrent_context_updates() {
                 app_bundle_id: format!("com.test.app{}", i),
                 window_title: Some(format!("Window{}", i)),
                 attachments: None,
+                topic_id: None,
             };
             core_ref.set_current_context(context);
         });

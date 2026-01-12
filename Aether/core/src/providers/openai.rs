@@ -41,6 +41,10 @@
 /// ```
 use crate::config::ProviderConfig;
 use crate::error::{AetherError, Result};
+use crate::providers::shared::{
+    build_document_context, combine_with_document_context, separate_attachments,
+    should_use_prepend_mode,
+};
 use crate::providers::AiProvider;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -264,15 +268,7 @@ impl OpenAiProvider {
 
         // Check system_prompt_mode: default to prepend for better compatibility
         // Only use standard mode if explicitly set to "standard" OR if force_standard_mode is true
-        let use_prepend_mode = if force_standard_mode {
-            false
-        } else {
-            self.config
-                .system_prompt_mode
-                .as_ref()
-                .map(|m| m.to_lowercase() != "standard")
-                .unwrap_or(true)
-        };
+        let use_prepend_mode = !force_standard_mode && should_use_prepend_mode(&self.config);
 
         if use_prepend_mode {
             // Prepend system prompt to user message (for APIs that ignore system role)
@@ -330,14 +326,7 @@ impl OpenAiProvider {
     ) -> ChatCompletionRequest {
         let mut messages = Vec::new();
 
-        // Check system_prompt_mode: default to prepend for better compatibility
-        // Only use standard mode if explicitly set to "standard"
-        let use_prepend_mode = self
-            .config
-            .system_prompt_mode
-            .as_ref()
-            .map(|m| m.to_lowercase() != "standard")
-            .unwrap_or(true);
+        let use_prepend_mode = should_use_prepend_mode(&self.config);
 
         // Add system prompt if provided and not using prepend mode
         if !use_prepend_mode {
@@ -355,23 +344,7 @@ impl OpenAiProvider {
         let mut content_blocks = Vec::new();
 
         // Determine text content (with prepended system prompt if in prepend mode)
-        let text_content = if use_prepend_mode {
-            if let Some(prompt) = system_prompt {
-                if !input.is_empty() {
-                    format!("{}\n\n{}", prompt, input)
-                } else {
-                    format!("{}\n\nDescribe this image in detail.", prompt)
-                }
-            } else if !input.is_empty() {
-                input.to_string()
-            } else {
-                "Describe this image in detail.".to_string()
-            }
-        } else if !input.is_empty() {
-            input.to_string()
-        } else {
-            "Describe this image in detail.".to_string()
-        };
+        let text_content = Self::build_text_content(input, system_prompt, use_prepend_mode);
 
         content_blocks.push(ContentBlock::Text { text: text_content });
 
@@ -408,14 +381,7 @@ impl OpenAiProvider {
     ) -> ChatCompletionRequest {
         let mut messages = Vec::new();
 
-        // Check system_prompt_mode: default to prepend for better compatibility
-        // Only use standard mode if explicitly set to "standard"
-        let use_prepend_mode = self
-            .config
-            .system_prompt_mode
-            .as_ref()
-            .map(|m| m.to_lowercase() != "standard")
-            .unwrap_or(true);
+        let use_prepend_mode = should_use_prepend_mode(&self.config);
 
         // Add system prompt if provided and not using prepend mode
         if !use_prepend_mode {
@@ -430,35 +396,11 @@ impl OpenAiProvider {
         }
 
         // Separate images and documents
-        let images: Vec<_> = attachments
-            .iter()
-            .filter(|a| a.media_type == "image")
-            .collect();
-        let documents: Vec<_> = attachments
-            .iter()
-            .filter(|a| a.media_type == "document")
-            .collect();
+        let (images, documents) = separate_attachments(attachments);
 
-        // Build document context (prepend to user input)
-        let doc_context = if !documents.is_empty() {
-            documents
-                .iter()
-                .map(|d| {
-                    let name = d.filename.as_deref().unwrap_or("document");
-                    format!("--- {} ---\n{}", name, d.data)
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n")
-        } else {
-            String::new()
-        };
-
-        // Build final input with document context
-        let full_input = if doc_context.is_empty() {
-            input.to_string()
-        } else {
-            format!("{}\n\n{}", doc_context, input)
-        };
+        // Build document context and combine with user input
+        let doc_context = build_document_context(&documents);
+        let full_input = combine_with_document_context(&doc_context, input);
 
         // Build multimodal user message with text and images
         let mut content_blocks = Vec::new();
@@ -775,21 +717,9 @@ impl AiProvider for OpenAiProvider {
             // If only documents (no images), inject document content into text and use text-only request
             // This is important for APIs that don't support multimodal format
             if image_count == 0 && document_count > 0 {
-                let documents: Vec<_> = all_attachments
-                    .iter()
-                    .filter(|a| a.media_type == "document")
-                    .collect();
-
-                let doc_context = documents
-                    .iter()
-                    .map(|d| {
-                        let name = d.filename.as_deref().unwrap_or("document");
-                        format!("--- {} ---\n{}", name, d.data)
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n\n");
-
-                let full_input = format!("{}\n\n{}", doc_context, input);
+                let (_, documents) = separate_attachments(all_attachments);
+                let doc_context = build_document_context(&documents);
+                let full_input = combine_with_document_context(&doc_context, &input);
 
                 debug!(
                     model = %self.config.model,

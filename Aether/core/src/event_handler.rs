@@ -51,8 +51,6 @@ pub trait AetherEventHandler: Send + Sync {
     /// Called when the processing state changes
     fn on_state_changed(&self, state: ProcessingState);
 
-    // REMOVED: on_hotkey_detected() - hotkey handling now in Swift layer
-
     /// Called when an error occurs
     fn on_error(&self, message: String, suggestion: Option<String>);
 
@@ -222,7 +220,6 @@ pub trait AetherEventHandler: Send + Sync {
 #[cfg(test)]
 pub struct MockEventHandler {
     pub state_changes: std::sync::Arc<std::sync::Mutex<Vec<ProcessingState>>>,
-    // REMOVED: hotkey_events - hotkey handling now in Swift layer
     pub errors: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     pub response_chunks: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     pub typed_errors: std::sync::Arc<std::sync::Mutex<Vec<(ErrorType, String)>>>,
@@ -257,7 +254,6 @@ impl MockEventHandler {
     pub fn new() -> Self {
         Self {
             state_changes: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-            // REMOVED: hotkey_events - hotkey handling now in Swift layer
             errors: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             response_chunks: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             typed_errors: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -325,8 +321,6 @@ impl MockEventHandler {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
-
-    // REMOVED: get_hotkey_events() - hotkey handling now in Swift layer
 
     pub fn get_errors(&self) -> Vec<String> {
         self.errors
@@ -450,8 +444,6 @@ impl AetherEventHandler for MockEventHandler {
             .unwrap_or_else(|e| e.into_inner())
             .push(state);
     }
-
-    // REMOVED: on_hotkey_detected() - hotkey handling now in Swift layer
 
     fn on_error(&self, message: String, _suggestion: Option<String>) {
         self.errors
@@ -653,8 +645,6 @@ mod tests {
         assert_eq!(states[0], ProcessingState::Idle);
         assert_eq!(states[1], ProcessingState::Listening);
     }
-
-    // REMOVED: test_mock_handler_hotkey_events - hotkey handling now in Swift layer
 
     #[test]
     fn test_mock_handler_errors() {

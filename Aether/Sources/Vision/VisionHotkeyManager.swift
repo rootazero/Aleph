@@ -11,7 +11,6 @@ import Foundation
 final class VisionHotkeyManager {
     // MARK: - Properties
 
-    private var coordinator: ScreenCaptureCoordinator
     private var eventMonitor: Any?
 
     // MARK: - Hotkey Definitions
@@ -40,8 +39,8 @@ final class VisionHotkeyManager {
 
     // MARK: - Initialization
 
-    init(coordinator: ScreenCaptureCoordinator = .shared) {
-        self.coordinator = coordinator
+    init() {
+        // Coordinator will be lazily accessed on the main actor when needed
     }
 
     // MARK: - Public Methods
@@ -82,7 +81,7 @@ final class VisionHotkeyManager {
            modifiers == Hotkeys.regionCapture.modifiers
         {
             Task { @MainActor in
-                coordinator.startCapture(mode: .region)
+                ScreenCaptureCoordinator.shared.startCapture(mode: .region)
             }
             return true
         }
@@ -92,7 +91,7 @@ final class VisionHotkeyManager {
            modifiers == Hotkeys.windowCapture.modifiers
         {
             Task { @MainActor in
-                coordinator.startCapture(mode: .window)
+                ScreenCaptureCoordinator.shared.startCapture(mode: .window)
             }
             return true
         }
@@ -102,7 +101,7 @@ final class VisionHotkeyManager {
            modifiers == Hotkeys.fullScreenCapture.modifiers
         {
             Task { @MainActor in
-                coordinator.startCapture(mode: .fullScreen)
+                ScreenCaptureCoordinator.shared.startCapture(mode: .fullScreen)
             }
             return true
         }
