@@ -144,6 +144,10 @@ final class MultiTurnInputViewModel: ObservableObject {
         selectedTopicIndex = 0
     }
 
+    func reloadTopics() {
+        loadTopics()
+    }
+
     private func filterTopics(query: String) {
         if query.isEmpty {
             filteredTopics = topics
@@ -153,6 +157,22 @@ final class MultiTurnInputViewModel: ObservableObject {
             }
         }
         selectedTopicIndex = 0
+    }
+
+    // MARK: - Topic Operations
+
+    func deleteTopic(_ topic: Topic) {
+        ConversationStore.shared.deleteTopic(id: topic.id)
+        loadTopics()
+        print("[MultiTurnInputViewModel] Deleted topic: \(topic.title)")
+    }
+
+    func renameTopic(_ topic: Topic, newTitle: String) {
+        let trimmedTitle = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else { return }
+        ConversationStore.shared.updateTopicTitle(id: topic.id, title: trimmedTitle)
+        loadTopics()
+        print("[MultiTurnInputViewModel] Renamed topic: \(topic.id) -> \(trimmedTitle)")
     }
 
     // MARK: - Command Loading
@@ -334,10 +354,17 @@ struct MultiTurnInputView: View {
                             ForEach(Array(viewModel.filteredTopics.enumerated()), id: \.element.id) { index, topic in
                                 TopicRowView(
                                     topic: topic,
-                                    isSelected: index == viewModel.selectedTopicIndex
-                                ) {
-                                    viewModel.selectTopic(topic)
-                                }
+                                    isSelected: index == viewModel.selectedTopicIndex,
+                                    onSelect: {
+                                        viewModel.selectTopic(topic)
+                                    },
+                                    onDelete: {
+                                        viewModel.deleteTopic(topic)
+                                    },
+                                    onRename: { newTitle in
+                                        viewModel.renameTopic(topic, newTitle: newTitle)
+                                    }
+                                )
                                 .id("topic-\(index)")
                             }
                         }
@@ -420,12 +447,38 @@ struct TopicRowView: View {
     let topic: Topic
     let isSelected: Bool
     let onSelect: () -> Void
+    let onDelete: () -> Void
+    let onRename: (String) -> Void
 
     @State private var isHovering = false
+    @State private var isEditing = false
+    @State private var editingTitle: String = ""
+    @FocusState private var isTextFieldFocused: Bool
 
     var body: some View {
-        Button(action: onSelect) {
-            HStack {
+        HStack {
+            if isEditing {
+                // Editing mode: inline text field
+                editingView
+            } else {
+                // Normal mode: display topic info
+                normalView
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background((isHovering || isSelected) ? .white.opacity(0.1) : .clear)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+    }
+
+    // MARK: - Normal View
+
+    private var normalView: some View {
+        HStack {
+            // Topic info - clickable to select
+            Button(action: onSelect) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(topic.title)
                         .font(.system(size: 14))
@@ -435,21 +488,101 @@ struct TopicRowView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+            }
+            .buttonStyle(.plain)
 
-                Spacer()
+            Spacer()
 
+            // Action buttons - visible on hover
+            if isHovering {
+                HStack(spacing: 8) {
+                    // Rename button
+                    Button {
+                        editingTitle = topic.title
+                        isEditing = true
+                        isTextFieldFocused = true
+                    } label: {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 12))
+                            .foregroundColor(.primary.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Rename")
+
+                    // Delete button
+                    Button {
+                        onDelete()
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 12))
+                            .foregroundColor(.red.opacity(0.7))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete")
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
+            } else {
+                // Chevron when not hovering
                 Image(systemName: "chevron.right")
                     .font(.caption)
                     .foregroundColor(.primary.opacity(0.4))
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background((isHovering || isSelected) ? .white.opacity(0.1) : .clear)
         }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            isHovering = hovering
+        .animation(.easeInOut(duration: 0.15), value: isHovering)
+    }
+
+    // MARK: - Editing View
+
+    private var editingView: some View {
+        HStack(spacing: 8) {
+            TextField("Topic title", text: $editingTitle)
+                .textFieldStyle(.plain)
+                .font(.system(size: 14))
+                .focused($isTextFieldFocused)
+                .onSubmit {
+                    commitRename()
+                }
+                .onExitCommand {
+                    cancelEditing()
+                }
+
+            // Confirm button
+            Button {
+                commitRename()
+            } label: {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.green)
+            }
+            .buttonStyle(.plain)
+            .help("Confirm")
+
+            // Cancel button
+            Button {
+                cancelEditing()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Cancel")
         }
+    }
+
+    // MARK: - Actions
+
+    private func commitRename() {
+        let newTitle = editingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !newTitle.isEmpty && newTitle != topic.title {
+            onRename(newTitle)
+        }
+        isEditing = false
+    }
+
+    private func cancelEditing() {
+        isEditing = false
+        editingTitle = topic.title
     }
 
     private func formatDate(_ date: Date) -> String {
