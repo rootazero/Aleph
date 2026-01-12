@@ -54,6 +54,14 @@ final class ScreenCaptureCoordinator: ObservableObject {
             return
         }
 
+        // Permission pre-check: Verify Screen Recording permission BEFORE creating overlay
+        // This provides better UX by showing error immediately instead of after user selection
+        guard PermissionChecker.hasScreenRecordingPermission() else {
+            print("[ScreenCaptureCoordinator] Screen Recording permission not granted")
+            showPermissionRequiredError()
+            return
+        }
+
         // CRITICAL: Set isCapturing IMMEDIATELY after guard to prevent race conditions
         // This must happen before any async work or UI setup to prevent double-entry
         // when hotkey is pressed rapidly
@@ -344,6 +352,26 @@ final class ScreenCaptureCoordinator: ObservableObject {
             message: message,
             autoDismiss: true
         )
+    }
+
+    /// Show permission required error and open System Settings
+    private func showPermissionRequiredError() {
+        guard let appDelegate = NSApplication.shared.delegate as? AppDelegate,
+              let haloWindow = appDelegate.getHaloWindow()
+        else {
+            return
+        }
+
+        // Show error toast with guidance
+        haloWindow.showToast(
+            type: .error,
+            title: L("ocr.permission_required_title"),
+            message: L("ocr.permission_required_message"),
+            autoDismiss: false  // Keep visible so user can read
+        )
+
+        // Open System Settings to Screen Recording permission page
+        PermissionChecker.openSystemSettings(for: .screenRecording)
     }
 
     // MARK: - Helper Methods

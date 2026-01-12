@@ -791,3 +791,5 @@
 "ocr.success_message" = "Extracted %d characters. Ready to paste.";
 "ocr.error_title" = "Recognition Failed";
 "ocr.no_text_found" = "No text found in the selected area";
+"ocr.permission_required_title" = "Screen Recording Permission Required";
+"ocr.permission_required_message" = "Please grant Screen Recording permission in System Settings to use OCR.";

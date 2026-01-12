@@ -793,3 +793,5 @@
 "ocr.success_message" = "已提取 %d 个字符，可以粘贴了";
 "ocr.error_title" = "识别失败";
 "ocr.no_text_found" = "所选区域未找到文字";
+"ocr.permission_required_title" = "需要屏幕录制权限";
+"ocr.permission_required_message" = "请在系统设置中授予屏幕录制权限以使用 OCR 功能。";
