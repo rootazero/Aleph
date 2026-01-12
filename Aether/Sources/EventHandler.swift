@@ -635,19 +635,14 @@ class EventHandler: AetherEventHandler {
     func handleRetry() {
         print("[EventHandler] Retry requested")
 
-        guard let core = core else {
+        guard core != nil else {
             print("[EventHandler] Error: No AetherCore reference to retry")
             return
         }
 
-        do {
-            try core.retryLastRequest()
-            print("[EventHandler] Retry initiated successfully")
-        } catch {
-            print("[EventHandler] Retry failed: \(error)")
-            // Show error message
-            handleTypedError(errorType: .unknown, message: "Retry failed: \(error.localizedDescription)")
-        }
+        // TODO: Implement retry - retryLastRequest not yet exported to UniFFI
+        print("[EventHandler] Retry not yet implemented")
+        handleTypedError(errorType: .unknown, message: "Retry feature not yet available")
     }
 
     /// Handle open settings action from ErrorActionView

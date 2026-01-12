@@ -4,38 +4,17 @@ import Foundation
 
 /// Manager for vision-related hotkeys
 ///
-/// Handles registration and dispatch of screen capture hotkeys:
-/// - Cmd+Shift+4: Region capture
-/// - Cmd+Shift+Option+4: Window capture
-/// - Cmd+Shift+3: Full screen capture
+/// Handles registration and dispatch of screen capture hotkey:
+/// - Default: Cmd+Shift+Control+4: Region capture (configurable)
 final class VisionHotkeyManager {
     // MARK: - Properties
 
-    private var eventMonitor: Any?
+    private var localEventMonitor: Any?
+    private var globalEventMonitor: Any?
 
-    // MARK: - Hotkey Definitions
-
-    /// Default hotkey configurations
-    /// Note: These use different keys to avoid conflict with system shortcuts
-    struct Hotkeys {
-        /// Region capture: Cmd+Shift+Control+4
-        static let regionCapture = (
-            keyCode: UInt16(kVK_ANSI_4),
-            modifiers: NSEvent.ModifierFlags([.command, .shift, .control])
-        )
-
-        /// Window capture: Cmd+Shift+Control+5
-        static let windowCapture = (
-            keyCode: UInt16(kVK_ANSI_5),
-            modifiers: NSEvent.ModifierFlags([.command, .shift, .control])
-        )
-
-        /// Full screen capture: Cmd+Shift+Control+3
-        static let fullScreenCapture = (
-            keyCode: UInt16(kVK_ANSI_3),
-            modifiers: NSEvent.ModifierFlags([.command, .shift, .control])
-        )
-    }
+    // Configurable hotkey (default: Cmd+Shift+Control+4)
+    private var ocrKeyCode: UInt16 = UInt16(kVK_ANSI_4)
+    private var ocrModifiers: NSEvent.ModifierFlags = [.command, .shift, .control]
 
     // MARK: - Initialization
 
@@ -45,10 +24,10 @@ final class VisionHotkeyManager {
 
     // MARK: - Public Methods
 
-    /// Register all vision hotkeys
+    /// Register vision hotkey
     func registerHotkeys() {
         // Use local event monitor for key events
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if self?.handleKeyEvent(event) == true {
                 return nil // Consume the event
             }
@@ -56,17 +35,30 @@ final class VisionHotkeyManager {
         }
 
         // Also register global monitor for when app is not focused
-        NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleKeyEvent(event)
         }
     }
 
-    /// Unregister all vision hotkeys
+    /// Unregister vision hotkey
     func unregisterHotkeys() {
-        if let monitor = eventMonitor {
+        if let monitor = localEventMonitor {
             NSEvent.removeMonitor(monitor)
-            eventMonitor = nil
+            localEventMonitor = nil
         }
+        if let monitor = globalEventMonitor {
+            NSEvent.removeMonitor(monitor)
+            globalEventMonitor = nil
+        }
+    }
+
+    /// Update hotkey from configuration
+    /// - Parameter config: ShortcutsConfig containing ocr_capture setting
+    func updateHotkey(from config: ShortcutsConfig) {
+        let parsed = parseHotkeyString(config.ocrCapture)
+        ocrKeyCode = parsed.keyCode
+        ocrModifiers = parsed.modifiers
+        print("[VisionHotkeyManager] Updated OCR hotkey: \(config.ocrCapture)")
     }
 
     // MARK: - Private Methods
@@ -76,36 +68,97 @@ final class VisionHotkeyManager {
         let keyCode = event.keyCode
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
-        // Check for region capture hotkey
-        if keyCode == Hotkeys.regionCapture.keyCode,
-           modifiers == Hotkeys.regionCapture.modifiers
-        {
+        // Check for OCR capture hotkey
+        if keyCode == ocrKeyCode, modifiers == ocrModifiers {
             Task { @MainActor in
                 ScreenCaptureCoordinator.shared.startCapture(mode: .region)
             }
             return true
         }
 
-        // Check for window capture hotkey
-        if keyCode == Hotkeys.windowCapture.keyCode,
-           modifiers == Hotkeys.windowCapture.modifiers
-        {
-            Task { @MainActor in
-                ScreenCaptureCoordinator.shared.startCapture(mode: .window)
-            }
-            return true
-        }
-
-        // Check for full screen capture hotkey
-        if keyCode == Hotkeys.fullScreenCapture.keyCode,
-           modifiers == Hotkeys.fullScreenCapture.modifiers
-        {
-            Task { @MainActor in
-                ScreenCaptureCoordinator.shared.startCapture(mode: .fullScreen)
-            }
-            return true
-        }
-
         return false
+    }
+
+    /// Parse hotkey string (e.g., "Command+Shift+Control+4") into keyCode and modifiers
+    private func parseHotkeyString(_ hotkeyString: String) -> (keyCode: UInt16, modifiers: NSEvent.ModifierFlags) {
+        let parts = hotkeyString.split(separator: "+").map { String($0) }
+
+        var modifiers: NSEvent.ModifierFlags = []
+        var keyCode: UInt16 = UInt16(kVK_ANSI_4) // Default
+
+        for part in parts {
+            switch part.lowercased() {
+            case "command", "cmd":
+                modifiers.insert(.command)
+            case "shift":
+                modifiers.insert(.shift)
+            case "control", "ctrl":
+                modifiers.insert(.control)
+            case "option", "alt":
+                modifiers.insert(.option)
+            default:
+                // Try to parse as key
+                keyCode = keyCodeFor(part)
+            }
+        }
+
+        return (keyCode, modifiers)
+    }
+
+    /// Convert key string to keyCode
+    private func keyCodeFor(_ key: String) -> UInt16 {
+        switch key.lowercased() {
+        // Number keys
+        case "0": return UInt16(kVK_ANSI_0)
+        case "1": return UInt16(kVK_ANSI_1)
+        case "2": return UInt16(kVK_ANSI_2)
+        case "3": return UInt16(kVK_ANSI_3)
+        case "4": return UInt16(kVK_ANSI_4)
+        case "5": return UInt16(kVK_ANSI_5)
+        case "6": return UInt16(kVK_ANSI_6)
+        case "7": return UInt16(kVK_ANSI_7)
+        case "8": return UInt16(kVK_ANSI_8)
+        case "9": return UInt16(kVK_ANSI_9)
+
+        // Letter keys
+        case "a": return UInt16(kVK_ANSI_A)
+        case "b": return UInt16(kVK_ANSI_B)
+        case "c": return UInt16(kVK_ANSI_C)
+        case "d": return UInt16(kVK_ANSI_D)
+        case "e": return UInt16(kVK_ANSI_E)
+        case "f": return UInt16(kVK_ANSI_F)
+        case "g": return UInt16(kVK_ANSI_G)
+        case "h": return UInt16(kVK_ANSI_H)
+        case "i": return UInt16(kVK_ANSI_I)
+        case "j": return UInt16(kVK_ANSI_J)
+        case "k": return UInt16(kVK_ANSI_K)
+        case "l": return UInt16(kVK_ANSI_L)
+        case "m": return UInt16(kVK_ANSI_M)
+        case "n": return UInt16(kVK_ANSI_N)
+        case "o": return UInt16(kVK_ANSI_O)
+        case "p": return UInt16(kVK_ANSI_P)
+        case "q": return UInt16(kVK_ANSI_Q)
+        case "r": return UInt16(kVK_ANSI_R)
+        case "s": return UInt16(kVK_ANSI_S)
+        case "t": return UInt16(kVK_ANSI_T)
+        case "u": return UInt16(kVK_ANSI_U)
+        case "v": return UInt16(kVK_ANSI_V)
+        case "w": return UInt16(kVK_ANSI_W)
+        case "x": return UInt16(kVK_ANSI_X)
+        case "y": return UInt16(kVK_ANSI_Y)
+        case "z": return UInt16(kVK_ANSI_Z)
+
+        // Symbol keys
+        case "/": return 44  // kVK_ANSI_Slash
+        case "`", "grave": return 50  // kVK_ANSI_Grave
+        case "\\": return 42  // kVK_ANSI_Backslash
+        case ";": return 41  // kVK_ANSI_Semicolon
+        case ",": return 43  // kVK_ANSI_Comma
+        case ".": return 47  // kVK_ANSI_Period
+        case "space": return 49  // kVK_Space
+
+        default:
+            return UInt16(kVK_ANSI_4) // Default to 4
+        }
     }
 }

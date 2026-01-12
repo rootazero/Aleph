@@ -63,6 +63,7 @@
 "settings.general.version" = "版本：";
 "settings.general.coming_soon" = "即将推出";
 "settings.general.coming_soon_message" = "%@ 将在未来的更新中推出。";
+"settings.general.command_completion" = "会话窗口";
 
 // MARK: - Settings Window - Unified Save Bar (NEW)
 "settings.save_bar.all_changes_saved" = "所有更改已保存";
@@ -245,6 +246,10 @@
 "settings.shortcuts.command_completion_description" = "按下热键打开会话窗口，支持多轮对话和命令补全。";
 "settings.shortcuts.command_completion_title" = "会话窗口";
 "settings.shortcuts.command_completion_hint" = "打开多轮对话窗口";
+"settings.shortcuts.ocr_capture" = "屏幕OCR";
+"settings.shortcuts.ocr_capture_description" = "按下热键截取屏幕区域并使用OCR提取文字。";
+"settings.shortcuts.ocr_capture_title" = "区域截图OCR";
+"settings.shortcuts.ocr_capture_hint" = "选择区域并提取文字";
 
 // MARK: - Hotkey Display
 "hotkey.double_tap_shift" = "双击 Shift";
@@ -776,3 +781,10 @@
 "plan.safety.reversible" = "可逆";
 "plan.safety.low_risk" = "低风险";
 "plan.safety.high_risk" = "高风险";
+
+// MARK: - OCR (Screen Capture Text Recognition)
+"ocr.processing" = "正在识别文字...";
+"ocr.success_title" = "文字识别完成";
+"ocr.success_message" = "已提取 %d 个字符，可以粘贴了";
+"ocr.error_title" = "识别失败";
+"ocr.no_text_found" = "所选区域未找到文字";

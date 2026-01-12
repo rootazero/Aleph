@@ -840,7 +840,6 @@ impl AetherCore {
     // ========================================================================
 
     /// Set the current context (called from Swift when user triggers action)
-    #[deprecated(note = "Not used by Swift layer, may be removed in future")]
     pub fn set_current_context(&self, context: CapturedContext) {
         let mut ctx = self
             .current_context

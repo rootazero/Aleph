@@ -817,6 +817,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         updateMultiTurnHotkeyConfig(shortcuts)
     }
 
+    /// Update OCR capture hotkey configuration at runtime
+    func updateOcrCaptureHotkey(_ shortcuts: ShortcutsConfig) {
+        visionHotkeyManager?.updateHotkey(from: shortcuts)
+    }
+
+    /// Get HaloWindow for external components (e.g., OCR feedback)
+    func getHaloWindow() -> HaloWindow? {
+        return haloWindow
+    }
+
     // MARK: - Multi-Turn Hotkey Configuration
 
     /// Multi-turn hotkey modifiers (default: Cmd+Opt)
@@ -1010,14 +1020,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Initialize vision hotkey manager for screen capture OCR
     ///
-    /// Hotkeys:
-    /// - Cmd+Shift+Ctrl+3: Full screen capture + OCR
-    /// - Cmd+Shift+Ctrl+4: Region selection capture + OCR
-    /// - Cmd+Shift+Ctrl+5: Window capture + OCR
+    /// Default hotkey: Cmd+Shift+Ctrl+4 (Region selection capture + OCR)
+    /// Configurable via Settings → Shortcuts
     private func initializeVisionHotkeys() {
         visionHotkeyManager = VisionHotkeyManager()
+
+        // Load hotkey configuration from config
+        if let core = core {
+            Task {
+                do {
+                    let config = try core.loadConfig()
+                    if let shortcuts = config.shortcuts {
+                        await MainActor.run {
+                            visionHotkeyManager?.updateHotkey(from: shortcuts)
+                        }
+                    }
+                } catch {
+                    print("[AppDelegate] Failed to load OCR hotkey config: \(error)")
+                }
+            }
+        }
+
         visionHotkeyManager?.registerHotkeys()
-        print("[AppDelegate] ✅ Vision hotkeys registered (Cmd+Shift+Ctrl+3/4/5)")
+        print("[AppDelegate] ✅ Vision hotkey registered")
     }
 
     // MARK: - Language Preference

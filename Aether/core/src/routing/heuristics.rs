@@ -196,8 +196,8 @@ mod tests {
         // "Translate this document to English, then summarize the key points"
         let result = QuickHeuristics::analyze("把这个文档翻译成英文，然后总结要点");
         assert!(result.is_likely_multi_step);
-        assert!(result.action_count >= 2); // 翻译, 总结
-        assert!(result.has_connector); // 然后
+        assert!(result.action_count >= 2); // translate, summarize
+        assert!(result.has_connector); // "then" connector
     }
 
     #[test]
@@ -214,7 +214,7 @@ mod tests {
         // "Translate this text"
         let result = QuickHeuristics::analyze("翻译这段文字");
         assert!(!result.is_likely_multi_step);
-        assert_eq!(result.action_count, 1); // 翻译
+        assert_eq!(result.action_count, 1); // translate
         assert!(!result.has_connector);
     }
 
@@ -231,8 +231,8 @@ mod tests {
         // "Then translate it" - connector + 1 action
         let result = QuickHeuristics::analyze("然后翻译它");
         assert!(result.is_likely_multi_step);
-        assert!(result.has_connector); // 然后
-        assert_eq!(result.action_count, 1); // 翻译
+        assert!(result.has_connector); // "then" connector
+        assert_eq!(result.action_count, 1); // translate
     }
 
     #[test]
@@ -253,11 +253,11 @@ mod tests {
 
     #[test]
     fn test_mixed_language() {
-        // "Search then 总结"
+        // Mixed language: "search" + Chinese "then summarize"
         let result = QuickHeuristics::analyze("search然后总结");
         assert!(result.is_likely_multi_step);
-        assert!(result.action_count >= 2); // search, 总结
-        assert!(result.has_connector); // 然后
+        assert!(result.action_count >= 2); // search, summarize
+        assert!(result.has_connector); // "then" connector
     }
 
     #[test]

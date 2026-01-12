@@ -2,6 +2,8 @@
 //!
 //! This module contains all unit tests for the core module.
 
+#![allow(deprecated)]
+
 use super::types::CapturedContext;
 use super::AetherCore;
 use crate::event_handler::MockEventHandler;

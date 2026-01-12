@@ -584,8 +584,6 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func cleanupExpiredConfirmations()  -> UInt32
     
-    func cleanupOldMemories() throws  -> UInt64
-    
     func clearFacts() throws  -> UInt64
     
     func clearMemories(appBundleId: String?, windowTitle: String?) throws  -> UInt64
@@ -679,12 +677,6 @@ public protocol AetherCoreProtocol : AnyObject {
     func processInput(userInput: String, context: CapturedContext) throws  -> String
     
     func processVision(request: VisionRequest) async throws  -> VisionResult
-    
-    func refreshTools() throws 
-    
-    func retrieveAndAugmentPrompt(basePrompt: String, userInput: String) throws  -> String
-    
-    func retryLastRequest() throws 
     
     func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32) throws  -> [MemoryEntry]
     
@@ -812,13 +804,6 @@ open func cancelConfirmation(confirmationId: String) -> Bool {
 open func cleanupExpiredConfirmations() -> UInt32 {
     return try!  FfiConverterUInt32.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_cleanup_expired_confirmations(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func cleanupOldMemories()throws  -> UInt64 {
-    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_cleanup_old_memories(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -1189,27 +1174,6 @@ open func processVision(request: VisionRequest)async throws  -> VisionResult {
             liftFunc: FfiConverterTypeVisionResult.lift,
             errorHandler: FfiConverterTypeAetherException.lift
         )
-}
-    
-open func refreshTools()throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_refresh_tools(self.uniffiClonePointer(),$0
-    )
-}
-}
-    
-open func retrieveAndAugmentPrompt(basePrompt: String, userInput: String)throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_retrieve_and_augment_prompt(self.uniffiClonePointer(),
-        FfiConverterString.lower(basePrompt),
-        FfiConverterString.lower(userInput),$0
-    )
-})
-}
-    
-open func retryLastRequest()throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_retry_last_request(self.uniffiClonePointer(),$0
-    )
-}
 }
     
 open func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32)throws  -> [MemoryEntry] {
@@ -5005,13 +4969,15 @@ public struct ShortcutsConfig {
     public var summon: String
     public var cancel: String?
     public var commandPrompt: String
+    public var ocrCapture: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(summon: String, cancel: String?, commandPrompt: String) {
+    public init(summon: String, cancel: String?, commandPrompt: String, ocrCapture: String) {
         self.summon = summon
         self.cancel = cancel
         self.commandPrompt = commandPrompt
+        self.ocrCapture = ocrCapture
     }
 }
 
@@ -5028,6 +4994,9 @@ extension ShortcutsConfig: Equatable, Hashable {
         if lhs.commandPrompt != rhs.commandPrompt {
             return false
         }
+        if lhs.ocrCapture != rhs.ocrCapture {
+            return false
+        }
         return true
     }
 
@@ -5035,6 +5004,7 @@ extension ShortcutsConfig: Equatable, Hashable {
         hasher.combine(summon)
         hasher.combine(cancel)
         hasher.combine(commandPrompt)
+        hasher.combine(ocrCapture)
     }
 }
 
@@ -5048,7 +5018,8 @@ public struct FfiConverterTypeShortcutsConfig: FfiConverterRustBuffer {
             try ShortcutsConfig(
                 summon: FfiConverterString.read(from: &buf), 
                 cancel: FfiConverterOptionString.read(from: &buf), 
-                commandPrompt: FfiConverterString.read(from: &buf)
+                commandPrompt: FfiConverterString.read(from: &buf), 
+                ocrCapture: FfiConverterString.read(from: &buf)
         )
     }
 
@@ -5056,6 +5027,7 @@ public struct FfiConverterTypeShortcutsConfig: FfiConverterRustBuffer {
         FfiConverterString.write(value.summon, into: &buf)
         FfiConverterOptionString.write(value.cancel, into: &buf)
         FfiConverterString.write(value.commandPrompt, into: &buf)
+        FfiConverterString.write(value.ocrCapture, into: &buf)
     }
 }
 
@@ -8801,9 +8773,6 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_cleanup_expired_confirmations() != 8982) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_cleanup_old_memories() != 47692) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_aethecore_checksum_method_aethercore_clear_facts() != 35773) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8943,15 +8912,6 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_process_vision() != 25227) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_refresh_tools() != 51434) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_retrieve_and_augment_prompt() != 61661) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_retry_last_request() != 30016) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_search_memories() != 31229) {

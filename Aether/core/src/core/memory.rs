@@ -225,7 +225,6 @@ impl AetherCore {
     ///
     /// # Returns
     /// * `Result<String>` - Memory ID if stored successfully
-    #[deprecated(note = "Not used by Swift layer, may be removed in future")]
     pub fn store_interaction_memory(
         &self,
         user_input: String,

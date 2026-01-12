@@ -1,12 +1,15 @@
-/// Integration tests for Memory + AI Pipeline (Phase 6)
-///
-/// These tests verify the complete flow:
-/// 1. Context capture
-/// 2. Memory retrieval
-/// 3. Prompt augmentation
-/// 4. Router selection
-/// 5. Provider execution
-/// 6. Memory storage
+//! Integration tests for Memory + AI Pipeline (Phase 6)
+//!
+//! These tests verify the complete flow:
+//! 1. Context capture
+//! 2. Memory retrieval
+//! 3. Prompt augmentation
+//! 4. Router selection
+//! 5. Provider execution
+//! 6. Memory storage
+
+#![allow(deprecated)]
+
 use aethecore::{
     AetherCore, AetherEventHandler, CapturedContext, Config, MemoryConfig, ProcessingState,
     ProviderConfig, RoutingRuleConfig,

@@ -63,6 +63,7 @@
 "settings.general.version" = "Version:";
 "settings.general.coming_soon" = "Coming Soon";
 "settings.general.coming_soon_message" = "%@ will be available in a future update.";
+"settings.general.command_completion" = "Conversation Window";
 
 // MARK: - Settings Window - Unified Save Bar (NEW)
 "settings.save_bar.all_changes_saved" = "All changes saved";
@@ -245,6 +246,10 @@
 "settings.shortcuts.command_completion_description" = "Press the hotkey to open the conversation window for multi-turn dialogue and commands.";
 "settings.shortcuts.command_completion_title" = "Conversation Window";
 "settings.shortcuts.command_completion_hint" = "Open multi-turn conversation window";
+"settings.shortcuts.ocr_capture" = "Screen OCR";
+"settings.shortcuts.ocr_capture_description" = "Press the hotkey to capture a screen region and extract text using OCR.";
+"settings.shortcuts.ocr_capture_title" = "Region Capture OCR";
+"settings.shortcuts.ocr_capture_hint" = "Select a region and extract text";
 
 // MARK: - Hotkey Display
 "hotkey.double_tap_shift" = "Double-tap Shift";
@@ -774,3 +779,10 @@
 "plan.safety.reversible" = "Reversible";
 "plan.safety.low_risk" = "Low Risk";
 "plan.safety.high_risk" = "High Risk";
+
+// MARK: - OCR (Screen Capture Text Recognition)
+"ocr.processing" = "Recognizing text...";
+"ocr.success_title" = "Text Recognized";
+"ocr.success_message" = "Extracted %d characters. Ready to paste.";
+"ocr.error_title" = "Recognition Failed";
+"ocr.no_text_found" = "No text found in the selected area";

@@ -20,6 +20,7 @@ enum ScreenCaptureMode {
 /// - Displaying the region selection overlay
 /// - Capturing windows and full screen using ScreenCaptureKit
 /// - Processing captured images through Rust vision service
+/// - Showing HaloWindow feedback during OCR processing
 @MainActor
 final class ScreenCaptureCoordinator: ObservableObject {
     // MARK: - Published Properties
@@ -227,26 +228,38 @@ final class ScreenCaptureCoordinator: ObservableObject {
             return
         }
 
+        // Show HaloWindow with processing state
+        showHaloProcessing()
+
         // Process through Rust vision service
         Task {
             do {
                 let result = try await extractTextFromImage(pngData: pngData)
 
-                // Copy result to clipboard
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(result, forType: .string)
+                // Check if OCR returned empty or whitespace-only result
+                let trimmedResult = result.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmedResult.isEmpty {
+                    // No text found
+                    showHaloError(message: L("ocr.no_text_found"))
+                    lastError = L("ocr.no_text_found")
+                    isCapturing = false
+                    return
+                }
 
-                lastResult = result
+                // Copy OCR result text to clipboard (NOT the image)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(trimmedResult, forType: .string)
+
+                lastResult = trimmedResult
                 isCapturing = false
 
-                // Show notification
-                await showNotification(
-                    title: "Text Extracted",
-                    body: "Extracted \(result.count) characters. Copied to clipboard."
-                )
+                // Show success feedback via HaloWindow
+                showHaloSuccess(characterCount: trimmedResult.count)
+
             } catch {
                 lastError = error.localizedDescription
                 isCapturing = false
+                showHaloError(message: error.localizedDescription)
             }
         }
     }
@@ -269,37 +282,58 @@ final class ScreenCaptureCoordinator: ObservableObject {
         return try await core.extractText(imageData: imageBytes)
     }
 
+    // MARK: - HaloWindow Feedback
+
+    /// Show HaloWindow with processing state for OCR
+    private func showHaloProcessing() {
+        guard let appDelegate = NSApplication.shared.delegate as? AppDelegate,
+              let haloWindow = appDelegate.getHaloWindow()
+        else {
+            return
+        }
+
+        haloWindow.updateState(.processing(streamingText: L("ocr.processing")))
+        haloWindow.showCentered()
+    }
+
+    /// Show HaloWindow success toast
+    private func showHaloSuccess(characterCount: Int) {
+        guard let appDelegate = NSApplication.shared.delegate as? AppDelegate,
+              let haloWindow = appDelegate.getHaloWindow()
+        else {
+            return
+        }
+
+        let message = String(format: L("ocr.success_message"), characterCount)
+        haloWindow.showToast(
+            type: .info,
+            title: L("ocr.success_title"),
+            message: message,
+            autoDismiss: true
+        )
+    }
+
+    /// Show HaloWindow error toast
+    private func showHaloError(message: String) {
+        guard let appDelegate = NSApplication.shared.delegate as? AppDelegate,
+              let haloWindow = appDelegate.getHaloWindow()
+        else {
+            return
+        }
+
+        haloWindow.showToast(
+            type: .error,
+            title: L("ocr.error_title"),
+            message: message,
+            autoDismiss: true
+        )
+    }
+
     // MARK: - Helper Methods
 
     private func dismissOverlay() {
         overlayWindow?.close()
         overlayWindow = nil
         overlayView = nil
-    }
-
-    private func showNotification(title: String, body: String) async {
-        let center = UNUserNotificationCenter.current()
-
-        // Request permission if needed
-        let settings = await center.notificationSettings()
-        if settings.authorizationStatus == .notDetermined {
-            _ = try? await center.requestAuthorization(options: [.alert, .sound])
-        }
-
-        // Create notification content
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        content.sound = .default
-
-        // Create request
-        let request = UNNotificationRequest(
-            identifier: UUID().uuidString,
-            content: content,
-            trigger: nil
-        )
-
-        // Add notification
-        try? await center.add(request)
     }
 }
