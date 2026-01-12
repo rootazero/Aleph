@@ -41,9 +41,9 @@ struct AdaptiveGlassModifier: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 26, *) {
             // macOS 26+: Use native Liquid Glass effect managed by system
-            // .regular provides the standard glass appearance that adapts to system settings
+            // .clear provides a lighter glass appearance with less visible border
             content
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         } else {
             // Fallback for earlier versions: Use VisualEffectBackground
             content
