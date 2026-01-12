@@ -45,6 +45,12 @@ final class ScreenCaptureCoordinator: ObservableObject {
 
     /// Start screen capture with the specified mode
     func startCapture(mode: ScreenCaptureMode) {
+        // Prevent reentry - if already capturing, ignore the request
+        guard !isCapturing else {
+            print("[ScreenCaptureCoordinator] Capture already in progress, ignoring request")
+            return
+        }
+
         captureMode = mode
         lastResult = nil
         lastError = nil
@@ -332,8 +338,15 @@ final class ScreenCaptureCoordinator: ObservableObject {
     // MARK: - Helper Methods
 
     private func dismissOverlay() {
+        // First, clear the content view to avoid release issues
+        // This ensures the overlay view is properly released before window closes
+        if let window = overlayWindow {
+            window.contentView = nil
+        }
+        overlayView = nil
+
+        // Then close and release the window
         overlayWindow?.close()
         overlayWindow = nil
-        overlayView = nil
     }
 }

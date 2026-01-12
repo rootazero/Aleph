@@ -46,6 +46,17 @@ final class ScreenCaptureOverlayView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        // Clean up tracking area before deallocation
+        if let area = trackingArea {
+            removeTrackingArea(area)
+            trackingArea = nil
+        }
+        // Clear callbacks to break any retain cycles
+        onComplete = nil
+        onCancel = nil
+    }
+
     // MARK: - Setup
 
     private func setupView() {

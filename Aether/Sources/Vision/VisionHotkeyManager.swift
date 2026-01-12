@@ -71,6 +71,11 @@ final class VisionHotkeyManager {
         // Check for OCR capture hotkey
         if keyCode == ocrKeyCode, modifiers == ocrModifiers {
             Task { @MainActor in
+                // Check if capture is already in progress before starting
+                guard !ScreenCaptureCoordinator.shared.isCapturing else {
+                    print("[VisionHotkeyManager] Capture already in progress, ignoring hotkey")
+                    return
+                }
                 ScreenCaptureCoordinator.shared.startCapture(mode: .region)
             }
             return true
