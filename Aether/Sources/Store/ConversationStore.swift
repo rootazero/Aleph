@@ -78,4 +78,92 @@ final class ConversationStore {
             try db.create(index: "idx_topics_updated", on: "topics", columns: ["updatedAt"], ifNotExists: true)
         }
     }
+
+    // MARK: - Topic Operations
+
+    /// Create a new topic
+    func createTopic(title: String = "New Conversation") -> Topic? {
+        let topic = Topic(title: title)
+        do {
+            try dbQueue?.write { db in
+                try topic.insert(db)
+            }
+            print("[ConversationStore] Created topic: \(topic.id)")
+            return topic
+        } catch {
+            print("[ConversationStore] Failed to create topic: \(error)")
+            return nil
+        }
+    }
+
+    /// Get all non-deleted topics, sorted by updatedAt DESC
+    func getAllTopics() -> [Topic] {
+        do {
+            return try dbQueue?.read { db in
+                try Topic
+                    .filter(Column("isDeleted") == false)
+                    .order(Column("updatedAt").desc)
+                    .fetchAll(db)
+            } ?? []
+        } catch {
+            print("[ConversationStore] Failed to fetch topics: \(error)")
+            return []
+        }
+    }
+
+    /// Get a topic by ID
+    func getTopic(id: String) -> Topic? {
+        do {
+            return try dbQueue?.read { db in
+                try Topic.fetchOne(db, key: id)
+            }
+        } catch {
+            print("[ConversationStore] Failed to fetch topic: \(error)")
+            return nil
+        }
+    }
+
+    /// Update topic title
+    func updateTopicTitle(id: String, title: String) {
+        do {
+            try dbQueue?.write { db in
+                try db.execute(
+                    sql: "UPDATE topics SET title = ?, updatedAt = ? WHERE id = ?",
+                    arguments: [title, Date(), id]
+                )
+            }
+            print("[ConversationStore] Updated topic title: \(id) -> \(title)")
+        } catch {
+            print("[ConversationStore] Failed to update topic title: \(error)")
+        }
+    }
+
+    /// Soft delete a topic
+    func deleteTopic(id: String) {
+        do {
+            try dbQueue?.write { db in
+                try db.execute(
+                    sql: "UPDATE topics SET isDeleted = 1 WHERE id = ?",
+                    arguments: [id]
+                )
+            }
+            print("[ConversationStore] Deleted topic: \(id)")
+        } catch {
+            print("[ConversationStore] Failed to delete topic: \(error)")
+        }
+    }
+
+    /// Update topic's updatedAt timestamp
+    func touchTopic(id: String) {
+        do {
+            try dbQueue?.write { db in
+                try db.execute(
+                    sql: "UPDATE topics SET updatedAt = ? WHERE id = ?",
+                    arguments: [Date(), id]
+                )
+            }
+        } catch {
+            print("[ConversationStore] Failed to touch topic: \(error)")
+        }
+    }
 }
