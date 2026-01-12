@@ -276,4 +276,68 @@ impl AetherCore {
             .unwrap_or_else(|e| e.into_inner());
         manager.turn_count()
     }
+
+    // ========================================================================
+    // Topic Title Generation
+    // ========================================================================
+
+    /// Generate a concise title for a conversation topic.
+    ///
+    /// This method uses the default AI provider to generate a short title
+    /// based on the first exchange in a conversation. The title should be
+    /// suitable for display in a conversation history list.
+    ///
+    /// # Arguments
+    /// * `user_input` - The user's first message in the conversation
+    /// * `ai_response` - The AI's first response in the conversation
+    ///
+    /// # Returns
+    /// * `Result<String>` - A short title (max 50 chars), or a default title if AI fails
+    pub async fn generate_topic_title(
+        &self,
+        user_input: String,
+        ai_response: String,
+    ) -> std::result::Result<String, AetherException> {
+        use crate::title_generator;
+
+        info!(
+            user_input_len = user_input.len(),
+            ai_response_len = ai_response.len(),
+            "Generating topic title"
+        );
+
+        // Get the default provider
+        let provider = match self.get_default_provider_instance() {
+            Some(p) => p,
+            None => {
+                // No provider available, use default title
+                let default = title_generator::default_title(&user_input);
+                info!(default_title = %default, "No provider available, using default title");
+                return Ok(default);
+            }
+        };
+
+        // Build the title prompt
+        let prompt = title_generator::build_title_prompt(&user_input, &ai_response);
+
+        // Call the AI provider to generate title
+        match provider.process(&prompt, None).await {
+            Ok(title) => {
+                // Validate and clean the title
+                let validated = title_generator::validate_title(&title, &user_input);
+                info!(
+                    raw_title = %title.trim(),
+                    validated_title = %validated,
+                    "Topic title generated"
+                );
+                Ok(validated)
+            }
+            Err(e) => {
+                // Log error and return default title
+                tracing::warn!(error = %e, "Failed to generate topic title, using default");
+                let default = title_generator::default_title(&user_input);
+                Ok(default)
+            }
+        }
+    }
 }

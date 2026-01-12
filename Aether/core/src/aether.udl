@@ -393,6 +393,11 @@ interface AetherCore {
   // Get the current turn count for the active conversation
   u32 conversation_turn_count();
 
+  // Generate a title for a conversation topic
+  // Uses AI to create a concise title from the first exchange
+  [Async, Throws=AetherException]
+  string generate_topic_title(string user_input, string ai_response);
+
   // MCP (Model Context Protocol) METHODS (implement-mcp-capability)
 
   // Get MCP configuration for Settings UI
