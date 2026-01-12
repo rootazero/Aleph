@@ -35,6 +35,9 @@ final class ScreenCaptureCoordinator: ObservableObject {
     private var overlayWindow: NSWindow?
     private var overlayView: ScreenCaptureOverlayView?
 
+    /// Flag to prevent reentry during dismissal
+    private var isDismissing = false
+
     // MARK: - Singleton
 
     static let shared = ScreenCaptureCoordinator()
@@ -346,15 +349,37 @@ final class ScreenCaptureCoordinator: ObservableObject {
     // MARK: - Helper Methods
 
     private func dismissOverlay() {
-        // First, clear the content view to avoid release issues
-        // This ensures the overlay view is properly released before window closes
-        if let window = overlayWindow {
-            window.contentView = nil
+        // Reentry protection - prevent multiple dismissal attempts
+        guard !isDismissing else {
+            print("[ScreenCaptureCoordinator] dismissOverlay() reentry prevented")
+            return
         }
-        overlayView = nil
+        isDismissing = true
+        defer { isDismissing = false }
 
-        // Then close and release the window
-        overlayWindow?.close()
+        // Step 1: Prepare overlay view for dismissal
+        // This stops callbacks and removes tracking areas to break retain cycles
+        overlayView?.prepareForDismissal()
+
+        // Step 2: Order the window out (removes from screen, stops rendering)
+        // This is safer than immediate close() which can trigger autorelease issues
+        overlayWindow?.orderOut(nil)
+
+        // Step 3: Store reference and clear our properties
+        // Important: clear overlayView BEFORE closing window to break retain cycles
+        let windowToClose = overlayWindow
+        overlayView = nil
         overlayWindow = nil
+
+        // Step 4: Close the window asynchronously
+        // This allows the current autorelease pool to drain cleanly
+        // before the window is fully deallocated
+        if let window = windowToClose {
+            DispatchQueue.main.async {
+                // The window is no longer in our view hierarchy
+                // Safe to close now
+                window.close()
+            }
+        }
     }
 }
