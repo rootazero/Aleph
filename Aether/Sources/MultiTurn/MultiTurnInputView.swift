@@ -162,9 +162,11 @@ final class MultiTurnInputViewModel: ObservableObject {
     // MARK: - Topic Operations
 
     func deleteTopic(_ topic: Topic) {
+        // Delete messages first, then soft-delete the topic
+        ConversationStore.shared.deleteMessages(topicId: topic.id)
         ConversationStore.shared.deleteTopic(id: topic.id)
         loadTopics()
-        print("[MultiTurnInputViewModel] Deleted topic: \(topic.title)")
+        print("[MultiTurnInputViewModel] Deleted topic and messages: \(topic.title)")
     }
 
     func renameTopic(_ topic: Topic, newTitle: String) {
@@ -452,12 +454,16 @@ struct TopicRowView: View {
 
     @State private var isHovering = false
     @State private var isEditing = false
+    @State private var isConfirmingDelete = false
     @State private var editingTitle: String = ""
     @FocusState private var isTextFieldFocused: Bool
 
     var body: some View {
         HStack {
-            if isEditing {
+            if isConfirmingDelete {
+                // Delete confirmation mode
+                deleteConfirmView
+            } else if isEditing {
                 // Editing mode: inline text field
                 editingView
             } else {
@@ -467,7 +473,7 @@ struct TopicRowView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background((isHovering || isSelected) ? .white.opacity(0.1) : .clear)
+        .background((isHovering || isSelected || isConfirmingDelete) ? .white.opacity(0.1) : .clear)
         .onHover { hovering in
             isHovering = hovering
         }
@@ -511,7 +517,9 @@ struct TopicRowView: View {
 
                     // Delete button
                     Button {
-                        onDelete()
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            isConfirmingDelete = true
+                        }
                     } label: {
                         Image(systemName: "trash")
                             .font(.system(size: 12))
@@ -529,6 +537,45 @@ struct TopicRowView: View {
             }
         }
         .animation(.easeInOut(duration: 0.15), value: isHovering)
+    }
+
+    // MARK: - Delete Confirmation View
+
+    private var deleteConfirmView: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 14))
+                .foregroundColor(.orange)
+
+            Text("确认删除「\(topic.title)」？")
+                .font(.system(size: 13))
+                .lineLimit(1)
+
+            Spacer()
+
+            // Cancel button
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isConfirmingDelete = false
+                }
+            } label: {
+                Text("取消")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+
+            // Confirm delete button
+            Button {
+                onDelete()
+                isConfirmingDelete = false
+            } label: {
+                Text("删除")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.red)
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     // MARK: - Editing View
