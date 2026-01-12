@@ -166,4 +166,70 @@ final class ConversationStore {
             print("[ConversationStore] Failed to touch topic: \(error)")
         }
     }
+
+    // MARK: - Message Operations
+
+    /// Add a message to a topic
+    func addMessage(topicId: String, role: MessageRole, content: String) -> ConversationMessage? {
+        let message = ConversationMessage(topicId: topicId, role: role, content: content)
+        do {
+            try dbQueue?.write { db in
+                try message.insert(db)
+                // Update topic's updatedAt
+                try db.execute(
+                    sql: "UPDATE topics SET updatedAt = ? WHERE id = ?",
+                    arguments: [Date(), topicId]
+                )
+            }
+            print("[ConversationStore] Added message to topic \(topicId): \(role.rawValue)")
+            return message
+        } catch {
+            print("[ConversationStore] Failed to add message: \(error)")
+            return nil
+        }
+    }
+
+    /// Get all messages for a topic, sorted by createdAt ASC
+    func getMessages(topicId: String) -> [ConversationMessage] {
+        do {
+            return try dbQueue?.read { db in
+                try ConversationMessage
+                    .filter(Column("topicId") == topicId)
+                    .order(Column("createdAt").asc)
+                    .fetchAll(db)
+            } ?? []
+        } catch {
+            print("[ConversationStore] Failed to fetch messages: \(error)")
+            return []
+        }
+    }
+
+    /// Get message count for a topic
+    func getMessageCount(topicId: String) -> Int {
+        do {
+            return try dbQueue?.read { db in
+                try ConversationMessage
+                    .filter(Column("topicId") == topicId)
+                    .fetchCount(db)
+            } ?? 0
+        } catch {
+            print("[ConversationStore] Failed to count messages: \(error)")
+            return 0
+        }
+    }
+
+    /// Delete all messages for a topic
+    func deleteMessages(topicId: String) {
+        do {
+            try dbQueue?.write { db in
+                try db.execute(
+                    sql: "DELETE FROM messages WHERE topicId = ?",
+                    arguments: [topicId]
+                )
+            }
+            print("[ConversationStore] Deleted messages for topic: \(topicId)")
+        } catch {
+            print("[ConversationStore] Failed to delete messages: \(error)")
+        }
+    }
 }
