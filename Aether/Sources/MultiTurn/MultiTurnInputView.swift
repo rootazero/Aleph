@@ -5,6 +5,7 @@
 //  SwiftUI view for multi-turn input window.
 //
 
+import AppKit
 import Combine
 import SwiftUI
 
@@ -23,6 +24,7 @@ final class MultiTurnInputViewModel: ObservableObject {
     @Published var filteredTopics: [Topic] = []
     @Published var commands: [CommandNode] = []
     @Published var selectedCommandIndex: Int = 0
+    @Published var selectedTopicIndex: Int = 0
 
     // MARK: - Callbacks
 
@@ -47,7 +49,10 @@ final class MultiTurnInputViewModel: ObservableObject {
     // MARK: - Actions
 
     func handleInputChange(_ newValue: String) {
-        inputText = newValue
+        // Note: inputText is already updated via IMETextField binding
+        // We only need to handle command/topic detection here
+
+        print("[MultiTurnInputViewModel] handleInputChange: '\(newValue)'")
 
         // Check for // command (topic list)
         if newValue.hasPrefix("//") {
@@ -55,12 +60,14 @@ final class MultiTurnInputViewModel: ObservableObject {
             showCommandList = false
             loadTopics()
             filterTopics(query: String(newValue.dropFirst(2)))
+            print("[MultiTurnInputViewModel] Showing topic list")
         }
         // Check for / command (command completion)
         else if newValue.hasPrefix("/") && !newValue.hasPrefix("//") {
             showTopicList = false
             showCommandList = true
             loadCommands(prefix: String(newValue.dropFirst()))
+            print("[MultiTurnInputViewModel] Showing command list")
         } else {
             showTopicList = false
             showCommandList = false
@@ -107,6 +114,7 @@ final class MultiTurnInputViewModel: ObservableObject {
         filteredTopics = []
         commands = []
         selectedCommandIndex = 0
+        selectedTopicIndex = 0
     }
 
     // MARK: - Navigation
@@ -114,12 +122,16 @@ final class MultiTurnInputViewModel: ObservableObject {
     func moveSelectionUp() {
         if showCommandList && !commands.isEmpty {
             selectedCommandIndex = (selectedCommandIndex - 1 + commands.count) % commands.count
+        } else if showTopicList && !filteredTopics.isEmpty {
+            selectedTopicIndex = (selectedTopicIndex - 1 + filteredTopics.count) % filteredTopics.count
         }
     }
 
     func moveSelectionDown() {
         if showCommandList && !commands.isEmpty {
             selectedCommandIndex = (selectedCommandIndex + 1) % commands.count
+        } else if showTopicList && !filteredTopics.isEmpty {
+            selectedTopicIndex = (selectedTopicIndex + 1) % filteredTopics.count
         }
     }
 
@@ -128,6 +140,7 @@ final class MultiTurnInputViewModel: ObservableObject {
     private func loadTopics() {
         topics = ConversationStore.shared.getAllTopics()
         filteredTopics = topics
+        selectedTopicIndex = 0
     }
 
     private func filterTopics(query: String) {
@@ -138,6 +151,7 @@ final class MultiTurnInputViewModel: ObservableObject {
                 topic.title.localizedCaseInsensitiveContains(query)
             }
         }
+        selectedTopicIndex = 0
     }
 
     // MARK: - Command Loading
@@ -169,9 +183,21 @@ final class MultiTurnInputViewModel: ObservableObject {
 /// SwiftUI view for multi-turn input
 struct MultiTurnInputView: View {
     @ObservedObject var viewModel: MultiTurnInputViewModel
-    @FocusState private var isInputFocused: Bool
 
     var body: some View {
+        // Fixed height container - window never resizes
+        // Content aligns to top, background only covers content area
+        VStack(spacing: 0) {
+            // Content area with background
+            contentWithBackground
+
+            // Transparent spacer fills remaining window space
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// Content area with animated background
+    private var contentWithBackground: some View {
         VStack(spacing: 0) {
             // Input field
             inputField
@@ -190,12 +216,9 @@ struct MultiTurnInputView: View {
             VisualEffectBackground(material: .hudWindow, blendingMode: .behindWindow)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .onChange(of: viewModel.shouldFocusInput) { _, shouldFocus in
-            if shouldFocus {
-                isInputFocused = true
-                viewModel.shouldFocusInput = false
-            }
-        }
+        // Smooth animation for background expansion
+        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: viewModel.showCommandList)
+        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: viewModel.showTopicList)
     }
 
     // MARK: - Input Field
@@ -213,25 +236,36 @@ struct MultiTurnInputView: View {
                     .cornerRadius(4)
             }
 
-            // Text field
-            TextField("Type a message... (/ for commands, // for topics)", text: $viewModel.inputText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 16))
-                .focused($isInputFocused)
-                .onChange(of: viewModel.inputText) { _, newValue in
+            // Text field - using IMETextField for proper IME and focus handling in floating windows
+            IMETextField(
+                text: $viewModel.inputText,
+                placeholder: "Type a message... (/ for commands, // for topics)",
+                font: .systemFont(ofSize: 16),
+                textColor: .labelColor,
+                placeholderColor: NSColor.secondaryLabelColor,
+                backgroundColor: .clear,
+                autoFocus: true,
+                onSubmit: { viewModel.submit() },
+                onEscape: { viewModel.cancel() },
+                onTextChange: { newValue in
                     viewModel.handleInputChange(newValue)
+                },
+                onArrowUp: { viewModel.moveSelectionUp() },
+                onArrowDown: { viewModel.moveSelectionDown() },
+                onTab: {
+                    // Tab to complete selected command
+                    if viewModel.showCommandList, viewModel.selectedCommandIndex < viewModel.commands.count {
+                        let command = viewModel.commands[viewModel.selectedCommandIndex]
+                        viewModel.selectCommand(command)
+                    }
+                    // Tab to select topic
+                    else if viewModel.showTopicList, viewModel.selectedTopicIndex < viewModel.filteredTopics.count {
+                        let topic = viewModel.filteredTopics[viewModel.selectedTopicIndex]
+                        viewModel.selectTopic(topic)
+                    }
                 }
-                .onSubmit {
-                    viewModel.submit()
-                }
-                .onKeyPress(.upArrow) {
-                    viewModel.moveSelectionUp()
-                    return .handled
-                }
-                .onKeyPress(.downArrow) {
-                    viewModel.moveSelectionDown()
-                    return .handled
-                }
+            )
+            .frame(height: 24)
 
             // Submit button
             Button(action: viewModel.submit) {
@@ -288,8 +322,11 @@ struct MultiTurnInputView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(viewModel.filteredTopics) { topic in
-                            TopicRowView(topic: topic) {
+                        ForEach(Array(viewModel.filteredTopics.enumerated()), id: \.element.id) { index, topic in
+                            TopicRowView(
+                                topic: topic,
+                                isSelected: index == viewModel.selectedTopicIndex
+                            ) {
                                 viewModel.selectTopic(topic)
                             }
                         }
@@ -365,6 +402,7 @@ struct CommandRowView: View {
 /// Row view for topic list
 struct TopicRowView: View {
     let topic: Topic
+    let isSelected: Bool
     let onSelect: () -> Void
 
     @State private var isHovering = false
@@ -390,7 +428,7 @@ struct TopicRowView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(isHovering ? Color.purple.opacity(0.1) : Color.clear)
+            .background((isHovering || isSelected) ? Color.purple.opacity(0.15) : Color.clear)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
