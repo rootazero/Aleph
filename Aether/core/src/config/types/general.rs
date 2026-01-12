@@ -69,7 +69,7 @@ pub fn default_command_prompt_hotkey() -> String {
 }
 
 pub fn default_ocr_capture_hotkey() -> String {
-    "Command+Shift+Control+4".to_string()
+    "Command+Option+O".to_string()
 }
 
 impl Default for ShortcutsConfig {
