@@ -60,6 +60,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Unified input coordinator for Halo window
     private var unifiedInputCoordinator: UnifiedInputCoordinator?
 
+    // Multi-turn conversation hotkey monitor (Cmd+Opt+/)
+    private var multiTurnHotkeyMonitor: Any?
+
     // MARK: - Managers (via DependencyContainer)
 
     /// Clipboard monitor accessed through DependencyContainer
@@ -127,6 +130,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     func applicationWillTerminate(_ notification: Notification) {
         // Stop hotkey monitoring
         hotkeyMonitor?.stopMonitoring()
+
+        // Stop multi-turn hotkey monitoring
+        if let monitor = multiTurnHotkeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            multiTurnHotkeyMonitor = nil
+        }
 
         // Stop clipboard monitoring
         clipboardMonitor.stopMonitoring()
@@ -574,8 +583,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     conversationCoordinator: conversationCoordinator
                 )
             }
-            unifiedInputCoordinator?.setupUnifiedHotkey()
-            print("[Aether] UnifiedInputCoordinator configured")
+            // Note: UnifiedInputCoordinator hotkey setup is now handled via MultiTurnCoordinator
+            // unifiedInputCoordinator?.setupUnifiedHotkey() - REMOVED
+            print("[Aether] UnifiedInputCoordinator configured (hotkey via MultiTurnCoordinator)")
+
+            // Configure MultiTurnCoordinator with core
+            MultiTurnCoordinator.shared.configure(core: core!)
+            // Setup Cmd+Opt+/ hotkey to route to MultiTurnCoordinator
+            setupMultiTurnHotkey()
+            print("[Aether] MultiTurnCoordinator configured and hotkey installed")
 
             // Hide startup Halo animation (initialization succeeded)
             // Note: "No providers" error will be shown when user presses hotkey, not at startup
@@ -822,7 +838,107 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Update unified input hotkey at runtime (called from ShortcutsView)
     func updateCommandPromptHotkey(_ shortcuts: ShortcutsConfig) {
-        unifiedInputCoordinator?.updateUnifiedHotkey(shortcuts)
+        // Update multi-turn hotkey configuration
+        updateMultiTurnHotkeyConfig(shortcuts)
+    }
+
+    // MARK: - Multi-Turn Hotkey Configuration
+
+    /// Multi-turn hotkey modifiers (default: Cmd+Opt)
+    private var multiTurnHotkeyModifiers: NSEvent.ModifierFlags = [.command, .option]
+
+    /// Multi-turn hotkey key code (default: / = 44)
+    private var multiTurnHotkeyKeyCode: UInt16 = 44
+
+    /// Setup global hotkey for multi-turn conversation (configurable, default: Cmd+Opt+/)
+    private func setupMultiTurnHotkey() {
+        // Load hotkey configuration from config
+        loadMultiTurnHotkeyConfig()
+
+        multiTurnHotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return }
+
+            // Check for configured hotkey
+            var modifiersMatch = true
+            for modifier in [NSEvent.ModifierFlags.command, .option, .control, .shift] {
+                if self.multiTurnHotkeyModifiers.contains(modifier) {
+                    if !event.modifierFlags.contains(modifier) {
+                        modifiersMatch = false
+                        break
+                    }
+                }
+            }
+            if modifiersMatch && event.keyCode == self.multiTurnHotkeyKeyCode {
+                MultiTurnCoordinator.shared.handleHotkey()
+            }
+        }
+        print("[AppDelegate] Multi-turn hotkey monitor installed (keyCode: \(multiTurnHotkeyKeyCode), modifiers: \(multiTurnHotkeyModifiers))")
+    }
+
+    /// Load multi-turn hotkey configuration from config
+    private func loadMultiTurnHotkeyConfig() {
+        guard let core = core else { return }
+
+        do {
+            let config = try core.loadConfig()
+            if let shortcuts = config.shortcuts {
+                parseAndApplyMultiTurnHotkey(shortcuts.commandPrompt)
+            }
+        } catch {
+            print("[AppDelegate] Failed to load multi-turn hotkey config: \(error)")
+        }
+    }
+
+    /// Parse multi-turn hotkey config string (e.g., "Command+Option+/") and apply it
+    private func parseAndApplyMultiTurnHotkey(_ configString: String) {
+        let parts = configString.split(separator: "+").map { String($0) }
+        guard parts.count >= 2 else {
+            print("[AppDelegate] Invalid multi-turn hotkey config: \(configString)")
+            return
+        }
+
+        var modifiers: NSEvent.ModifierFlags = []
+
+        // Parse modifiers (all parts except the last)
+        for i in 0..<(parts.count - 1) {
+            switch parts[i] {
+            case "Command": modifiers.insert(.command)
+            case "Option": modifiers.insert(.option)
+            case "Control": modifiers.insert(.control)
+            case "Shift": modifiers.insert(.shift)
+            default: break
+            }
+        }
+
+        // Parse last part as key code
+        let keyCode: UInt16
+        switch parts[parts.count - 1] {
+        case "/": keyCode = 44
+        case "`": keyCode = 50
+        case "\\": keyCode = 42
+        case ";": keyCode = 41
+        case ",": keyCode = 43
+        case ".": keyCode = 47
+        case "Space": keyCode = 49
+        default: keyCode = 44  // Default to /
+        }
+
+        multiTurnHotkeyModifiers = modifiers
+        multiTurnHotkeyKeyCode = keyCode
+        print("[AppDelegate] Multi-turn hotkey configured: \(configString) (keyCode: \(keyCode), modifiers: \(modifiers))")
+    }
+
+    /// Update multi-turn hotkey at runtime (called from ShortcutsView)
+    private func updateMultiTurnHotkeyConfig(_ shortcuts: ShortcutsConfig) {
+        parseAndApplyMultiTurnHotkey(shortcuts.commandPrompt)
+
+        // Reinstall the monitor with new settings
+        if let monitor = multiTurnHotkeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            multiTurnHotkeyMonitor = nil
+        }
+        setupMultiTurnHotkey()
+        print("[AppDelegate] Multi-turn hotkey updated and monitor reinstalled")
     }
 
     // MARK: - Trigger System Configuration
