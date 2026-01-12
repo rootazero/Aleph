@@ -610,7 +610,7 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func filterCommands(prefix: String)  -> [CommandNode]
     
-    func generateTopicTitle(userInput: String, aiResponse: String) async throws  -> String
+    func generateTopicTitle(userInput: String, aiResponse: String) throws  -> String
     
     func getCommandChildren(parentKey: String)  -> [CommandNode]
     
@@ -910,21 +910,13 @@ open func filterCommands(prefix: String) -> [CommandNode] {
 })
 }
     
-open func generateTopicTitle(userInput: String, aiResponse: String)async throws  -> String {
-    return
-        try  await uniffiRustCallAsync(
-            rustFutureFunc: {
-                uniffi_aethecore_fn_method_aethercore_generate_topic_title(
-                    self.uniffiClonePointer(),
-                    FfiConverterString.lower(userInput),FfiConverterString.lower(aiResponse)
-                )
-            },
-            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
-            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
-            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
-            liftFunc: FfiConverterString.lift,
-            errorHandler: FfiConverterTypeAetherException.lift
-        )
+open func generateTopicTitle(userInput: String, aiResponse: String)throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_generate_topic_title(self.uniffiClonePointer(),
+        FfiConverterString.lower(userInput),
+        FfiConverterString.lower(aiResponse),$0
+    )
+})
 }
     
 open func getCommandChildren(parentKey: String) -> [CommandNode] {
@@ -8293,52 +8285,6 @@ fileprivate struct FfiConverterDictionaryStringUInt64: FfiConverterRustBuffer {
         return dict
     }
 }
-private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
-private let UNIFFI_RUST_FUTURE_POLL_MAYBE_READY: Int8 = 1
-
-fileprivate let uniffiContinuationHandleMap = UniffiHandleMap<UnsafeContinuation<Int8, Never>>()
-
-fileprivate func uniffiRustCallAsync<F, T>(
-    rustFutureFunc: () -> UInt64,
-    pollFunc: (UInt64, @escaping UniffiRustFutureContinuationCallback, UInt64) -> (),
-    completeFunc: (UInt64, UnsafeMutablePointer<RustCallStatus>) -> F,
-    freeFunc: (UInt64) -> (),
-    liftFunc: (F) throws -> T,
-    errorHandler: ((RustBuffer) throws -> Swift.Error)?
-) async throws -> T {
-    // Make sure to call uniffiEnsureInitialized() since future creation doesn't have a
-    // RustCallStatus param, so doesn't use makeRustCall()
-    uniffiEnsureInitialized()
-    let rustFuture = rustFutureFunc()
-    defer {
-        freeFunc(rustFuture)
-    }
-    var pollResult: Int8;
-    repeat {
-        pollResult = await withUnsafeContinuation {
-            pollFunc(
-                rustFuture,
-                uniffiFutureContinuationCallback,
-                uniffiContinuationHandleMap.insert(obj: $0)
-            )
-        }
-    } while pollResult != UNIFFI_RUST_FUTURE_POLL_READY
-
-    return try liftFunc(makeRustCall(
-        { completeFunc(rustFuture, $0) },
-        errorHandler: errorHandler
-    ))
-}
-
-// Callback handlers for an async calls.  These are invoked by Rust when the future is ready.  They
-// lift the return value or error and resume the suspended function.
-fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: Int8) {
-    if let continuation = try? uniffiContinuationHandleMap.remove(handle: handle) {
-        continuation.resume(returning: pollResult)
-    } else {
-        print("uniffiFutureContinuationCallback invalid handle")
-    }
-}
 public func checkEmbeddingModelExists()throws  -> Bool {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_func_check_embedding_model_exists($0
@@ -8496,7 +8442,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_filter_commands() != 53560) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_generate_topic_title() != 16853) {
+    if (uniffi_aethecore_checksum_method_aethercore_generate_topic_title() != 35518) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_get_command_children() != 60196) {

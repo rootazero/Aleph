@@ -8,6 +8,7 @@
 use super::types::CapturedContext;
 use super::AetherCore;
 use crate::error::AetherException;
+use std::sync::Arc;
 use tracing::info;
 
 impl AetherCore {
@@ -287,13 +288,17 @@ impl AetherCore {
     /// based on the first exchange in a conversation. The title should be
     /// suitable for display in a conversation history list.
     ///
+    /// Note: This is a synchronous function that internally uses the stored
+    /// Tokio runtime to execute async operations. This avoids issues with
+    /// UniFFI async calls from non-Tokio threads.
+    ///
     /// # Arguments
     /// * `user_input` - The user's first message in the conversation
     /// * `ai_response` - The AI's first response in the conversation
     ///
     /// # Returns
     /// * `Result<String>` - A short title (max 50 chars), or a default title if AI fails
-    pub async fn generate_topic_title(
+    pub fn generate_topic_title(
         &self,
         user_input: String,
         ai_response: String,
@@ -320,11 +325,17 @@ impl AetherCore {
         // Build the title prompt
         let prompt = title_generator::build_title_prompt(&user_input, &ai_response);
 
-        // Call the AI provider to generate title
-        match provider.process(&prompt, None).await {
-            Ok(title) => {
+        // Execute async AI call using the stored runtime
+        // This avoids the "no reactor running" panic when called from non-Tokio threads
+        let runtime = Arc::clone(&self.runtime);
+        let ai_result: Result<String, crate::error::AetherError> = runtime.block_on(async move {
+            provider.process(&prompt, None).await
+        });
+
+        match ai_result {
+            Ok(ref title) => {
                 // Validate and clean the title
-                let validated = title_generator::validate_title(&title, &user_input);
+                let validated = title_generator::validate_title(title, &user_input);
                 info!(
                     raw_title = %title.trim(),
                     validated_title = %validated,

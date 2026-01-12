@@ -170,7 +170,9 @@ final class MultiTurnCoordinator {
         displayWindow.viewModel.setLoading(true)
 
         // Check if this is the first message (for title generation)
-        let isFirstMessage = displayWindow.viewModel.messages.count == 1
+        let messageCount = displayWindow.viewModel.messages.count
+        let isFirstMessage = messageCount == 1
+        print("[MultiTurnCoordinator] handleInput: messageCount=\(messageCount), isFirstMessage=\(isFirstMessage)")
 
         // Process in background (use finalText which may include clipboard content)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -300,6 +302,8 @@ final class MultiTurnCoordinator {
         let messageCount = ConversationStore.shared.getMessageCount(topicId: topic.id)
         inputWindow.updateTurnCount(messageCount / 2)
 
+        print("[MultiTurnCoordinator] finishResponse: isFirstMessage=\(isFirstMessage), messageCount=\(messageCount)")
+
         // Generate title if this is the first exchange
         if isFirstMessage {
             generateTitle(topic: topic, userInput: userInput, aiResponse: aiResponse)
@@ -308,27 +312,32 @@ final class MultiTurnCoordinator {
         print("[MultiTurnCoordinator] Response added, turn count: \(messageCount / 2)")
     }
 
-    /// Generate title for topic asynchronously
+    /// Generate title for topic
+    /// Note: The Rust function is now synchronous (uses internal Tokio runtime)
     private func generateTitle(topic: Topic, userInput: String, aiResponse: String) {
-        guard let core = core else { return }
+        print("[MultiTurnCoordinator] generateTitle called for topic: \(topic.id), core is \(core != nil ? "available" : "NIL")")
 
-        print("[MultiTurnCoordinator] Generating title for topic: \(topic.id)")
+        guard let core = core else {
+            print("[MultiTurnCoordinator] ERROR: core is nil, cannot generate title")
+            return
+        }
 
-        // Use Swift async/await since generateTopicTitle is an async function
-        Task {
+        print("[MultiTurnCoordinator] Generating title with AI...")
+
+        // Run on background thread since the Rust function may block
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
-                let title = try await core.generateTopicTitle(userInput: userInput, aiResponse: aiResponse)
+                // Rust function is now synchronous (internally uses Tokio runtime)
+                let title = try core.generateTopicTitle(userInput: userInput, aiResponse: aiResponse)
 
                 // Update in store
                 ConversationStore.shared.updateTopicTitle(id: topic.id, title: title)
 
                 // Update UI on main thread
-                // Note: Topic is a struct (value type), so we must replace the entire object
-                // to trigger @Published observer, not just modify an inner property
-                await MainActor.run {
-                    if var updatedTopic = self.displayWindow.viewModel.topic {
+                DispatchQueue.main.async {
+                    if var updatedTopic = self?.displayWindow.viewModel.topic {
                         updatedTopic.title = title
-                        self.displayWindow.viewModel.topic = updatedTopic
+                        self?.displayWindow.viewModel.topic = updatedTopic
                     }
                     print("[MultiTurnCoordinator] Title updated: \(title)")
                 }

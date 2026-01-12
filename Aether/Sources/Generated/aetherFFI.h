@@ -594,7 +594,7 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_filter_commands(void*_Nonnull p
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_TOPIC_TITLE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_TOPIC_TITLE
-uint64_t uniffi_aethecore_fn_method_aethercore_generate_topic_title(void*_Nonnull ptr, RustBuffer user_input, RustBuffer ai_response
+RustBuffer uniffi_aethecore_fn_method_aethercore_generate_topic_title(void*_Nonnull ptr, RustBuffer user_input, RustBuffer ai_response, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_COMMAND_CHILDREN
