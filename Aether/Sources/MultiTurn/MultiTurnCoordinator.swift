@@ -47,6 +47,9 @@ final class MultiTurnCoordinator {
     private var currentTopic: Topic?
     private var isActive: Bool = false
 
+    /// Typewriter task (can be cancelled)
+    private var typewriterTask: Task<Void, Never>?
+
     // MARK: - Initialization
 
     private init() {}
@@ -103,6 +106,10 @@ final class MultiTurnCoordinator {
     func exit() {
         print("[MultiTurnCoordinator] Exiting")
         isActive = false
+
+        // Cancel any ongoing typewriter output
+        typewriterTask?.cancel()
+        typewriterTask = nil
 
         inputWindow.hide()
         displayWindow.hide()
@@ -222,16 +229,80 @@ final class MultiTurnCoordinator {
 
     /// Handle AI response
     private func handleAIResponse(_ response: String, topic: Topic, userInput: String, isFirstMessage: Bool) {
-        // Add assistant message
-        displayWindow.viewModel.addAssistantMessage(response)
+        // Load output mode config
+        var outputMode = "instant"
+        var typingSpeed: Int = 50
 
+        if let core = core {
+            do {
+                let config = try core.loadConfig()
+                if let behavior = config.behavior {
+                    outputMode = behavior.outputMode
+                    typingSpeed = Int(behavior.typingSpeed)
+                }
+            } catch {
+                print("[MultiTurnCoordinator] Failed to load config, using instant mode: \(error)")
+            }
+        }
+
+        print("[MultiTurnCoordinator] Output mode: \(outputMode), speed: \(typingSpeed)")
+
+        if outputMode == "typewriter" {
+            // Typewriter mode - stream character by character
+            startTypewriterOutput(response: response, topic: topic, userInput: userInput, isFirstMessage: isFirstMessage, speed: typingSpeed)
+        } else {
+            // Instant mode - add full message at once
+            displayWindow.viewModel.addAssistantMessage(response)
+            finishResponse(topic: topic, userInput: userInput, aiResponse: response, isFirstMessage: isFirstMessage)
+        }
+    }
+
+    /// Start typewriter output streaming
+    private func startTypewriterOutput(response: String, topic: Topic, userInput: String, isFirstMessage: Bool, speed: Int) {
+        // Cancel any existing typewriter task
+        typewriterTask?.cancel()
+
+        // Start streaming message placeholder
+        guard displayWindow.viewModel.startStreamingMessage() != nil else {
+            print("[MultiTurnCoordinator] Failed to start streaming message")
+            return
+        }
+
+        // Calculate delay between characters (speed is chars/second)
+        let charDelay = 1.0 / Double(max(speed, 1))
+
+        typewriterTask = Task { @MainActor in
+            var currentText = ""
+
+            for char in response {
+                // Check for cancellation
+                if Task.isCancelled {
+                    print("[MultiTurnCoordinator] Typewriter cancelled")
+                    break
+                }
+
+                currentText.append(char)
+                displayWindow.viewModel.updateStreamingText(currentText)
+
+                // Wait for next character
+                try? await Task.sleep(nanoseconds: UInt64(charDelay * 1_000_000_000))
+            }
+
+            // Finish streaming
+            displayWindow.viewModel.finishStreamingMessage()
+            finishResponse(topic: topic, userInput: userInput, aiResponse: response, isFirstMessage: isFirstMessage)
+        }
+    }
+
+    /// Finish response processing (update turn count, generate title)
+    private func finishResponse(topic: Topic, userInput: String, aiResponse: String, isFirstMessage: Bool) {
         // Update turn count
         let messageCount = ConversationStore.shared.getMessageCount(topicId: topic.id)
         inputWindow.updateTurnCount(messageCount / 2)
 
         // Generate title if this is the first exchange
         if isFirstMessage {
-            generateTitle(topic: topic, userInput: userInput, aiResponse: response)
+            generateTitle(topic: topic, userInput: userInput, aiResponse: aiResponse)
         }
 
         print("[MultiTurnCoordinator] Response added, turn count: \(messageCount / 2)")
@@ -252,8 +323,13 @@ final class MultiTurnCoordinator {
                 ConversationStore.shared.updateTopicTitle(id: topic.id, title: title)
 
                 // Update UI on main thread
+                // Note: Topic is a struct (value type), so we must replace the entire object
+                // to trigger @Published observer, not just modify an inner property
                 await MainActor.run {
-                    self.displayWindow.viewModel.topic?.title = title
+                    if var updatedTopic = self.displayWindow.viewModel.topic {
+                        updatedTopic.title = title
+                        self.displayWindow.viewModel.topic = updatedTopic
+                    }
                     print("[MultiTurnCoordinator] Title updated: \(title)")
                 }
             } catch {
