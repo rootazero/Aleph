@@ -610,6 +610,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func exportMcpConfigJson()  -> String
     
+    func extractText(imageData: [UInt8]) async throws  -> String
+    
     func filterCommands(prefix: String)  -> [CommandNode]
     
     func generateTopicTitle(userInput: String, aiResponse: String) throws  -> String
@@ -675,6 +677,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func loadConfig() throws  -> FullConfig
     
     func processInput(userInput: String, context: CapturedContext) throws  -> String
+    
+    func processVision(request: VisionRequest) async throws  -> VisionResult
     
     func refreshTools() throws 
     
@@ -910,6 +914,23 @@ open func exportMcpConfigJson() -> String {
     uniffi_aethecore_fn_method_aethercore_export_mcp_config_json(self.uniffiClonePointer(),$0
     )
 })
+}
+    
+open func extractText(imageData: [UInt8])async throws  -> String {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_aethecore_fn_method_aethercore_extract_text(
+                    self.uniffiClonePointer(),
+                    FfiConverterSequenceUInt8.lower(imageData)
+                )
+            },
+            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
+            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
+            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeAetherException.lift
+        )
 }
     
 open func filterCommands(prefix: String) -> [CommandNode] {
@@ -1155,6 +1176,23 @@ open func processInput(userInput: String, context: CapturedContext)throws  -> St
         FfiConverterTypeCapturedContext.lower(context),$0
     )
 })
+}
+    
+open func processVision(request: VisionRequest)async throws  -> VisionResult {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_aethecore_fn_method_aethercore_process_vision(
+                    self.uniffiClonePointer(),
+                    FfiConverterTypeVisionRequest.lower(request)
+                )
+            },
+            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
+            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
+            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeVisionResult.lift,
+            errorHandler: FfiConverterTypeAetherException.lift
+        )
 }
     
 open func refreshTools()throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
@@ -5643,6 +5681,178 @@ public func FfiConverterTypeUnifiedToolInfo_lower(_ value: UnifiedToolInfo) -> R
 }
 
 
+public struct VisionRequest {
+    public var imageData: [UInt8]
+    public var captureMode: CaptureMode
+    public var task: VisionTask
+    public var prompt: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(imageData: [UInt8], captureMode: CaptureMode, task: VisionTask, prompt: String?) {
+        self.imageData = imageData
+        self.captureMode = captureMode
+        self.task = task
+        self.prompt = prompt
+    }
+}
+
+
+
+extension VisionRequest: Equatable, Hashable {
+    public static func ==(lhs: VisionRequest, rhs: VisionRequest) -> Bool {
+        if lhs.imageData != rhs.imageData {
+            return false
+        }
+        if lhs.captureMode != rhs.captureMode {
+            return false
+        }
+        if lhs.task != rhs.task {
+            return false
+        }
+        if lhs.prompt != rhs.prompt {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(imageData)
+        hasher.combine(captureMode)
+        hasher.combine(task)
+        hasher.combine(prompt)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeVisionRequest: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VisionRequest {
+        return
+            try VisionRequest(
+                imageData: FfiConverterSequenceUInt8.read(from: &buf), 
+                captureMode: FfiConverterTypeCaptureMode.read(from: &buf), 
+                task: FfiConverterTypeVisionTask.read(from: &buf), 
+                prompt: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: VisionRequest, into buf: inout [UInt8]) {
+        FfiConverterSequenceUInt8.write(value.imageData, into: &buf)
+        FfiConverterTypeCaptureMode.write(value.captureMode, into: &buf)
+        FfiConverterTypeVisionTask.write(value.task, into: &buf)
+        FfiConverterOptionString.write(value.prompt, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVisionRequest_lift(_ buf: RustBuffer) throws -> VisionRequest {
+    return try FfiConverterTypeVisionRequest.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVisionRequest_lower(_ value: VisionRequest) -> RustBuffer {
+    return FfiConverterTypeVisionRequest.lower(value)
+}
+
+
+public struct VisionResult {
+    public var extractedText: String
+    public var description: String?
+    public var aiResponse: String?
+    public var confidence: Float
+    public var processingTimeMs: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(extractedText: String, description: String?, aiResponse: String?, confidence: Float, processingTimeMs: UInt64) {
+        self.extractedText = extractedText
+        self.description = description
+        self.aiResponse = aiResponse
+        self.confidence = confidence
+        self.processingTimeMs = processingTimeMs
+    }
+}
+
+
+
+extension VisionResult: Equatable, Hashable {
+    public static func ==(lhs: VisionResult, rhs: VisionResult) -> Bool {
+        if lhs.extractedText != rhs.extractedText {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.aiResponse != rhs.aiResponse {
+            return false
+        }
+        if lhs.confidence != rhs.confidence {
+            return false
+        }
+        if lhs.processingTimeMs != rhs.processingTimeMs {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(extractedText)
+        hasher.combine(description)
+        hasher.combine(aiResponse)
+        hasher.combine(confidence)
+        hasher.combine(processingTimeMs)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeVisionResult: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VisionResult {
+        return
+            try VisionResult(
+                extractedText: FfiConverterString.read(from: &buf), 
+                description: FfiConverterOptionString.read(from: &buf), 
+                aiResponse: FfiConverterOptionString.read(from: &buf), 
+                confidence: FfiConverterFloat.read(from: &buf), 
+                processingTimeMs: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: VisionResult, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.extractedText, into: &buf)
+        FfiConverterOptionString.write(value.description, into: &buf)
+        FfiConverterOptionString.write(value.aiResponse, into: &buf)
+        FfiConverterFloat.write(value.confidence, into: &buf)
+        FfiConverterUInt64.write(value.processingTimeMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVisionResult_lift(_ buf: RustBuffer) throws -> VisionResult {
+    return try FfiConverterTypeVisionResult.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVisionResult_lower(_ value: VisionResult) -> RustBuffer {
+    return FfiConverterTypeVisionResult.lower(value)
+}
+
+
 public enum AetherException {
 
     
@@ -5696,6 +5906,77 @@ extension AetherException: Foundation.LocalizedError {
         String(reflecting: self)
     }
 }
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum CaptureMode {
+    
+    case region
+    case window
+    case fullScreen
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCaptureMode: FfiConverterRustBuffer {
+    typealias SwiftType = CaptureMode
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CaptureMode {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .region
+        
+        case 2: return .window
+        
+        case 3: return .fullScreen
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: CaptureMode, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .region:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .window:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .fullScreen:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCaptureMode_lift(_ buf: RustBuffer) throws -> CaptureMode {
+    return try FfiConverterTypeCaptureMode.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCaptureMode_lower(_ value: CaptureMode) -> RustBuffer {
+    return FfiConverterTypeCaptureMode.lower(value)
+}
+
+
+
+extension CaptureMode: Equatable, Hashable {}
+
+
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
@@ -6481,6 +6762,77 @@ public func FfiConverterTypeUserConfirmationDecision_lower(_ value: UserConfirma
 
 
 extension UserConfirmationDecision: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum VisionTask {
+    
+    case ocrOnly
+    case ocrWithContext
+    case describe
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeVisionTask: FfiConverterRustBuffer {
+    typealias SwiftType = VisionTask
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VisionTask {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .ocrOnly
+        
+        case 2: return .ocrWithContext
+        
+        case 3: return .describe
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: VisionTask, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .ocrOnly:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .ocrWithContext:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .describe:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVisionTask_lift(_ buf: RustBuffer) throws -> VisionTask {
+    return try FfiConverterTypeVisionTask.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeVisionTask_lower(_ value: VisionTask) -> RustBuffer {
+    return FfiConverterTypeVisionTask.lower(value)
+}
+
+
+
+extension VisionTask: Equatable, Hashable {}
 
 
 
@@ -8303,6 +8655,52 @@ fileprivate struct FfiConverterDictionaryStringUInt64: FfiConverterRustBuffer {
         return dict
     }
 }
+private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
+private let UNIFFI_RUST_FUTURE_POLL_MAYBE_READY: Int8 = 1
+
+fileprivate let uniffiContinuationHandleMap = UniffiHandleMap<UnsafeContinuation<Int8, Never>>()
+
+fileprivate func uniffiRustCallAsync<F, T>(
+    rustFutureFunc: () -> UInt64,
+    pollFunc: (UInt64, @escaping UniffiRustFutureContinuationCallback, UInt64) -> (),
+    completeFunc: (UInt64, UnsafeMutablePointer<RustCallStatus>) -> F,
+    freeFunc: (UInt64) -> (),
+    liftFunc: (F) throws -> T,
+    errorHandler: ((RustBuffer) throws -> Swift.Error)?
+) async throws -> T {
+    // Make sure to call uniffiEnsureInitialized() since future creation doesn't have a
+    // RustCallStatus param, so doesn't use makeRustCall()
+    uniffiEnsureInitialized()
+    let rustFuture = rustFutureFunc()
+    defer {
+        freeFunc(rustFuture)
+    }
+    var pollResult: Int8;
+    repeat {
+        pollResult = await withUnsafeContinuation {
+            pollFunc(
+                rustFuture,
+                uniffiFutureContinuationCallback,
+                uniffiContinuationHandleMap.insert(obj: $0)
+            )
+        }
+    } while pollResult != UNIFFI_RUST_FUTURE_POLL_READY
+
+    return try liftFunc(makeRustCall(
+        { completeFunc(rustFuture, $0) },
+        errorHandler: errorHandler
+    ))
+}
+
+// Callback handlers for an async calls.  These are invoked by Rust when the future is ready.  They
+// lift the return value or error and resume the suspended function.
+fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: Int8) {
+    if let continuation = try? uniffiContinuationHandleMap.remove(handle: handle) {
+        continuation.resume(returning: pollResult)
+    } else {
+        print("uniffiFutureContinuationCallback invalid handle")
+    }
+}
 public func checkEmbeddingModelExists()throws  -> Bool {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_func_check_embedding_model_exists($0
@@ -8460,6 +8858,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_export_mcp_config_json() != 17811) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_extract_text() != 2920) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_filter_commands() != 53560) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8557,6 +8958,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_process_input() != 803) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_process_vision() != 25227) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_refresh_tools() != 51434) {

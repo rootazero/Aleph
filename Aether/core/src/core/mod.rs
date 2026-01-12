@@ -19,6 +19,7 @@ mod processing;
 mod search_ops;
 mod tools;
 pub mod types;
+mod vision_ops;
 
 #[cfg(test)]
 mod tests;

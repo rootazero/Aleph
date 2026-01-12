@@ -592,6 +592,11 @@ void uniffi_aethecore_fn_method_aethercore_end_conversation(void*_Nonnull ptr, R
 RustBuffer uniffi_aethecore_fn_method_aethercore_export_mcp_config_json(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EXTRACT_TEXT
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EXTRACT_TEXT
+uint64_t uniffi_aethecore_fn_method_aethercore_extract_text(void*_Nonnull ptr, RustBuffer image_data
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_FILTER_COMMANDS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_FILTER_COMMANDS
 RustBuffer uniffi_aethecore_fn_method_aethercore_filter_commands(void*_Nonnull ptr, RustBuffer prefix, RustCallStatus *_Nonnull out_status
@@ -755,6 +760,11 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_load_config(void*_Nonnull ptr, 
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROCESS_INPUT
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROCESS_INPUT
 RustBuffer uniffi_aethecore_fn_method_aethercore_process_input(void*_Nonnull ptr, RustBuffer user_input, RustBuffer context, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROCESS_VISION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROCESS_VISION
+uint64_t uniffi_aethecore_fn_method_aethercore_process_vision(void*_Nonnull ptr, RustBuffer request
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_REFRESH_TOOLS
@@ -1402,6 +1412,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_export_mcp_config_json(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_EXTRACT_TEXT
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_EXTRACT_TEXT
+uint16_t uniffi_aethecore_checksum_method_aethercore_extract_text(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_FILTER_COMMANDS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_FILTER_COMMANDS
 uint16_t uniffi_aethecore_checksum_method_aethercore_filter_commands(void
@@ -1597,6 +1613,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_load_config(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_PROCESS_INPUT
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_PROCESS_INPUT
 uint16_t uniffi_aethecore_checksum_method_aethercore_process_input(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_PROCESS_VISION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_PROCESS_VISION
+uint16_t uniffi_aethecore_checksum_method_aethercore_process_vision(void
     
 );
 #endif

@@ -102,6 +102,7 @@ pub mod dispatcher; // NEW: Intelligent tool routing (Dispatcher Layer)
 pub mod routing; // NEW: Unified multi-layer routing framework
 mod title_generator; // Title generation for conversation topics
 pub mod tools; // NEW: Native function calling tools (AgentTool trait)
+pub mod vision; // NEW: Vision capability (screen OCR, image understanding)
 
 // Integration tests module
 #[cfg(test)]
@@ -182,6 +183,9 @@ pub use crate::tools::{
     create_search_tools, SearchConfig as SearchToolConfig, SearchContext, WebSearchTool,
 };
 pub use crate::utils::pii;
+pub use crate::vision::{
+    CaptureMode, VisionConfig, VisionRequest, VisionResult, VisionService, VisionTask,
+};
 
 // Test-only exports
 #[cfg(test)]

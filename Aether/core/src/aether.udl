@@ -55,6 +55,41 @@ namespace aether {
   sequence<string> install_skills_from_zip(string zip_path);
 };
 
+// ===== VISION CAPABILITY (rust-native-vision) =====
+
+// Capture mode for screen capture
+enum CaptureMode {
+  "Region",       // User-selected region
+  "Window",       // Active window capture
+  "FullScreen",   // Full screen capture
+};
+
+// Vision task type
+enum VisionTask {
+  "OcrOnly",          // Extract text only
+  "OcrWithContext",   // Extract text + use as AI context
+  "Describe",         // Image description
+};
+
+// Vision request from Swift to Rust
+dictionary VisionRequest {
+  sequence<u8> image_data;      // Raw PNG data
+  CaptureMode capture_mode;
+  VisionTask task;
+  string? prompt;               // Optional user prompt for OcrWithContext
+};
+
+// Vision result from Rust to Swift
+dictionary VisionResult {
+  string extracted_text;        // OCR extracted text
+  string? description;          // Image description (if requested)
+  string? ai_response;          // AI response (OcrWithContext mode)
+  f32 confidence;               // Confidence score (0.0-1.0)
+  u64 processing_time_ms;       // Processing duration
+};
+
+// ===== END VISION CAPABILITY =====
+
 // Processing states for Aether system
 enum ProcessingState {
   "Idle",
@@ -499,6 +534,18 @@ interface AetherCore {
   // Cleanup expired confirmations
   // Returns count of cleaned confirmations
   u32 cleanup_expired_confirmations();
+
+  // VISION CAPABILITY METHODS (rust-native-vision)
+
+  // Process vision request (OCR, description, or context-aware)
+  // Uses user-configured default AI provider for vision processing
+  [Async, Throws=AetherException]
+  VisionResult process_vision(VisionRequest request);
+
+  // Convenience method: Extract text from image (OCR only)
+  // Returns extracted text directly
+  [Async, Throws=AetherException]
+  string extract_text(sequence<u8> image_data);
 };
 
 // Callback interface for events from Rust to client
