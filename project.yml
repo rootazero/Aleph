@@ -1,4 +1,10 @@
 name: Aether
+
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift.git
+    from: "6.24.0"
+
 options:
   bundleIdPrefix: Rootazero
   deploymentTarget:
@@ -110,6 +116,7 @@ targets:
       - framework: Aether/Frameworks/libaethecore.dylib
         embed: true
         link: true
+      - package: GRDB
     preBuildScripts:
       - name: "Build Rust Core"
         script: |
