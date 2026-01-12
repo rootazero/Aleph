@@ -689,6 +689,11 @@ struct MemoryView: View {
         do {
             let deletedCount = try core.clearMemories(appBundleId: nil, windowTitle: nil)
             print("[MemoryView] Cleared \(deletedCount) memories")
+
+            // Also clear all conversation topics when clearing all memories
+            let topicsDeleted = ConversationStore.shared.clearAllTopics()
+            print("[MemoryView] Cleared \(topicsDeleted) conversation topics")
+
             // Refresh data
             refreshData()
         } catch {

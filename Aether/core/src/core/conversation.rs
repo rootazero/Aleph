@@ -168,6 +168,7 @@ impl AetherCore {
                 },
                 window_title: new_ctx.window_title.or(session_context.window_title.clone()),
                 attachments: new_ctx.attachments,
+                topic_id: new_ctx.topic_id.or(session_context.topic_id.clone()),
             }
         } else {
             session_context.clone()

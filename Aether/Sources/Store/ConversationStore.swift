@@ -246,4 +246,23 @@ final class ConversationStore {
             print("[ConversationStore] Failed to delete messages: \(error)")
         }
     }
+
+    // MARK: - Bulk Operations
+
+    /// Clear all topics and messages (hard delete)
+    /// Returns the number of topics deleted
+    @discardableResult
+    func clearAllTopics() -> Int {
+        do {
+            return try dbQueue?.write { db in
+                // Messages will be deleted automatically due to ON DELETE CASCADE
+                let deletedCount = try Topic.deleteAll(db)
+                print("[ConversationStore] Cleared all topics and messages: \(deletedCount) topics deleted")
+                return deletedCount
+            } ?? 0
+        } catch {
+            print("[ConversationStore] Failed to clear all topics: \(error)")
+            return 0
+        }
+    }
 }

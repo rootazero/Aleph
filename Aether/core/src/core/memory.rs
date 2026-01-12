@@ -104,6 +104,21 @@ impl AetherCore {
         self.runtime.block_on(db.clear_facts())
     }
 
+    /// Delete all memories associated with a specific topic ID
+    ///
+    /// This method is called when a multi-turn conversation topic is deleted
+    /// to ensure all related memories are also removed.
+    ///
+    /// # Arguments
+    /// * `topic_id` - The unique identifier of the topic
+    ///
+    /// # Returns
+    /// * `Result<u64>` - Number of deleted memories
+    pub fn delete_memories_by_topic_id(&self, topic_id: String) -> Result<u64> {
+        let db = self.require_memory_db()?;
+        self.runtime.block_on(db.delete_by_topic_id(&topic_id))
+    }
+
     /// Get memory configuration
     pub fn get_memory_config(&self) -> MemoryConfig {
         let config = self.lock_config();
@@ -235,11 +250,15 @@ impl AetherCore {
             .as_ref()
             .ok_or_else(|| AetherError::config("No context captured"))?;
 
-        // Create context anchor
+        // Create context anchor with topic_id from captured context
         let context_anchor = ContextAnchor {
             app_bundle_id: captured_context.app_bundle_id.clone(),
             window_title: captured_context.window_title.clone().unwrap_or_default(),
             timestamp: chrono::Utc::now().timestamp(),
+            topic_id: captured_context
+                .topic_id
+                .clone()
+                .unwrap_or_else(|| crate::memory::context::SINGLE_TURN_TOPIC_ID.to_string()),
         };
 
         // Get memory database
@@ -323,11 +342,15 @@ impl AetherCore {
             }
         };
 
-        // Create context anchor
+        // Create context anchor with topic_id from captured context
         let context_anchor = ContextAnchor {
             app_bundle_id: captured_context.app_bundle_id.clone(),
             window_title: captured_context.window_title.clone().unwrap_or_default(),
             timestamp: chrono::Utc::now().timestamp(),
+            topic_id: captured_context
+                .topic_id
+                .clone()
+                .unwrap_or_else(|| crate::memory::context::SINGLE_TURN_TOPIC_ID.to_string()),
         };
 
         // Get memory database
@@ -467,11 +490,15 @@ impl AetherCore {
             // Embedding-based retrieval: use vector similarity search
             debug!("[Memory] Using embedding-based retrieval");
 
-            // Create context anchor
+            // Create context anchor with topic_id from captured context
             let context_anchor = ContextAnchor {
                 app_bundle_id: captured_context.app_bundle_id.clone(),
                 window_title: captured_context.window_title.clone().unwrap_or_default(),
                 timestamp: chrono::Utc::now().timestamp(),
+                topic_id: captured_context
+                    .topic_id
+                    .clone()
+                    .unwrap_or_else(|| crate::memory::context::SINGLE_TURN_TOPIC_ID.to_string()),
             };
 
             // Get embedding model

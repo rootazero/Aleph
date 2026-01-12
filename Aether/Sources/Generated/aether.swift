@@ -600,6 +600,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func deleteMcpServer(id: String) throws 
     
+    func deleteMemoriesByTopicId(topicId: String) throws  -> UInt64
+    
     func deleteMemory(id: String) throws 
     
     func deleteProvider(name: String) throws 
@@ -873,6 +875,14 @@ open func deleteMcpServer(id: String)throws  {try rustCallWithError(FfiConverter
         FfiConverterString.lower(id),$0
     )
 }
+}
+    
+open func deleteMemoriesByTopicId(topicId: String)throws  -> UInt64 {
+    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_delete_memories_by_topic_id(self.uniffiClonePointer(),
+        FfiConverterString.lower(topicId),$0
+    )
+})
 }
     
 open func deleteMemory(id: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
@@ -1589,13 +1599,15 @@ public struct CapturedContext {
     public var appBundleId: String
     public var windowTitle: String?
     public var attachments: [MediaAttachment]?
+    public var topicId: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(appBundleId: String, windowTitle: String?, attachments: [MediaAttachment]?) {
+    public init(appBundleId: String, windowTitle: String?, attachments: [MediaAttachment]?, topicId: String?) {
         self.appBundleId = appBundleId
         self.windowTitle = windowTitle
         self.attachments = attachments
+        self.topicId = topicId
     }
 }
 
@@ -1612,6 +1624,9 @@ extension CapturedContext: Equatable, Hashable {
         if lhs.attachments != rhs.attachments {
             return false
         }
+        if lhs.topicId != rhs.topicId {
+            return false
+        }
         return true
     }
 
@@ -1619,6 +1634,7 @@ extension CapturedContext: Equatable, Hashable {
         hasher.combine(appBundleId)
         hasher.combine(windowTitle)
         hasher.combine(attachments)
+        hasher.combine(topicId)
     }
 }
 
@@ -1632,7 +1648,8 @@ public struct FfiConverterTypeCapturedContext: FfiConverterRustBuffer {
             try CapturedContext(
                 appBundleId: FfiConverterString.read(from: &buf), 
                 windowTitle: FfiConverterOptionString.read(from: &buf), 
-                attachments: FfiConverterOptionSequenceTypeMediaAttachment.read(from: &buf)
+                attachments: FfiConverterOptionSequenceTypeMediaAttachment.read(from: &buf), 
+                topicId: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -1640,6 +1657,7 @@ public struct FfiConverterTypeCapturedContext: FfiConverterRustBuffer {
         FfiConverterString.write(value.appBundleId, into: &buf)
         FfiConverterOptionString.write(value.windowTitle, into: &buf)
         FfiConverterOptionSequenceTypeMediaAttachment.write(value.attachments, into: &buf)
+        FfiConverterOptionString.write(value.topicId, into: &buf)
     }
 }
 
@@ -8425,6 +8443,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_delete_mcp_server() != 25905) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_delete_memories_by_topic_id() != 24621) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_delete_memory() != 18981) {

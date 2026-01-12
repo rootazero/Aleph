@@ -197,11 +197,12 @@ final class MultiTurnCoordinator {
         guard let core = core else { return }
 
         do {
-            // Create context for AI call with attachments
+            // Create context for AI call with attachments and topic ID
             let context = CapturedContext(
                 appBundleId: "com.aether.multi-turn",
                 windowTitle: nil,
-                attachments: attachments.isEmpty ? nil : attachments
+                attachments: attachments.isEmpty ? nil : attachments,
+                topicId: topic.id  // Associate memory with this topic
             )
 
             // Log attachment info

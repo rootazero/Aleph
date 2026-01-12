@@ -218,6 +218,10 @@ interface AetherCore {
   [Throws=AetherException]
   u64 clear_facts();
 
+  // Delete all memories associated with a topic ID (for multi-turn conversation deletion)
+  [Throws=AetherException]
+  u64 delete_memories_by_topic_id(string topic_id);
+
   // Get memory configuration
   MemoryConfig get_memory_config();
 
@@ -919,6 +923,7 @@ dictionary CapturedContext {
   string app_bundle_id;
   string? window_title;
   sequence<MediaAttachment>? attachments;  // Multimodal content support
+  string? topic_id;  // Topic ID for multi-turn conversations
 };
 
 // Media attachment for multimodal content (add-multimodal-content-support)

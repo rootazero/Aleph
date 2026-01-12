@@ -67,7 +67,8 @@ impl VectorDatabase {
                 user_input TEXT NOT NULL,
                 ai_output TEXT NOT NULL,
                 embedding BLOB NOT NULL,
-                timestamp INTEGER NOT NULL
+                timestamp INTEGER NOT NULL,
+                topic_id TEXT NOT NULL
             );
 
             -- Index for fast context-based filtering
@@ -75,6 +76,9 @@ impl VectorDatabase {
 
             -- Index for timestamp-based queries (retention policy)
             CREATE INDEX IF NOT EXISTS idx_timestamp ON memories(timestamp);
+
+            -- Index for topic-based queries (multi-turn conversation deletion)
+            CREATE INDEX IF NOT EXISTS idx_topic_id ON memories(topic_id);
 
             -- ================================================================
             -- Memory Compression: Fact Storage Tables
@@ -193,8 +197,8 @@ impl VectorDatabase {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             r#"
-            INSERT INTO memories (id, app_bundle_id, window_title, user_input, ai_output, embedding, timestamp)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            INSERT INTO memories (id, app_bundle_id, window_title, user_input, ai_output, embedding, timestamp, topic_id)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             "#,
             params![
                 memory.id,
@@ -204,6 +208,7 @@ impl VectorDatabase {
                 memory.ai_output,
                 embedding_bytes,
                 memory.context.timestamp,
+                memory.context.topic_id,
             ],
         )
         .map_err(|e| AetherError::config(format!("Failed to insert memory: {}", e)))?;
@@ -226,7 +231,7 @@ impl VectorDatabase {
         let mut stmt = conn
             .prepare(
                 r#"
-            SELECT id, app_bundle_id, window_title, user_input, ai_output, embedding, timestamp
+            SELECT id, app_bundle_id, window_title, user_input, ai_output, embedding, timestamp, topic_id
             FROM memories
             WHERE (?1 = '' OR app_bundle_id = ?1)
               AND (?2 = '' OR window_title = ?2)
@@ -245,6 +250,7 @@ impl VectorDatabase {
                 let ai_output: String = row.get(4)?;
                 let embedding_bytes: Vec<u8> = row.get(5)?;
                 let timestamp: i64 = row.get(6)?;
+                let topic_id: String = row.get(7)?;
 
                 let embedding = Self::deserialize_embedding(&embedding_bytes);
 
@@ -254,6 +260,7 @@ impl VectorDatabase {
                         app_bundle_id: app_id,
                         window_title: window,
                         timestamp,
+                        topic_id,
                     },
                     user_input,
                     ai_output,
@@ -310,7 +317,7 @@ impl VectorDatabase {
         let mut stmt = conn
             .prepare(
                 r#"
-            SELECT id, app_bundle_id, window_title, user_input, ai_output, embedding, timestamp
+            SELECT id, app_bundle_id, window_title, user_input, ai_output, embedding, timestamp, topic_id
             FROM memories
             WHERE (?1 = '' OR app_bundle_id = ?1)
               AND (?2 = '' OR window_title = ?2)
@@ -330,6 +337,7 @@ impl VectorDatabase {
                 let ai_output: String = row.get(4)?;
                 let embedding_bytes: Vec<u8> = row.get(5)?;
                 let timestamp: i64 = row.get(6)?;
+                let topic_id: String = row.get(7)?;
 
                 let embedding = Self::deserialize_embedding(&embedding_bytes);
 
@@ -339,6 +347,7 @@ impl VectorDatabase {
                         app_bundle_id: app_id,
                         window_title: window,
                         timestamp,
+                        topic_id,
                     },
                     user_input,
                     ai_output,
@@ -414,6 +423,27 @@ impl VectorDatabase {
         let rows_affected = conn
             .execute(&query, params_refs.as_slice())
             .map_err(|e| AetherError::config(format!("Failed to clear memories: {}", e)))?;
+
+        Ok(rows_affected as u64)
+    }
+
+    /// Delete all memories associated with a specific topic ID
+    ///
+    /// Used when deleting a multi-turn conversation topic to ensure
+    /// all related memories are also removed from the database.
+    pub async fn delete_by_topic_id(&self, topic_id: &str) -> Result<u64, AetherError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let rows_affected = conn
+            .execute("DELETE FROM memories WHERE topic_id = ?1", params![topic_id])
+            .map_err(|e| {
+                AetherError::config(format!("Failed to delete memories by topic_id: {}", e))
+            })?;
+
+        tracing::info!(
+            topic_id = %topic_id,
+            deleted_count = rows_affected,
+            "Deleted memories for topic"
+        );
 
         Ok(rows_affected as u64)
     }
@@ -848,7 +878,7 @@ impl VectorDatabase {
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT id, app_bundle_id, window_title, user_input, ai_output, embedding, timestamp
+                SELECT id, app_bundle_id, window_title, user_input, ai_output, embedding, timestamp, topic_id
                 FROM memories
                 WHERE timestamp > ?1
                 ORDER BY timestamp ASC
@@ -866,6 +896,7 @@ impl VectorDatabase {
                 let ai_output: String = row.get(4)?;
                 let embedding_bytes: Vec<u8> = row.get(5)?;
                 let timestamp: i64 = row.get(6)?;
+                let topic_id: String = row.get(7)?;
 
                 let embedding = Self::deserialize_embedding(&embedding_bytes);
 
@@ -875,6 +906,7 @@ impl VectorDatabase {
                         app_bundle_id: app_id,
                         window_title: window,
                         timestamp,
+                        topic_id,
                     },
                     user_input,
                     ai_output,

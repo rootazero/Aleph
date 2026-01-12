@@ -162,11 +162,26 @@ final class MultiTurnInputViewModel: ObservableObject {
     // MARK: - Topic Operations
 
     func deleteTopic(_ topic: Topic) {
-        // Delete messages first, then soft-delete the topic
+        // 1. Delete associated memories from Rust core first
+        if let core = core {
+            do {
+                let deletedMemories = try core.deleteMemoriesByTopicId(topicId: topic.id)
+                print("[MultiTurnInputViewModel] Deleted \(deletedMemories) memories for topic: \(topic.id)")
+            } catch {
+                print("[MultiTurnInputViewModel] Failed to delete memories: \(error)")
+            }
+        }
+
+        // 2. Delete messages from conversation store
         ConversationStore.shared.deleteMessages(topicId: topic.id)
+
+        // 3. Soft-delete the topic
         ConversationStore.shared.deleteTopic(id: topic.id)
+
+        // 4. Reload topic list
         loadTopics()
-        print("[MultiTurnInputViewModel] Deleted topic and messages: \(topic.title)")
+
+        print("[MultiTurnInputViewModel] Deleted topic, messages and memories: \(topic.title)")
     }
 
     func renameTopic(_ topic: Topic, newTitle: String) {

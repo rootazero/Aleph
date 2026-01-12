@@ -210,6 +210,7 @@ mod tests {
             app_bundle_id: "com.test.old".to_string(),
             window_title: "Old Window".to_string(),
             timestamp: old_timestamp,
+            topic_id: "test-topic-old".to_string(),
         };
         let embedding = vec![0.1; 512];
         let old_memory = MemoryEntry::with_embedding(
@@ -227,6 +228,7 @@ mod tests {
             app_bundle_id: "com.test.recent".to_string(),
             window_title: "Recent Window".to_string(),
             timestamp: recent_timestamp,
+            topic_id: "test-topic-recent".to_string(),
         };
         let recent_memory = MemoryEntry::with_embedding(
             "recent-id".to_string(),

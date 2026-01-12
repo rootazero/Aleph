@@ -10,11 +10,32 @@ pub struct ContextAnchor {
     pub window_title: String,
     /// Unix timestamp when interaction occurred
     pub timestamp: i64,
+    /// Topic ID for associating memories with conversation topics
+    /// For multi-turn: specific topic UUID; For single-turn: "single-turn" constant
+    pub topic_id: String,
 }
 
+/// Default topic ID for single-turn interactions
+pub const SINGLE_TURN_TOPIC_ID: &str = "single-turn";
+
 impl ContextAnchor {
-    /// Create a new context anchor with current timestamp
+    /// Create a new context anchor with current timestamp (for single-turn)
     pub fn now(app_bundle_id: String, window_title: String) -> Self {
+        Self::with_topic(app_bundle_id, window_title, SINGLE_TURN_TOPIC_ID.to_string())
+    }
+
+    /// Create context anchor with specific timestamp (for single-turn)
+    pub fn with_timestamp(app_bundle_id: String, window_title: String, timestamp: i64) -> Self {
+        Self {
+            app_bundle_id,
+            window_title,
+            timestamp,
+            topic_id: SINGLE_TURN_TOPIC_ID.to_string(),
+        }
+    }
+
+    /// Create context anchor with topic ID (for multi-turn conversations)
+    pub fn with_topic(app_bundle_id: String, window_title: String, topic_id: String) -> Self {
         use std::time::{SystemTime, UNIX_EPOCH};
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -25,15 +46,7 @@ impl ContextAnchor {
             app_bundle_id,
             window_title,
             timestamp,
-        }
-    }
-
-    /// Create context anchor with specific timestamp
-    pub fn with_timestamp(app_bundle_id: String, window_title: String, timestamp: i64) -> Self {
-        Self {
-            app_bundle_id,
-            window_title,
-            timestamp,
+            topic_id,
         }
     }
 }

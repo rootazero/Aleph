@@ -405,7 +405,8 @@ final class InputCoordinator {
                 let capturedContext = CapturedContext(
                     appBundleId: windowContext.bundleId ?? "unknown",
                     windowTitle: windowContext.windowTitle,
-                    attachments: mergeResult.finalAttachments.isEmpty ? nil : mergeResult.finalAttachments
+                    attachments: mergeResult.finalAttachments.isEmpty ? nil : mergeResult.finalAttachments,
+                    topicId: nil  // Single-turn mode uses default topic
                 )
 
                 // Use merged text from AttachmentMerger

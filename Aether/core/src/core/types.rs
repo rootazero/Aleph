@@ -38,6 +38,7 @@ pub struct CapturedContext {
     pub app_bundle_id: String,
     pub window_title: Option<String>,
     pub attachments: Option<Vec<MediaAttachment>>, // Multimodal content support
+    pub topic_id: Option<String>, // Topic ID for multi-turn conversations
 }
 
 /// Statistics about memory compression state
@@ -132,11 +133,15 @@ impl StorageHelper {
                 .as_ref()
                 .ok_or_else(|| crate::error::AetherError::config("No context captured"))?;
 
-            // Create context anchor
+            // Create context anchor with topic_id from captured context
             let context_anchor = ContextAnchor {
                 app_bundle_id: captured_context.app_bundle_id.clone(),
                 window_title: captured_context.window_title.clone().unwrap_or_default(),
                 timestamp: chrono::Utc::now().timestamp(),
+                topic_id: captured_context
+                    .topic_id
+                    .clone()
+                    .unwrap_or_else(|| crate::memory::context::SINGLE_TURN_TOPIC_ID.to_string()),
             };
 
             // Get memory database
