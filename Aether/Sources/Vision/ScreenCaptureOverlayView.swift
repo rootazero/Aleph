@@ -23,9 +23,6 @@ final class ScreenCaptureOverlayView: NSView {
     /// Tracking area for mouse events
     private var trackingArea: NSTrackingArea?
 
-    /// Flag indicating the view is being dismissed - prevents callbacks and updates
-    private var isDismissed = false
-
     /// Overlay background color
     private let overlayColor = NSColor.black.withAlphaComponent(0.3)
 
@@ -62,23 +59,16 @@ final class ScreenCaptureOverlayView: NSView {
     /// Prepare the view for safe dismissal
     /// Must be called by the coordinator before closing the containing window
     func prepareForDismissal() {
-        // Set flag first to prevent any concurrent operations
-        isDismissed = true
-
-        // Immediately remove tracking area to break owner reference
+        // Remove tracking area to break owner reference
         if let area = trackingArea {
             removeTrackingArea(area)
             trackingArea = nil
         }
 
-        // Clear callbacks to prevent any pending invocations
-        // This breaks potential retain cycles
+        // Clear callbacks - this is the key safety mechanism
+        // After this, onComplete?() and onCancel?() become no-ops
         onComplete = nil
         onCancel = nil
-
-        // Reset state
-        startPoint = nil
-        currentRect = nil
     }
 
     // MARK: - Setup
@@ -94,9 +84,6 @@ final class ScreenCaptureOverlayView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-
-        // Don't update tracking areas after dismissal
-        guard !isDismissed else { return }
 
         // Remove old tracking area
         if let existingArea = trackingArea {
@@ -144,22 +131,14 @@ final class ScreenCaptureOverlayView: NSView {
     }
 
     override func mouseUp(with _: NSEvent) {
-        // Guard: don't process events after dismissal started
-        guard !isDismissed else { return }
-
         guard let rect = currentRect, rect.width > 10, rect.height > 10 else {
             // Selection too small, cancel
-            // Check dismissal again before callback
-            guard !isDismissed else { return }
             onCancel?()
             return
         }
 
-        // Convert to screen coordinates
+        // Convert to screen coordinates and complete
         let screenRect = convertToScreenCoordinates(rect)
-
-        // Final check before callback
-        guard !isDismissed else { return }
         onComplete?(screenRect)
     }
 
@@ -170,12 +149,8 @@ final class ScreenCaptureOverlayView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        // Guard: don't process events after dismissal started
-        guard !isDismissed else { return }
-
         // Escape key cancels selection
-        if event.keyCode == 53 { // Escape key
-            guard !isDismissed else { return }
+        if event.keyCode == 53 {
             onCancel?()
         }
     }
