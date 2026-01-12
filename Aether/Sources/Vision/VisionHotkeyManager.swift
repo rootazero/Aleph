@@ -5,16 +5,16 @@ import Foundation
 /// Manager for vision-related hotkeys
 ///
 /// Handles registration and dispatch of screen capture hotkey:
-/// - Default: Cmd+Shift+Control+4: Region capture (configurable)
+/// - Default: Cmd+Option+O: Region capture (configurable)
 final class VisionHotkeyManager {
     // MARK: - Properties
 
     private var localEventMonitor: Any?
     private var globalEventMonitor: Any?
 
-    // Configurable hotkey (default: Cmd+Shift+Control+4)
-    private var ocrKeyCode: UInt16 = UInt16(kVK_ANSI_4)
-    private var ocrModifiers: NSEvent.ModifierFlags = [.command, .shift, .control]
+    // Configurable hotkey (default: Cmd+Option+O)
+    private var ocrKeyCode: UInt16 = UInt16(kVK_ANSI_O)
+    private var ocrModifiers: NSEvent.ModifierFlags = [.command, .option]
 
     // MARK: - Initialization
 
