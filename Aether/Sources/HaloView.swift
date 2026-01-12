@@ -65,7 +65,7 @@ struct HaloView: View {
                 )
 
             case .conversationInput:
-                // Handled by UnifiedInputWindow, not HaloView
+                // Handled by MultiTurnInputWindow, not HaloView
                 EmptyView()
 
             case .toolConfirmation(_, let toolName, let toolDescription, let reason, let confidence):

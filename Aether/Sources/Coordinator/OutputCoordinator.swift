@@ -391,7 +391,7 @@ final class OutputCoordinator {
     /// Handle ESC key press - cancel typewriter animation
     private func handleEscapeKey() {
         guard let cancellation = typewriterCancellation else {
-            // Note: Unified input ESC handling is managed by UnifiedInputCoordinator
+            // Note: Multi-turn input ESC handling is managed by MultiTurnCoordinator
             print("[OutputCoordinator] ESC pressed but no typewriter is running")
             return
         }

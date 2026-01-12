@@ -514,7 +514,7 @@ class EventHandler: AetherEventHandler {
 
         case .listening:
             // Skip halo spinner in multi-turn conversation mode
-            // UnifiedInputWindow handles UI feedback instead
+            // MultiTurnInputWindow handles UI feedback instead
             if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
                 print("[EventHandler] Skipping listening state (multi-turn mode)")
                 return
@@ -528,7 +528,7 @@ class EventHandler: AetherEventHandler {
 
         case .retrievingMemory:
             // Skip halo spinner in multi-turn conversation mode
-            // SubPanel handles UI feedback instead
+            // MultiTurnInputWindow handles UI feedback instead
             if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
                 print("[EventHandler] Skipping retrievingMemory state (multi-turn mode)")
                 return
@@ -540,24 +540,24 @@ class EventHandler: AetherEventHandler {
 
         case .processingWithAi:
             // Skip halo spinner in multi-turn conversation mode
-            // SubPanel handles UI feedback instead
+            // MultiTurnInputWindow handles UI feedback instead
             if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
                 print("[EventHandler] Skipping processing state (multi-turn mode)")
                 return
             }
-            // Update state only - position is controlled by UnifiedInputCoordinator
+            // Update state only - position is controlled by InputCoordinator
             haloWindow?.updateState(.processingWithAI(providerName: nil))
             haloWindow?.showAtCurrentPosition()
             announceToVoiceOver("Processing with AI")
 
         case .processing:
             // Skip halo spinner in multi-turn conversation mode
-            // SubPanel handles UI feedback instead
+            // MultiTurnInputWindow handles UI feedback instead
             if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
                 print("[EventHandler] Skipping processing state (multi-turn mode)")
                 return
             }
-            // Update state only - position is controlled by UnifiedInputCoordinator
+            // Update state only - position is controlled by InputCoordinator
             haloWindow?.updateState(.processing(streamingText: nil))
             haloWindow?.showAtCurrentPosition()
             announceToVoiceOver("Processing request")

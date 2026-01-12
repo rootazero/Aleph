@@ -14,6 +14,20 @@ import SwiftUI
 /// Input window for multi-turn conversations
 final class MultiTurnInputWindow: NSWindow {
 
+    // MARK: - Constants
+
+    /// Window width
+    private static let windowWidth: CGFloat = 600
+
+    /// Base input height
+    private static let baseInputHeight: CGFloat = 60
+
+    /// Maximum height for command/topic list
+    private static let maxPanelHeight: CGFloat = 300
+
+    /// Total fixed window height to accommodate expanded lists
+    private static let fixedWindowHeight: CGFloat = baseInputHeight + maxPanelHeight + 20
+
     // MARK: - Properties
 
     /// View model for input state
@@ -33,8 +47,9 @@ final class MultiTurnInputWindow: NSWindow {
     // MARK: - Initialization
 
     init() {
+        // Use fixed window height to accommodate command/topic list expansion
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 60),
+            contentRect: NSRect(x: 0, y: 0, width: Self.windowWidth, height: Self.fixedWindowHeight),
             styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -60,6 +75,9 @@ final class MultiTurnInputWindow: NSWindow {
         backgroundColor = .clear
         isOpaque = false
         hasShadow = true
+
+        // CRITICAL: Start hidden to prevent flash during lazy initialization
+        alphaValue = 0
 
         collectionBehavior = [.canJoinAllSpaces, .stationary]
         hidesOnDeactivate = false
@@ -109,23 +127,36 @@ final class MultiTurnInputWindow: NSWindow {
         guard let screen = NSScreen.main else { return }
 
         let screenFrame = screen.frame
+
+        // Position window so input area is at upper portion of screen
+        // This allows command/topic list to expand downward
+        let inputAreaTopY = screenFrame.midY + 150
+        let windowOriginY = inputAreaTopY - Self.fixedWindowHeight
+
         let origin = NSPoint(
             x: screenFrame.midX - frame.width / 2,
-            y: screenFrame.midY + 100  // Slightly above center
+            y: windowOriginY
         )
 
         setFrameOrigin(origin)
         alphaValue = 0
-        orderFrontRegardless()
-        makeKey()
 
-        NSAnimationContext.runAnimationGroup { context in
+        // Activate the app first to ensure we can receive keyboard focus
+        // This is critical when the app is in background
+        NSApp.activate(ignoringOtherApps: true)
+
+        // Show window
+        makeKeyAndOrderFront(nil)
+
+        // Animate fade in
+        NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.15
             self.animator().alphaValue = 1.0
-        }
-
-        // Focus the text field
-        viewModel.focusInput()
+        }, completionHandler: {
+            // IMETextField has autoFocus=true, it will handle focus automatically
+            // Do NOT call makeFirstResponder on hostingView - it interferes with IMETextField
+            NSLog("[MultiTurnInputWindow] Window shown, IMETextField will auto-focus")
+        })
     }
 
     func hide() {

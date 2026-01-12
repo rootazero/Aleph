@@ -189,6 +189,20 @@ final class ConversationStore {
         }
     }
 
+    /// Update message content (for streaming/typewriter mode)
+    func updateMessageContent(messageId: String, content: String) {
+        do {
+            try dbQueue?.write { db in
+                try db.execute(
+                    sql: "UPDATE messages SET content = ? WHERE id = ?",
+                    arguments: [content, messageId]
+                )
+            }
+        } catch {
+            print("[ConversationStore] Failed to update message content: \(error)")
+        }
+    }
+
     /// Get all messages for a topic, sorted by createdAt ASC
     func getMessages(topicId: String) -> [ConversationMessage] {
         do {

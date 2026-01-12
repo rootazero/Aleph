@@ -28,6 +28,15 @@ final class ConversationDisplayViewModel: ObservableObject {
     /// Error message if any
     @Published var errorMessage: String?
 
+    /// Streaming text for typewriter mode (nil = complete message)
+    @Published var streamingMessageId: String?
+    @Published var streamingText: String = ""
+
+    // MARK: - Callbacks
+
+    /// Callback when content height changes
+    var onHeightChanged: ((CGFloat) -> Void)?
+
     // MARK: - Computed Properties
 
     /// Whether there are any messages
@@ -74,6 +83,57 @@ final class ConversationDisplayViewModel: ObservableObject {
             messages.append(message)
         }
         isLoading = false
+    }
+
+    /// Start streaming an assistant message (for typewriter mode)
+    func startStreamingMessage() -> String? {
+        guard let topicId = topic?.id else { return nil }
+
+        // Create placeholder message
+        if let message = ConversationStore.shared.addMessage(
+            topicId: topicId,
+            role: .assistant,
+            content: ""
+        ) {
+            messages.append(message)
+            streamingMessageId = message.id
+            streamingText = ""
+            return message.id
+        }
+        return nil
+    }
+
+    /// Update streaming message content
+    func updateStreamingText(_ text: String) {
+        streamingText = text
+
+        // Update the last message content
+        if let messageId = streamingMessageId,
+           let index = messages.firstIndex(where: { $0.id == messageId }) {
+            messages[index].content = text
+        }
+    }
+
+    /// Finish streaming message
+    func finishStreamingMessage() {
+        if let messageId = streamingMessageId,
+           messages.contains(where: { $0.id == messageId }) {
+            // Update in store with final content
+            ConversationStore.shared.updateMessageContent(
+                messageId: messageId,
+                content: streamingText
+            )
+        }
+
+        streamingMessageId = nil
+        streamingText = ""
+        isLoading = false
+    }
+
+    /// Report content height change
+    func reportHeightChange(_ height: CGFloat) {
+        print("[ConversationDisplayViewModel] Height reported: \(height)")
+        onHeightChanged?(height)
     }
 
     /// Set loading state

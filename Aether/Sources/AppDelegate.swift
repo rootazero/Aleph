@@ -57,11 +57,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Global hotkey monitor (Swift layer)
     private var hotkeyMonitor: GlobalHotkeyMonitor?
 
-    // Unified input coordinator for Halo window
-    private var unifiedInputCoordinator: UnifiedInputCoordinator?
-
-    // Multi-turn conversation hotkey monitor (Cmd+Opt+/)
-    private var multiTurnHotkeyMonitor: Any?
+    // Multi-turn conversation hotkey monitors (Cmd+Opt+/)
+    // Global monitor for when other apps are active
+    private var multiTurnHotkeyGlobalMonitor: Any?
+    // Local monitor for when Aether is active
+    private var multiTurnHotkeyLocalMonitor: Any?
 
     // MARK: - Managers (via DependencyContainer)
 
@@ -132,9 +132,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         hotkeyMonitor?.stopMonitoring()
 
         // Stop multi-turn hotkey monitoring
-        if let monitor = multiTurnHotkeyMonitor {
+        if let monitor = multiTurnHotkeyGlobalMonitor {
             NSEvent.removeMonitor(monitor)
-            multiTurnHotkeyMonitor = nil
+            multiTurnHotkeyGlobalMonitor = nil
+        }
+        if let monitor = multiTurnHotkeyLocalMonitor {
+            NSEvent.removeMonitor(monitor)
+            multiTurnHotkeyLocalMonitor = nil
         }
 
         // Stop clipboard monitoring
@@ -142,9 +146,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Stop output coordinator (removes ESC key monitor)
         outputCoordinator?.stop()
-
-        // Clean up unified input coordinator (replaces old CommandModeCoordinator)
-        unifiedInputCoordinator?.cleanup()
 
         // Clean up Rust core (only if initialized)
         // Note: No need to call stopListening() as hotkey monitoring is now in Swift
@@ -572,21 +573,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
             print("[Aether] All coordinators configured")
 
-            // Initialize and configure unified input coordinator
-            unifiedInputCoordinator = UnifiedInputCoordinator()
-            if let core = core {
-                unifiedInputCoordinator?.configure(
-                    core: core,
-                    haloWindowController: haloWindowController,
-                    eventHandler: eventHandler,
-                    outputCoordinator: outputCoordinator,
-                    conversationCoordinator: conversationCoordinator
-                )
-            }
-            // Note: UnifiedInputCoordinator hotkey setup is now handled via MultiTurnCoordinator
-            // unifiedInputCoordinator?.setupUnifiedHotkey() - REMOVED
-            print("[Aether] UnifiedInputCoordinator configured (hotkey via MultiTurnCoordinator)")
-
             // Configure MultiTurnCoordinator with core
             MultiTurnCoordinator.shared.configure(core: core!)
             // Setup Cmd+Opt+/ hotkey to route to MultiTurnCoordinator
@@ -855,8 +841,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Load hotkey configuration from config
         loadMultiTurnHotkeyConfig()
 
-        multiTurnHotkeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self = self else { return }
+        // Hotkey handler closure - shared between global and local monitors
+        let hotkeyHandler: (NSEvent) -> Bool = { [weak self] event in
+            guard let self = self else { return false }
 
             // Check for configured hotkey
             var modifiersMatch = true
@@ -870,9 +857,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
             if modifiersMatch && event.keyCode == self.multiTurnHotkeyKeyCode {
                 MultiTurnCoordinator.shared.handleHotkey()
+                return true  // Event handled
             }
+            return false
         }
-        print("[AppDelegate] Multi-turn hotkey monitor installed (keyCode: \(multiTurnHotkeyKeyCode), modifiers: \(multiTurnHotkeyModifiers))")
+
+        // Global monitor - captures hotkey when OTHER apps are active
+        multiTurnHotkeyGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
+            _ = hotkeyHandler(event)
+        }
+
+        // Local monitor - captures hotkey when AETHER is active
+        multiTurnHotkeyLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if hotkeyHandler(event) {
+                return nil  // Consume the event
+            }
+            return event  // Pass through
+        }
+
+        print("[AppDelegate] Multi-turn hotkey monitors installed (keyCode: \(multiTurnHotkeyKeyCode), modifiers: \(multiTurnHotkeyModifiers))")
     }
 
     /// Load multi-turn hotkey configuration from config
@@ -932,13 +935,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func updateMultiTurnHotkeyConfig(_ shortcuts: ShortcutsConfig) {
         parseAndApplyMultiTurnHotkey(shortcuts.commandPrompt)
 
-        // Reinstall the monitor with new settings
-        if let monitor = multiTurnHotkeyMonitor {
+        // Reinstall the monitors with new settings
+        if let monitor = multiTurnHotkeyGlobalMonitor {
             NSEvent.removeMonitor(monitor)
-            multiTurnHotkeyMonitor = nil
+            multiTurnHotkeyGlobalMonitor = nil
+        }
+        if let monitor = multiTurnHotkeyLocalMonitor {
+            NSEvent.removeMonitor(monitor)
+            multiTurnHotkeyLocalMonitor = nil
         }
         setupMultiTurnHotkey()
-        print("[AppDelegate] Multi-turn hotkey updated and monitor reinstalled")
+        print("[AppDelegate] Multi-turn hotkey updated and monitors reinstalled")
     }
 
     // MARK: - Trigger System Configuration

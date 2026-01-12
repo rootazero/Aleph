@@ -277,7 +277,7 @@ final class ConversationCoordinator {
         let attachmentCount = context?.attachments?.count ?? 0
         print("[ConversationCoordinator] 🎭 Continuing conversation with: \(followUpInput.prefix(50))... + \(attachmentCount) attachment(s)")
 
-        // Multi-turn mode: No spinner displayed, UnifiedInputWindow handles UI
+        // Multi-turn mode: No spinner displayed, MultiTurnInputWindow handles UI
 
         DispatchQueue.global(qos: .userInitiated).async {
             do {

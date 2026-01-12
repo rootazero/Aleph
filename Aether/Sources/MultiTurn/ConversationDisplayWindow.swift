@@ -56,6 +56,10 @@ final class ConversationDisplayWindow: NSWindow {
         isOpaque = false
         hasShadow = true
 
+        // CRITICAL: Start hidden to prevent flash during lazy initialization
+        // The window may be displayed by setFrame(display: true) before show() is called
+        alphaValue = 0
+
         // Behavior
         collectionBehavior = [.canJoinAllSpaces, .stationary]
         hidesOnDeactivate = false
@@ -74,6 +78,13 @@ final class ConversationDisplayWindow: NSWindow {
             hostingView.frame = contentView?.bounds ?? .zero
             hostingView.autoresizingMask = [.width, .height]
             contentView = hostingView
+        }
+
+        // Setup height change callback
+        viewModel.onHeightChanged = { [weak self] height in
+            DispatchQueue.main.async {
+                self?.updateHeight(for: height)
+            }
         }
     }
 
@@ -96,6 +107,11 @@ final class ConversationDisplayWindow: NSWindow {
     /// Update window height based on content
     func updateHeight(for contentHeight: CGFloat) {
         let clampedHeight = min(max(contentHeight, Layout.minHeight), Layout.maxHeight)
+
+        // Skip if height hasn't changed significantly
+        guard abs(clampedHeight - frame.height) > 1 else { return }
+
+        print("[ConversationDisplayWindow] Updating height: content=\(contentHeight), clamped=\(clampedHeight), current=\(frame.height)")
 
         var newFrame = frame
         let heightDiff = clampedHeight - newFrame.height

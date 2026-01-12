@@ -289,19 +289,28 @@ struct MultiTurnInputView: View {
                     .foregroundColor(.primary.opacity(0.6))
                     .padding()
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(viewModel.commands.enumerated()), id: \.element.key) { index, command in
-                            CommandRowView(
-                                command: command,
-                                isSelected: index == viewModel.selectedCommandIndex
-                            ) {
-                                viewModel.selectCommand(command)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        // Use VStack to ensure all rows are rendered for scrollTo
+                        VStack(spacing: 0) {
+                            ForEach(Array(viewModel.commands.enumerated()), id: \.element.key) { index, command in
+                                CommandRowView(
+                                    command: command,
+                                    isSelected: index == viewModel.selectedCommandIndex
+                                ) {
+                                    viewModel.selectCommand(command)
+                                }
+                                .id("cmd-\(index)")
                             }
                         }
                     }
+                    .frame(maxHeight: 300)
+                    .onChange(of: viewModel.selectedCommandIndex) { _, newIndex in
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            proxy.scrollTo("cmd-\(newIndex)", anchor: nil)
+                        }
+                    }
                 }
-                .frame(maxHeight: 300)
             }
         }
     }
@@ -318,19 +327,28 @@ struct MultiTurnInputView: View {
                     .foregroundColor(.primary.opacity(0.6))
                     .padding()
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(viewModel.filteredTopics.enumerated()), id: \.element.id) { index, topic in
-                            TopicRowView(
-                                topic: topic,
-                                isSelected: index == viewModel.selectedTopicIndex
-                            ) {
-                                viewModel.selectTopic(topic)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        // Use VStack to ensure all rows are rendered for scrollTo
+                        VStack(spacing: 0) {
+                            ForEach(Array(viewModel.filteredTopics.enumerated()), id: \.element.id) { index, topic in
+                                TopicRowView(
+                                    topic: topic,
+                                    isSelected: index == viewModel.selectedTopicIndex
+                                ) {
+                                    viewModel.selectTopic(topic)
+                                }
+                                .id("topic-\(index)")
                             }
                         }
                     }
+                    .frame(maxHeight: 300)
+                    .onChange(of: viewModel.selectedTopicIndex) { _, newIndex in
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            proxy.scrollTo("topic-\(newIndex)", anchor: nil)
+                        }
+                    }
                 }
-                .frame(maxHeight: 300)
             }
         }
     }
