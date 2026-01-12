@@ -51,6 +51,11 @@ final class ScreenCaptureCoordinator: ObservableObject {
             return
         }
 
+        // CRITICAL: Set isCapturing IMMEDIATELY after guard to prevent race conditions
+        // This must happen before any async work or UI setup to prevent double-entry
+        // when hotkey is pressed rapidly
+        isCapturing = true
+
         captureMode = mode
         lastResult = nil
         lastError = nil
@@ -76,6 +81,7 @@ final class ScreenCaptureCoordinator: ObservableObject {
     private func showRegionSelector() {
         guard let screen = NSScreen.main else {
             lastError = "No screen available"
+            isCapturing = false  // Reset flag on failure
             return
         }
 
@@ -87,7 +93,10 @@ final class ScreenCaptureCoordinator: ObservableObject {
             defer: false
         )
 
-        guard let window = overlayWindow else { return }
+        guard let window = overlayWindow else {
+            isCapturing = false  // Reset flag on failure
+            return
+        }
 
         // Configure window properties
         window.level = .screenSaver
@@ -109,8 +118,7 @@ final class ScreenCaptureCoordinator: ObservableObject {
         window.contentView = overlayView
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(overlayView)
-
-        isCapturing = true
+        // Note: isCapturing was already set to true in startCapture()
     }
 
     private func captureRegion(_ rect: CGRect) {

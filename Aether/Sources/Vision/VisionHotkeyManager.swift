@@ -70,12 +70,10 @@ final class VisionHotkeyManager {
 
         // Check for OCR capture hotkey
         if keyCode == ocrKeyCode, modifiers == ocrModifiers {
+            // Dispatch to MainActor to call the coordinator
+            // The coordinator's startCapture() has its own reentry protection
+            // that sets isCapturing=true immediately to prevent race conditions
             Task { @MainActor in
-                // Check if capture is already in progress before starting
-                guard !ScreenCaptureCoordinator.shared.isCapturing else {
-                    print("[VisionHotkeyManager] Capture already in progress, ignoring hotkey")
-                    return
-                }
                 ScreenCaptureCoordinator.shared.startCapture(mode: .region)
             }
             return true
