@@ -160,12 +160,6 @@ struct ShortcutsView: View {
 
                     Divider()
 
-                    // Control group
-                    Text(ModifierKey.leftControl.displayName).tag(ModifierKey.leftControl)
-                    Text(ModifierKey.rightControl.displayName).tag(ModifierKey.rightControl)
-
-                    Divider()
-
                     // Option group
                     Text(ModifierKey.leftOption.displayName).tag(ModifierKey.leftOption)
                     Text(ModifierKey.rightOption.displayName).tag(ModifierKey.rightOption)

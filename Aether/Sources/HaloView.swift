@@ -77,6 +77,19 @@ struct HaloView: View {
                     onExecute: viewModel.callbacks.toolConfirmationOnExecute,
                     onCancel: viewModel.callbacks.toolConfirmationOnCancel
                 )
+
+            case .planConfirmation(let planInfo):
+                PlanConfirmationView(
+                    planInfo: planInfo,
+                    onExecute: { viewModel.callbacks.planConfirmationOnExecute?() },
+                    onCancel: { viewModel.callbacks.planConfirmationOnCancel?() }
+                )
+
+            case .planProgress(let progressInfo):
+                PlanProgressView(
+                    progressInfo: progressInfo,
+                    onCancel: viewModel.callbacks.planConfirmationOnCancel
+                )
             }
         }
         .animation(.easeInOut(duration: 0.2), value: viewModel.state)

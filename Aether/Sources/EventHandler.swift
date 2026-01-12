@@ -84,6 +84,14 @@ class EventHandler: AetherEventHandler {
         }
 
         DispatchQueue.mainAsync(weakRef: self) { slf in
+            // Skip halo spinner in multi-turn conversation mode
+            // SubPanel handles UI feedback instead
+            if slf.conversationManager.sessionId != nil {
+                print("[EventHandler] Skipping halo error animation (multi-turn mode)")
+                slf.showErrorNotification(message: message, suggestion: suggestion)
+                return
+            }
+
             // Calculate delay to ensure Halo displays for at least minHaloDisplayTime
             // showTime is tracked by HaloWindow when show() is called
             let delay: TimeInterval
@@ -324,6 +332,16 @@ class EventHandler: AetherEventHandler {
 
     /// Show tool confirmation dialog in Halo
     private func showToolConfirmation(_ confirmation: PendingConfirmationInfo) {
+        // Skip halo spinner in multi-turn conversation mode
+        // SubPanel handles UI feedback instead
+        if conversationManager.sessionId != nil {
+            print("[EventHandler] Skipping tool confirmation halo (multi-turn mode)")
+            // In multi-turn mode, auto-execute tools without confirmation dialog
+            // This provides a smoother experience for conversation flow
+            handleUserConfirmation(confirmationId: confirmation.id, decision: .execute)
+            return
+        }
+
         // Show confirmation in Halo with action buttons
         haloWindow?.showToolConfirmation(
             confirmationId: confirmation.id,
@@ -367,6 +385,12 @@ class EventHandler: AetherEventHandler {
     private func handleConfirmationExpired(_ confirmationId: String) {
         print("[EventHandler] Handling expired confirmation: \(confirmationId)")
 
+        // Skip halo operations in multi-turn conversation mode
+        if conversationManager.sessionId != nil {
+            print("[EventHandler] Skipping confirmation expired handling (multi-turn mode)")
+            return
+        }
+
         // Show timeout notification
         showToast(
             type: .warning,
@@ -396,6 +420,89 @@ class EventHandler: AetherEventHandler {
         }
     }
 
+    // MARK: - Agent Loop Callbacks (enhance-l3-agent-planning)
+
+    /// Called when agent loop starts executing a multi-step plan
+    ///
+    /// NOTE: This method is called from a background thread by Rust/UniFFI.
+    func onAgentStarted(planId: String, totalSteps: UInt32, description: String) {
+        print("[EventHandler] Agent started: planId=\(planId), steps=\(totalSteps)")
+        print("[EventHandler]   Description: \(description)")
+
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .agentStarted,
+                object: nil,
+                userInfo: [
+                    "planId": planId,
+                    "totalSteps": totalSteps,
+                    "description": description
+                ]
+            )
+        }
+    }
+
+    /// Called when agent starts executing a tool
+    ///
+    /// NOTE: This method is called from a background thread by Rust/UniFFI.
+    func onAgentToolStarted(planId: String, stepIndex: UInt32, toolName: String, toolDescription: String) {
+        print("[EventHandler] Agent tool started: planId=\(planId), step=\(stepIndex), tool=\(toolName)")
+
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .agentToolStarted,
+                object: nil,
+                userInfo: [
+                    "planId": planId,
+                    "stepIndex": stepIndex,
+                    "toolName": toolName,
+                    "toolDescription": toolDescription
+                ]
+            )
+        }
+    }
+
+    /// Called when agent tool execution completes
+    ///
+    /// NOTE: This method is called from a background thread by Rust/UniFFI.
+    func onAgentToolCompleted(planId: String, stepIndex: UInt32, toolName: String, success: Bool, resultPreview: String) {
+        print("[EventHandler] Agent tool completed: planId=\(planId), step=\(stepIndex), tool=\(toolName), success=\(success)")
+
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .agentToolCompleted,
+                object: nil,
+                userInfo: [
+                    "planId": planId,
+                    "stepIndex": stepIndex,
+                    "toolName": toolName,
+                    "success": success,
+                    "resultPreview": resultPreview
+                ]
+            )
+        }
+    }
+
+    /// Called when agent loop completes (success or failure)
+    ///
+    /// NOTE: This method is called from a background thread by Rust/UniFFI.
+    func onAgentCompleted(planId: String, success: Bool, totalDurationMs: UInt64, finalResponse: String) {
+        print("[EventHandler] Agent completed: planId=\(planId), success=\(success), duration=\(totalDurationMs)ms")
+
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .agentCompleted,
+                object: nil,
+                userInfo: [
+                    "planId": planId,
+                    "success": success,
+                    "totalDurationMs": totalDurationMs,
+                    "finalResponse": finalResponse
+                ]
+            )
+        }
+    }
+
     // MARK: - State Change Handling
 
     private func handleStateChange(_ state: ProcessingState) {
@@ -406,6 +513,12 @@ class EventHandler: AetherEventHandler {
             accumulatedText = ""
 
         case .listening:
+            // Skip halo spinner in multi-turn conversation mode
+            // UnifiedInputWindow handles UI feedback instead
+            if conversationManager.sessionId != nil {
+                print("[EventHandler] Skipping listening state (multi-turn mode)")
+                return
+            }
             // Show HaloWindow with listening state
             haloWindow?.updateState(.listening)
             haloWindow?.show(at: NSEvent.mouseLocation)
@@ -414,6 +527,12 @@ class EventHandler: AetherEventHandler {
             announceToVoiceOver("Listening for input")
 
         case .retrievingMemory:
+            // Skip halo spinner in multi-turn conversation mode
+            // SubPanel handles UI feedback instead
+            if conversationManager.sessionId != nil {
+                print("[EventHandler] Skipping retrievingMemory state (multi-turn mode)")
+                return
+            }
             // Show HaloWindow with retrieving memory state
             haloWindow?.updateState(.retrievingMemory)
             haloWindow?.showAtCurrentPosition()

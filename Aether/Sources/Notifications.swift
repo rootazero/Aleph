@@ -76,6 +76,24 @@ extension Notification.Name {
     /// Posted when tool registry is refreshed (tools added/removed/changed)
     /// - UserInfo: ["toolCount": UInt32]
     static let toolsDidChange = Notification.Name("AetherToolsDidChange")
+
+    // MARK: - Agent Loop (enhance-l3-agent-planning)
+
+    /// Posted when agent loop starts executing a multi-step plan
+    /// - UserInfo: ["planId": String, "totalSteps": UInt32, "description": String]
+    static let agentStarted = Notification.Name("AetherAgentStarted")
+
+    /// Posted when agent starts executing a tool
+    /// - UserInfo: ["planId": String, "stepIndex": UInt32, "toolName": String, "toolDescription": String]
+    static let agentToolStarted = Notification.Name("AetherAgentToolStarted")
+
+    /// Posted when agent tool execution completes
+    /// - UserInfo: ["planId": String, "stepIndex": UInt32, "toolName": String, "success": Bool, "resultPreview": String]
+    static let agentToolCompleted = Notification.Name("AetherAgentToolCompleted")
+
+    /// Posted when agent loop completes (success or failure)
+    /// - UserInfo: ["planId": String, "success": Bool, "totalDurationMs": UInt64, "finalResponse": String]
+    static let agentCompleted = Notification.Name("AetherAgentCompleted")
 }
 
 // MARK: - UserInfo Keys

@@ -155,6 +155,65 @@ pub trait AetherEventHandler: Send + Sync {
     /// # Arguments
     /// * `tool_count` - Total number of active tools in the registry
     fn on_tools_changed(&self, tool_count: u32);
+
+    // ========================================================================
+    // Agent Loop Callbacks (enhance-intent-routing-pipeline)
+    // ========================================================================
+
+    /// Called when agent loop starts executing a multi-step plan.
+    ///
+    /// # Arguments
+    /// * `plan_id` - Unique identifier for the plan
+    /// * `total_steps` - Total number of steps in the plan
+    /// * `description` - Human-readable description of the plan
+    fn on_agent_started(&self, plan_id: String, total_steps: u32, description: String);
+
+    /// Called when agent starts executing a tool.
+    ///
+    /// # Arguments
+    /// * `plan_id` - Plan identifier
+    /// * `step_index` - Current step index (0-based)
+    /// * `tool_name` - Name of the tool being executed
+    /// * `tool_description` - Human-readable description of the tool
+    fn on_agent_tool_started(
+        &self,
+        plan_id: String,
+        step_index: u32,
+        tool_name: String,
+        tool_description: String,
+    );
+
+    /// Called when agent tool execution completes (success or failure).
+    ///
+    /// # Arguments
+    /// * `plan_id` - Plan identifier
+    /// * `step_index` - Step index that completed
+    /// * `tool_name` - Name of the tool
+    /// * `success` - Whether execution succeeded
+    /// * `result_preview` - Preview of the result (truncated if long)
+    fn on_agent_tool_completed(
+        &self,
+        plan_id: String,
+        step_index: u32,
+        tool_name: String,
+        success: bool,
+        result_preview: String,
+    );
+
+    /// Called when agent loop completes (success or failure).
+    ///
+    /// # Arguments
+    /// * `plan_id` - Plan identifier
+    /// * `success` - Whether the overall plan succeeded
+    /// * `total_duration_ms` - Total execution time in milliseconds
+    /// * `final_response` - Final response text (may be empty on failure)
+    fn on_agent_completed(
+        &self,
+        plan_id: String,
+        success: bool,
+        total_duration_ms: u64,
+        final_response: String,
+    );
 }
 
 /// Mock event handler for testing
@@ -186,6 +245,11 @@ pub struct MockEventHandler {
     pub confirmations_expired: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     // Tool registry tracking
     pub tools_changed: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+    // Agent loop tracking
+    pub agent_started: std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String)>>>, // (plan_id, total_steps, description)
+    pub agent_tool_started: std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String, String)>>>, // (plan_id, step_index, tool_name, description)
+    pub agent_tool_completed: std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String, bool, String)>>>, // (plan_id, step_index, tool_name, success, result_preview)
+    pub agent_completed: std::sync::Arc<std::sync::Mutex<Vec<(String, bool, u64, String)>>>, // (plan_id, success, duration_ms, response)
 }
 
 #[cfg(test)]
@@ -213,7 +277,39 @@ impl MockEventHandler {
             confirmations_needed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             confirmations_expired: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             tools_changed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            agent_started: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            agent_tool_started: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            agent_tool_completed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            agent_completed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
+    }
+
+    pub fn get_agent_started(&self) -> Vec<(String, u32, String)> {
+        self.agent_started
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn get_agent_tool_started(&self) -> Vec<(String, u32, String, String)> {
+        self.agent_tool_started
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn get_agent_tool_completed(&self) -> Vec<(String, u32, String, bool, String)> {
+        self.agent_tool_completed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn get_agent_completed(&self) -> Vec<(String, bool, u64, String)> {
+        self.agent_completed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn get_tools_changed(&self) -> Vec<u32> {
@@ -492,6 +588,53 @@ impl AetherEventHandler for MockEventHandler {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(tool_count);
+    }
+
+    fn on_agent_started(&self, plan_id: String, total_steps: u32, description: String) {
+        self.agent_started
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((plan_id, total_steps, description));
+    }
+
+    fn on_agent_tool_started(
+        &self,
+        plan_id: String,
+        step_index: u32,
+        tool_name: String,
+        tool_description: String,
+    ) {
+        self.agent_tool_started
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((plan_id, step_index, tool_name, tool_description));
+    }
+
+    fn on_agent_tool_completed(
+        &self,
+        plan_id: String,
+        step_index: u32,
+        tool_name: String,
+        success: bool,
+        result_preview: String,
+    ) {
+        self.agent_tool_completed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((plan_id, step_index, tool_name, success, result_preview));
+    }
+
+    fn on_agent_completed(
+        &self,
+        plan_id: String,
+        success: bool,
+        total_duration_ms: u64,
+        final_response: String,
+    ) {
+        self.agent_completed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((plan_id, success, total_duration_ms, final_response));
     }
 }
 

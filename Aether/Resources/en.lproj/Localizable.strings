@@ -53,9 +53,6 @@
 "settings.general.language_restart_message" = "Language will change after restarting Aether. Restart now?";
 "settings.general.language_restart_now" = "Restart Now";
 "settings.general.language_restart_later" = "Later";
-"settings.general.command_completion" = "Command Completion";
-"settings.general.show_command_hints" = "Show Command Hints";
-"settings.general.show_command_hints_description" = "Show command hints when typing slash commands (e.g., /translate, /summary).";
 "settings.general.updates" = "Updates";
 "settings.general.check_updates" = "Check for Updates";
 "settings.general.check_updates_help" = "Check for Aether updates";
@@ -199,9 +196,6 @@
 "settings.routing.editor.preview" = "Preview";
 "settings.routing.editor.generated_pattern" = "Generated Pattern:";
 "settings.routing.editor.example_match" = "Example Match:";
-"settings.routing.editor.hint" = "Hint";
-"settings.routing.editor.hint_placeholder" = "e.g., Translate text to English";
-"settings.routing.editor.hint_help" = "A brief description shown in command completion. Helps users understand what this command does.";
 
 // MARK: - Settings Window - Shortcuts Tab
 "settings.shortcuts.title" = "Keyboard Shortcuts";
@@ -760,3 +754,23 @@
 "tool.chat.description" = "Multi-turn Conversation - Start a conversation session with follow-up questions";
 "tool.chat.hint" = "Conversation";
 "tool.chat.usage" = "/chat <message>";
+
+// MARK: - Plan Confirmation (enhance-l3-agent-planning)
+"plan.confirmation.title" = "Confirm Plan";
+"plan.steps" = "steps";
+"plan.warning.irreversible" = "This plan contains irreversible operations";
+"plan.button.execute" = "Execute";
+"button.cancel" = "Cancel";
+
+// Plan Progress
+"plan.progress.title" = "Executing Plan";
+"plan.progress.step" = "Step %d of %d";
+"plan.progress.completed" = "Completed";
+"plan.progress.failed" = "Failed";
+"plan.progress.cancelled" = "Cancelled";
+
+// Plan Safety Levels
+"plan.safety.readonly" = "Read Only";
+"plan.safety.reversible" = "Reversible";
+"plan.safety.low_risk" = "Low Risk";
+"plan.safety.high_risk" = "High Risk";

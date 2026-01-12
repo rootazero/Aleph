@@ -68,7 +68,7 @@ impl CommandRegistry {
     pub fn from_config(config: &Config, language: &str) -> Self {
         let mut registry = Self::new();
         registry.language = language.to_string();
-        registry.show_hints = config.general.show_command_hints.unwrap_or(true);
+        // show_hints is always enabled
 
         // Parse routing rules into command nodes
         for rule in &config.rules {

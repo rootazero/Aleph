@@ -115,7 +115,7 @@ struct MultiTurnInputView: View {
             VisualEffectBackground(material: .hudWindow, blendingMode: .behindWindow)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .onChange(of: viewModel.shouldFocusInput) { shouldFocus in
+        .onChange(of: viewModel.shouldFocusInput) { _, shouldFocus in
             if shouldFocus {
                 isInputFocused = true
                 viewModel.shouldFocusInput = false
@@ -143,7 +143,7 @@ struct MultiTurnInputView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 16))
                 .focused($isInputFocused)
-                .onChange(of: viewModel.inputText) { newValue in
+                .onChange(of: viewModel.inputText) { _, newValue in
                     viewModel.handleInputChange(newValue)
                 }
                 .onSubmit {

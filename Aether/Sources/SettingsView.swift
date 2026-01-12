@@ -40,7 +40,6 @@ struct GeneralSettingsView: View {
     @State private var soundEnabled = false
     @State private var showingLogViewer = false
     @State private var selectedLanguage: String? = nil
-    @State private var showCommandHints = true
 
     // Launch at login manager
     @ObservedObject private var launchAtLoginManager = LaunchAtLoginManager.shared
@@ -65,16 +64,6 @@ struct GeneralSettingsView: View {
                     Section(header: Text(L("settings.general.startup"))) {
                         Toggle(L("settings.general.launch_at_login"), isOn: $launchAtLoginManager.isEnabled)
                         Text(L("settings.general.launch_at_login_description"))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-
-                    Section(header: Text(L("settings.general.command_completion"))) {
-                        Toggle(L("settings.general.show_command_hints"), isOn: $showCommandHints)
-                            .onChange(of: showCommandHints) { _, newValue in
-                                saveShowCommandHints(newValue)
-                            }
-                        Text(L("settings.general.show_command_hints_description"))
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -137,9 +126,6 @@ struct GeneralSettingsView: View {
 
             // Load current language setting
             loadLanguagePreference()
-
-            // Load command hints setting
-            loadShowCommandHints()
         }
     }
 
@@ -182,41 +168,6 @@ struct GeneralSettingsView: View {
             selectedLanguage = config.general.language
         } catch {
             print("Failed to load language preference: \(error)")
-        }
-    }
-
-    private func loadShowCommandHints() {
-        guard let core = core else { return }
-        do {
-            let config = try core.loadConfig()
-            showCommandHints = config.general.showCommandHints ?? true
-        } catch {
-            print("Failed to load showCommandHints: \(error)")
-        }
-    }
-
-    private func saveShowCommandHints(_ enabled: Bool) {
-        guard let core = core else { return }
-
-        do {
-            // Load current config
-            var config = try core.loadConfig()
-
-            // Update showCommandHints field
-            config.general.showCommandHints = enabled
-
-            // Save config using update_general_config
-            try core.updateGeneralConfig(config: config.general)
-
-            print("[Settings] showCommandHints saved: \(enabled)")
-        } catch {
-            print("Failed to save showCommandHints: \(error)")
-            let alert = NSAlert()
-            alert.messageText = L("common.error")
-            alert.informativeText = "Failed to save command hints setting: \(error.localizedDescription)"
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: L("common.ok"))
-            alert.runModal()
         }
     }
 

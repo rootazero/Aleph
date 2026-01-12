@@ -8,6 +8,7 @@
 //! - `ParameterRequirement`: Description of a missing parameter
 
 use crate::dispatcher::UnifiedTool;
+use crate::routing::plan::TaskPlan;
 use crate::routing::RoutingLayerType;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -200,6 +201,16 @@ impl AggregatedIntent {
 pub enum IntentAction {
     /// Execute tool directly (confidence >= auto_execute threshold)
     Execute,
+
+    /// Execute multi-step plan
+    ///
+    /// This action is returned when the L3 router detects a multi-step task
+    /// and generates an execution plan. The plan contains an ordered list
+    /// of steps to execute sequentially.
+    ExecutePlan {
+        /// The execution plan with ordered steps
+        plan: TaskPlan,
+    },
 
     /// Request user confirmation (medium confidence)
     RequestConfirmation,

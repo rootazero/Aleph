@@ -41,6 +41,10 @@ impl AetherEventHandler for TestEventHandler {
     fn on_confirmation_needed(&self, _confirmation: aethecore::PendingConfirmationInfo) {}
     fn on_confirmation_expired(&self, _confirmation_id: String) {}
     fn on_tools_changed(&self, _tool_count: u32) {}
+    fn on_agent_started(&self, _plan_id: String, _total_steps: u32, _description: String) {}
+    fn on_agent_tool_started(&self, _plan_id: String, _step_index: u32, _tool_name: String, _tool_description: String) {}
+    fn on_agent_tool_completed(&self, _plan_id: String, _step_index: u32, _tool_name: String, _success: bool, _result_preview: String) {}
+    fn on_agent_completed(&self, _plan_id: String, _success: bool, _total_duration_ms: u64, _final_response: String) {}
 }
 
 /// Test helper: Create a test config with mock provider

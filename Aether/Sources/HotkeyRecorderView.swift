@@ -241,11 +241,6 @@ extension PresetShortcut {
             description: "Popular AI assistant shortcut"
         ),
         PresetShortcut(
-            name: "Control + Space",
-            hotkey: Hotkey(modifiers: .control, keyCode: 49, character: "Space"),
-            description: "Similar to Spotlight"
-        ),
-        PresetShortcut(
             name: "Option + Space",
             hotkey: Hotkey(modifiers: .option, keyCode: 49, character: "Space"),
             description: "Alfred-style shortcut"
@@ -256,8 +251,8 @@ extension PresetShortcut {
             description: "Extended modifier combo"
         ),
         PresetShortcut(
-            name: "Control + Option + Space",
-            hotkey: Hotkey(modifiers: [.control, .option], keyCode: 49, character: "Space"),
+            name: "Command + Option + Space",
+            hotkey: Hotkey(modifiers: [.command, .option], keyCode: 49, character: "Space"),
             description: "Power user combo"
         )
     ]

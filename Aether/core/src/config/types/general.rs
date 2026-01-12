@@ -27,9 +27,6 @@ pub struct GeneralConfig {
     /// Preferred language override (e.g., 'en', 'zh-Hans'). If None, use system language.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
-    /// Show command hints in command mode (default: true)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub show_command_hints: Option<bool>,
 }
 
 pub fn default_log_retention_days() -> u32 {

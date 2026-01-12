@@ -53,9 +53,6 @@
 "settings.general.language_restart_message" = "语言将在重启 Aether 后更改。是否立即重启？";
 "settings.general.language_restart_now" = "立即重启";
 "settings.general.language_restart_later" = "稍后";
-"settings.general.command_completion" = "命令补全";
-"settings.general.show_command_hints" = "显示命令提示";
-"settings.general.show_command_hints_description" = "输入斜杠命令时显示命令提示（例如 /translate、/summary）。";
 "settings.general.updates" = "更新";
 "settings.general.check_updates" = "检查更新";
 "settings.general.check_updates_help" = "检查 Aether 更新";
@@ -199,9 +196,6 @@
 "settings.routing.editor.preview" = "预览";
 "settings.routing.editor.generated_pattern" = "生成的正则：";
 "settings.routing.editor.example_match" = "匹配示例：";
-"settings.routing.editor.hint" = "备注";
-"settings.routing.editor.hint_placeholder" = "例如：将文本翻译成英文";
-"settings.routing.editor.hint_help" = "命令补全时显示的简短描述，帮助用户理解此命令的功能。";
 
 // MARK: - Settings Window - Shortcuts Tab
 "settings.shortcuts.title" = "快捷键";
@@ -762,3 +756,23 @@
 "tool.chat.description" = "多轮对话 - 开始支持追问的对话会话";
 "tool.chat.hint" = "对话";
 "tool.chat.usage" = "/chat <消息>";
+
+// MARK: - Plan Confirmation (enhance-l3-agent-planning)
+"plan.confirmation.title" = "确认执行计划";
+"plan.steps" = "步骤";
+"plan.warning.irreversible" = "此计划包含不可逆操作";
+"plan.button.execute" = "执行";
+"button.cancel" = "取消";
+
+// Plan Progress
+"plan.progress.title" = "正在执行计划";
+"plan.progress.step" = "步骤 %d / %d";
+"plan.progress.completed" = "已完成";
+"plan.progress.failed" = "失败";
+"plan.progress.cancelled" = "已取消";
+
+// Plan Safety Levels
+"plan.safety.readonly" = "只读";
+"plan.safety.reversible" = "可逆";
+"plan.safety.low_risk" = "低风险";
+"plan.safety.high_risk" = "高风险";

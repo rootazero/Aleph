@@ -384,6 +384,34 @@ typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod18)(uint64_t, uint
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD19
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD19
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod19)(uint64_t, RustBuffer, uint32_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD20
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD20
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod20)(uint64_t, RustBuffer, uint32_t, RustBuffer, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD21
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD21
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod21)(uint64_t, RustBuffer, uint32_t, RustBuffer, int8_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD22
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD22
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod22)(uint64_t, RustBuffer, int8_t, uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_INITIALIZATION_PROGRESS_HANDLER_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_INITIALIZATION_PROGRESS_HANDLER_METHOD0
 typedef void (*UniffiCallbackInterfaceInitializationProgressHandlerMethod0)(uint64_t, void* _Nonnull, 
@@ -448,6 +476,10 @@ typedef struct UniffiVTableCallbackInterfaceAetherEventHandler {
     UniffiCallbackInterfaceAetherEventHandlerMethod16 _Nonnull onConversationContinuationReady;
     UniffiCallbackInterfaceAetherEventHandlerMethod17 _Nonnull onConversationEnded;
     UniffiCallbackInterfaceAetherEventHandlerMethod18 _Nonnull onToolsChanged;
+    UniffiCallbackInterfaceAetherEventHandlerMethod19 _Nonnull onAgentStarted;
+    UniffiCallbackInterfaceAetherEventHandlerMethod20 _Nonnull onAgentToolStarted;
+    UniffiCallbackInterfaceAetherEventHandlerMethod21 _Nonnull onAgentToolCompleted;
+    UniffiCallbackInterfaceAetherEventHandlerMethod22 _Nonnull onAgentCompleted;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceAetherEventHandler;
 
@@ -1848,6 +1880,30 @@ uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_end
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOLS_CHANGED
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOLS_CHANGED
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_tools_changed(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_AGENT_STARTED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_AGENT_STARTED
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_agent_started(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_AGENT_TOOL_STARTED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_AGENT_TOOL_STARTED
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_agent_tool_started(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_AGENT_TOOL_COMPLETED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_AGENT_TOOL_COMPLETED
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_agent_tool_completed(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_AGENT_COMPLETED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_AGENT_COMPLETED
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_agent_completed(void
     
 );
 #endif

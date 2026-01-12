@@ -307,9 +307,27 @@ impl Config {
         }
 
         // Auto-save if any migration was performed
+        // IMPORTANT: Use incremental save to preserve user's existing config
+        // This only updates the migrated sections without overwriting providers, rules, etc.
         if pii_migrated || trigger_migrated {
-            if let Err(e) = config.save() {
-                warn!(error = %e, "Failed to auto-save migrated config");
+            let mut sections_to_save: Vec<&str> = Vec::new();
+
+            if pii_migrated {
+                sections_to_save.push("search");
+                sections_to_save.push("behavior");
+            }
+            if trigger_migrated {
+                sections_to_save.push("trigger");
+            }
+
+            if let Err(e) = config.save_incremental(&sections_to_save) {
+                warn!(error = %e, "Failed to auto-save migrated config (incremental)");
+                // Don't fall back to full save - that would overwrite user config
+            } else {
+                debug!(
+                    sections = ?sections_to_save,
+                    "Migration saved incrementally"
+                );
             }
         }
 
@@ -1028,6 +1046,137 @@ impl Config {
     /// ```
     pub fn save(&self) -> Result<()> {
         self.save_to_file(Self::default_path())
+    }
+
+    /// Save only specific sections to the config file (incremental update)
+    ///
+    /// This method preserves existing user configuration and only adds/updates
+    /// the specified sections. This is used for migrations to avoid overwriting
+    /// user's custom settings like providers and rules.
+    ///
+    /// # Arguments
+    /// * `sections` - List of section names to update (e.g., ["trigger", "search.pii"])
+    ///
+    /// # How it works
+    /// 1. Read existing TOML file as raw toml::Value
+    /// 2. Serialize current Config to toml::Value
+    /// 3. Only copy specified sections from current to existing
+    /// 4. Write back with atomic operation
+    pub fn save_incremental(&self, sections: &[&str]) -> Result<()> {
+        let path = Self::default_path();
+
+        // If file doesn't exist, do a full save
+        if !path.exists() {
+            return self.save_to_file(&path);
+        }
+
+        debug!(
+            sections = ?sections,
+            "Performing incremental config save"
+        );
+
+        // Read existing file
+        let existing_contents = fs::read_to_string(&path).map_err(|e| {
+            AetherError::invalid_config(format!("Failed to read config for incremental save: {}", e))
+        })?;
+
+        // Parse existing as toml::Value
+        let mut existing: toml::Value = toml::from_str(&existing_contents).map_err(|e| {
+            AetherError::invalid_config(format!("Failed to parse existing config: {}", e))
+        })?;
+
+        // Serialize current config to toml::Value
+        let current: toml::Value = toml::Value::try_from(self).map_err(|e| {
+            AetherError::invalid_config(format!("Failed to serialize current config: {}", e))
+        })?;
+
+        // Only update specified sections
+        if let (toml::Value::Table(ref mut existing_table), toml::Value::Table(ref current_table)) =
+            (&mut existing, &current)
+        {
+            for section in sections {
+                // Handle nested sections like "search.pii"
+                let parts: Vec<&str> = section.split('.').collect();
+
+                if parts.len() == 1 {
+                    // Top-level section
+                    if let Some(value) = current_table.get(parts[0]) {
+                        existing_table.insert(parts[0].to_string(), value.clone());
+                        debug!(section = %section, "Updated top-level section");
+                    }
+                } else if parts.len() == 2 {
+                    // Nested section (e.g., "search.pii")
+                    let parent_key = parts[0];
+                    let child_key = parts[1];
+
+                    // Get or create parent table in existing
+                    let parent_table = existing_table
+                        .entry(parent_key.to_string())
+                        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+
+                    if let toml::Value::Table(ref mut parent) = parent_table {
+                        // Get value from current config
+                        if let Some(current_parent) = current_table.get(parent_key) {
+                            if let toml::Value::Table(ref cp) = current_parent {
+                                if let Some(value) = cp.get(child_key) {
+                                    parent.insert(child_key.to_string(), value.clone());
+                                    debug!(section = %section, "Updated nested section");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Serialize back to TOML string
+        let new_contents = toml::to_string_pretty(&existing).map_err(|e| {
+            AetherError::invalid_config(format!("Failed to serialize updated config: {}", e))
+        })?;
+
+        // Write with atomic operation (same as save_to_file)
+        let temp_path = path.with_extension("tmp");
+        fs::write(&temp_path, &new_contents).map_err(|e| {
+            AetherError::invalid_config(format!("Failed to write temp config: {}", e))
+        })?;
+
+        // fsync on Unix
+        #[cfg(unix)]
+        {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&temp_path)
+                .map_err(|e| {
+                    AetherError::invalid_config(format!("Failed to open temp file for fsync: {}", e))
+                })?;
+            file.sync_all().map_err(|e| {
+                AetherError::invalid_config(format!("Failed to fsync: {}", e))
+            })?;
+        }
+
+        // Atomic rename
+        fs::rename(&temp_path, &path).map_err(|e| {
+            let _ = fs::remove_file(&temp_path);
+            AetherError::invalid_config(format!("Failed to rename temp config: {}", e))
+        })?;
+
+        // Set permissions on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(metadata) = fs::metadata(&path) {
+                let mut perms = metadata.permissions();
+                perms.set_mode(0o600);
+                let _ = fs::set_permissions(&path, perms);
+            }
+        }
+
+        info!(
+            sections = ?sections,
+            "Incremental config save completed"
+        );
+
+        Ok(())
     }
 
     /// Migrate PII config from behavior to search (integrate-search-registry)

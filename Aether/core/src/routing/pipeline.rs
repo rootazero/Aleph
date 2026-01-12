@@ -294,6 +294,20 @@ impl IntentRoutingPipeline {
                 // Execute the tool directly
                 self.execute_tool(intent).await
             }
+            IntentAction::ExecutePlan { plan } => {
+                // Execute multi-step plan
+                // Note: Plan execution will be implemented in Phase 3
+                // For now, return the plan info for UI confirmation
+                PipelineResult::executed(
+                    "plan",
+                    serde_json::to_string(&plan).unwrap_or_default(),
+                    serde_json::json!({
+                        "plan_id": plan.id.to_string(),
+                        "step_count": plan.steps.len(),
+                        "confidence": intent.final_confidence,
+                    }),
+                )
+            }
             IntentAction::RequestConfirmation => {
                 // Return pending confirmation
                 // Note: In real implementation, this would go to UI

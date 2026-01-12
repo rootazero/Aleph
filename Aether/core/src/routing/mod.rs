@@ -76,6 +76,7 @@ mod cache;
 mod calibrator;
 mod clarification;
 mod engine;
+mod heuristics;
 mod intent;
 mod l1_regex;
 mod l2_semantic;
@@ -83,6 +84,12 @@ mod l3_enhanced;
 mod pipeline;
 mod pipeline_config;
 mod pipeline_result;
+
+// L3 Agent Planning types
+mod executor;
+mod plan;
+mod planner;
+mod rollback;
 
 // Re-export core types
 pub use types::{
@@ -117,7 +124,7 @@ pub use calibrator::{CalibrationHistory, ConfidenceCalibrator};
 pub use engine::{LayerExecutionEngine, LayerExecutionResult};
 pub use l1_regex::L1RegexMatcher;
 pub use l2_semantic::L2SemanticMatcher;
-pub use l3_enhanced::EnhancedL3Router;
+pub use l3_enhanced::{EnhancedL3Router, L3EnhancedResult};
 
 // Re-export aggregator types
 pub use aggregator::IntentAggregator;
@@ -127,3 +134,21 @@ pub use clarification::{ClarificationIntegrator, PendingClarification};
 
 // Re-export pipeline types
 pub use pipeline::IntentRoutingPipeline;
+
+// Re-export heuristics types
+pub use heuristics::QuickHeuristics;
+
+// Re-export plan types
+pub use plan::{
+    PlanError, PlanExecutionContext, PlanExecutionResult, PlanInfo, PlanProgress, PlanResult,
+    PlanStep, PlanStepInfo, StepResult, StepStatus, TaskPlan, ToolSafetyLevel,
+};
+
+// Re-export planner types
+pub use planner::{L3TaskPlanner, PlanningResult};
+
+// Re-export executor types
+pub use executor::{PlanExecutor, PlanExecutorConfig};
+
+// Re-export rollback types
+pub use rollback::{RollbackCapable, RollbackEntry, RollbackManager, RollbackRegistry, RollbackResult};

@@ -2570,16 +2570,14 @@ public struct GeneralConfig {
     public var logRetentionDays: UInt32
     public var enablePerformanceLogging: Bool
     public var language: String?
-    public var showCommandHints: Bool?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultProvider: String?, logRetentionDays: UInt32, enablePerformanceLogging: Bool, language: String?, showCommandHints: Bool?) {
+    public init(defaultProvider: String?, logRetentionDays: UInt32, enablePerformanceLogging: Bool, language: String?) {
         self.defaultProvider = defaultProvider
         self.logRetentionDays = logRetentionDays
         self.enablePerformanceLogging = enablePerformanceLogging
         self.language = language
-        self.showCommandHints = showCommandHints
     }
 }
 
@@ -2599,9 +2597,6 @@ extension GeneralConfig: Equatable, Hashable {
         if lhs.language != rhs.language {
             return false
         }
-        if lhs.showCommandHints != rhs.showCommandHints {
-            return false
-        }
         return true
     }
 
@@ -2610,7 +2605,6 @@ extension GeneralConfig: Equatable, Hashable {
         hasher.combine(logRetentionDays)
         hasher.combine(enablePerformanceLogging)
         hasher.combine(language)
-        hasher.combine(showCommandHints)
     }
 }
 
@@ -2625,8 +2619,7 @@ public struct FfiConverterTypeGeneralConfig: FfiConverterRustBuffer {
                 defaultProvider: FfiConverterOptionString.read(from: &buf), 
                 logRetentionDays: FfiConverterUInt32.read(from: &buf), 
                 enablePerformanceLogging: FfiConverterBool.read(from: &buf), 
-                language: FfiConverterOptionString.read(from: &buf), 
-                showCommandHints: FfiConverterOptionBool.read(from: &buf)
+                language: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -2635,7 +2628,6 @@ public struct FfiConverterTypeGeneralConfig: FfiConverterRustBuffer {
         FfiConverterUInt32.write(value.logRetentionDays, into: &buf)
         FfiConverterBool.write(value.enablePerformanceLogging, into: &buf)
         FfiConverterOptionString.write(value.language, into: &buf)
-        FfiConverterOptionBool.write(value.showCommandHints, into: &buf)
     }
 }
 
@@ -5465,6 +5457,7 @@ public struct UnifiedToolInfo {
     public var parametersSchema: String?
     public var isActive: Bool
     public var requiresConfirmation: Bool
+    public var safetyLevel: String
     public var serviceName: String?
     public var icon: String?
     public var usage: String?
@@ -5475,7 +5468,7 @@ public struct UnifiedToolInfo {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, name: String, displayName: String, description: String, sourceType: ToolSourceType, sourceId: String?, parametersSchema: String?, isActive: Bool, requiresConfirmation: Bool, serviceName: String?, icon: String?, usage: String?, localizationKey: String?, isBuiltin: Bool, sortOrder: Int32, hasSubtools: Bool) {
+    public init(id: String, name: String, displayName: String, description: String, sourceType: ToolSourceType, sourceId: String?, parametersSchema: String?, isActive: Bool, requiresConfirmation: Bool, safetyLevel: String, serviceName: String?, icon: String?, usage: String?, localizationKey: String?, isBuiltin: Bool, sortOrder: Int32, hasSubtools: Bool) {
         self.id = id
         self.name = name
         self.displayName = displayName
@@ -5485,6 +5478,7 @@ public struct UnifiedToolInfo {
         self.parametersSchema = parametersSchema
         self.isActive = isActive
         self.requiresConfirmation = requiresConfirmation
+        self.safetyLevel = safetyLevel
         self.serviceName = serviceName
         self.icon = icon
         self.usage = usage
@@ -5526,6 +5520,9 @@ extension UnifiedToolInfo: Equatable, Hashable {
         if lhs.requiresConfirmation != rhs.requiresConfirmation {
             return false
         }
+        if lhs.safetyLevel != rhs.safetyLevel {
+            return false
+        }
         if lhs.serviceName != rhs.serviceName {
             return false
         }
@@ -5560,6 +5557,7 @@ extension UnifiedToolInfo: Equatable, Hashable {
         hasher.combine(parametersSchema)
         hasher.combine(isActive)
         hasher.combine(requiresConfirmation)
+        hasher.combine(safetyLevel)
         hasher.combine(serviceName)
         hasher.combine(icon)
         hasher.combine(usage)
@@ -5587,6 +5585,7 @@ public struct FfiConverterTypeUnifiedToolInfo: FfiConverterRustBuffer {
                 parametersSchema: FfiConverterOptionString.read(from: &buf), 
                 isActive: FfiConverterBool.read(from: &buf), 
                 requiresConfirmation: FfiConverterBool.read(from: &buf), 
+                safetyLevel: FfiConverterString.read(from: &buf), 
                 serviceName: FfiConverterOptionString.read(from: &buf), 
                 icon: FfiConverterOptionString.read(from: &buf), 
                 usage: FfiConverterOptionString.read(from: &buf), 
@@ -5607,6 +5606,7 @@ public struct FfiConverterTypeUnifiedToolInfo: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.parametersSchema, into: &buf)
         FfiConverterBool.write(value.isActive, into: &buf)
         FfiConverterBool.write(value.requiresConfirmation, into: &buf)
+        FfiConverterString.write(value.safetyLevel, into: &buf)
         FfiConverterOptionString.write(value.serviceName, into: &buf)
         FfiConverterOptionString.write(value.icon, into: &buf)
         FfiConverterOptionString.write(value.usage, into: &buf)
@@ -6517,6 +6517,14 @@ public protocol AetherEventHandler : AnyObject {
     
     func onToolsChanged(toolCount: UInt32) 
     
+    func onAgentStarted(planId: String, totalSteps: UInt32, description: String) 
+    
+    func onAgentToolStarted(planId: String, stepIndex: UInt32, toolName: String, toolDescription: String) 
+    
+    func onAgentToolCompleted(planId: String, stepIndex: UInt32, toolName: String, success: Bool, resultPreview: String) 
+    
+    func onAgentCompleted(planId: String, success: Bool, totalDurationMs: UInt64, finalResponse: String) 
+    
 }
 
 // Magic number for the Rust proxy to call using the same mechanism as every other method,
@@ -6982,6 +6990,126 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
                 }
                 return uniffiObj.onToolsChanged(
                      toolCount: try FfiConverterUInt32.lift(toolCount)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onAgentStarted: { (
+            uniffiHandle: UInt64,
+            planId: RustBuffer,
+            totalSteps: UInt32,
+            description: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onAgentStarted(
+                     planId: try FfiConverterString.lift(planId),
+                     totalSteps: try FfiConverterUInt32.lift(totalSteps),
+                     description: try FfiConverterString.lift(description)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onAgentToolStarted: { (
+            uniffiHandle: UInt64,
+            planId: RustBuffer,
+            stepIndex: UInt32,
+            toolName: RustBuffer,
+            toolDescription: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onAgentToolStarted(
+                     planId: try FfiConverterString.lift(planId),
+                     stepIndex: try FfiConverterUInt32.lift(stepIndex),
+                     toolName: try FfiConverterString.lift(toolName),
+                     toolDescription: try FfiConverterString.lift(toolDescription)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onAgentToolCompleted: { (
+            uniffiHandle: UInt64,
+            planId: RustBuffer,
+            stepIndex: UInt32,
+            toolName: RustBuffer,
+            success: Int8,
+            resultPreview: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onAgentToolCompleted(
+                     planId: try FfiConverterString.lift(planId),
+                     stepIndex: try FfiConverterUInt32.lift(stepIndex),
+                     toolName: try FfiConverterString.lift(toolName),
+                     success: try FfiConverterBool.lift(success),
+                     resultPreview: try FfiConverterString.lift(resultPreview)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onAgentCompleted: { (
+            uniffiHandle: UInt64,
+            planId: RustBuffer,
+            success: Int8,
+            totalDurationMs: UInt64,
+            finalResponse: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onAgentCompleted(
+                     planId: try FfiConverterString.lift(planId),
+                     success: try FfiConverterBool.lift(success),
+                     totalDurationMs: try FfiConverterUInt64.lift(totalDurationMs),
+                     finalResponse: try FfiConverterString.lift(finalResponse)
                 )
             }
 
@@ -8609,6 +8737,18 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_tools_changed() != 46377) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_agent_started() != 58953) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_agent_tool_started() != 39375) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_agent_tool_completed() != 10804) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_agent_completed() != 26263) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_init_started() != 45699) {

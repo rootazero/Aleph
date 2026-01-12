@@ -86,7 +86,7 @@ struct ConversationDisplayView: View {
                 }
                 .padding(12)
             }
-            .onChange(of: viewModel.messages.count) { _ in
+            .onChange(of: viewModel.messages.count) {
                 // Scroll to bottom when new message added
                 if let lastId = viewModel.messages.last?.id {
                     withAnimation {

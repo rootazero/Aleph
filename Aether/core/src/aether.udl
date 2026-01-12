@@ -571,6 +571,19 @@ callback interface AetherEventHandler {
   // TOOL REGISTRY CALLBACKS (unify-tool-registry)
   // Called when tool registry is refreshed (tools added/removed/changed)
   void on_tools_changed(u32 tool_count);
+
+  // AGENT LOOP CALLBACKS (enhance-intent-routing-pipeline)
+  // Called when agent loop starts executing a multi-step plan
+  void on_agent_started(string plan_id, u32 total_steps, string description);
+
+  // Called when agent starts executing a tool
+  void on_agent_tool_started(string plan_id, u32 step_index, string tool_name, string tool_description);
+
+  // Called when agent tool execution completes (success or failure)
+  void on_agent_tool_completed(string plan_id, u32 step_index, string tool_name, boolean success, string result_preview);
+
+  // Called when agent loop completes (success or failure)
+  void on_agent_completed(string plan_id, boolean success, u64 total_duration_ms, string final_response);
 };
 
 // Callback interface for first-time initialization progress
@@ -603,7 +616,6 @@ dictionary GeneralConfig {
   u32 log_retention_days;
   boolean enable_performance_logging;
   string? language;
-  boolean? show_command_hints;
 };
 
 dictionary MemoryConfig {
@@ -955,6 +967,7 @@ dictionary UnifiedToolInfo {
   string? parameters_schema;    // JSON Schema string for input parameters
   boolean is_active;            // Whether tool is enabled
   boolean requires_confirmation; // Whether requires user confirmation
+  string safety_level;          // Safety level label (Read Only, Reversible, Low Risk, High Risk)
   string? service_name;         // Parent service name (for MCP sub-tools)
 
   // UI Metadata (unify-tool-registry)

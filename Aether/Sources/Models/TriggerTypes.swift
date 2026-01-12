@@ -18,9 +18,6 @@ enum ModifierKey: String, CaseIterable, Codable {
     // Shift
     case leftShift = "leftShift"
     case rightShift = "rightShift"
-    // Control
-    case leftControl = "leftControl"
-    case rightControl = "rightControl"
     // Option
     case leftOption = "leftOption"
     case rightOption = "rightOption"
@@ -33,8 +30,6 @@ enum ModifierKey: String, CaseIterable, Codable {
         switch self {
         case .leftShift: return 56
         case .rightShift: return 60
-        case .leftControl: return 59
-        case .rightControl: return 62
         case .leftOption: return 58
         case .rightOption: return 61
         case .leftCommand: return 55
@@ -47,8 +42,6 @@ enum ModifierKey: String, CaseIterable, Codable {
         switch self {
         case .leftShift: return L("modifier.left_shift")
         case .rightShift: return L("modifier.right_shift")
-        case .leftControl: return L("modifier.left_control")
-        case .rightControl: return L("modifier.right_control")
         case .leftOption: return L("modifier.left_option")
         case .rightOption: return L("modifier.right_option")
         case .leftCommand: return L("modifier.left_command")
@@ -60,7 +53,6 @@ enum ModifierKey: String, CaseIterable, Codable {
     var symbol: String {
         switch self {
         case .leftShift, .rightShift: return "⇧"
-        case .leftControl, .rightControl: return "⌃"
         case .leftOption, .rightOption: return "⌥"
         case .leftCommand, .rightCommand: return "⌘"
         }
@@ -70,9 +62,9 @@ enum ModifierKey: String, CaseIterable, Codable {
     var shortDisplayName: String {
         let side: String
         switch self {
-        case .leftShift, .leftControl, .leftOption, .leftCommand:
+        case .leftShift, .leftOption, .leftCommand:
             side = L("modifier.side.left")
-        case .rightShift, .rightControl, .rightOption, .rightCommand:
+        case .rightShift, .rightOption, .rightCommand:
             side = L("modifier.side.right")
         }
         return "\(side) \(symbol)"

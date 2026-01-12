@@ -77,7 +77,7 @@ final class HaloWindow: NSWindow {
     override var canBecomeKey: Bool {
         // Allow key status for interactive states (error buttons, toast dismiss)
         switch viewModel.state {
-        case .error, .toast, .clarification, .toolConfirmation:
+        case .error, .toast, .clarification, .toolConfirmation, .planConfirmation, .planProgress:
             return true
         default:
             return false
@@ -116,6 +116,10 @@ final class HaloWindow: NSWindow {
             size = NSSize(width: 100, height: 60)
         case .error, .toast, .clarification, .toolConfirmation:
             size = NSSize(width: 320, height: 200)
+        case .planConfirmation:
+            size = NSSize(width: 360, height: 400)  // Plan confirmation needs more space
+        case .planProgress:
+            size = NSSize(width: 380, height: 420)  // Plan progress needs most space
         case .permissionRequired, .conversationInput:
             size = NSSize(width: 0, height: 0)  // Handled by other windows
         }
@@ -126,7 +130,7 @@ final class HaloWindow: NSWindow {
     private func updateInteractivity() {
         // Enable mouse events for interactive states
         switch viewModel.state {
-        case .error, .toast, .clarification, .toolConfirmation:
+        case .error, .toast, .clarification, .toolConfirmation, .planConfirmation, .planProgress:
             ignoresMouseEvents = false
         default:
             ignoresMouseEvents = true

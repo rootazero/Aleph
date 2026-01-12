@@ -126,7 +126,7 @@ final class MultiTurnCoordinator {
 
     /// Handle user input
     private func handleInput(_ text: String) {
-        guard let topic = currentTopic, let core = core else {
+        guard let topic = currentTopic, core != nil else {
             print("[MultiTurnCoordinator] No active topic or core")
             return
         }

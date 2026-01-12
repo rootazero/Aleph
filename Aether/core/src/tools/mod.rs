@@ -78,6 +78,8 @@
 pub mod clipboard;
 pub mod filesystem;
 pub mod git;
+pub mod handler;
+pub mod params;
 pub mod screen;
 pub mod search;
 pub mod shell;
@@ -88,6 +90,15 @@ mod traits;
 // Re-export core types
 pub use registry::NativeToolRegistry;
 pub use traits::{AgentTool, ToolCategory, ToolDefinition, ToolResult};
+
+// Re-export params types for schemars-based tool definitions
+pub use params::{
+    FileReadParams, FileWriteParams, SearchParams, ShellExecuteParams, SummarizeParams,
+    ToolOutput, ToolParams, TranslateParams,
+};
+
+// Re-export handler types for type-safe tool execution
+pub use handler::{wrap_handler, DynToolHandler, ToolHandler, ToolHandlerDef, TypedHandlerWrapper};
 
 // Re-export filesystem tools for convenience
 pub use filesystem::{
