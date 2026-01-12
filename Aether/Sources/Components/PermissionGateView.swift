@@ -9,17 +9,20 @@
 import SwiftUI
 import Combine
 
-/// Permission gate step in the two-step flow
+/// Permission gate step in the three-step flow
 enum PermissionGateStep: Int {
     case accessibility = 1
-    case inputMonitoring = 2
+    case screenRecording = 2
+    case inputMonitoring = 3
 
     var title: String {
         switch self {
         case .accessibility:
             return L("permission.gate.step1_title")
-        case .inputMonitoring:
+        case .screenRecording:
             return L("permission.gate.step2_title")
+        case .inputMonitoring:
+            return L("permission.gate.step3_title")
         }
     }
 
@@ -27,6 +30,8 @@ enum PermissionGateStep: Int {
         switch self {
         case .accessibility:
             return "hand.raised.fill"
+        case .screenRecording:
+            return "rectangle.dashed.badge.record"
         case .inputMonitoring:
             return "keyboard.fill"
         }
@@ -36,6 +41,8 @@ enum PermissionGateStep: Int {
         switch self {
         case .accessibility:
             return L("permission.gate.accessibility_description")
+        case .screenRecording:
+            return L("permission.gate.screen_recording_description")
         case .inputMonitoring:
             return L("permission.gate.input_monitoring_description")
         }
@@ -45,6 +52,8 @@ enum PermissionGateStep: Int {
         switch self {
         case .accessibility:
             return .accessibility
+        case .screenRecording:
+            return .screenRecording
         case .inputMonitoring:
             return .inputMonitoring
         }
@@ -109,7 +118,7 @@ struct PermissionGateView: View {
     // MARK: - Progress Indicator
 
     private var progressIndicator: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
             // Step 1: Accessibility
             stepBadge(
                 step: 1,
@@ -118,15 +127,29 @@ struct PermissionGateView: View {
                 isComplete: manager.accessibilityGranted
             )
 
-            // Connector line
+            // Connector line 1-2
             Rectangle()
                 .fill(manager.accessibilityGranted ? Color.green : Color.gray.opacity(0.3))
                 .frame(height: 2)
                 .frame(maxWidth: .infinity)
 
-            // Step 2: Input Monitoring
+            // Step 2: Screen Recording
             stepBadge(
                 step: 2,
+                title: L("permission.gate.screen_recording_short"),
+                isActive: currentStep == .screenRecording,
+                isComplete: manager.screenRecordingGranted
+            )
+
+            // Connector line 2-3
+            Rectangle()
+                .fill(manager.screenRecordingGranted ? Color.green : Color.gray.opacity(0.3))
+                .frame(height: 2)
+                .frame(maxWidth: .infinity)
+
+            // Step 3: Input Monitoring
+            stepBadge(
+                step: 3,
                 title: L("permission.gate.input_monitoring_short"),
                 isActive: currentStep == .inputMonitoring,
                 isComplete: manager.inputMonitoringGranted
@@ -178,7 +201,7 @@ struct PermissionGateView: View {
             // Icon
             Image(systemName: currentStep.icon)
                 .font(.system(size: 60))
-                .foregroundStyle(currentStep == .accessibility ? Color.blue.gradient : Color.purple.gradient)
+                .foregroundStyle(stepIconColor)
 
             // Title
             Text(currentStep.title)
@@ -197,23 +220,45 @@ struct PermissionGateView: View {
         }
     }
 
+    /// Get the icon color for the current step
+    private var stepIconColor: AnyGradient {
+        switch currentStep {
+        case .accessibility:
+            return Color.blue.gradient
+        case .screenRecording:
+            return Color.orange.gradient
+        case .inputMonitoring:
+            return Color.purple.gradient
+        }
+    }
+
+    /// Check if current step's permission is granted
+    private var isCurrentStepGranted: Bool {
+        switch currentStep {
+        case .accessibility:
+            return manager.accessibilityGranted
+        case .screenRecording:
+            return manager.screenRecordingGranted
+        case .inputMonitoring:
+            return manager.inputMonitoringGranted
+        }
+    }
+
     private var permissionStatusIndicator: some View {
         HStack(spacing: 12) {
-            let isGranted = currentStep == .accessibility ? manager.accessibilityGranted : manager.inputMonitoringGranted
-
             Circle()
-                .fill(isGranted ? Color.green : Color.orange)
+                .fill(isCurrentStepGranted ? Color.green : Color.orange)
                 .frame(width: 12, height: 12)
 
-            Text(isGranted ? L("permission.gate.status_granted") : L("permission.gate.status_waiting"))
+            Text(isCurrentStepGranted ? L("permission.gate.status_granted") : L("permission.gate.status_waiting"))
                 .font(.subheadline.weight(.medium))
-                .foregroundColor(isGranted ? .green : .orange)
+                .foregroundColor(isCurrentStepGranted ? .green : .orange)
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 16)
         .background(
             Capsule()
-                .fill((currentStep == .accessibility ? manager.accessibilityGranted : manager.inputMonitoringGranted) ? Color.green.opacity(0.1) : Color.orange.opacity(0.1))
+                .fill(isCurrentStepGranted ? Color.green.opacity(0.1) : Color.orange.opacity(0.1))
         )
     }
 
@@ -222,9 +267,7 @@ struct PermissionGateView: View {
     private var actionButtons: some View {
         VStack(spacing: 12) {
             // "Open System Settings" button - shown when current step permission not granted
-            if (currentStep == .accessibility && !manager.accessibilityGranted) ||
-               (currentStep == .inputMonitoring && !manager.inputMonitoringGranted) {
-
+            if !isCurrentStepGranted {
                 Button(action: openSystemSettings) {
                     HStack(spacing: 8) {
                         Image(systemName: "gear")
@@ -240,8 +283,29 @@ struct PermissionGateView: View {
                 .contentShape(Rectangle())
             }
 
-            // "Continue" button - shown when Accessibility granted (to progress to step 2)
-            if currentStep == .accessibility && manager.accessibilityGranted && !manager.inputMonitoringGranted {
+            // "Continue" button - shown when current step is granted but not on the last step
+            if currentStep == .accessibility && manager.accessibilityGranted {
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        currentStep = .screenRecording
+                    }
+                }) {
+                    HStack(spacing: 8) {
+                        Text(L("permission.gate.button.continue"))
+                        Image(systemName: "arrow.right")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(Color.green.gradient)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                }
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
+            }
+
+            // "Continue" button - progress from Screen Recording to Input Monitoring
+            if currentStep == .screenRecording && manager.screenRecordingGranted {
                 Button(action: {
                     withAnimation(.easeInOut(duration: 0.3)) {
                         currentStep = .inputMonitoring
@@ -261,9 +325,9 @@ struct PermissionGateView: View {
                 .contentShape(Rectangle())
             }
 
-            // "Enter Aether" button - shown when BOTH permissions are granted
+            // "Enter Aether" button - shown when ALL THREE permissions are granted
             // User manually clicks this button to restart the app (not automatic)
-            if manager.accessibilityGranted && manager.inputMonitoringGranted {
+            if manager.accessibilityGranted && manager.screenRecordingGranted && manager.inputMonitoringGranted {
                 Button(action: restartApp) {
                     HStack(spacing: 8) {
                         Image(systemName: "checkmark.circle.fill")
@@ -304,13 +368,15 @@ struct PermissionGateView: View {
     private func checkInitialPermissions() {
         // Short delay (0.3s) to ensure macOS permission API returns accurate cached values
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            // If Accessibility is already granted, skip to Input Monitoring step
-            if self.manager.accessibilityGranted && !self.manager.inputMonitoringGranted {
+            // Determine the appropriate starting step based on already-granted permissions
+            if self.manager.accessibilityGranted && self.manager.screenRecordingGranted && !self.manager.inputMonitoringGranted {
                 self.currentStep = .inputMonitoring
+            } else if self.manager.accessibilityGranted && !self.manager.screenRecordingGranted {
+                self.currentStep = .screenRecording
             }
 
-            // If both permissions already granted, dismiss gate immediately
-            if self.manager.accessibilityGranted && self.manager.inputMonitoringGranted {
+            // If all three permissions already granted, dismiss gate immediately
+            if self.manager.accessibilityGranted && self.manager.screenRecordingGranted && self.manager.inputMonitoringGranted {
                 print("[PermissionGateView] All permissions already granted, dismissing gate")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     self.onAllPermissionsGranted()
@@ -325,13 +391,26 @@ struct PermissionGateView: View {
         // Start the PermissionManager's timer-based polling
         manager.startMonitoring()
 
-        // Auto-progress from Accessibility to Input Monitoring when Accessibility is granted
-        // Use Combine to observe permission changes
+        // Auto-progress from Accessibility to Screen Recording when Accessibility is granted
         manager.$accessibilityGranted
             .dropFirst() // Ignore initial value
             .filter { $0 == true && self.currentStep == .accessibility }
             .sink { _ in
-                print("[PermissionGateView] Accessibility permission granted - progressing to Input Monitoring")
+                print("[PermissionGateView] Accessibility permission granted - progressing to Screen Recording")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        self.currentStep = .screenRecording
+                    }
+                }
+            }
+            .store(in: &cancellables)
+
+        // Auto-progress from Screen Recording to Input Monitoring when Screen Recording is granted
+        manager.$screenRecordingGranted
+            .dropFirst() // Ignore initial value
+            .filter { $0 == true && self.currentStep == .screenRecording }
+            .sink { _ in
+                print("[PermissionGateView] Screen Recording permission granted - progressing to Input Monitoring")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     withAnimation(.easeInOut(duration: 0.3)) {
                         self.currentStep = .inputMonitoring
@@ -340,7 +419,7 @@ struct PermissionGateView: View {
             }
             .store(in: &cancellables)
 
-        // When both permissions are granted, the user will see "Enter Aether" button
+        // When all three permissions are granted, the user will see "Enter Aether" button
         // User manually clicks the button to restart (NO automatic restart)
     }
 

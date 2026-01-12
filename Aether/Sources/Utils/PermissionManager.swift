@@ -18,6 +18,7 @@ class PermissionManager: ObservableObject {
     // MARK: - Published Properties
 
     @Published var accessibilityGranted: Bool = false
+    @Published var screenRecordingGranted: Bool = false
     @Published var inputMonitoringGranted: Bool = false
 
     // MARK: - Private Properties
@@ -87,6 +88,7 @@ class PermissionManager: ObservableObject {
     /// it does NOT call exit() or NSApp.terminate()
     private func checkPermissions() {
         let axStatus = checkAccessibility()
+        let screenStatus = checkScreenRecording()
         let inputStatus = checkInputMonitoringViaHID()
 
         // Update properties on main thread
@@ -95,6 +97,13 @@ class PermissionManager: ObservableObject {
             if slf.accessibilityGranted != axStatus {
                 print("PermissionManager: Accessibility status changed: \(axStatus)")
                 slf.accessibilityGranted = axStatus
+                // ✅ NO automatic restart logic here
+            }
+
+            // Update Screen Recording status
+            if slf.screenRecordingGranted != screenStatus {
+                print("PermissionManager: Screen Recording status changed: \(screenStatus)")
+                slf.screenRecordingGranted = screenStatus
                 // ✅ NO automatic restart logic here
             }
 
@@ -110,6 +119,11 @@ class PermissionManager: ObservableObject {
     /// Check Accessibility permission status
     private func checkAccessibility() -> Bool {
         return AXIsProcessTrusted()
+    }
+
+    /// Check Screen Recording permission status
+    private func checkScreenRecording() -> Bool {
+        return CGPreflightScreenCaptureAccess()
     }
 
     /// Check Input Monitoring permission via IOHIDManager

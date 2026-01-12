@@ -11,6 +11,7 @@ import ApplicationServices
 import IOKit
 import IOKit.hid
 import Combine
+import ScreenCaptureKit
 
 /// Centralized permission checker for all system permissions required by Aether
 class PermissionChecker {
@@ -32,6 +33,28 @@ class PermissionChecker {
     static func requestAccessibilityPermission() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         let _ = AXIsProcessTrustedWithOptions(options)
+    }
+
+    // MARK: - Screen Recording Permission
+
+    /// Check if Screen Recording permission is granted
+    ///
+    /// Uses CGPreflightScreenCaptureAccess() which returns the current authorization status
+    /// without prompting the user.
+    ///
+    /// - Returns: true if permission granted, false otherwise
+    static func hasScreenRecordingPermission() -> Bool {
+        // CGPreflightScreenCaptureAccess() returns true if the app has screen recording permission
+        return CGPreflightScreenCaptureAccess()
+    }
+
+    /// Request Screen Recording permission (shows system prompt if not granted)
+    ///
+    /// Note: This will trigger the system prompt to request screen capture access.
+    /// The user must manually grant in System Settings.
+    static func requestScreenRecordingPermission() {
+        // CGRequestScreenCaptureAccess() will prompt the user for permission
+        let _ = CGRequestScreenCaptureAccess()
     }
 
     // MARK: - Input Monitoring Permission
@@ -101,9 +124,9 @@ class PermissionChecker {
     // MARK: - Combined Permission Check
 
     /// Check if all required permissions are granted
-    /// - Returns: true if both Accessibility and Input Monitoring permissions are granted
+    /// - Returns: true if Accessibility, Screen Recording and Input Monitoring permissions are granted
     static func hasAllRequiredPermissions() -> Bool {
-        return hasAccessibilityPermission() && hasInputMonitoringPermission()
+        return hasAccessibilityPermission() && hasScreenRecordingPermission() && hasInputMonitoringPermission()
     }
 
     /// Get detailed permission status for debugging
@@ -111,6 +134,7 @@ class PermissionChecker {
     static func getPermissionStatus() -> [String: Bool] {
         return [
             "Accessibility": hasAccessibilityPermission(),
+            "ScreenRecording": hasScreenRecordingPermission(),
             "InputMonitoring": hasInputMonitoringPermission()
         ]
     }
@@ -126,6 +150,9 @@ class PermissionChecker {
         case .accessibility:
             // Deep link to Accessibility privacy pane
             urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        case .screenRecording:
+            // Deep link to Screen Recording privacy pane
+            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
         case .inputMonitoring:
             // Deep link to Input Monitoring privacy pane
             urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"

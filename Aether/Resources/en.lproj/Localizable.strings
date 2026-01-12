@@ -524,6 +524,8 @@
 // MARK: - Permissions
 "permission.accessibility.title" = "Accessibility Permission Required";
 "permission.accessibility.description" = "Aether needs Accessibility permission to detect global hotkeys and simulate keyboard input.";
+"permission.screen_recording.title" = "Screen Recording Permission Required";
+"permission.screen_recording.description" = "Aether needs Screen Recording permission for OCR and screen capture features.";
 "permission.input_monitoring.title" = "Input Monitoring Permission Required";
 "permission.input_monitoring.description" = "Aether needs Input Monitoring permission to capture keyboard events.";
 "permission.open_settings" = "Open System Settings";
@@ -535,12 +537,15 @@
 "permission.instruction.step4" = "Return to Aether, hotkey will automatically work";
 
 // MARK: - Permission Gate View
-"permission.gate.step1_title" = "Step 1/2: Accessibility Permission";
-"permission.gate.step2_title" = "Step 2/2: Input Monitoring Permission";
+"permission.gate.step1_title" = "Step 1/3: Accessibility Permission";
+"permission.gate.step2_title" = "Step 2/3: Screen Recording Permission";
+"permission.gate.step3_title" = "Step 3/3: Input Monitoring Permission";
 "permission.gate.accessibility_short" = "Accessibility";
+"permission.gate.screen_recording_short" = "Screen Recording";
 "permission.gate.input_monitoring_short" = "Input Monitoring";
 "permission.gate.accessibility_description" = "Aether needs Accessibility permission to capture window context and simulate keyboard input to paste AI responses into your applications.";
-"permission.gate.input_monitoring_description" = "Aether needs Input Monitoring permission to detect global hotkeys (default: ` key), allowing you to quickly summon the AI assistant in any app.\n\n⚠️ Important: After granting this permission, macOS will prompt you to restart. Please click the \"Reopen\" button.";
+"permission.gate.screen_recording_description" = "Aether needs Screen Recording permission for OCR text recognition and screen capture features.";
+"permission.gate.input_monitoring_description" = "Aether needs Input Monitoring permission to detect global hotkeys (default: ` key), allowing you to quickly summon the AI assistant in any app.\n\n⚠️ Important: After granting all permissions, click \"Enter Aether\" to restart the app.";
 "permission.gate.status_granted" = "Granted ✓";
 "permission.gate.status_waiting" = "Waiting for authorization...";
 "permission.gate.button.continue" = "Continue";

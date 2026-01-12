@@ -11,12 +11,15 @@ import SwiftUI
 /// Permission type for the prompt
 enum PermissionType {
     case accessibility
+    case screenRecording
     case inputMonitoring
 
     var title: String {
         switch self {
         case .accessibility:
             return L("permission.accessibility.title")
+        case .screenRecording:
+            return L("permission.screen_recording.title")
         case .inputMonitoring:
             return L("permission.input_monitoring.title")
         }
@@ -26,6 +29,8 @@ enum PermissionType {
         switch self {
         case .accessibility:
             return L("permission.accessibility.description")
+        case .screenRecording:
+            return L("permission.screen_recording.description")
         case .inputMonitoring:
             return L("permission.input_monitoring.description")
         }
@@ -35,6 +40,8 @@ enum PermissionType {
         switch self {
         case .accessibility:
             return "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        case .screenRecording:
+            return "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
         case .inputMonitoring:
             return "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
         }
@@ -44,6 +51,8 @@ enum PermissionType {
         switch self {
         case .accessibility:
             return "hand.raised.fill"
+        case .screenRecording:
+            return "rectangle.dashed.badge.record"
         case .inputMonitoring:
             return "keyboard.fill"
         }
