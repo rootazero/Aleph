@@ -66,3 +66,4 @@ log*.md
 
 icons/
 agentstructure/
+.worktrees/
