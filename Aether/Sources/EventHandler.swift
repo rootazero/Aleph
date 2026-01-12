@@ -86,7 +86,7 @@ class EventHandler: AetherEventHandler {
         DispatchQueue.mainAsync(weakRef: self) { slf in
             // Skip halo spinner in multi-turn conversation mode
             // SubPanel handles UI feedback instead
-            if slf.conversationManager.sessionId != nil {
+            if slf.conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
                 print("[EventHandler] Skipping halo error animation (multi-turn mode)")
                 slf.showErrorNotification(message: message, suggestion: suggestion)
                 return
@@ -515,7 +515,7 @@ class EventHandler: AetherEventHandler {
         case .listening:
             // Skip halo spinner in multi-turn conversation mode
             // UnifiedInputWindow handles UI feedback instead
-            if conversationManager.sessionId != nil {
+            if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
                 print("[EventHandler] Skipping listening state (multi-turn mode)")
                 return
             }
@@ -529,7 +529,7 @@ class EventHandler: AetherEventHandler {
         case .retrievingMemory:
             // Skip halo spinner in multi-turn conversation mode
             // SubPanel handles UI feedback instead
-            if conversationManager.sessionId != nil {
+            if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
                 print("[EventHandler] Skipping retrievingMemory state (multi-turn mode)")
                 return
             }
@@ -541,7 +541,7 @@ class EventHandler: AetherEventHandler {
         case .processingWithAi:
             // Skip halo spinner in multi-turn conversation mode
             // SubPanel handles UI feedback instead
-            if conversationManager.sessionId != nil {
+            if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
                 print("[EventHandler] Skipping processing state (multi-turn mode)")
                 return
             }
@@ -553,7 +553,7 @@ class EventHandler: AetherEventHandler {
         case .processing:
             // Skip halo spinner in multi-turn conversation mode
             // SubPanel handles UI feedback instead
-            if conversationManager.sessionId != nil {
+            if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
                 print("[EventHandler] Skipping processing state (multi-turn mode)")
                 return
             }
@@ -592,7 +592,7 @@ class EventHandler: AetherEventHandler {
         accumulatedText = text
 
         // Skip halo update in multi-turn conversation mode
-        if conversationManager.sessionId != nil {
+        if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
             return
         }
 
@@ -608,7 +608,7 @@ class EventHandler: AetherEventHandler {
     private func handleAiProcessingStarted(providerName: String, providerColor: String) {
         // Skip halo spinner in multi-turn conversation mode
         // SubPanel handles UI feedback instead
-        if conversationManager.sessionId != nil {
+        if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
             print("[EventHandler] AI processing started (multi-turn, no halo): \(providerName)")
             return
         }
@@ -625,7 +625,7 @@ class EventHandler: AetherEventHandler {
         accumulatedText = responsePreview
 
         // Skip halo update in multi-turn conversation mode
-        if conversationManager.sessionId != nil {
+        if conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive {
             return
         }
 

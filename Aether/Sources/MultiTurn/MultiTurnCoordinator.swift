@@ -133,25 +133,43 @@ final class MultiTurnCoordinator {
 
         print("[MultiTurnCoordinator] Processing input: \(text.prefix(50))...")
 
-        // Add user message to UI and store
+        // Check for recent clipboard content (within 10 seconds)
+        var finalText = text
+        if let recentClipboard = ClipboardMonitor.shared.getRecentClipboardContent() {
+            // Only append if clipboard content is different from user input
+            let trimmedClipboard = recentClipboard.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedInput = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedClipboard.isEmpty && trimmedClipboard != trimmedInput {
+                finalText = text + "\n\n---\n[剪切板内容]\n" + recentClipboard
+                print("[MultiTurnCoordinator] Appended recent clipboard content (\(recentClipboard.count) chars)")
+            }
+        }
+
+        // Add user message to UI and store (show original text to user)
         displayWindow.viewModel.addUserMessage(text)
         displayWindow.viewModel.setLoading(true)
 
         // Check if this is the first message (for title generation)
         let isFirstMessage = displayWindow.viewModel.messages.count == 1
 
-        // Process in background
+        // Process in background (use finalText which may include clipboard content)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.processWithAI(
-                text: text,
+                text: finalText,
                 topic: topic,
+                userDisplayText: text,
                 isFirstMessage: isFirstMessage
             )
         }
     }
 
     /// Process input with AI
-    private func processWithAI(text: String, topic: Topic, isFirstMessage: Bool) {
+    /// - Parameters:
+    ///   - text: The full text to send to AI (may include clipboard content)
+    ///   - topic: The current conversation topic
+    ///   - userDisplayText: The original user input (for title generation)
+    ///   - isFirstMessage: Whether this is the first message in the topic
+    private func processWithAI(text: String, topic: Topic, userDisplayText: String, isFirstMessage: Bool) {
         guard let core = core else { return }
 
         do {
@@ -162,14 +180,14 @@ final class MultiTurnCoordinator {
                 attachments: nil
             )
 
-            // Call AI
+            // Call AI with full text (including clipboard if present)
             let response = try core.processInput(userInput: text, context: context)
 
             DispatchQueue.main.async { [weak self] in
                 self?.handleAIResponse(
                     response,
                     topic: topic,
-                    userInput: text,
+                    userInput: userDisplayText,  // Use original text for title
                     isFirstMessage: isFirstMessage
                 )
             }

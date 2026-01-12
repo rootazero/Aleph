@@ -63,6 +63,7 @@ final class MultiTurnInputWindow: NSWindow {
 
         collectionBehavior = [.canJoinAllSpaces, .stationary]
         hidesOnDeactivate = false
+        isMovableByWindowBackground = true  // Enable dragging
 
         titlebarAppearsTransparent = true
         titleVisibility = .hidden
