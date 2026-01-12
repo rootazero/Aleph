@@ -133,15 +133,28 @@ final class MultiTurnCoordinator {
 
         print("[MultiTurnCoordinator] Processing input: \(text.prefix(50))...")
 
-        // Check for recent clipboard content (within 10 seconds)
+        // Get clipboard content (text + attachments like images) if recent (within 10 seconds)
         var finalText = text
-        if let recentClipboard = ClipboardMonitor.shared.getRecentClipboardContent() {
-            // Only append if clipboard content is different from user input
-            let trimmedClipboard = recentClipboard.trimmingCharacters(in: .whitespacesAndNewlines)
-            let trimmedInput = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmedClipboard.isEmpty && trimmedClipboard != trimmedInput {
-                finalText = text + "\n\n---\n[剪切板内容]\n" + recentClipboard
-                print("[MultiTurnCoordinator] Appended recent clipboard content (\(recentClipboard.count) chars)")
+        var clipboardAttachments: [MediaAttachment] = []
+
+        if ClipboardMonitor.shared.isClipboardRecent() {
+            // Get mixed content from clipboard (text + images)
+            let (clipboardText, attachments, _) = ClipboardManager.shared.getMixedContent()
+
+            // Append text context if different from user input
+            if let recentText = clipboardText {
+                let trimmedClipboard = recentText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let trimmedInput = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmedClipboard.isEmpty && trimmedClipboard != trimmedInput {
+                    finalText = text + "\n\n---\n[剪切板内容]\n" + recentText
+                    print("[MultiTurnCoordinator] Appended recent clipboard text (\(recentText.count) chars)")
+                }
+            }
+
+            // Capture attachments (images, etc.)
+            if !attachments.isEmpty {
+                clipboardAttachments = attachments
+                print("[MultiTurnCoordinator] Found \(attachments.count) clipboard attachment(s)")
             }
         }
 
@@ -158,6 +171,7 @@ final class MultiTurnCoordinator {
                 text: finalText,
                 topic: topic,
                 userDisplayText: text,
+                attachments: clipboardAttachments,
                 isFirstMessage: isFirstMessage
             )
         }
@@ -168,19 +182,25 @@ final class MultiTurnCoordinator {
     ///   - text: The full text to send to AI (may include clipboard content)
     ///   - topic: The current conversation topic
     ///   - userDisplayText: The original user input (for title generation)
+    ///   - attachments: Media attachments from clipboard (images, etc.)
     ///   - isFirstMessage: Whether this is the first message in the topic
-    private func processWithAI(text: String, topic: Topic, userDisplayText: String, isFirstMessage: Bool) {
+    private func processWithAI(text: String, topic: Topic, userDisplayText: String, attachments: [MediaAttachment], isFirstMessage: Bool) {
         guard let core = core else { return }
 
         do {
-            // Create context for AI call
+            // Create context for AI call with attachments
             let context = CapturedContext(
                 appBundleId: "com.aether.multi-turn",
                 windowTitle: nil,
-                attachments: nil
+                attachments: attachments.isEmpty ? nil : attachments
             )
 
-            // Call AI with full text (including clipboard if present)
+            // Log attachment info
+            if !attachments.isEmpty {
+                print("[MultiTurnCoordinator] Sending \(attachments.count) attachment(s) to AI")
+            }
+
+            // Call AI with full text and attachments
             let response = try core.processInput(userInput: text, context: context)
 
             DispatchQueue.main.async { [weak self] in
