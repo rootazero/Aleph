@@ -2,120 +2,93 @@
 //  AdaptiveGlassModifier.swift
 //  Aether
 //
-//  Compatibility layer for Liquid Glass effects.
-//  Uses native .glassEffect() API on macOS 26+, falls back to VisualEffectBackground on earlier versions.
-//
-//  Liquid Glass is managed by the system on macOS 26+, providing consistent visual effects
-//  that automatically adapt to system settings and user preferences.
+//  Custom glass effect modifiers for consistent translucent appearance.
+//  Uses NSVisualEffectView for native macOS blur effects.
 //
 
 import SwiftUI
 import AppKit
 
-// MARK: - AdaptiveGlassModifier
+// MARK: - GlassModifier
 
-/// A view modifier that applies Liquid Glass effect on macOS 26+ with fallback for earlier versions
-/// On macOS 26+, the glass effect is managed by the system for consistent appearance.
-struct AdaptiveGlassModifier: ViewModifier {
+/// A view modifier that applies custom glass effect with translucent background
+struct GlassModifier: ViewModifier {
 
     // MARK: - Properties
 
-    /// Corner radius for fallback mode (ignored on macOS 26+, uses .containerConcentric)
+    /// Corner radius for the glass effect
     let cornerRadius: CGFloat
 
-    /// Material for fallback mode
-    let fallbackMaterial: NSVisualEffectView.Material
+    /// Material type for the visual effect
+    let material: NSVisualEffectView.Material
+
+    /// Blending mode
+    let blendingMode: NSVisualEffectView.BlendingMode
 
     // MARK: - Initialization
 
     init(
         cornerRadius: CGFloat = 12,
-        fallbackMaterial: NSVisualEffectView.Material = .hudWindow
+        material: NSVisualEffectView.Material = .hudWindow,
+        blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
     ) {
         self.cornerRadius = cornerRadius
-        self.fallbackMaterial = fallbackMaterial
+        self.material = material
+        self.blendingMode = blendingMode
     }
 
     // MARK: - Body
 
     func body(content: Content) -> some View {
-        if #available(macOS 26, *) {
-            // macOS 26+: Use native Liquid Glass effect managed by system
-            // .clear provides a lighter glass appearance with less visible border
-            content
-                .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        } else {
-            // Fallback for earlier versions: Use VisualEffectBackground
-            content
-                .background(
-                    VisualEffectBackground(
-                        material: fallbackMaterial,
-                        blendingMode: .behindWindow
-                    )
+        content
+            .background(
+                VisualEffectBackground(
+                    material: material,
+                    blendingMode: blendingMode
                 )
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-        }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }
 
-// MARK: - AdaptiveGlassProminentButtonModifier
+// MARK: - GlassProminentButtonModifier
 
 /// A view modifier for prominent glass-style buttons
-/// On macOS 26+, uses native .glassProminent button style managed by system
-struct AdaptiveGlassProminentButtonModifier: ViewModifier {
+struct GlassProminentButtonModifier: ViewModifier {
 
     @Environment(\.isEnabled) private var isEnabled
 
     func body(content: Content) -> some View {
-        if #available(macOS 26, *) {
-            // macOS 26+: Use native glass prominent button style
-            content
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.white)
-                .padding(10)
-                .glassEffect(.regular.interactive(), in: Circle())
-        } else {
-            // Fallback: Custom prominent button styling
-            content
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.white)
-                .padding(10)
-                .background(
-                    Circle()
-                        .fill(isEnabled ? Color.primary.opacity(0.8) : Color.primary.opacity(0.4))
-                )
-        }
+        content
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundColor(.white)
+            .padding(10)
+            .background(
+                Circle()
+                    .fill(isEnabled ? Color.primary.opacity(0.8) : Color.primary.opacity(0.4))
+            )
     }
 }
 
-// MARK: - AdaptiveGlassButtonModifier
+// MARK: - GlassButtonModifier
 
-/// A view modifier for secondary glass-style buttons
-/// On macOS 26+, uses native glass button style managed by system
-struct AdaptiveGlassButtonModifier: ViewModifier {
+/// A view modifier for secondary glass-style buttons with hover effect
+struct GlassButtonModifier: ViewModifier {
 
     @State private var isHovering = false
 
     func body(content: Content) -> some View {
-        if #available(macOS 26, *) {
-            // macOS 26+: Use native glass button style
-            content
-                .padding(6)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-        } else {
-            // Fallback: Subtle hover effect
-            content
-                .padding(6)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(isHovering ? Color.primary.opacity(0.1) : Color.clear)
-                )
-                .onHover { hovering in
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        isHovering = hovering
-                    }
+        content
+            .padding(6)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isHovering ? Color.primary.opacity(0.1) : Color.clear)
+            )
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isHovering = hovering
                 }
-        }
+            }
     }
 }
 
@@ -123,33 +96,37 @@ struct AdaptiveGlassButtonModifier: ViewModifier {
 
 extension View {
 
-    /// Apply adaptive glass effect (Liquid Glass on macOS 26+, VisualEffect on earlier)
+    /// Apply custom glass effect with translucent background
+    /// - Parameters:
+    ///   - cornerRadius: Corner radius for the glass shape (default: 12)
+    ///   - material: NSVisualEffectView material (default: .hudWindow)
+    ///   - blendingMode: Blending mode (default: .behindWindow)
     func adaptiveGlass(
         cornerRadius: CGFloat = 12,
-        fallbackMaterial: NSVisualEffectView.Material = .hudWindow
+        material: NSVisualEffectView.Material = .hudWindow,
+        blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
     ) -> some View {
-        modifier(AdaptiveGlassModifier(
+        modifier(GlassModifier(
             cornerRadius: cornerRadius,
-            fallbackMaterial: fallbackMaterial
+            material: material,
+            blendingMode: blendingMode
         ))
     }
 
     /// Apply prominent glass button style
     func adaptiveGlassProminent() -> some View {
-        modifier(AdaptiveGlassProminentButtonModifier())
+        modifier(GlassProminentButtonModifier())
     }
 
-    /// Apply secondary glass button style
+    /// Apply secondary glass button style with hover effect
     func adaptiveGlassButton() -> some View {
-        modifier(AdaptiveGlassButtonModifier())
+        modifier(GlassButtonModifier())
     }
 }
 
-// MARK: - Adaptive Glass Container
+// MARK: - Glass Container
 
-/// A container that provides GlassEffectContainer on macOS 26+ with fallback
-/// On macOS 26+, uses system's GlassEffectContainer for proper glass element grouping
-/// This ensures nearby glass elements share the same visual context and can morph into each other
+/// A container for grouping glass elements
 struct AdaptiveGlassContainer<Content: View>: View {
 
     let spacing: CGFloat?
@@ -161,46 +138,25 @@ struct AdaptiveGlassContainer<Content: View>: View {
     }
 
     var body: some View {
-        if #available(macOS 26, *) {
-            // macOS 26+: Use native GlassEffectContainer for proper glass grouping
-            // Glass elements in the same container share visual context and can morph
-            GlassEffectContainer(spacing: spacing ?? 0) {
-                content()
-            }
-        } else {
-            // Fallback: Simple VStack
-            VStack(spacing: spacing ?? 0) {
-                content()
-            }
+        VStack(spacing: spacing ?? 0) {
+            content()
         }
     }
 }
 
 // MARK: - Glass Message Bubble Modifier
 
-/// Modifier for message bubbles with glass effect
-/// On macOS 26+, uses native glass effect managed by system
+/// Modifier for message bubbles with subtle background
 struct GlassMessageBubbleModifier: ViewModifier {
 
     let isUser: Bool
 
     func body(content: Content) -> some View {
-        if #available(macOS 26, *) {
-            // macOS 26+: Use native glass effect for message bubbles
-            // User messages use slightly more prominent glass effect
-            content
-                .glassEffect(
-                    isUser ? .regular : .regular,
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                )
-        } else {
-            // Fallback: Semi-transparent background
-            content
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.primary.opacity(isUser ? 0.08 : 0.05))
-                )
-        }
+        content
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.primary.opacity(isUser ? 0.08 : 0.05))
+            )
     }
 }
 
@@ -213,19 +169,15 @@ extension View {
 
 // MARK: - Preview Provider
 
-#Preview("Adaptive Glass Demo") {
+#Preview("Glass Effect Demo") {
     VStack(spacing: 20) {
-        Text("Adaptive Glass Demo")
+        Text("Custom Glass Effect Demo")
             .font(.headline)
 
         VStack(spacing: 12) {
-            if #available(macOS 26, *) {
-                Text("Using native Liquid Glass (macOS 26+)")
-                Text("Effect managed by system settings")
-            } else {
-                Text("Using VisualEffect fallback")
-                Text("Upgrade to macOS 26 for Liquid Glass")
-            }
+            Text("Unified glass effect")
+            Text("Using NSVisualEffectView")
+            Text("No version-specific code")
         }
         .padding(20)
         .frame(width: 300)
@@ -258,7 +210,7 @@ extension View {
         // User message
         HStack {
             Spacer()
-            Text("I'd like to learn about Liquid Glass")
+            Text("I'd like to learn about glass effects")
                 .padding(12)
                 .glassBubble(isUser: true)
         }
