@@ -3,6 +3,7 @@
 //  Aether
 //
 //  SwiftUI view for displaying conversation history.
+//  Updated to use Liquid Glass design language (macOS 26+).
 //
 
 import SwiftUI
@@ -10,8 +11,16 @@ import SwiftUI
 // MARK: - ConversationDisplayView
 
 /// Main view for conversation display window
+/// Uses adaptive glass effect for Liquid Glass on macOS 26+ with fallback
 struct ConversationDisplayView: View {
     @ObservedObject var viewModel: ConversationDisplayViewModel
+
+    // Height tracking state
+    @State private var messagesContentHeight: CGFloat = 100
+
+    // Title bar height constant
+    private let titleBarHeight: CGFloat = 38
+    private let loadingHeight: CGFloat = 30
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,6 +28,7 @@ struct ConversationDisplayView: View {
             titleBar
 
             Divider()
+                .opacity(0.3)
 
             // Messages list
             if viewModel.hasMessages {
@@ -38,36 +48,33 @@ struct ConversationDisplayView: View {
             }
         }
         .frame(width: 360)
-        .background(
-            VisualEffectBackground(material: .hudWindow, blendingMode: .behindWindow)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .adaptiveGlass()  // Liquid Glass on macOS 26+, VisualEffect fallback
     }
 
     // MARK: - Title Bar
 
     private var titleBar: some View {
         HStack {
-            Circle()
-                .fill(Color.purple)
-                .frame(width: 8, height: 8)
-
+            // Clean design without colored indicator (pure glass style)
             Text(viewModel.displayTitle)
                 .font(.headline)
                 .lineLimit(1)
 
             Spacer()
 
+            // Copy button with hover effect
             Button(action: viewModel.copyAllMessages) {
                 Image(systemName: "doc.on.doc")
                     .font(.system(size: 12))
+                    .foregroundColor(.primary.opacity(0.6))
             }
             .buttonStyle(.plain)
+            .adaptiveGlassButton()
             .help("Copy all messages")
             .disabled(!viewModel.hasMessages)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
     }
 
     // MARK: - Messages List
@@ -75,7 +82,7 @@ struct ConversationDisplayView: View {
     private var messagesList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 12) {
+                VStack(spacing: 12) {
                     ForEach(viewModel.messages) { message in
                         MessageBubbleView(
                             message: message,
@@ -85,6 +92,17 @@ struct ConversationDisplayView: View {
                     }
                 }
                 .padding(12)
+                .background(
+                    GeometryReader { geometry in
+                        Color.clear
+                            .onAppear {
+                                updateMessagesHeight(geometry.size.height)
+                            }
+                            .onChange(of: geometry.size.height) { _, newHeight in
+                                updateMessagesHeight(newHeight)
+                            }
+                    }
+                )
             }
             .onChange(of: viewModel.messages.count) {
                 // Scroll to bottom when new message added
@@ -97,54 +115,67 @@ struct ConversationDisplayView: View {
         }
     }
 
+    private func updateMessagesHeight(_ height: CGFloat) {
+        messagesContentHeight = height
+        let totalHeight = titleBarHeight + 1 + height + (viewModel.isLoading ? loadingHeight : 0)
+        viewModel.reportHeightChange(totalHeight)
+    }
+
     // MARK: - Empty State
 
     private var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 32))
-                .foregroundColor(.secondary)
+                .foregroundColor(.primary.opacity(0.5))
 
             Text("Start a conversation")
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundColor(.primary.opacity(0.6))
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
+        .frame(height: 100)
         .padding()
+        .onAppear {
+            // Report initial height for empty state
+            let totalHeight = titleBarHeight + 1 + 132 + (viewModel.isLoading ? loadingHeight : 0)
+            viewModel.reportHeightChange(totalHeight)
+        }
     }
 
     // MARK: - Loading Indicator
 
     private var loadingIndicator: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<3, id: \.self) { _ in
+        HStack(spacing: 6) {
+            ForEach(0..<3, id: \.self) { index in
                 Circle()
-                    .fill(Color.purple.opacity(0.6))
+                    .fill(.primary.opacity(0.4))
                     .frame(width: 6, height: 6)
             }
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
+        // Pure glass style: use .primary instead of purple
     }
 
     // MARK: - Error Banner
 
     private func errorBanner(_ message: String) -> some View {
-        HStack {
+        HStack(spacing: 6) {
             Image(systemName: "exclamationmark.triangle")
             Text(message)
                 .font(.caption)
         }
         .foregroundColor(.red)
-        .padding(8)
-        .background(Color.red.opacity(0.1))
-        .cornerRadius(8)
+        .padding(10)
+        .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
         .padding(12)
     }
 }
 
 // MARK: - MessageBubbleView
 
-/// Individual message bubble
+/// Individual message bubble with glass effect
+/// Uses adaptive glass bubble styling for Liquid Glass on macOS 26+
 struct MessageBubbleView: View {
     let message: ConversationMessage
     let onCopy: () -> Void
@@ -160,13 +191,12 @@ struct MessageBubbleView: View {
             if isUser { Spacer(minLength: 40) }
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
-                // Message content
+                // Message content with glass bubble effect
                 Text(message.content)
                     .font(.system(size: 13))
                     .textSelection(.enabled)
-                    .padding(10)
-                    .background(bubbleBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .padding(12)
+                    .glassBubble(isUser: isUser)
 
                 // Copy button (on hover)
                 if isHovering {
@@ -176,7 +206,7 @@ struct MessageBubbleView: View {
                             Text("Copy")
                         }
                         .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.primary.opacity(0.6))
                     }
                     .buttonStyle(.plain)
                 }
@@ -189,9 +219,5 @@ struct MessageBubbleView: View {
                 isHovering = hovering
             }
         }
-    }
-
-    private var bubbleBackground: Color {
-        isUser ? Color.purple.opacity(0.2) : Color.gray.opacity(0.15)
     }
 }

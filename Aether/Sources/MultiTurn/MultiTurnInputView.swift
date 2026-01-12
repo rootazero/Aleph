@@ -3,6 +3,7 @@
 //  Aether
 //
 //  SwiftUI view for multi-turn input window.
+//  Updated to use Liquid Glass design language (macOS 26+).
 //
 
 import AppKit
@@ -197,6 +198,7 @@ struct MultiTurnInputView: View {
     }
 
     /// Content area with animated background
+    /// Uses adaptive glass effect for Liquid Glass on macOS 26+
     private var contentWithBackground: some View {
         VStack(spacing: 0) {
             // Input field
@@ -212,28 +214,25 @@ struct MultiTurnInputView: View {
                 topicList
             }
         }
-        .background(
-            VisualEffectBackground(material: .hudWindow, blendingMode: .behindWindow)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .adaptiveGlass()  // Liquid Glass on macOS 26+, VisualEffect fallback
         // Smooth animation for background expansion
-        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: viewModel.showCommandList)
-        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: viewModel.showTopicList)
+        .animation(.smooth(duration: 0.3), value: viewModel.showCommandList)
+        .animation(.smooth(duration: 0.3), value: viewModel.showTopicList)
     }
 
     // MARK: - Input Field
 
     private var inputField: some View {
         HStack(spacing: 12) {
-            // Turn indicator
+            // Turn indicator (pure glass style - no colored background)
             if viewModel.turnCount > 0 {
                 Text("Turn \(viewModel.turnCount + 1)")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.purple.opacity(0.1))
-                    .cornerRadius(4)
+                    .background(.primary.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
             }
 
             // Text field - using IMETextField for proper IME and focus handling in floating windows
@@ -267,13 +266,12 @@ struct MultiTurnInputView: View {
             )
             .frame(height: 24)
 
-            // Submit button
+            // Submit button with glass prominent style
             Button(action: viewModel.submit) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 24))
-                    .foregroundColor(.purple)
+                Image(systemName: "arrow.up")
             }
             .buttonStyle(.plain)
+            .adaptiveGlassProminent()
             .disabled(viewModel.inputText.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding(16)
@@ -288,7 +286,7 @@ struct MultiTurnInputView: View {
             if viewModel.commands.isEmpty {
                 Text("No commands found")
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.primary.opacity(0.6))
                     .padding()
             } else {
                 ScrollView {
@@ -317,7 +315,7 @@ struct MultiTurnInputView: View {
             if viewModel.filteredTopics.isEmpty {
                 Text("No topics found")
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.primary.opacity(0.6))
                     .padding()
             } else {
                 ScrollView {
@@ -340,7 +338,7 @@ struct MultiTurnInputView: View {
 
 // MARK: - CommandRowView
 
-/// Row view for command list
+/// Row view for command list with glass style
 struct CommandRowView: View {
     let command: CommandNode
     let isSelected: Bool
@@ -351,10 +349,10 @@ struct CommandRowView: View {
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 12) {
-                // Command icon
+                // Command icon (neutral color for pure glass style)
                 Image(systemName: command.icon.isEmpty ? "terminal" : command.icon)
                     .font(.system(size: 14))
-                    .foregroundColor(.purple)
+                    .foregroundColor(.primary.opacity(0.7))
                     .frame(width: 20)
 
                 // Command info
@@ -363,13 +361,13 @@ struct CommandRowView: View {
                         Text("/\(command.key)")
                             .font(.system(size: 14, weight: .medium))
 
-                        // Source badge
+                        // Source badge (neutral style)
                         Text(sourceTypeName(command.sourceType))
                             .font(.system(size: 9))
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
-                            .background(Color.purple.opacity(0.2))
-                            .cornerRadius(3)
+                            .background(.primary.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
 
                     if !command.description.isEmpty {
@@ -384,11 +382,11 @@ struct CommandRowView: View {
 
                 Image(systemName: "chevron.right")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.primary.opacity(0.4))
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background((isHovering || isSelected) ? Color.purple.opacity(0.15) : Color.clear)
+            .background((isHovering || isSelected) ? .white.opacity(0.1) : .clear)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -399,7 +397,7 @@ struct CommandRowView: View {
 
 // MARK: - TopicRowView
 
-/// Row view for topic list
+/// Row view for topic list with glass style
 struct TopicRowView: View {
     let topic: Topic
     let isSelected: Bool
@@ -424,11 +422,11 @@ struct TopicRowView: View {
 
                 Image(systemName: "chevron.right")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(.primary.opacity(0.4))
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background((isHovering || isSelected) ? Color.purple.opacity(0.15) : Color.clear)
+            .background((isHovering || isSelected) ? .white.opacity(0.1) : .clear)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
