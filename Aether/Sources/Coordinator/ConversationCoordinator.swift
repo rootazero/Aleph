@@ -2,6 +2,15 @@
 //  ConversationCoordinator.swift
 //  Aether
 //
+//  DEPRECATED: This file is deprecated and will be removed in a future version.
+//  Multi-turn conversation logic has been moved to:
+//  - MultiTurnCoordinator (coordinator)
+//  - ConversationStore (persistence)
+//  - ConversationDisplayWindow/ViewModel/View (UI)
+//
+//  Keeping for backward compatibility during transition period.
+//
+//  Original Description:
 //  Coordinator for managing multi-turn conversations.
 //  Extracted from AppDelegate to improve separation of concerns.
 //

@@ -2,6 +2,15 @@
 //  ConversationManager.swift
 //  Aether
 //
+//  DEPRECATED: This file is deprecated and will be removed in a future version.
+//  Multi-turn conversation logic has been moved to:
+//  - MultiTurnCoordinator (coordinator)
+//  - ConversationStore (persistence)
+//  - ConversationDisplayWindow/ViewModel/View (UI)
+//
+//  Keeping for backward compatibility during transition period.
+//
+//  Original Description:
 //  Manages multi-turn conversation state between Rust core and Halo UI.
 //  Similar to ClarificationManager but for conversation continuation flow.
 //

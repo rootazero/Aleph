@@ -2,6 +2,11 @@
 //  UnifiedInputCoordinator.swift
 //  Aether
 //
+//  NOTE: Multi-turn conversation handling has been moved to MultiTurnCoordinator.
+//  This coordinator now only handles single-turn command processing.
+//  The hotkey (Cmd+Opt+/) is handled by AppDelegate -> MultiTurnCoordinator.
+//
+//  Original Description:
 //  Coordinator for managing the unified Halo input window.
 //  Combines command completion, multi-turn conversation, and AI interaction
 //  into a single, cohesive flow with a Raycast-style SubPanel.
