@@ -426,6 +426,55 @@ typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod24)(uint64_t, Rust
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_V2_EVENT_HANDLER_METHOD0
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_V2_EVENT_HANDLER_METHOD0
+typedef void (*UniffiCallbackInterfaceAetherV2EventHandlerMethod0)(uint64_t, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_V2_EVENT_HANDLER_METHOD1
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_V2_EVENT_HANDLER_METHOD1
+typedef void (*UniffiCallbackInterfaceAetherV2EventHandlerMethod1)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_V2_EVENT_HANDLER_METHOD2
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_V2_EVENT_HANDLER_METHOD2
+typedef void (*UniffiCallbackInterfaceAetherV2EventHandlerMethod2)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_V2_EVENT_HANDLER_METHOD3
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_V2_EVENT_HANDLER_METHOD3
+typedef void (*UniffiCallbackInterfaceAetherV2EventHandlerMethod3)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_V2_EVENT_HANDLER_METHOD4
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_V2_EVENT_HANDLER_METHOD4
+typedef void (*UniffiCallbackInterfaceAetherV2EventHandlerMethod4)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_V2_EVENT_HANDLER_METHOD5
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_V2_EVENT_HANDLER_METHOD5
+typedef void (*UniffiCallbackInterfaceAetherV2EventHandlerMethod5)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_V2_EVENT_HANDLER_METHOD6
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_V2_EVENT_HANDLER_METHOD6
+typedef void (*UniffiCallbackInterfaceAetherV2EventHandlerMethod6)(uint64_t, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_INITIALIZATION_PROGRESS_HANDLER_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_INITIALIZATION_PROGRESS_HANDLER_METHOD0
 typedef void (*UniffiCallbackInterfaceInitializationProgressHandlerMethod0)(uint64_t, void* _Nonnull, 
@@ -498,6 +547,20 @@ typedef struct UniffiVTableCallbackInterfaceAetherEventHandler {
     UniffiCallbackInterfaceAetherEventHandlerMethod24 _Nonnull onAgentCompleted;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceAetherEventHandler;
+
+#endif
+#ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_AETHER_V2_EVENT_HANDLER
+#define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_AETHER_V2_EVENT_HANDLER
+typedef struct UniffiVTableCallbackInterfaceAetherV2EventHandler {
+    UniffiCallbackInterfaceAetherV2EventHandlerMethod0 _Nonnull onThinking;
+    UniffiCallbackInterfaceAetherV2EventHandlerMethod1 _Nonnull onToolStart;
+    UniffiCallbackInterfaceAetherV2EventHandlerMethod2 _Nonnull onToolResult;
+    UniffiCallbackInterfaceAetherV2EventHandlerMethod3 _Nonnull onStreamChunk;
+    UniffiCallbackInterfaceAetherV2EventHandlerMethod4 _Nonnull onComplete;
+    UniffiCallbackInterfaceAetherV2EventHandlerMethod5 _Nonnull onError;
+    UniffiCallbackInterfaceAetherV2EventHandlerMethod6 _Nonnull onMemoryStored;
+    UniffiCallbackInterfaceFree _Nonnull uniffiFree;
+} UniffiVTableCallbackInterfaceAetherV2EventHandler;
 
 #endif
 #ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_INITIALIZATION_PROGRESS_HANDLER
@@ -928,9 +991,59 @@ void uniffi_aethecore_fn_method_aethercore_update_trigger_config(void*_Nonnull p
 int8_t uniffi_aethecore_fn_method_aethercore_validate_regex(void*_Nonnull ptr, RustBuffer pattern, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_CLONE_AETHERV2CORE
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_CLONE_AETHERV2CORE
+void*_Nonnull uniffi_aethecore_fn_clone_aetherv2core(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FREE_AETHERV2CORE
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FREE_AETHERV2CORE
+void uniffi_aethecore_fn_free_aetherv2core(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERV2CORE_CANCEL
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERV2CORE_CANCEL
+void uniffi_aethecore_fn_method_aetherv2core_cancel(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERV2CORE_CLEAR_MEMORY
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERV2CORE_CLEAR_MEMORY
+void uniffi_aethecore_fn_method_aetherv2core_clear_memory(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERV2CORE_IS_CANCELLED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERV2CORE_IS_CANCELLED
+int8_t uniffi_aethecore_fn_method_aetherv2core_is_cancelled(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERV2CORE_LIST_TOOLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERV2CORE_LIST_TOOLS
+RustBuffer uniffi_aethecore_fn_method_aetherv2core_list_tools(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERV2CORE_PROCESS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERV2CORE_PROCESS
+void uniffi_aethecore_fn_method_aetherv2core_process(void*_Nonnull ptr, RustBuffer input, RustBuffer options, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERV2CORE_RELOAD_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERV2CORE_RELOAD_CONFIG
+void uniffi_aethecore_fn_method_aetherv2core_reload_config(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERV2CORE_SEARCH_MEMORY
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERV2CORE_SEARCH_MEMORY
+RustBuffer uniffi_aethecore_fn_method_aetherv2core_search_memory(void*_Nonnull ptr, RustBuffer query, uint32_t limit, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_AETHEREVENTHANDLER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_AETHEREVENTHANDLER
 void uniffi_aethecore_fn_init_callback_vtable_aethereventhandler(UniffiVTableCallbackInterfaceAetherEventHandler* _Nonnull vtable
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_AETHERV2EVENTHANDLER
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_AETHERV2EVENTHANDLER
+void uniffi_aethecore_fn_init_callback_vtable_aetherv2eventhandler(UniffiVTableCallbackInterfaceAetherV2EventHandler* _Nonnull vtable
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_INIT_CALLBACK_VTABLE_INITIALIZATIONPROGRESSHANDLER
@@ -953,6 +1066,11 @@ int8_t uniffi_aethecore_fn_func_download_embedding_model_standalone(RustBuffer p
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_GET_SKILLS_DIR_STRING
 RustBuffer uniffi_aethecore_fn_func_get_skills_dir_string(RustCallStatus *_Nonnull out_status
     
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INIT_V2
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INIT_V2
+void*_Nonnull uniffi_aethecore_fn_func_init_v2(RustBuffer config_path, uint64_t handler, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
@@ -1272,6 +1390,12 @@ uint16_t uniffi_aethecore_checksum_func_download_embedding_model_standalone(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_GET_SKILLS_DIR_STRING
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_GET_SKILLS_DIR_STRING
 uint16_t uniffi_aethecore_checksum_func_get_skills_dir_string(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INIT_V2
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INIT_V2
+uint16_t uniffi_aethecore_checksum_func_init_v2(void
     
 );
 #endif
@@ -1779,6 +1903,48 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_validate_regex(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2CORE_CANCEL
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2CORE_CANCEL
+uint16_t uniffi_aethecore_checksum_method_aetherv2core_cancel(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2CORE_CLEAR_MEMORY
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2CORE_CLEAR_MEMORY
+uint16_t uniffi_aethecore_checksum_method_aetherv2core_clear_memory(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2CORE_IS_CANCELLED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2CORE_IS_CANCELLED
+uint16_t uniffi_aethecore_checksum_method_aetherv2core_is_cancelled(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2CORE_LIST_TOOLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2CORE_LIST_TOOLS
+uint16_t uniffi_aethecore_checksum_method_aetherv2core_list_tools(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2CORE_PROCESS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2CORE_PROCESS
+uint16_t uniffi_aethecore_checksum_method_aetherv2core_process(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2CORE_RELOAD_CONFIG
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2CORE_RELOAD_CONFIG
+uint16_t uniffi_aethecore_checksum_method_aetherv2core_reload_config(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2CORE_SEARCH_MEMORY
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2CORE_SEARCH_MEMORY
+uint16_t uniffi_aethecore_checksum_method_aetherv2core_search_memory(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_CONSTRUCTOR_AETHERCORE_NEW
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_CONSTRUCTOR_AETHERCORE_NEW
 uint16_t uniffi_aethecore_checksum_constructor_aethercore_new(void
@@ -1932,6 +2098,48 @@ uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_agent_tool_compl
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_AGENT_COMPLETED
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_AGENT_COMPLETED
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_agent_completed(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2EVENTHANDLER_ON_THINKING
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2EVENTHANDLER_ON_THINKING
+uint16_t uniffi_aethecore_checksum_method_aetherv2eventhandler_on_thinking(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2EVENTHANDLER_ON_TOOL_START
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2EVENTHANDLER_ON_TOOL_START
+uint16_t uniffi_aethecore_checksum_method_aetherv2eventhandler_on_tool_start(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2EVENTHANDLER_ON_TOOL_RESULT
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2EVENTHANDLER_ON_TOOL_RESULT
+uint16_t uniffi_aethecore_checksum_method_aetherv2eventhandler_on_tool_result(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2EVENTHANDLER_ON_STREAM_CHUNK
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2EVENTHANDLER_ON_STREAM_CHUNK
+uint16_t uniffi_aethecore_checksum_method_aetherv2eventhandler_on_stream_chunk(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2EVENTHANDLER_ON_COMPLETE
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2EVENTHANDLER_ON_COMPLETE
+uint16_t uniffi_aethecore_checksum_method_aetherv2eventhandler_on_complete(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2EVENTHANDLER_ON_ERROR
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2EVENTHANDLER_ON_ERROR
+uint16_t uniffi_aethecore_checksum_method_aetherv2eventhandler_on_error(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2EVENTHANDLER_ON_MEMORY_STORED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERV2EVENTHANDLER_ON_MEMORY_STORED
+uint16_t uniffi_aethecore_checksum_method_aetherv2eventhandler_on_memory_stored(void
     
 );
 #endif

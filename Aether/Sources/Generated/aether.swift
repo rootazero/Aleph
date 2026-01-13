@@ -1470,6 +1470,180 @@ public func FfiConverterTypeAetherCore_lower(_ value: AetherCore) -> UnsafeMutab
 }
 
 
+
+
+public protocol AetherV2CoreProtocol : AnyObject {
+    
+    func cancel() 
+    
+    func clearMemory() throws 
+    
+    func isCancelled()  -> Bool
+    
+    func listTools()  -> [ToolInfoV2]
+    
+    func process(input: String, options: ProcessOptionsV2?) throws 
+    
+    func reloadConfig() throws 
+    
+    func searchMemory(query: String, limit: UInt32) throws  -> [MemoryItemV2]
+    
+}
+
+open class AetherV2Core:
+    AetherV2CoreProtocol {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_aethecore_fn_clone_aetherv2core(self.pointer, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_aethecore_fn_free_aetherv2core(pointer, $0) }
+    }
+
+    
+
+    
+open func cancel() {try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_cancel(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+open func clearMemory()throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_clear_memory(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+open func isCancelled() -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_is_cancelled(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func listTools() -> [ToolInfoV2] {
+    return try!  FfiConverterSequenceTypeToolInfoV2.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_list_tools(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func process(input: String, options: ProcessOptionsV2?)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_process(self.uniffiClonePointer(),
+        FfiConverterString.lower(input),
+        FfiConverterOptionTypeProcessOptionsV2.lower(options),$0
+    )
+}
+}
+    
+open func reloadConfig()throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_reload_config(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+open func searchMemory(query: String, limit: UInt32)throws  -> [MemoryItemV2] {
+    return try  FfiConverterSequenceTypeMemoryItemV2.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_search_memory(self.uniffiClonePointer(),
+        FfiConverterString.lower(query),
+        FfiConverterUInt32.lower(limit),$0
+    )
+})
+}
+    
+
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAetherV2Core: FfiConverter {
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = AetherV2Core
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> AetherV2Core {
+        return AetherV2Core(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: AetherV2Core) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AetherV2Core {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: AetherV2Core, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAetherV2Core_lift(_ pointer: UnsafeMutableRawPointer) throws -> AetherV2Core {
+    return try FfiConverterTypeAetherV2Core.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAetherV2Core_lower(_ value: AetherV2Core) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeAetherV2Core.lower(value)
+}
+
+
 public struct AppMemoryInfo {
     public var appBundleId: String
     public var memoryCount: UInt64
@@ -3994,6 +4168,96 @@ public func FfiConverterTypeMemoryEntry_lower(_ value: MemoryEntry) -> RustBuffe
 }
 
 
+public struct MemoryItemV2 {
+    public var id: String
+    public var userInput: String
+    public var assistantResponse: String
+    public var timestamp: Int64
+    public var appContext: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, userInput: String, assistantResponse: String, timestamp: Int64, appContext: String?) {
+        self.id = id
+        self.userInput = userInput
+        self.assistantResponse = assistantResponse
+        self.timestamp = timestamp
+        self.appContext = appContext
+    }
+}
+
+
+
+extension MemoryItemV2: Equatable, Hashable {
+    public static func ==(lhs: MemoryItemV2, rhs: MemoryItemV2) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.userInput != rhs.userInput {
+            return false
+        }
+        if lhs.assistantResponse != rhs.assistantResponse {
+            return false
+        }
+        if lhs.timestamp != rhs.timestamp {
+            return false
+        }
+        if lhs.appContext != rhs.appContext {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(userInput)
+        hasher.combine(assistantResponse)
+        hasher.combine(timestamp)
+        hasher.combine(appContext)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMemoryItemV2: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MemoryItemV2 {
+        return
+            try MemoryItemV2(
+                id: FfiConverterString.read(from: &buf), 
+                userInput: FfiConverterString.read(from: &buf), 
+                assistantResponse: FfiConverterString.read(from: &buf), 
+                timestamp: FfiConverterInt64.read(from: &buf), 
+                appContext: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MemoryItemV2, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.userInput, into: &buf)
+        FfiConverterString.write(value.assistantResponse, into: &buf)
+        FfiConverterInt64.write(value.timestamp, into: &buf)
+        FfiConverterOptionString.write(value.appContext, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMemoryItemV2_lift(_ buf: RustBuffer) throws -> MemoryItemV2 {
+    return try FfiConverterTypeMemoryItemV2.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMemoryItemV2_lower(_ value: MemoryItemV2) -> RustBuffer {
+    return FfiConverterTypeMemoryItemV2.lower(value)
+}
+
+
 public struct MemoryStats {
     public var totalMemories: UInt64
     public var totalApps: UInt64
@@ -4293,6 +4557,80 @@ public func FfiConverterTypePendingConfirmationInfo_lift(_ buf: RustBuffer) thro
 #endif
 public func FfiConverterTypePendingConfirmationInfo_lower(_ value: PendingConfirmationInfo) -> RustBuffer {
     return FfiConverterTypePendingConfirmationInfo.lower(value)
+}
+
+
+public struct ProcessOptionsV2 {
+    public var appContext: String?
+    public var windowTitle: String?
+    public var stream: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(appContext: String?, windowTitle: String?, stream: Bool) {
+        self.appContext = appContext
+        self.windowTitle = windowTitle
+        self.stream = stream
+    }
+}
+
+
+
+extension ProcessOptionsV2: Equatable, Hashable {
+    public static func ==(lhs: ProcessOptionsV2, rhs: ProcessOptionsV2) -> Bool {
+        if lhs.appContext != rhs.appContext {
+            return false
+        }
+        if lhs.windowTitle != rhs.windowTitle {
+            return false
+        }
+        if lhs.stream != rhs.stream {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(appContext)
+        hasher.combine(windowTitle)
+        hasher.combine(stream)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProcessOptionsV2: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProcessOptionsV2 {
+        return
+            try ProcessOptionsV2(
+                appContext: FfiConverterOptionString.read(from: &buf), 
+                windowTitle: FfiConverterOptionString.read(from: &buf), 
+                stream: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ProcessOptionsV2, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.appContext, into: &buf)
+        FfiConverterOptionString.write(value.windowTitle, into: &buf)
+        FfiConverterBool.write(value.stream, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProcessOptionsV2_lift(_ buf: RustBuffer) throws -> ProcessOptionsV2 {
+    return try FfiConverterTypeProcessOptionsV2.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProcessOptionsV2_lower(_ value: ProcessOptionsV2) -> RustBuffer {
+    return FfiConverterTypeProcessOptionsV2.lower(value)
 }
 
 
@@ -5570,6 +5908,80 @@ public func FfiConverterTypeTestConnectionResult_lower(_ value: TestConnectionRe
 }
 
 
+public struct ToolInfoV2 {
+    public var name: String
+    public var description: String
+    public var source: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(name: String, description: String, source: String) {
+        self.name = name
+        self.description = description
+        self.source = source
+    }
+}
+
+
+
+extension ToolInfoV2: Equatable, Hashable {
+    public static func ==(lhs: ToolInfoV2, rhs: ToolInfoV2) -> Bool {
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.source != rhs.source {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+        hasher.combine(description)
+        hasher.combine(source)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeToolInfoV2: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ToolInfoV2 {
+        return
+            try ToolInfoV2(
+                name: FfiConverterString.read(from: &buf), 
+                description: FfiConverterString.read(from: &buf), 
+                source: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ToolInfoV2, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.description, into: &buf)
+        FfiConverterString.write(value.source, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeToolInfoV2_lift(_ buf: RustBuffer) throws -> ToolInfoV2 {
+    return try FfiConverterTypeToolInfoV2.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeToolInfoV2_lower(_ value: ToolInfoV2) -> RustBuffer {
+    return FfiConverterTypeToolInfoV2.lower(value)
+}
+
+
 public struct TriggerConfig {
     public var replaceHotkey: String
     public var appendHotkey: String
@@ -6043,6 +6455,93 @@ public struct FfiConverterTypeAetherException: FfiConverterRustBuffer {
 extension AetherException: Equatable, Hashable {}
 
 extension AetherException: Foundation.LocalizedError {
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+}
+
+
+public enum AetherV2Error {
+
+    
+    
+    case Config(message: String)
+    
+    case Provider(message: String)
+    
+    case Tool(message: String)
+    
+    case Memory(message: String)
+    
+    case Cancelled(message: String)
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAetherV2Error: FfiConverterRustBuffer {
+    typealias SwiftType = AetherV2Error
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AetherV2Error {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .Config(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 2: return .Provider(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 3: return .Tool(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 4: return .Memory(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 5: return .Cancelled(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: AetherV2Error, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        case .Config(_ /* message is ignored*/):
+            writeInt(&buf, Int32(1))
+        case .Provider(_ /* message is ignored*/):
+            writeInt(&buf, Int32(2))
+        case .Tool(_ /* message is ignored*/):
+            writeInt(&buf, Int32(3))
+        case .Memory(_ /* message is ignored*/):
+            writeInt(&buf, Int32(4))
+        case .Cancelled(_ /* message is ignored*/):
+            writeInt(&buf, Int32(5))
+
+        
+        }
+    }
+}
+
+
+extension AetherV2Error: Equatable, Hashable {}
+
+extension AetherV2Error: Foundation.LocalizedError {
     public var errorDescription: String? {
         String(reflecting: self)
     }
@@ -7735,6 +8234,259 @@ extension FfiConverterCallbackInterfaceAetherEventHandler : FfiConverter {
 
 
 
+public protocol AetherV2EventHandler : AnyObject {
+    
+    func onThinking() 
+    
+    func onToolStart(toolName: String) 
+    
+    func onToolResult(toolName: String, result: String) 
+    
+    func onStreamChunk(text: String) 
+    
+    func onComplete(response: String) 
+    
+    func onError(message: String) 
+    
+    func onMemoryStored() 
+    
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceAetherV2EventHandler {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    static var vtable: UniffiVTableCallbackInterfaceAetherV2EventHandler = UniffiVTableCallbackInterfaceAetherV2EventHandler(
+        onThinking: { (
+            uniffiHandle: UInt64,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherV2EventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onThinking(
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onToolStart: { (
+            uniffiHandle: UInt64,
+            toolName: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherV2EventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onToolStart(
+                     toolName: try FfiConverterString.lift(toolName)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onToolResult: { (
+            uniffiHandle: UInt64,
+            toolName: RustBuffer,
+            result: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherV2EventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onToolResult(
+                     toolName: try FfiConverterString.lift(toolName),
+                     result: try FfiConverterString.lift(result)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onStreamChunk: { (
+            uniffiHandle: UInt64,
+            text: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherV2EventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onStreamChunk(
+                     text: try FfiConverterString.lift(text)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onComplete: { (
+            uniffiHandle: UInt64,
+            response: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherV2EventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onComplete(
+                     response: try FfiConverterString.lift(response)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onError: { (
+            uniffiHandle: UInt64,
+            message: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherV2EventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onError(
+                     message: try FfiConverterString.lift(message)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onMemoryStored: { (
+            uniffiHandle: UInt64,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherV2EventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onMemoryStored(
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            let result = try? FfiConverterCallbackInterfaceAetherV2EventHandler.handleMap.remove(handle: uniffiHandle)
+            if result == nil {
+                print("Uniffi callback interface AetherV2EventHandler: handle missing in uniffiFree")
+            }
+        }
+    )
+}
+
+private func uniffiCallbackInitAetherV2EventHandler() {
+    uniffi_aethecore_fn_init_callback_vtable_aetherv2eventhandler(&UniffiCallbackInterfaceAetherV2EventHandler.vtable)
+}
+
+// FfiConverter protocol for callback interfaces
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterCallbackInterfaceAetherV2EventHandler {
+    fileprivate static var handleMap = UniffiHandleMap<AetherV2EventHandler>()
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+extension FfiConverterCallbackInterfaceAetherV2EventHandler : FfiConverter {
+    typealias SwiftType = AetherV2EventHandler
+    typealias FfiType = UInt64
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
+
+
+
 public protocol InitializationProgressHandler : AnyObject {
     
     func onInitStarted() 
@@ -8174,6 +8926,30 @@ fileprivate struct FfiConverterOptionTypePendingConfirmationInfo: FfiConverterRu
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypePendingConfirmationInfo.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeProcessOptionsV2: FfiConverterRustBuffer {
+    typealias SwiftType = ProcessOptionsV2?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeProcessOptionsV2.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeProcessOptionsV2.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -8724,6 +9500,31 @@ fileprivate struct FfiConverterSequenceTypeMemoryEntry: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeMemoryItemV2: FfiConverterRustBuffer {
+    typealias SwiftType = [MemoryItemV2]
+
+    public static func write(_ value: [MemoryItemV2], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeMemoryItemV2.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [MemoryItemV2] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [MemoryItemV2]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeMemoryItemV2.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeProviderConfigEntry: FfiConverterRustBuffer {
     typealias SwiftType = [ProviderConfigEntry]
 
@@ -8816,6 +9617,31 @@ fileprivate struct FfiConverterSequenceTypeSkillInfo: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeSkillInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeToolInfoV2: FfiConverterRustBuffer {
+    typealias SwiftType = [ToolInfoV2]
+
+    public static func write(_ value: [ToolInfoV2], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeToolInfoV2.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ToolInfoV2] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ToolInfoV2]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeToolInfoV2.read(from: &buf))
         }
         return seq
     }
@@ -8936,6 +9762,14 @@ public func getSkillsDirString()throws  -> String {
     )
 })
 }
+public func initV2(configPath: String, handler: AetherV2EventHandler)throws  -> AetherV2Core {
+    return try  FfiConverterTypeAetherV2Core.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_func_init_v2(
+        FfiConverterString.lower(configPath),
+        FfiConverterCallbackInterfaceAetherV2EventHandler.lower(handler),$0
+    )
+})
+}
 public func initializeBuiltinSkillsFfi(bundleSkillsDir: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_func_initialize_builtin_skills_ffi(
         FfiConverterString.lower(bundleSkillsDir),$0
@@ -8983,6 +9817,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_func_get_skills_dir_string() != 54210) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_func_init_v2() != 34658) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_func_initialize_builtin_skills_ffi() != 33816) {
@@ -9237,6 +10074,27 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_validate_regex() != 42285) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aetherv2core_cancel() != 53624) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_clear_memory() != 64906) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_is_cancelled() != 11389) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_list_tools() != 37444) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_process() != 24152) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_reload_config() != 4462) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_search_memory() != 28128) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_constructor_aethercore_new() != 50082) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -9315,6 +10173,27 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_agent_completed() != 26263) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aetherv2eventhandler_on_thinking() != 52985) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2eventhandler_on_tool_start() != 58383) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2eventhandler_on_tool_result() != 42979) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2eventhandler_on_stream_chunk() != 30521) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2eventhandler_on_complete() != 6429) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2eventhandler_on_error() != 14735) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2eventhandler_on_memory_stored() != 25520) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_init_started() != 45699) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -9335,6 +10214,7 @@ private var initializationResult: InitializationResult = {
     }
 
     uniffiCallbackInitAetherEventHandler()
+    uniffiCallbackInitAetherV2EventHandler()
     uniffiCallbackInitInitializationProgressHandler()
     return InitializationResult.ok
 }()

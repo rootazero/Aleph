@@ -28,6 +28,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Event handler for Rust callbacks (internal for toast access)
     internal var eventHandler: EventHandler?
 
+    // V2 interface (rig-core based)
+    // These will eventually replace core and eventHandler after full migration
+    @Published internal var coreV2: AetherV2Core?
+    internal var eventHandlerV2: EventHandlerV2?
+
     // Halo overlay window
     private var haloWindow: HaloWindow?
 
@@ -632,6 +637,150 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
 
+    // MARK: - V2 Core Initialization (rig-core based)
+
+    /// Initialize AetherV2Core using the rig-core based interface
+    /// This runs alongside v1 during migration and will eventually replace it
+    private func initializeRustCoreV2() {
+        guard let eventHandlerV2 = eventHandlerV2 else {
+            print("[Aether] Error: EventHandlerV2 not initialized")
+            return
+        }
+
+        // Config path for v2 interface
+        let configPath = NSHomeDirectory() + "/.config/aether/config.toml"
+
+        // Check if config file exists
+        if !FileManager.default.fileExists(atPath: configPath) {
+            print("[Aether] Warning: Config file not found at \(configPath)")
+            print("[Aether] V2 initialization skipped - create config file first")
+            return
+        }
+
+        do {
+            // Initialize V2 core using initV2()
+            coreV2 = try initV2(configPath: configPath, handler: eventHandlerV2)
+            print("[Aether] AetherV2Core initialized successfully")
+
+            // Set core reference in event handler for cancellation
+            eventHandlerV2.setCore(coreV2!)
+
+            // Log available tools
+            if let tools = coreV2?.listTools() {
+                print("[Aether] V2 has \(tools.count) tools available:")
+                for tool in tools.prefix(5) {
+                    print("[Aether]   - \(tool.name): \(tool.description)")
+                }
+                if tools.count > 5 {
+                    print("[Aether]   ... and \(tools.count - 5) more")
+                }
+            }
+
+        } catch {
+            print("[Aether] Error initializing V2 core: \(error)")
+            // V2 failure is non-fatal during migration - v1 continues to work
+        }
+    }
+
+    /// Process input using V2 interface (rig-core based)
+    /// This is an async operation - results come via EventHandlerV2 callbacks
+    ///
+    /// - Parameters:
+    ///   - input: User input text to process
+    ///   - appContext: Optional app context (e.g., "Safari" or "Xcode")
+    ///   - windowTitle: Optional window title for context
+    ///   - stream: Whether to stream response chunks (default: true)
+    func processWithV2(input: String, appContext: String? = nil, windowTitle: String? = nil, stream: Bool = true) {
+        guard let coreV2 = coreV2 else {
+            print("[Aether] Error: V2 core not initialized")
+            eventHandlerV2?.onError(message: "V2 core not initialized")
+            return
+        }
+
+        print("[Aether] Processing with V2 interface: \(input.prefix(50))...")
+
+        do {
+            let options = ProcessOptionsV2(
+                appContext: appContext,
+                windowTitle: windowTitle,
+                stream: stream
+            )
+            try coreV2.process(input: input, options: options)
+        } catch {
+            print("[Aether] V2 processing error: \(error)")
+            eventHandlerV2?.onError(message: error.localizedDescription)
+        }
+    }
+
+    /// Cancel current V2 processing operation
+    func cancelV2Processing() {
+        coreV2?.cancel()
+        print("[Aether] V2 processing cancelled")
+    }
+
+    /// Check if V2 core is available and initialized
+    var isV2Available: Bool {
+        coreV2 != nil
+    }
+
+    /// List available tools from V2 core
+    func listV2Tools() -> [ToolInfoV2] {
+        return coreV2?.listTools() ?? []
+    }
+
+    /// Search memory using V2 interface
+    /// - Parameters:
+    ///   - query: Search query
+    ///   - limit: Maximum number of results
+    /// - Returns: Array of memory items matching the query
+    func searchV2Memory(query: String, limit: UInt32 = 10) -> [MemoryItemV2] {
+        guard let coreV2 = coreV2 else {
+            print("[Aether] Error: V2 core not initialized for memory search")
+            return []
+        }
+
+        do {
+            return try coreV2.searchMemory(query: query, limit: limit)
+        } catch {
+            print("[Aether] V2 memory search error: \(error)")
+            return []
+        }
+    }
+
+    /// Clear all V2 memory
+    func clearV2Memory() -> Bool {
+        guard let coreV2 = coreV2 else {
+            print("[Aether] Error: V2 core not initialized for memory clear")
+            return false
+        }
+
+        do {
+            try coreV2.clearMemory()
+            print("[Aether] V2 memory cleared")
+            return true
+        } catch {
+            print("[Aether] V2 memory clear error: \(error)")
+            return false
+        }
+    }
+
+    /// Reload V2 configuration
+    func reloadV2Config() -> Bool {
+        guard let coreV2 = coreV2 else {
+            print("[Aether] Error: V2 core not initialized for config reload")
+            return false
+        }
+
+        do {
+            try coreV2.reloadConfig()
+            print("[Aether] V2 config reloaded")
+            return true
+        } catch {
+            print("[Aether] V2 config reload error: \(error)")
+            return false
+        }
+    }
+
     private func updateMenuBarIcon(state: ProcessingState) {
         // Delegate to MenuBarManager
         menuBarManager?.updateIcon(for: state)
@@ -781,6 +930,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Initialize event handler with halo window
         eventHandler = EventHandler(haloWindow: haloWindow)
 
+        // Initialize V2 event handler (rig-core based)
+        eventHandlerV2 = EventHandlerV2(haloWindow: haloWindow)
+
         // Initialize output coordinator (will configure with core after Rust core init)
         outputCoordinator = OutputCoordinator()
         outputCoordinator?.start()
@@ -792,8 +944,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         clipboardMonitor.startMonitoring()
         print("[Aether] Clipboard monitoring started for context tracking")
 
-        // Initialize Rust core
+        // Initialize Rust core (v1 interface)
         initializeRustCore()
+
+        // Initialize V2 core (rig-core based) - runs alongside v1 during migration
+        initializeRustCoreV2()
 
         // Observe config changes to rebuild providers menu
         NotificationCenter.default.addObserver(
