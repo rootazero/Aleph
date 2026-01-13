@@ -23,7 +23,7 @@ pub fn get_builtin_hint(command_key: &str, language: &str) -> Option<String> {
     // Note: /mcp and /skill removed - tools are registered directly
     static BUILTIN_HINTS: &[(&str, &str, &str)] = &[
         ("search", "Web search", "网页搜索"),
-        ("video", "Video info", "视频信息"),
+        ("youtube", "YouTube videos", "YouTube视频"),
         ("chat", "Chat", "对话"),
     ];
 
@@ -454,7 +454,7 @@ mod tests {
 
         let commands = registry.get_root_commands();
 
-        // In flat namespace mode: en, search, video, chat (sorted alphabetically)
+        // In flat namespace mode: en, search, youtube, chat (sorted alphabetically)
         // No /mcp namespace - MCP tools are registered directly
         assert!(commands.len() >= 2);
 
@@ -571,7 +571,7 @@ mod tests {
 
     #[test]
     fn test_flat_namespace_builtins() {
-        // In flat namespace mode, only 3 builtins: search, video, chat
+        // In flat namespace mode, only 3 builtins: search, youtube, chat
         let config = Config::default();
         let registry = CommandRegistry::from_config(&config, "en");
 
@@ -579,7 +579,7 @@ mod tests {
 
         // Verify the 3 builtins exist
         assert!(commands.iter().any(|c| c.key == "search"), "search should exist");
-        assert!(commands.iter().any(|c| c.key == "video"), "video should exist");
+        assert!(commands.iter().any(|c| c.key == "youtube"), "youtube should exist");
         assert!(commands.iter().any(|c| c.key == "chat"), "chat should exist");
 
         // Verify no /mcp or /skill namespace

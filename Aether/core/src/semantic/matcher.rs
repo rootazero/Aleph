@@ -649,7 +649,7 @@ impl CompiledRule {
                 "search" | "web_search" | "builtin_search" => {
                     IntentCategory::Builtin(BuiltinCapability::Search)
                 }
-                "video" | "video_analysis" => {
+                "youtube" | "youtube_analysis" | "video" | "video_analysis" => {
                     IntentCategory::Builtin(BuiltinCapability::Video)
                 }
                 "mcp" | "tool_call" | "builtin_mcp" => {

@@ -161,7 +161,7 @@ impl SemanticIntent {
             IntentCategory::Builtin(cap) => match cap {
                 BuiltinCapability::Search => Intent::BuiltinSearch,
                 BuiltinCapability::Mcp => Intent::BuiltinMcp,
-                BuiltinCapability::Video => Intent::Custom("video_analysis".to_string()),
+                BuiltinCapability::Video => Intent::Custom("youtube_analysis".to_string()),
             },
             IntentCategory::Command(name) => Intent::Custom(name.clone()),
             IntentCategory::Semantic(name) => Intent::Custom(name.clone()),

@@ -69,7 +69,7 @@ impl ToolRegistry {
     // Registration Methods
     // =========================================================================
 
-    /// Register system builtin commands (/search, /mcp, /skill, /video, /chat)
+    /// Register system builtin commands (/search, /youtube, /chat)
     ///
     /// These are always-available slash commands that serve as the entry points
     /// for various capabilities. They are the single source of truth for:
@@ -367,7 +367,7 @@ impl ToolRegistry {
     /// gets renamed with a suffix based on priority.
     ///
     /// Priority order (highest to lowest):
-    /// 1. Builtin - System commands (/search, /video, /chat)
+    /// 1. Builtin - System commands (/search, /youtube, /chat)
     /// 2. Native - System capabilities
     /// 3. Custom - User-defined rules
     /// 4. MCP - External MCP tools
@@ -535,7 +535,7 @@ impl ToolRegistry {
     ///
     /// # Registration Order
     ///
-    /// 1. Builtin commands (/search, /video, /chat)
+    /// 1. Builtin commands (/search, /youtube, /chat)
     /// 2. Native AgentTools (filesystem, git, shell, etc.)
     /// 3. External MCP tools
     /// 4. Skills
@@ -593,7 +593,7 @@ impl ToolRegistry {
 
     /// List builtin tools only
     ///
-    /// Returns the 5 system builtin commands (/search, /mcp, /skill, /video, /chat)
+    /// Returns the 3 system builtin commands (/search, /youtube, /chat)
     /// sorted by sort_order.
     pub async fn list_builtin_tools(&self) -> Vec<UnifiedTool> {
         let tools = self.tools.read().await;
@@ -946,7 +946,7 @@ mod tests {
 
         // Verify sorted by sort_order (no /mcp or /skill)
         let names: Vec<_> = builtins.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, vec!["search", "video", "chat"]);
+        assert_eq!(names, vec!["search", "youtube", "chat"]);
 
         // Check metadata
         let search = registry.get_by_id("builtin:search").await.unwrap();
@@ -1086,7 +1086,7 @@ mod tests {
         registry.register_skills(&skills).await;
 
         let builtin = registry.list_by_source_type("Builtin").await;
-        assert_eq!(builtin.len(), 3); // search, video, chat
+        assert_eq!(builtin.len(), 3); // search, youtube, chat
 
         let skill = registry.list_by_source_type("Skill").await;
         assert_eq!(skill.len(), 1);
@@ -1134,7 +1134,7 @@ mod tests {
 
         let prompt = registry.to_prompt_block().await;
         assert!(prompt.contains("**search**"));
-        assert!(prompt.contains("**video**"));
+        assert!(prompt.contains("**youtube**"));
         assert!(prompt.contains("**chat**"));
     }
 

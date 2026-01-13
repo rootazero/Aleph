@@ -663,9 +663,9 @@ mod tests {
                 }
             })),
             UnifiedTool::new(
-                "native:video",
-                "video",
-                "Analyze video content",
+                "native:youtube",
+                "youtube",
+                "Analyze YouTube video content",
                 ToolSource::Native,
             ),
         ]
@@ -752,12 +752,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_l3_router_with_options() {
-        let response = r#"{"tool": "video", "confidence": 0.85, "parameters": {"url": "youtube.com/watch?v=abc"}, "reason": "User wants video analysis"}"#;
+        let response = r#"{"tool": "youtube", "confidence": 0.85, "parameters": {"url": "youtube.com/watch?v=abc"}, "reason": "User wants YouTube video analysis"}"#;
         let provider = Arc::new(MockProvider::new(response));
         let router = L3Router::new(provider);
 
         let tools = create_test_tools();
-        let options = L3RoutingOptions::with_context("Previous video discussion")
+        let options = L3RoutingOptions::with_context("Previous YouTube video discussion")
             .with_entity_hints(vec!["youtube video about cooking".to_string()]);
 
         let result = router.route_with_options("analyze that", &tools, options).await.unwrap();
@@ -813,10 +813,10 @@ mod tests {
 
         // With markdown code block
         let markdown = r#"```json
-{"tool": "video", "confidence": 0.8, "parameters": {"url": "test"}, "reason": "markdown"}
+{"tool": "youtube", "confidence": 0.8, "parameters": {"url": "test"}, "reason": "markdown"}
 ```"#;
         let parsed = parse_l3_response_robust(markdown).unwrap();
-        assert_eq!(parsed.tool, Some("video".to_string()));
+        assert_eq!(parsed.tool, Some("youtube".to_string()));
         assert_eq!(parsed.confidence, 0.8);
 
         // With extra text (proper brace matching)

@@ -203,7 +203,7 @@ impl CompiledRegexRule {
                 "search" | "web_search" | "builtin_search" => {
                     IntentCategory::search()
                 }
-                "video" | "video_analysis" => IntentCategory::video(),
+                "youtube" | "youtube_analysis" | "video" | "video_analysis" => IntentCategory::video(),
                 "mcp" | "tool_call" | "builtin_mcp" => IntentCategory::mcp(),
                 s if s.starts_with("skills:") => {
                     let id = s.strip_prefix("skills:").unwrap_or("");

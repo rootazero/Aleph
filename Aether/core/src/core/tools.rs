@@ -196,7 +196,7 @@ impl AetherCore {
 
     /// List builtin tools only
     ///
-    /// Returns the 3 system builtin commands (/search, /video, /chat)
+    /// Returns the 3 system builtin commands (/search, /youtube, /chat)
     /// sorted by sort_order.
     pub fn list_builtin_tools(&self) -> Vec<crate::dispatcher::UnifiedToolInfo> {
         self.runtime

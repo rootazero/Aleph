@@ -26,7 +26,7 @@ pub struct McpToolInfo {
 /// about available capabilities and how to invoke them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilityDeclaration {
-    /// Unique identifier (e.g., "search", "video")
+    /// Unique identifier (e.g., "search", "youtube")
     pub id: String,
     /// Human-readable name (e.g., "Web Search")
     pub name: String,
@@ -95,12 +95,12 @@ impl CapabilityDeclaration {
         .with_example("最新的科技新闻")
     }
 
-    /// Create the Video capability declaration.
-    pub fn video() -> Self {
+    /// Create the YouTube capability declaration.
+    pub fn youtube() -> Self {
         Self::new(
-            "video",
-            "Video Transcript",
-            "Extract and analyze transcripts from YouTube videos. Use this when the user provides a YouTube URL and wants to summarize, analyze, or ask questions about the video content.",
+            "youtube",
+            "YouTube",
+            "Extract and analyze transcripts from YouTube videos. Use this when the user provides a YouTube URL (youtube.com or youtu.be) and wants to summarize, analyze, or ask questions about the video content.",
         )
         .with_parameter(CapabilityParameter::new(
             "url",
@@ -111,6 +111,7 @@ impl CapabilityDeclaration {
         .with_example("Summarize this video: https://youtube.com/watch?v=xxx")
         .with_example("What is this video about? https://youtu.be/xxx")
         .with_example("总结一下这个视频 https://youtube.com/watch?v=xxx")
+        .with_example("分析这个 YouTube 视频")
     }
 
     /// Create the MCP capability declaration.
@@ -306,7 +307,7 @@ impl CapabilityRegistry {
         }
 
         if video_enabled {
-            registry.register(CapabilityDeclaration::video());
+            registry.register(CapabilityDeclaration::youtube());
         }
 
         // Register MCP capability if tools are provided
@@ -351,18 +352,18 @@ mod tests {
     }
 
     #[test]
-    fn test_video_declaration() {
-        let video = CapabilityDeclaration::video();
-        assert_eq!(video.id, "video");
-        assert!(!video.parameters.is_empty());
-        assert!(video.available);
+    fn test_youtube_declaration() {
+        let youtube = CapabilityDeclaration::youtube();
+        assert_eq!(youtube.id, "youtube");
+        assert!(!youtube.parameters.is_empty());
+        assert!(youtube.available);
     }
 
     #[test]
     fn test_registry() {
         let mut registry = CapabilityRegistry::new();
         registry.register(CapabilityDeclaration::search());
-        registry.register(CapabilityDeclaration::video());
+        registry.register(CapabilityDeclaration::youtube());
         registry.register(CapabilityDeclaration::mcp());
 
         assert_eq!(registry.all().len(), 3);
@@ -375,6 +376,6 @@ mod tests {
     fn test_registry_with_defaults() {
         let registry = CapabilityRegistry::with_defaults(true, true);
         assert!(registry.is_available("search"));
-        assert!(registry.is_available("video"));
+        assert!(registry.is_available("youtube"));
     }
 }

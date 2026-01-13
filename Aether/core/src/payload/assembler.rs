@@ -900,15 +900,15 @@ mod tests {
 
         let capabilities = vec![
             CapabilityDeclaration::search(),
-            CapabilityDeclaration::video(),
+            CapabilityDeclaration::youtube(),
         ];
 
         let prompt = assembler.build_capability_aware_prompt("Base prompt.", &capabilities, None);
 
         // Should contain both capabilities
         assert!(prompt.contains("Web Search"));
-        assert!(prompt.contains("Video Transcript"));
         assert!(prompt.contains("YouTube"));
+        assert!(prompt.contains("youtube.com"));
     }
 
     #[test]

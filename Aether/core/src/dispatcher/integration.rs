@@ -1236,9 +1236,9 @@ mod tests {
                 ToolSource::Native,
             ),
             UnifiedTool::new(
-                "native:video",
-                "video",
-                "Analyze video",
+                "native:youtube",
+                "youtube",
+                "Analyze YouTube video",
                 ToolSource::Native,
             ),
         ]

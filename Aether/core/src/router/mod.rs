@@ -1651,7 +1651,7 @@ mod tests {
         let router = Router::new(&config).unwrap();
 
         assert_eq!(router.provider_count(), 1);
-        // Config::default() includes 3 preset rules (flat namespace: /search, /video, /chat)
+        // Config::default() includes 3 preset rules (flat namespace: /search, /youtube, /chat)
         // /mcp and /skill removed - MCP tools and Skills are registered directly
         assert_eq!(router.rule_count(), 3);
         assert!(router.has_provider("openai"));

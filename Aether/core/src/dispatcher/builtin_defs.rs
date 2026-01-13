@@ -16,7 +16,7 @@
 //!
 //! Only 3 system builtin commands remain:
 //! - `/search` - Web search capability
-//! - `/video` - Video transcript analysis
+//! - `/youtube` - YouTube video transcript analysis
 //! - `/chat` - Multi-turn conversation
 //!
 //! MCP tools and Skills are now registered dynamically via ToolRegistry with
@@ -70,20 +70,20 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommandDef] = &[
         routing_capabilities: &["search"],
         routing_intent_type: "builtin_search",
     },
-    // /video - Video transcript capability
+    // /youtube - YouTube video transcript capability
     BuiltinCommandDef {
-        name: "video",
-        display_name: "Video Transcript",
+        name: "youtube",
+        display_name: "YouTube",
         description: "Analyze YouTube video content via transcript extraction",
-        icon: "play.rectangle",
-        usage: "/video <YouTube URL>",
-        localization_key: "tool.video",
+        icon: "play.rectangle.fill",
+        usage: "/youtube <YouTube URL>",
+        localization_key: "tool.youtube",
         sort_order: 2,
         has_subtools: false,
-        routing_regex: r"^/video\s+",
-        routing_system_prompt: "You are a video content analyst. A video transcript will be provided in the context section below if available. Analyze the transcript and provide insights, summaries, or answer questions about the video content. If no transcript is provided, explain that the video may not have captions enabled or transcript extraction failed.",
+        routing_regex: r"^/youtube\s+",
+        routing_system_prompt: "You are a YouTube video content analyst. A video transcript will be provided in the context section below if available. Analyze the transcript and provide insights, summaries, or answer questions about the video content. If no transcript is provided, explain that the video may not have captions enabled or transcript extraction failed.",
         routing_capabilities: &["video", "memory"],
-        routing_intent_type: "video_analysis",
+        routing_intent_type: "youtube_analysis",
     },
     // /chat - Multi-turn conversation
     BuiltinCommandDef {
@@ -155,11 +155,11 @@ mod tests {
         assert!(search.is_builtin);
         assert_eq!(search.capabilities, Some(vec!["search".to_string()]));
 
-        // Verify video rule
-        let video = rules.iter().find(|r| r.regex.contains("/video")).unwrap();
-        assert!(video.is_builtin);
+        // Verify youtube rule
+        let youtube = rules.iter().find(|r| r.regex.contains("/youtube")).unwrap();
+        assert!(youtube.is_builtin);
         assert_eq!(
-            video.capabilities,
+            youtube.capabilities,
             Some(vec!["video".to_string(), "memory".to_string()])
         );
 
@@ -173,7 +173,7 @@ mod tests {
     fn test_builtin_command_names() {
         let names: Vec<_> = BUILTIN_COMMANDS.iter().map(|c| c.name).collect();
         // Flat namespace: no /mcp or /skill
-        assert_eq!(names, vec!["search", "video", "chat"]);
+        assert_eq!(names, vec!["search", "youtube", "chat"]);
     }
 
     #[test]
