@@ -450,9 +450,9 @@ async fn test_registry_multiple_tool_types() {
     assert!(!git_defs.is_empty(), "Should have git tools");
 
     let sys_defs = registry
-        .get_definitions_by_category(ToolCategory::System)
+        .get_definitions_by_category(ToolCategory::Builtin)
         .await;
-    assert!(!sys_defs.is_empty(), "Should have system tools");
+    assert!(!sys_defs.is_empty(), "Should have builtin tools");
 }
 
 #[tokio::test]

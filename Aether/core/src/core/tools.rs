@@ -145,7 +145,7 @@ impl AetherCore {
                 crate::tools::ToolCategory::Filesystem => "filesystem",
                 crate::tools::ToolCategory::Git => "git",
                 crate::tools::ToolCategory::Shell => "shell",
-                crate::tools::ToolCategory::System => "system",
+                crate::tools::ToolCategory::Builtin => "builtin",
                 crate::tools::ToolCategory::Clipboard => "clipboard",
                 crate::tools::ToolCategory::Screen => "screen",
                 crate::tools::ToolCategory::Search => "search",

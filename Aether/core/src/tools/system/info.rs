@@ -92,7 +92,7 @@ impl AgentTool for SystemInfoTool {
                     }
                 }
             }),
-            ToolCategory::System,
+            ToolCategory::Builtin,
         )
     }
 
@@ -215,7 +215,7 @@ impl AgentTool for SystemInfoTool {
     }
 
     fn category(&self) -> ToolCategory {
-        ToolCategory::System
+        ToolCategory::Builtin
     }
 }
 
@@ -356,6 +356,6 @@ mod tests {
 
         assert_eq!(tool.name(), "sys_info");
         assert!(!tool.requires_confirmation());
-        assert_eq!(tool.category(), ToolCategory::System);
+        assert_eq!(tool.category(), ToolCategory::Builtin);
     }
 }

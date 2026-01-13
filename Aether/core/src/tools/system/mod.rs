@@ -74,7 +74,7 @@ mod tests {
     }
 
     #[test]
-    fn test_all_tools_have_system_category() {
+    fn test_all_tools_have_builtin_category() {
         use crate::tools::ToolCategory;
 
         let tools = create_all_tools();
@@ -82,8 +82,8 @@ mod tests {
         for tool in &tools {
             assert_eq!(
                 tool.category(),
-                ToolCategory::System,
-                "{} should have System category",
+                ToolCategory::Builtin,
+                "{} should have Builtin category",
                 tool.name()
             );
         }

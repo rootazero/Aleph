@@ -172,7 +172,7 @@ impl McpToolBridge {
                     "fs" => ToolCategory::Filesystem,
                     "git" => ToolCategory::Git,
                     "shell" => ToolCategory::Shell,
-                    "sys" | "system" => ToolCategory::System,
+                    "sys" | "system" | "builtin" => ToolCategory::Builtin,
                     "clipboard" => ToolCategory::Clipboard,
                     "screen" => ToolCategory::Screen,
                     "search" => ToolCategory::Search,

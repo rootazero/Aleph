@@ -29,8 +29,8 @@ pub enum ToolCategory {
     Git,
     /// Command execution
     Shell,
-    /// System information
-    System,
+    /// Builtin system tools (system info, etc.)
+    Builtin,
     /// Clipboard operations
     Clipboard,
     /// Screen capture
@@ -50,7 +50,7 @@ impl ToolCategory {
             ToolCategory::Filesystem => "Filesystem",
             ToolCategory::Git => "Git",
             ToolCategory::Shell => "Shell",
-            ToolCategory::System => "System",
+            ToolCategory::Builtin => "Builtin",
             ToolCategory::Clipboard => "Clipboard",
             ToolCategory::Screen => "Screen",
             ToolCategory::Search => "Search",
@@ -65,7 +65,7 @@ impl ToolCategory {
             ToolCategory::Filesystem => "folder.fill",
             ToolCategory::Git => "arrow.triangle.branch",
             ToolCategory::Shell => "terminal.fill",
-            ToolCategory::System => "gearshape.fill",
+            ToolCategory::Builtin => "gearshape.fill",
             ToolCategory::Clipboard => "doc.on.clipboard",
             ToolCategory::Screen => "camera.viewfinder",
             ToolCategory::Search => "magnifyingglass",

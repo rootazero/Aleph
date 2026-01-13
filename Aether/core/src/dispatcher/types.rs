@@ -568,7 +568,7 @@ impl UnifiedTool {
             ToolCategory::Filesystem => "folder.fill",
             ToolCategory::Git => "arrow.triangle.branch",
             ToolCategory::Shell => "terminal.fill",
-            ToolCategory::System => "gearshape.fill",
+            ToolCategory::Builtin => "gearshape.fill",
             ToolCategory::Clipboard => "doc.on.clipboard",
             ToolCategory::Screen => "camera.viewfinder",
             ToolCategory::Search => "magnifyingglass",
@@ -658,7 +658,7 @@ impl UnifiedTool {
             ToolCategory::Git => ToolSafetyLevel::Reversible, // Most git ops are reversible
             ToolCategory::Shell => ToolSafetyLevel::IrreversibleHighRisk, // Shell = dangerous
             ToolCategory::Clipboard => ToolSafetyLevel::Reversible,
-            ToolCategory::System => ToolSafetyLevel::IrreversibleLowRisk,
+            ToolCategory::Builtin => ToolSafetyLevel::IrreversibleLowRisk,
             ToolCategory::External => ToolSafetyLevel::IrreversibleLowRisk,
             ToolCategory::Other => ToolSafetyLevel::ReadOnly, // Conservative default
         }
@@ -1156,7 +1156,7 @@ mod tests {
     #[test]
     fn test_infer_safety_level_low_risk() {
         assert_eq!(
-            UnifiedTool::infer_safety_level("send_notification", ToolCategory::System),
+            UnifiedTool::infer_safety_level("send_notification", ToolCategory::Builtin),
             ToolSafetyLevel::IrreversibleLowRisk
         );
         assert_eq!(
@@ -1188,7 +1188,7 @@ mod tests {
             ToolSafetyLevel::Reversible
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("update_config", ToolCategory::System),
+            UnifiedTool::infer_safety_level("update_config", ToolCategory::Builtin),
             ToolSafetyLevel::Reversible
         );
     }
