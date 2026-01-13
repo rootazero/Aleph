@@ -647,7 +647,7 @@ mod tests {
                     },
                     "required": ["query"]
                 }),
-                crate::tools::ToolCategory::Search,
+                crate::tools::ToolCategory::Native,
             ),
         ];
 
@@ -676,7 +676,7 @@ mod tests {
                     },
                     "required": ["query"]
                 }),
-                crate::tools::ToolCategory::Search,
+                crate::tools::ToolCategory::Native,
             ),
         ];
 

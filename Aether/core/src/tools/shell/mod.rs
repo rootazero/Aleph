@@ -128,7 +128,7 @@ mod tests {
         for tool in &tools {
             assert_eq!(
                 tool.category(),
-                ToolCategory::Shell,
+                ToolCategory::Native,
                 "{} should have Shell category",
                 tool.name()
             );

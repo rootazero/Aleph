@@ -167,19 +167,10 @@ impl McpToolBridge {
     /// Infer tool category from source and tool name
     fn infer_category(&self) -> ToolCategory {
         match &self.source {
-            McpToolSource::Builtin { service_name } => {
-                match service_name.as_str() {
-                    "fs" => ToolCategory::Filesystem,
-                    "git" => ToolCategory::Git,
-                    "shell" => ToolCategory::Shell,
-                    "sys" | "system" | "builtin" => ToolCategory::Builtin,
-                    "clipboard" => ToolCategory::Clipboard,
-                    "screen" => ToolCategory::Screen,
-                    "search" => ToolCategory::Search,
-                    _ => ToolCategory::Other,
-                }
-            }
-            McpToolSource::External { .. } => ToolCategory::External,
+            // Builtin MCP tools are actually Native Rust tools
+            McpToolSource::Builtin { .. } => ToolCategory::Native,
+            // External MCP server tools
+            McpToolSource::External { .. } => ToolCategory::Mcp,
         }
     }
 
@@ -308,11 +299,12 @@ mod tests {
         assert_eq!(def.name, "test_tool");
         assert_eq!(def.description, "A test tool");
         assert!(!def.requires_confirmation);
-        assert_eq!(def.category, ToolCategory::Filesystem);
+        // Builtin MCP tools are categorized as Native
+        assert_eq!(def.category, ToolCategory::Native);
     }
 
     #[test]
-    fn test_bridge_category_inference_fs() {
+    fn test_bridge_category_inference_builtin() {
         let tool = create_test_tool();
         let client = Arc::new(McpClient::new());
         let bridge = McpToolBridge::new(
@@ -323,26 +315,12 @@ mod tests {
             },
         );
 
-        assert_eq!(bridge.category(), ToolCategory::Filesystem);
+        // All builtin MCP tools are categorized as Native
+        assert_eq!(bridge.category(), ToolCategory::Native);
     }
 
     #[test]
-    fn test_bridge_category_inference_git() {
-        let tool = create_test_tool();
-        let client = Arc::new(McpClient::new());
-        let bridge = McpToolBridge::new(
-            tool,
-            client,
-            McpToolSource::Builtin {
-                service_name: "git".to_string(),
-            },
-        );
-
-        assert_eq!(bridge.category(), ToolCategory::Git);
-    }
-
-    #[test]
-    fn test_bridge_category_inference_external() {
+    fn test_bridge_category_inference_mcp_external() {
         let tool = create_test_tool();
         let client = Arc::new(McpClient::new());
         let bridge = McpToolBridge::new(
@@ -353,7 +331,8 @@ mod tests {
             },
         );
 
-        assert_eq!(bridge.category(), ToolCategory::External);
+        // External MCP tools are categorized as Mcp
+        assert_eq!(bridge.category(), ToolCategory::Mcp);
     }
 
     #[test]

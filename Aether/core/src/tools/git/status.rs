@@ -53,7 +53,7 @@ impl AgentTool for GitStatusTool {
                 },
                 "required": ["path"]
             }),
-            ToolCategory::Git,
+            ToolCategory::Native,
         )
     }
 
@@ -128,7 +128,7 @@ impl AgentTool for GitStatusTool {
     }
 
     fn category(&self) -> ToolCategory {
-        ToolCategory::Git
+        ToolCategory::Native
     }
 }
 
@@ -261,6 +261,6 @@ mod tests {
 
         assert_eq!(tool.name(), "git_status");
         assert!(!tool.requires_confirmation());
-        assert_eq!(tool.category(), ToolCategory::Git);
+        assert_eq!(tool.category(), ToolCategory::Native);
     }
 }

@@ -155,7 +155,7 @@ impl AgentTool for ClipboardReadTool {
                     }
                 }
             }),
-            ToolCategory::Clipboard,
+            ToolCategory::Native,
         )
     }
 
@@ -235,7 +235,7 @@ impl AgentTool for ClipboardReadTool {
     }
 
     fn category(&self) -> ToolCategory {
-        ToolCategory::Clipboard
+        ToolCategory::Native
     }
 }
 
@@ -349,6 +349,6 @@ mod tests {
 
         assert_eq!(tool.name(), "clipboard_read");
         assert!(!tool.requires_confirmation());
-        assert_eq!(tool.category(), ToolCategory::Clipboard);
+        assert_eq!(tool.category(), ToolCategory::Native);
     }
 }

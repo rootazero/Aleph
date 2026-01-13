@@ -440,12 +440,12 @@ async fn test_registry_multiple_tool_types() {
 
     // Check tools by category
     let fs_defs = registry
-        .get_definitions_by_category(ToolCategory::Filesystem)
+        .get_definitions_by_category(ToolCategory::Native)
         .await;
     assert!(!fs_defs.is_empty(), "Should have filesystem tools");
 
     let git_defs = registry
-        .get_definitions_by_category(ToolCategory::Git)
+        .get_definitions_by_category(ToolCategory::Native)
         .await;
     assert!(!git_defs.is_empty(), "Should have git tools");
 

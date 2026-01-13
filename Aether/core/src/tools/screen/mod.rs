@@ -113,7 +113,7 @@ mod tests {
         for tool in &tools {
             assert_eq!(
                 tool.category(),
-                ToolCategory::Screen,
+                ToolCategory::Native,
                 "{} should have Screen category",
                 tool.name()
             );

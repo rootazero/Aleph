@@ -368,7 +368,7 @@ mod tests {
     #[tokio::test]
     async fn test_register_tool() {
         let registry = NativeToolRegistry::new();
-        let tool = Arc::new(MockTool::new("test", ToolCategory::Other));
+        let tool = Arc::new(MockTool::new("test", ToolCategory::Native));
 
         let name = registry.register(tool).await;
 
@@ -381,9 +381,9 @@ mod tests {
     async fn test_register_all() {
         let registry = NativeToolRegistry::new();
         let tools: Vec<Arc<dyn AgentTool>> = vec![
-            Arc::new(MockTool::new("tool1", ToolCategory::Filesystem)),
-            Arc::new(MockTool::new("tool2", ToolCategory::Git)),
-            Arc::new(MockTool::new("tool3", ToolCategory::Shell)),
+            Arc::new(MockTool::new("tool1", ToolCategory::Native)),
+            Arc::new(MockTool::new("tool2", ToolCategory::Native)),
+            Arc::new(MockTool::new("tool3", ToolCategory::Native)),
         ];
 
         let count = registry.register_all(tools).await;
@@ -396,7 +396,7 @@ mod tests {
     async fn test_unregister_tool() {
         let registry = NativeToolRegistry::new();
         registry
-            .register(Arc::new(MockTool::new("test", ToolCategory::Other)))
+            .register(Arc::new(MockTool::new("test", ToolCategory::Native)))
             .await;
 
         assert!(registry.unregister("test").await);
@@ -408,7 +408,7 @@ mod tests {
     async fn test_execute_tool() {
         let registry = NativeToolRegistry::new();
         registry
-            .register(Arc::new(MockTool::new("test", ToolCategory::Other)))
+            .register(Arc::new(MockTool::new("test", ToolCategory::Native)))
             .await;
 
         let result = registry.execute("test", r#"{"key": "value"}"#).await;
@@ -438,10 +438,10 @@ mod tests {
     async fn test_get_definitions() {
         let registry = NativeToolRegistry::new();
         registry
-            .register(Arc::new(MockTool::new("b_tool", ToolCategory::Git)))
+            .register(Arc::new(MockTool::new("b_tool", ToolCategory::Native)))
             .await;
         registry
-            .register(Arc::new(MockTool::new("a_tool", ToolCategory::Filesystem)))
+            .register(Arc::new(MockTool::new("a_tool", ToolCategory::Native)))
             .await;
 
         let definitions = registry.get_definitions().await;
@@ -456,21 +456,21 @@ mod tests {
     async fn test_get_definitions_by_category() {
         let registry = NativeToolRegistry::new();
         registry
-            .register(Arc::new(MockTool::new("fs1", ToolCategory::Filesystem)))
+            .register(Arc::new(MockTool::new("native1", ToolCategory::Native)))
             .await;
         registry
-            .register(Arc::new(MockTool::new("fs2", ToolCategory::Filesystem)))
+            .register(Arc::new(MockTool::new("native2", ToolCategory::Native)))
             .await;
         registry
-            .register(Arc::new(MockTool::new("git1", ToolCategory::Git)))
+            .register(Arc::new(MockTool::new("builtin1", ToolCategory::Builtin)))
             .await;
 
-        let fs_tools = registry
-            .get_definitions_by_category(ToolCategory::Filesystem)
+        let native_tools = registry
+            .get_definitions_by_category(ToolCategory::Native)
             .await;
 
-        assert_eq!(fs_tools.len(), 2);
-        assert!(fs_tools.iter().all(|d| d.category == ToolCategory::Filesystem));
+        assert_eq!(native_tools.len(), 2);
+        assert!(native_tools.iter().all(|d| d.category == ToolCategory::Native));
     }
 
     #[tokio::test]
@@ -478,12 +478,12 @@ mod tests {
         let registry = NativeToolRegistry::new();
         registry
             .register(Arc::new(
-                MockTool::new("safe", ToolCategory::Filesystem).with_confirmation(false),
+                MockTool::new("safe", ToolCategory::Native).with_confirmation(false),
             ))
             .await;
         registry
             .register(Arc::new(
-                MockTool::new("dangerous", ToolCategory::Filesystem).with_confirmation(true),
+                MockTool::new("dangerous", ToolCategory::Native).with_confirmation(true),
             ))
             .await;
 
@@ -498,12 +498,12 @@ mod tests {
         let registry = NativeToolRegistry::new();
         registry
             .register(Arc::new(
-                MockTool::new("safe", ToolCategory::Other).with_confirmation(false),
+                MockTool::new("safe", ToolCategory::Native).with_confirmation(false),
             ))
             .await;
         registry
             .register(Arc::new(
-                MockTool::new("dangerous", ToolCategory::Other).with_confirmation(true),
+                MockTool::new("dangerous", ToolCategory::Native).with_confirmation(true),
             ))
             .await;
 
@@ -516,7 +516,7 @@ mod tests {
     async fn test_to_openai_tools() {
         let registry = NativeToolRegistry::new();
         registry
-            .register(Arc::new(MockTool::new("test", ToolCategory::Other)))
+            .register(Arc::new(MockTool::new("test", ToolCategory::Native)))
             .await;
 
         let tools = registry.to_openai_tools().await;
@@ -530,7 +530,7 @@ mod tests {
     async fn test_to_anthropic_tools() {
         let registry = NativeToolRegistry::new();
         registry
-            .register(Arc::new(MockTool::new("test", ToolCategory::Other)))
+            .register(Arc::new(MockTool::new("test", ToolCategory::Native)))
             .await;
 
         let tools = registry.to_anthropic_tools().await;
@@ -544,10 +544,10 @@ mod tests {
     async fn test_names() {
         let registry = NativeToolRegistry::new();
         registry
-            .register(Arc::new(MockTool::new("a", ToolCategory::Other)))
+            .register(Arc::new(MockTool::new("a", ToolCategory::Native)))
             .await;
         registry
-            .register(Arc::new(MockTool::new("b", ToolCategory::Other)))
+            .register(Arc::new(MockTool::new("b", ToolCategory::Native)))
             .await;
 
         let mut names = registry.names().await;
@@ -560,7 +560,7 @@ mod tests {
     async fn test_clear() {
         let registry = NativeToolRegistry::new();
         registry
-            .register(Arc::new(MockTool::new("test", ToolCategory::Other)))
+            .register(Arc::new(MockTool::new("test", ToolCategory::Native)))
             .await;
 
         registry.clear().await;

@@ -52,7 +52,7 @@
 //!                 },
 //!                 "required": ["input"]
 //!             }),
-//!             ToolCategory::Other,
+//!             ToolCategory::Native,
 //!         )
 //!     }
 //!

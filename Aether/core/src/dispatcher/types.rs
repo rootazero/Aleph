@@ -564,17 +564,8 @@ impl UnifiedTool {
 
     /// Get icon for a tool category
     fn icon_for_category(category: ToolCategory) -> &'static str {
-        match category {
-            ToolCategory::Filesystem => "folder.fill",
-            ToolCategory::Git => "arrow.triangle.branch",
-            ToolCategory::Shell => "terminal.fill",
-            ToolCategory::Builtin => "gearshape.fill",
-            ToolCategory::Clipboard => "doc.on.clipboard",
-            ToolCategory::Screen => "camera.viewfinder",
-            ToolCategory::Search => "magnifyingglass",
-            ToolCategory::External => "puzzlepiece.extension.fill",
-            ToolCategory::Other => "wrench.fill",
-        }
+        // Delegate to ToolCategory's built-in icon method
+        category.icon()
     }
 
     /// Infer safety level from tool name and category
@@ -652,15 +643,16 @@ impl UnifiedTool {
 
         // Fall back to category-based inference
         match category {
-            ToolCategory::Search => ToolSafetyLevel::ReadOnly,
-            ToolCategory::Screen => ToolSafetyLevel::ReadOnly, // Screenshot = read-only
-            ToolCategory::Filesystem => ToolSafetyLevel::Reversible, // Default for file ops
-            ToolCategory::Git => ToolSafetyLevel::Reversible, // Most git ops are reversible
-            ToolCategory::Shell => ToolSafetyLevel::IrreversibleHighRisk, // Shell = dangerous
-            ToolCategory::Clipboard => ToolSafetyLevel::Reversible,
-            ToolCategory::Builtin => ToolSafetyLevel::IrreversibleLowRisk,
-            ToolCategory::External => ToolSafetyLevel::IrreversibleLowRisk,
-            ToolCategory::Other => ToolSafetyLevel::ReadOnly, // Conservative default
+            // Builtin commands are generally safe (search, chat, fetch, youtube)
+            ToolCategory::Builtin => ToolSafetyLevel::ReadOnly,
+            // Native tools vary - default to reversible as most are file/git ops
+            ToolCategory::Native => ToolSafetyLevel::Reversible,
+            // Skills are user-configured, assume moderate risk
+            ToolCategory::Skills => ToolSafetyLevel::IrreversibleLowRisk,
+            // MCP tools are external, assume moderate risk
+            ToolCategory::Mcp => ToolSafetyLevel::IrreversibleLowRisk,
+            // Custom tools are user-defined, assume moderate risk
+            ToolCategory::Custom => ToolSafetyLevel::IrreversibleLowRisk,
         }
     }
 
@@ -1136,19 +1128,19 @@ mod tests {
     #[test]
     fn test_infer_safety_level_high_risk() {
         assert_eq!(
-            UnifiedTool::infer_safety_level("delete_file", ToolCategory::Filesystem),
+            UnifiedTool::infer_safety_level("delete_file", ToolCategory::Native),
             ToolSafetyLevel::IrreversibleHighRisk
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("shell_execute", ToolCategory::Shell),
+            UnifiedTool::infer_safety_level("shell_execute", ToolCategory::Native),
             ToolSafetyLevel::IrreversibleHighRisk
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("run_bash_command", ToolCategory::Shell),
+            UnifiedTool::infer_safety_level("run_bash_command", ToolCategory::Native),
             ToolSafetyLevel::IrreversibleHighRisk
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("remove_directory", ToolCategory::Filesystem),
+            UnifiedTool::infer_safety_level("remove_directory", ToolCategory::Native),
             ToolSafetyLevel::IrreversibleHighRisk
         );
     }
@@ -1160,15 +1152,15 @@ mod tests {
             ToolSafetyLevel::IrreversibleLowRisk
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("post_message", ToolCategory::External),
+            UnifiedTool::infer_safety_level("post_message", ToolCategory::Mcp),
             ToolSafetyLevel::IrreversibleLowRisk
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("git_push", ToolCategory::Git),
+            UnifiedTool::infer_safety_level("git_push", ToolCategory::Native),
             ToolSafetyLevel::IrreversibleLowRisk
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("commit_changes", ToolCategory::Git),
+            UnifiedTool::infer_safety_level("commit_changes", ToolCategory::Native),
             ToolSafetyLevel::IrreversibleLowRisk
         );
     }
@@ -1176,15 +1168,15 @@ mod tests {
     #[test]
     fn test_infer_safety_level_reversible() {
         assert_eq!(
-            UnifiedTool::infer_safety_level("create_file", ToolCategory::Filesystem),
+            UnifiedTool::infer_safety_level("create_file", ToolCategory::Native),
             ToolSafetyLevel::Reversible
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("copy_file", ToolCategory::Filesystem),
+            UnifiedTool::infer_safety_level("copy_file", ToolCategory::Native),
             ToolSafetyLevel::Reversible
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("write_text", ToolCategory::Filesystem),
+            UnifiedTool::infer_safety_level("write_text", ToolCategory::Native),
             ToolSafetyLevel::Reversible
         );
         assert_eq!(
@@ -1196,23 +1188,23 @@ mod tests {
     #[test]
     fn test_infer_safety_level_readonly() {
         assert_eq!(
-            UnifiedTool::infer_safety_level("search_web", ToolCategory::Search),
+            UnifiedTool::infer_safety_level("search_web", ToolCategory::Native),
             ToolSafetyLevel::ReadOnly
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("read_file", ToolCategory::Filesystem),
+            UnifiedTool::infer_safety_level("read_file", ToolCategory::Native),
             ToolSafetyLevel::ReadOnly
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("list_files", ToolCategory::Filesystem),
+            UnifiedTool::infer_safety_level("list_files", ToolCategory::Native),
             ToolSafetyLevel::ReadOnly
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("translate_text", ToolCategory::Other),
+            UnifiedTool::infer_safety_level("translate_text", ToolCategory::Native),
             ToolSafetyLevel::ReadOnly
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("summarize_document", ToolCategory::Other),
+            UnifiedTool::infer_safety_level("summarize_document", ToolCategory::Native),
             ToolSafetyLevel::ReadOnly
         );
     }
@@ -1221,16 +1213,16 @@ mod tests {
     fn test_infer_safety_level_category_fallback() {
         // Unknown tool names should fall back to category-based inference
         assert_eq!(
-            UnifiedTool::infer_safety_level("xyz_unknown", ToolCategory::Search),
+            UnifiedTool::infer_safety_level("xyz_unknown", ToolCategory::Builtin),
             ToolSafetyLevel::ReadOnly
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("xyz_unknown", ToolCategory::Shell),
-            ToolSafetyLevel::IrreversibleHighRisk
+            UnifiedTool::infer_safety_level("xyz_unknown", ToolCategory::Native),
+            ToolSafetyLevel::Reversible
         );
         assert_eq!(
-            UnifiedTool::infer_safety_level("xyz_unknown", ToolCategory::Filesystem),
-            ToolSafetyLevel::Reversible
+            UnifiedTool::infer_safety_level("xyz_unknown", ToolCategory::Mcp),
+            ToolSafetyLevel::IrreversibleLowRisk
         );
     }
 

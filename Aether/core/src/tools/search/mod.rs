@@ -115,7 +115,7 @@ mod tests {
         for tool in &tools {
             assert_eq!(
                 tool.category(),
-                ToolCategory::Search,
+                ToolCategory::Native,
                 "{} should have Search category",
                 tool.name()
             );

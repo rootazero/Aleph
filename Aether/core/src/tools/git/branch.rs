@@ -52,7 +52,7 @@ impl AgentTool for GitBranchTool {
                 },
                 "required": ["path"]
             }),
-            ToolCategory::Git,
+            ToolCategory::Native,
         )
     }
 
@@ -98,7 +98,7 @@ impl AgentTool for GitBranchTool {
     }
 
     fn category(&self) -> ToolCategory {
-        ToolCategory::Git
+        ToolCategory::Native
     }
 }
 
@@ -246,6 +246,6 @@ mod tests {
 
         assert_eq!(tool.name(), "git_branch");
         assert!(!tool.requires_confirmation());
-        assert_eq!(tool.category(), ToolCategory::Git);
+        assert_eq!(tool.category(), ToolCategory::Native);
     }
 }

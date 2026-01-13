@@ -54,7 +54,7 @@ impl AgentTool for FileDeleteTool {
                 },
                 "required": ["path"]
             }),
-            ToolCategory::Filesystem,
+            ToolCategory::Native,
         )
         .with_confirmation(true)
     }
@@ -123,7 +123,7 @@ mod tests {
         let def = tool.definition();
 
         assert_eq!(def.name, "file_delete");
-        assert_eq!(def.category, ToolCategory::Filesystem);
+        assert_eq!(def.category, ToolCategory::Native);
         assert!(def.requires_confirmation);
     }
 

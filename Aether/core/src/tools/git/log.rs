@@ -64,7 +64,7 @@ impl AgentTool for GitLogTool {
                 },
                 "required": ["path"]
             }),
-            ToolCategory::Git,
+            ToolCategory::Native,
         )
     }
 
@@ -128,7 +128,7 @@ impl AgentTool for GitLogTool {
     }
 
     fn category(&self) -> ToolCategory {
-        ToolCategory::Git
+        ToolCategory::Native
     }
 }
 
@@ -308,6 +308,6 @@ mod tests {
 
         assert_eq!(tool.name(), "git_log");
         assert!(!tool.requires_confirmation());
-        assert_eq!(tool.category(), ToolCategory::Git);
+        assert_eq!(tool.category(), ToolCategory::Native);
     }
 }

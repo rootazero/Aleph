@@ -308,7 +308,7 @@ impl AgentTool for ScreenCaptureTool {
                     }
                 }
             }),
-            ToolCategory::Screen,
+            ToolCategory::Native,
         )
         .with_confirmation(true) // Always requires confirmation
     }
@@ -352,7 +352,7 @@ impl AgentTool for ScreenCaptureTool {
     }
 
     fn category(&self) -> ToolCategory {
-        ToolCategory::Screen
+        ToolCategory::Native
     }
 }
 
@@ -387,7 +387,7 @@ mod tests {
 
         assert_eq!(tool.name(), "screen_capture");
         assert!(tool.requires_confirmation());
-        assert_eq!(tool.category(), ToolCategory::Screen);
+        assert_eq!(tool.category(), ToolCategory::Native);
     }
 
     #[test]
@@ -397,7 +397,7 @@ mod tests {
 
         assert_eq!(def.name, "screen_capture");
         assert!(def.requires_confirmation);
-        assert_eq!(def.category, ToolCategory::Screen);
+        assert_eq!(def.category, ToolCategory::Native);
     }
 
     #[test]

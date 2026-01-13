@@ -58,7 +58,7 @@ impl AgentTool for FileSearchTool {
                 },
                 "required": ["base", "pattern"]
             }),
-            ToolCategory::Filesystem,
+            ToolCategory::Native,
         )
     }
 
@@ -140,7 +140,7 @@ mod tests {
         let def = tool.definition();
 
         assert_eq!(def.name, "file_search");
-        assert_eq!(def.category, ToolCategory::Filesystem);
+        assert_eq!(def.category, ToolCategory::Native);
         assert!(!def.requires_confirmation);
     }
 

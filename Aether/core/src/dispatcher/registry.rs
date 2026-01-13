@@ -937,16 +937,16 @@ mod tests {
         let registry = ToolRegistry::new();
         registry.register_builtin_tools().await;
 
-        // Flat namespace mode: only 3 builtin commands
-        assert_eq!(registry.count().await, 3);
+        // Flat namespace mode: 4 builtin commands
+        assert_eq!(registry.count().await, 4);
 
-        // Check all 3 builtins are registered
+        // Check all 4 builtins are registered
         let builtins = registry.list_builtin_tools().await;
-        assert_eq!(builtins.len(), 3);
+        assert_eq!(builtins.len(), 4);
 
         // Verify sorted by sort_order (no /mcp or /skill)
         let names: Vec<_> = builtins.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, vec!["search", "youtube", "chat"]);
+        assert_eq!(names, vec!["search", "youtube", "chat", "fetch"]);
 
         // Check metadata
         let search = registry.get_by_id("builtin:search").await.unwrap();
@@ -983,8 +983,8 @@ mod tests {
         registry.register_custom_commands(&rules).await;
 
         let roots = registry.list_root_commands().await;
-        // Flat namespace: 3 builtins + 1 custom = 4
-        assert_eq!(roots.len(), 4);
+        // Flat namespace: 4 builtins + 1 custom = 5
+        assert_eq!(roots.len(), 5);
 
         // Builtins should come first (higher priority in sort)
         assert!(roots[0].is_builtin);
@@ -992,7 +992,7 @@ mod tests {
 
         // Custom commands come after builtins
         let custom_idx = roots.iter().position(|t| t.name == "en").unwrap();
-        assert!(custom_idx >= 3, "Custom commands should come after builtins");
+        assert!(custom_idx >= 4, "Custom commands should come after builtins");
     }
 
     #[tokio::test]
@@ -1086,7 +1086,7 @@ mod tests {
         registry.register_skills(&skills).await;
 
         let builtin = registry.list_by_source_type("Builtin").await;
-        assert_eq!(builtin.len(), 3); // search, youtube, chat
+        assert_eq!(builtin.len(), 4); // search, youtube, chat, fetch
 
         let skill = registry.list_by_source_type("Skill").await;
         assert_eq!(skill.len(), 1);

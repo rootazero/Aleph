@@ -20,57 +20,48 @@ use std::fmt;
 // =============================================================================
 
 /// Tool category for UI grouping and filtering
+///
+/// Tools are classified into 5 categories based on their source:
+/// - **Builtin**: 4 built-in commands (/search, /chat, /youtube, /fetch)
+/// - **Native**: Rust-implemented tools (file ops, git, shell, system info, etc.)
+/// - **Skills**: User-configured skills (registered via UI settings)
+/// - **Mcp**: User-configured MCP server tools (registered via UI settings)
+/// - **Custom**: User-defined custom tools (registered via UI settings)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolCategory {
-    /// File and directory operations
-    Filesystem,
-    /// Version control operations
-    Git,
-    /// Command execution
-    Shell,
-    /// Builtin system tools (system info, etc.)
+    /// Built-in commands: /search, /chat, /youtube, /fetch
     Builtin,
-    /// Clipboard operations
-    Clipboard,
-    /// Screen capture
-    Screen,
-    /// Web search
-    Search,
-    /// External MCP server tools
-    External,
-    /// Miscellaneous tools
-    Other,
+    /// Native Rust tools: filesystem, git, shell, system, clipboard, screen, search
+    Native,
+    /// User-configured skills (via UI settings)
+    Skills,
+    /// User-configured MCP server tools (via UI settings)
+    Mcp,
+    /// User-defined custom tools (via UI settings)
+    Custom,
 }
 
 impl ToolCategory {
     /// Get display name for UI
     pub fn display_name(&self) -> &'static str {
         match self {
-            ToolCategory::Filesystem => "Filesystem",
-            ToolCategory::Git => "Git",
-            ToolCategory::Shell => "Shell",
             ToolCategory::Builtin => "Builtin",
-            ToolCategory::Clipboard => "Clipboard",
-            ToolCategory::Screen => "Screen",
-            ToolCategory::Search => "Search",
-            ToolCategory::External => "External",
-            ToolCategory::Other => "Other",
+            ToolCategory::Native => "Native",
+            ToolCategory::Skills => "Skills",
+            ToolCategory::Mcp => "MCP",
+            ToolCategory::Custom => "Custom",
         }
     }
 
     /// Get SF Symbol icon name
     pub fn icon(&self) -> &'static str {
         match self {
-            ToolCategory::Filesystem => "folder.fill",
-            ToolCategory::Git => "arrow.triangle.branch",
-            ToolCategory::Shell => "terminal.fill",
-            ToolCategory::Builtin => "gearshape.fill",
-            ToolCategory::Clipboard => "doc.on.clipboard",
-            ToolCategory::Screen => "camera.viewfinder",
-            ToolCategory::Search => "magnifyingglass",
-            ToolCategory::External => "puzzlepiece.extension.fill",
-            ToolCategory::Other => "wrench.fill",
+            ToolCategory::Builtin => "command.square.fill",
+            ToolCategory::Native => "wrench.and.screwdriver.fill",
+            ToolCategory::Skills => "sparkles",
+            ToolCategory::Mcp => "server.rack",
+            ToolCategory::Custom => "slider.horizontal.3",
         }
     }
 }
@@ -305,7 +296,7 @@ impl From<crate::error::AetherError> for ToolResult {
 ///                 },
 ///                 "required": ["path"]
 ///             }),
-///             ToolCategory::Filesystem,
+///             ToolCategory::Native,
 ///         )
 ///     }
 ///
@@ -381,16 +372,20 @@ mod tests {
 
     #[test]
     fn test_tool_category_display() {
-        assert_eq!(ToolCategory::Filesystem.display_name(), "Filesystem");
-        assert_eq!(ToolCategory::Git.display_name(), "Git");
-        assert_eq!(ToolCategory::Shell.display_name(), "Shell");
+        assert_eq!(ToolCategory::Builtin.display_name(), "Builtin");
+        assert_eq!(ToolCategory::Native.display_name(), "Native");
+        assert_eq!(ToolCategory::Skills.display_name(), "Skills");
+        assert_eq!(ToolCategory::Mcp.display_name(), "MCP");
+        assert_eq!(ToolCategory::Custom.display_name(), "Custom");
     }
 
     #[test]
     fn test_tool_category_icon() {
-        assert_eq!(ToolCategory::Filesystem.icon(), "folder.fill");
-        assert_eq!(ToolCategory::Git.icon(), "arrow.triangle.branch");
-        assert_eq!(ToolCategory::Search.icon(), "magnifyingglass");
+        assert_eq!(ToolCategory::Builtin.icon(), "command.square.fill");
+        assert_eq!(ToolCategory::Native.icon(), "wrench.and.screwdriver.fill");
+        assert_eq!(ToolCategory::Skills.icon(), "sparkles");
+        assert_eq!(ToolCategory::Mcp.icon(), "server.rack");
+        assert_eq!(ToolCategory::Custom.icon(), "slider.horizontal.3");
     }
 
     #[test]
@@ -405,18 +400,18 @@ mod tests {
                 },
                 "required": ["input"]
             }),
-            ToolCategory::Other,
+            ToolCategory::Native,
         );
 
         assert_eq!(def.name, "test_tool");
         assert_eq!(def.description, "A test tool");
         assert!(!def.requires_confirmation);
-        assert_eq!(def.category, ToolCategory::Other);
+        assert_eq!(def.category, ToolCategory::Native);
     }
 
     #[test]
     fn test_tool_definition_with_confirmation() {
-        let def = ToolDefinition::no_params("delete_file", "Delete a file", ToolCategory::Filesystem)
+        let def = ToolDefinition::no_params("delete_file", "Delete a file", ToolCategory::Native)
             .with_confirmation(true);
 
         assert!(def.requires_confirmation);
@@ -434,7 +429,7 @@ mod tests {
                 },
                 "required": ["query"]
             }),
-            ToolCategory::Search,
+            ToolCategory::Native,
         );
 
         let openai = def.to_openai_function();
@@ -455,7 +450,7 @@ mod tests {
                 },
                 "required": ["query"]
             }),
-            ToolCategory::Search,
+            ToolCategory::Native,
         );
 
         let anthropic = def.to_anthropic_tool();
@@ -513,11 +508,11 @@ mod tests {
 
     #[test]
     fn test_tool_category_serialization() {
-        let category = ToolCategory::Filesystem;
+        let category = ToolCategory::Native;
         let json = serde_json::to_string(&category).unwrap();
-        assert_eq!(json, "\"filesystem\"");
+        assert_eq!(json, "\"native\"");
 
         let parsed: ToolCategory = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, ToolCategory::Filesystem);
+        assert_eq!(parsed, ToolCategory::Native);
     }
 }

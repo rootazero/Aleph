@@ -619,7 +619,7 @@ impl AgentTool for WebFetchTool {
                 },
                 "required": ["url"]
             }),
-            ToolCategory::Search, // Using Search category since it's web-related
+            ToolCategory::Native, // Using Search category since it's web-related
         )
     }
 
@@ -713,7 +713,7 @@ impl AgentTool for WebFetchTool {
     }
 
     fn category(&self) -> ToolCategory {
-        ToolCategory::Search
+        ToolCategory::Native
     }
 }
 
@@ -746,7 +746,7 @@ mod tests {
         assert_eq!(def.name, "web_fetch");
         assert!(def.description.contains("Fetch"));
         assert!(!def.requires_confirmation);
-        assert_eq!(def.category, ToolCategory::Search);
+        assert_eq!(def.category, ToolCategory::Native);
     }
 
     #[test]

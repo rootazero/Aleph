@@ -166,7 +166,7 @@ impl AgentTool for ShellExecuteTool {
                 },
                 "required": ["command"]
             }),
-            ToolCategory::Shell,
+            ToolCategory::Native,
         )
         .with_confirmation(true)
     }
@@ -201,7 +201,7 @@ impl AgentTool for ShellExecuteTool {
     }
 
     fn category(&self) -> ToolCategory {
-        ToolCategory::Shell
+        ToolCategory::Native
     }
 }
 
@@ -311,7 +311,7 @@ mod tests {
 
         assert_eq!(tool.name(), "shell_exec");
         assert!(tool.requires_confirmation());
-        assert_eq!(tool.category(), ToolCategory::Shell);
+        assert_eq!(tool.category(), ToolCategory::Native);
     }
 
     #[test]
@@ -322,6 +322,6 @@ mod tests {
 
         assert_eq!(def.name, "shell_exec");
         assert!(def.requires_confirmation);
-        assert_eq!(def.category, ToolCategory::Shell);
+        assert_eq!(def.category, ToolCategory::Native);
     }
 }

@@ -142,15 +142,11 @@ impl AetherCore {
 
         for tool in tools {
             let service_name = match tool.category() {
-                crate::tools::ToolCategory::Filesystem => "filesystem",
-                crate::tools::ToolCategory::Git => "git",
-                crate::tools::ToolCategory::Shell => "shell",
                 crate::tools::ToolCategory::Builtin => "builtin",
-                crate::tools::ToolCategory::Clipboard => "clipboard",
-                crate::tools::ToolCategory::Screen => "screen",
-                crate::tools::ToolCategory::Search => "search",
-                crate::tools::ToolCategory::External => "external",
-                crate::tools::ToolCategory::Other => "other",
+                crate::tools::ToolCategory::Native => "native",
+                crate::tools::ToolCategory::Skills => "skills",
+                crate::tools::ToolCategory::Mcp => "mcp",
+                crate::tools::ToolCategory::Custom => "custom",
             };
 
             groups

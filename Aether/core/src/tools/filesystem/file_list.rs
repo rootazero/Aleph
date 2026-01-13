@@ -52,7 +52,7 @@ impl AgentTool for FileListTool {
                 },
                 "required": ["path"]
             }),
-            ToolCategory::Filesystem,
+            ToolCategory::Native,
         )
     }
 
@@ -162,7 +162,7 @@ mod tests {
         let def = tool.definition();
 
         assert_eq!(def.name, "file_list");
-        assert_eq!(def.category, ToolCategory::Filesystem);
+        assert_eq!(def.category, ToolCategory::Native);
         assert!(!def.requires_confirmation);
     }
 

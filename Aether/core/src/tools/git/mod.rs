@@ -126,7 +126,7 @@ mod tests {
         for tool in &tools {
             assert_eq!(
                 tool.category(),
-                ToolCategory::Git,
+                ToolCategory::Native,
                 "{} should have Git category",
                 tool.name()
             );

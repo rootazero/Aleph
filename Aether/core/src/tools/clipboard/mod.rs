@@ -91,7 +91,7 @@ mod tests {
         for tool in &tools {
             assert_eq!(
                 tool.category(),
-                ToolCategory::Clipboard,
+                ToolCategory::Native,
                 "{} should have Clipboard category",
                 tool.name()
             );

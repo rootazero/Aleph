@@ -193,7 +193,7 @@ impl AgentTool for WebSearchTool {
                 },
                 "required": ["query"]
             }),
-            ToolCategory::Search,
+            ToolCategory::Native,
         )
     }
 
@@ -257,7 +257,7 @@ impl AgentTool for WebSearchTool {
     }
 
     fn category(&self) -> ToolCategory {
-        ToolCategory::Search
+        ToolCategory::Native
     }
 }
 
@@ -335,7 +335,7 @@ mod tests {
 
         assert_eq!(tool.name(), "web_search");
         assert!(!tool.requires_confirmation());
-        assert_eq!(tool.category(), ToolCategory::Search);
+        assert_eq!(tool.category(), ToolCategory::Native);
     }
 
     #[test]
