@@ -242,10 +242,10 @@ impl AetherCore {
     ///
     /// This method handles the actual execution of tools/capabilities that were
     /// matched by the pipeline. It:
-    /// 1. Maps tool names to capabilities (e.g., "youtube" -> Video)
-    /// 2. Extracts query from parameters
-    /// 3. Executes capabilities via build_enriched_payload
-    /// 4. Calls AI provider to generate response with capability results
+    /// 1. Checks if tool is a builtin capability or native tool
+    /// 2. For builtins: Maps tool names to capabilities (e.g., "youtube" -> Video)
+    /// 3. For native tools: Executes via UnifiedToolExecutor
+    /// 4. Calls AI provider to generate response with tool results
     fn execute_matched_tool(
         &self,
         tool_name: String,
@@ -254,22 +254,70 @@ impl AetherCore {
         context: CapturedContext,
         start_time: std::time::Instant,
     ) -> Result<String> {
+        use crate::core::tool_executor::UnifiedToolExecutor;
         use crate::payload::{Capability, ContextFormat};
 
-        // Map tool name to Capability enum
-        let capability = match tool_name.as_str() {
-            "youtube" | "video" => Capability::Video,
-            "search" => Capability::Search,
-            "memory" => Capability::Memory,
-            _ => {
-                // Unknown tool, fall back to general chat
-                debug!(tool = %tool_name, "Unknown tool, falling back to AI-first");
-                return Err(AetherError::other(format!(
-                    "Unknown tool: {}, falling back to AI-first",
-                    tool_name
-                )));
+        // Check if this is a builtin capability
+        let capability = UnifiedToolExecutor::resolve_builtin_capability(&tool_name);
+
+        // If not a builtin, try executing as native tool
+        if capability.is_none() {
+            // Map "fetch" command to "web_fetch" native tool
+            let native_tool_name = if tool_name == "fetch" {
+                "web_fetch".to_string()
+            } else {
+                tool_name.clone()
+            };
+
+            info!(tool = %native_tool_name, original = %tool_name, "Attempting native tool execution");
+
+            // Execute native tool via NativeToolRegistry
+            let registry = Arc::clone(&self.native_tool_registry);
+            let args = serde_json::to_string(&parameters)?;
+
+            let tool_result = self.runtime.block_on(async {
+                registry.execute(&native_tool_name, &args).await
+            });
+
+            match tool_result {
+                Ok(result) if result.is_success() => {
+                    info!(
+                        tool = %native_tool_name,
+                        content_length = result.content.len(),
+                        "Native tool executed successfully"
+                    );
+
+                    // Now make AI call with tool result
+                    return self.synthesize_tool_result(
+                        &native_tool_name,
+                        &result.content,
+                        &input,
+                        context,
+                        start_time,
+                    );
+                }
+                Ok(result) => {
+                    // Tool returned error
+                    let error_msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
+                    debug!(tool = %native_tool_name, error = %error_msg, "Native tool returned error");
+                    return Err(AetherError::other(format!(
+                        "Tool '{}' failed: {}",
+                        native_tool_name, error_msg
+                    )));
+                }
+                Err(e) => {
+                    // Tool not found or execution error
+                    debug!(tool = %native_tool_name, error = %e, "Native tool execution failed, falling back to AI-first");
+                    return Err(AetherError::other(format!(
+                        "Unknown tool: {}, falling back to AI-first",
+                        native_tool_name
+                    )));
+                }
             }
-        };
+        }
+
+        // It's a builtin capability
+        let capability = capability.unwrap();
 
         info!(
             tool = %tool_name,
@@ -380,6 +428,96 @@ impl AetherCore {
                         error!(
                             error = %e,
                             "Failed to store pipeline tool response in memory"
+                        );
+                    }
+                }
+            });
+        }
+
+        // Record turn for compression scheduling
+        self.record_conversation_turn();
+
+        self.event_handler
+            .on_state_changed(ProcessingState::Success);
+
+        Ok(response)
+    }
+
+    /// Synthesize AI response from native tool execution result.
+    ///
+    /// This method takes the raw output from a native tool (like web_fetch)
+    /// and makes an AI call to generate a user-friendly response.
+    fn synthesize_tool_result(
+        &self,
+        tool_name: &str,
+        tool_content: &str,
+        original_input: &str,
+        context: CapturedContext,
+        start_time: std::time::Instant,
+    ) -> Result<String> {
+        info!(
+            tool = %tool_name,
+            content_length = tool_content.len(),
+            "Synthesizing AI response from tool result"
+        );
+
+        // Get AI provider
+        let provider = self
+            .get_default_provider_instance()
+            .ok_or_else(|| AetherError::config("No AI provider available"))?;
+
+        // Build system prompt with tool result
+        let system_prompt = format!(
+            "You are a helpful AI assistant. The user requested help and the '{}' tool was executed to gather information.\n\n\
+             ## Tool Result\n\n\
+             <tool_result>\n{}\n</tool_result>\n\n\
+             Based on this information, please provide a helpful response to the user's original request. \
+             Summarize, explain, or answer their question using the tool output above. \
+             If the tool result is in a foreign language, translate and summarize appropriately. \
+             Be concise but comprehensive.",
+            tool_name,
+            // Truncate very long content to avoid exceeding token limits
+            if tool_content.len() > 80000 {
+                format!("{}...\n\n[Content truncated for length]", &tool_content[..80000])
+            } else {
+                tool_content.to_string()
+            }
+        );
+
+        // Make AI call with tool result context
+        let attachments = context.attachments.as_ref().map(|a| a.as_slice());
+        let response = self.runtime.block_on(
+            provider.process_with_attachments(original_input, attachments, Some(&system_prompt)),
+        )?;
+
+        info!(
+            tool = %tool_name,
+            response_length = response.len(),
+            elapsed_ms = start_time.elapsed().as_millis(),
+            "Native tool + AI synthesis completed"
+        );
+
+        // Store in memory asynchronously if enabled
+        if self.memory_db.is_some() {
+            let user_input = original_input.to_string();
+            let ai_output = response.clone();
+            let core_clone = self.clone_for_storage();
+
+            self.runtime.spawn(async move {
+                match core_clone
+                    .store_interaction_memory(user_input, ai_output)
+                    .await
+                {
+                    Ok(memory_id) => {
+                        debug!(
+                            memory_id = %memory_id,
+                            "Native tool response stored in memory"
+                        );
+                    }
+                    Err(e) => {
+                        error!(
+                            error = %e,
+                            "Failed to store native tool response in memory"
                         );
                     }
                 }

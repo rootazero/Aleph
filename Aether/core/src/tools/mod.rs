@@ -84,6 +84,7 @@ pub mod screen;
 pub mod search;
 pub mod shell;
 pub mod system;
+pub mod web;
 mod registry;
 mod traits;
 
@@ -135,3 +136,6 @@ pub use screen::{
 pub use search::{
     create_all_tools as create_search_tools, SearchConfig, SearchContext, WebSearchTool,
 };
+
+// Re-export web tools for convenience
+pub use web::{create_all_tools as create_web_tools, WebFetchConfig, WebFetchTool};

@@ -70,6 +70,10 @@ xcap = "0.8"
 lru = "0.12"
 # For type-safe JSON Schema generation (L3 Agent Planning)
 schemars = "0.8"
+# For HTML parsing in WebFetchTool
+scraper = "0.22"
+# For URL parsing and validation
+url = "2.5"
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }

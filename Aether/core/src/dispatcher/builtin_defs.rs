@@ -100,6 +100,21 @@ pub const BUILTIN_COMMANDS: &[BuiltinCommandDef] = &[
         routing_capabilities: &["memory"],
         routing_intent_type: "general_chat",
     },
+    // /fetch - Web page content fetching
+    BuiltinCommandDef {
+        name: "fetch",
+        display_name: "Fetch URL",
+        description: "Fetch and read web page content from a URL",
+        icon: "globe",
+        usage: "/fetch <URL>",
+        localization_key: "tool.fetch",
+        sort_order: 4,
+        has_subtools: false,
+        routing_regex: r"^/fetch\s+",
+        routing_system_prompt: "You are a helpful assistant. A web page content has been fetched and will be provided below. Analyze, summarize, or answer questions about the content.",
+        routing_capabilities: &["web_fetch"],
+        routing_intent_type: "web_fetch",
+    },
 ];
 
 /// Get builtin routing rules (for Config module)
@@ -140,15 +155,15 @@ mod tests {
 
     #[test]
     fn test_builtin_commands_count() {
-        // Flat namespace mode: only 3 builtin commands
+        // Flat namespace mode: only 4 builtin commands
         // /mcp and /skill namespaces removed
-        assert_eq!(BUILTIN_COMMANDS.len(), 3);
+        assert_eq!(BUILTIN_COMMANDS.len(), 4);
     }
 
     #[test]
     fn test_builtin_routing_rules() {
         let rules = get_builtin_routing_rules();
-        assert_eq!(rules.len(), 3);
+        assert_eq!(rules.len(), 4);
 
         // Verify search rule
         let search = rules.iter().find(|r| r.regex.contains("/search")).unwrap();
@@ -173,7 +188,7 @@ mod tests {
     fn test_builtin_command_names() {
         let names: Vec<_> = BUILTIN_COMMANDS.iter().map(|c| c.name).collect();
         // Flat namespace: no /mcp or /skill
-        assert_eq!(names, vec!["search", "youtube", "chat"]);
+        assert_eq!(names, vec!["search", "youtube", "chat", "fetch"]);
     }
 
     #[test]

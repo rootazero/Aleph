@@ -11,8 +11,8 @@ use super::AetherCore;
 use crate::error::Result;
 use crate::tools::{
     create_clipboard_tools, create_filesystem_tools, create_git_tools, create_screen_tools,
-    create_shell_tools, create_system_tools, FilesystemConfig, GitConfig, ScreenConfig,
-    ShellConfig, ToolResult,
+    create_shell_tools, create_system_tools, create_web_tools, FilesystemConfig, GitConfig,
+    ScreenConfig, ShellConfig, ToolResult, WebFetchConfig,
 };
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -124,6 +124,10 @@ impl AetherCore {
         // Screen capture tools
         let screen_config = ScreenConfig::default();
         all_tools.extend(create_screen_tools(screen_config));
+
+        // Web fetch tools (for fetching and extracting web page content)
+        let web_config = WebFetchConfig::default();
+        all_tools.extend(create_web_tools(web_config));
 
         all_tools
     }

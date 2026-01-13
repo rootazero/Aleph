@@ -17,6 +17,7 @@ mod mcp_ops;
 mod memory;
 mod processing;
 mod search_ops;
+pub mod tool_executor;
 mod tools;
 pub mod types;
 mod vision_ops;
