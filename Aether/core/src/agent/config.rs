@@ -18,6 +18,12 @@ pub struct RigAgentConfig {
     /// System prompt
     #[serde(default)]
     pub system_prompt: String,
+    /// API key (optional, can be loaded from keychain or env)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// Custom base URL (for OpenAI-compatible providers)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
 }
 
 fn default_temperature() -> f32 {
@@ -36,6 +42,8 @@ impl Default for RigAgentConfig {
             temperature: default_temperature(),
             max_tokens: default_max_tokens(),
             system_prompt: "You are Aether, an intelligent assistant.".to_string(),
+            api_key: None,
+            base_url: None,
         }
     }
 }

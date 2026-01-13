@@ -1,14 +1,20 @@
 //! Web fetch tool for retrieving and extracting content from web pages
+//!
+//! Implements rig's Tool trait for AI agent integration.
 
 use reqwest::Client;
+use rig::completion::ToolDefinition;
+use rig::tool::Tool;
+use schemars::{schema_for, JsonSchema};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tracing::{debug, info};
 
 use super::error::ToolError;
 
 /// Arguments for web fetch tool
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct WebFetchArgs {
     /// URL to fetch
     pub url: String,
@@ -190,6 +196,52 @@ impl WebFetchTool {
 impl Default for WebFetchTool {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Clone for WebFetchTool {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
+/// Implementation of rig's Tool trait for WebFetchTool
+///
+/// This allows WebFetchTool to be used with rig agents via the `.tool()` method.
+impl Tool for WebFetchTool {
+    const NAME: &'static str = "web_fetch";
+
+    type Error = ToolError;
+    type Args = WebFetchArgs;
+    type Output = WebFetchResult;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        // Use schemars to generate JSON Schema for the arguments
+        let schema = schema_for!(WebFetchArgs);
+        let parameters = serde_json::to_value(&schema).unwrap_or_else(|_| {
+            // Fallback to manually defined schema if generation fails
+            json!({
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "URL to fetch (must start with http:// or https://)"
+                    }
+                },
+                "required": ["url"]
+            })
+        });
+
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: Self::DESCRIPTION.to_string(),
+            parameters,
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        // Delegate to the existing call implementation
+        WebFetchTool::call(self, args).await
     }
 }
 

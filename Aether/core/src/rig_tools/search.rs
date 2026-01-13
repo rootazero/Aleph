@@ -1,14 +1,20 @@
 //! Web search tool with Tavily API integration
+//!
+//! Implements rig's Tool trait for AI agent integration.
 
 use reqwest::Client;
+use rig::completion::ToolDefinition;
+use rig::tool::Tool;
+use schemars::{schema_for, JsonSchema};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::env;
 use tracing::{debug, info, warn};
 
 use super::error::ToolError;
 
 /// Arguments for search tool
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct SearchArgs {
     /// Search query
     pub query: String,
@@ -153,6 +159,57 @@ impl SearchTool {
 impl Default for SearchTool {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Clone for SearchTool {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
+/// Implementation of rig's Tool trait for SearchTool
+///
+/// This allows SearchTool to be used with rig agents via the `.tool()` method.
+impl Tool for SearchTool {
+    const NAME: &'static str = "search";
+
+    type Error = ToolError;
+    type Args = SearchArgs;
+    type Output = SearchOutput;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        // Use schemars to generate JSON Schema for the arguments
+        let schema = schema_for!(SearchArgs);
+        let parameters = serde_json::to_value(&schema).unwrap_or_else(|_| {
+            // Fallback to manually defined schema if generation fails
+            json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (default 5)",
+                        "default": 5
+                    }
+                },
+                "required": ["query"]
+            })
+        });
+
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: Self::DESCRIPTION.to_string(),
+            parameters,
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        // Delegate to the existing call implementation
+        SearchTool::call(self, args).await
     }
 }
 

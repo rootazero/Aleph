@@ -4,6 +4,10 @@
 // UniFFI will automatically generate type-safe bindings from this definition.
 
 namespace aether {
+  // V2 interface initialization (rig-core based)
+  [Throws=AetherV2Error]
+  AetherV2Core init_v2(string config_path, AetherV2EventHandler handler);
+
   // First-run initialization functions
 
   // Check if this is a fresh installation
@@ -1139,4 +1143,66 @@ dictionary PendingConfirmationInfo {
   f32 confidence;               // Confidence score (0.0-1.0)
   string reason;                // Reason for tool selection (from L3 routing)
   u64 timeout_ms;               // Timeout in milliseconds
+};
+
+// ===== V2 INTERFACE (rig-core based) =====
+// New simplified interface using rig-core for AI provider integration.
+// This provides a cleaner API compared to v1 and will eventually replace it.
+
+[Error]
+enum AetherV2Error {
+    "Config",
+    "Provider",
+    "Tool",
+    "Memory",
+    "Cancelled",
+};
+
+callback interface AetherV2EventHandler {
+    void on_thinking();
+    void on_tool_start(string tool_name);
+    void on_tool_result(string tool_name, string result);
+    void on_stream_chunk(string text);
+    void on_complete(string response);
+    void on_error(string message);
+    void on_memory_stored();
+};
+
+interface AetherV2Core {
+    [Throws=AetherV2Error]
+    void process(string input, ProcessOptionsV2? options);
+
+    void cancel();
+    boolean is_cancelled();
+
+    sequence<ToolInfoV2> list_tools();
+
+    [Throws=AetherV2Error]
+    sequence<MemoryItemV2> search_memory(string query, u32 limit);
+
+    [Throws=AetherV2Error]
+    void clear_memory();
+
+    [Throws=AetherV2Error]
+    void reload_config();
+};
+
+dictionary ProcessOptionsV2 {
+    string? app_context;
+    string? window_title;
+    boolean stream;
+};
+
+dictionary ToolInfoV2 {
+    string name;
+    string description;
+    string source;
+};
+
+dictionary MemoryItemV2 {
+    string id;
+    string user_input;
+    string assistant_response;
+    i64 timestamp;
+    string? app_context;
 };

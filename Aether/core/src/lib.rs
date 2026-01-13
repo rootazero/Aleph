@@ -193,6 +193,12 @@ pub use crate::vision::{
     CaptureMode, VisionConfig, VisionRequest, VisionResult, VisionService, VisionTask,
 };
 
+// V2 interface exports (rig-core based architecture)
+pub use crate::uniffi_v2::{
+    init_v2, AetherV2Core, AetherV2Error, AetherV2EventHandler, MemoryItemV2, ProcessOptionsV2,
+    ToolInfoV2,
+};
+
 // Test-only exports
 #[cfg(test)]
 pub use crate::event_handler::MockEventHandler;
