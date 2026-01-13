@@ -43,6 +43,60 @@ pub enum ErrorType {
     Unknown,
 }
 
+// ========================================================================
+// MCP Startup Report Types (Phase 3.3 - Swift callback)
+// ========================================================================
+
+/// MCP server error information for FFI
+///
+/// Contains details about a server that failed to start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServerErrorFFI {
+    /// Name of the server that failed
+    pub server_name: String,
+    /// Human-readable error message
+    pub error_message: String,
+}
+
+/// MCP startup report for FFI
+///
+/// Contains information about MCP server startup results,
+/// sent to Swift via `on_mcp_startup_complete` callback.
+#[derive(Debug, Clone, Default)]
+pub struct McpStartupReportFFI {
+    /// Names of servers that started successfully
+    pub succeeded_servers: Vec<String>,
+    /// Servers that failed to start with error details
+    pub failed_servers: Vec<McpServerErrorFFI>,
+}
+
+impl McpStartupReportFFI {
+    /// Create from internal McpStartupReport
+    pub fn from_internal(report: &crate::mcp::McpStartupReport) -> Self {
+        Self {
+            succeeded_servers: report.succeeded.clone(),
+            failed_servers: report
+                .failed
+                .iter()
+                .map(|(name, error): &(String, String)| McpServerErrorFFI {
+                    server_name: name.clone(),
+                    error_message: error.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Check if all servers started successfully
+    pub fn all_succeeded(&self) -> bool {
+        self.failed_servers.is_empty()
+    }
+
+    /// Get total number of servers (succeeded + failed)
+    pub fn total_count(&self) -> usize {
+        self.succeeded_servers.len() + self.failed_servers.len()
+    }
+}
+
 /// Trait for receiving events from Aether core
 ///
 /// Clients (Swift, Kotlin, etc.) implement this trait to receive
@@ -166,6 +220,25 @@ pub trait AetherEventHandler: Send + Sync {
     fn on_tools_refresh_needed(&self);
 
     // ========================================================================
+    // MCP Startup Callbacks (Phase 3.3 - mcp-startup-feedback)
+    // ========================================================================
+
+    /// Called when MCP servers finish starting.
+    ///
+    /// This callback provides detailed information about which MCP servers
+    /// started successfully and which failed. The UI can use this to:
+    /// - Show success notifications for started servers
+    /// - Display error messages for failed servers
+    /// - Update server status indicators
+    ///
+    /// This is called after each tool registry refresh that involves MCP servers,
+    /// including initial startup and after adding/updating MCP server configurations.
+    ///
+    /// # Arguments
+    /// * `report` - Startup report with succeeded/failed server information
+    fn on_mcp_startup_complete(&self, report: McpStartupReportFFI);
+
+    // ========================================================================
     // Agent Loop Callbacks (enhance-intent-routing-pipeline)
     // ========================================================================
 
@@ -254,6 +327,8 @@ pub struct MockEventHandler {
     // Tool registry tracking
     pub tools_changed: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
     pub tools_refresh_needed_count: std::sync::Arc<std::sync::Mutex<u32>>,
+    // MCP startup tracking
+    pub mcp_startup_reports: std::sync::Arc<std::sync::Mutex<Vec<McpStartupReportFFI>>>,
     // Agent loop tracking
     pub agent_started: std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String)>>>, // (plan_id, total_steps, description)
     pub agent_tool_started: std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String, String)>>>, // (plan_id, step_index, tool_name, description)
@@ -286,6 +361,7 @@ impl MockEventHandler {
             confirmations_expired: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             tools_changed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             tools_refresh_needed_count: std::sync::Arc::new(std::sync::Mutex::new(0)),
+            mcp_startup_reports: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             agent_started: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             agent_tool_started: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             agent_tool_completed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -323,6 +399,13 @@ impl MockEventHandler {
 
     pub fn get_tools_changed(&self) -> Vec<u32> {
         self.tools_changed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn get_mcp_startup_reports(&self) -> Vec<McpStartupReportFFI> {
+        self.mcp_startup_reports
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
@@ -601,6 +684,13 @@ impl AetherEventHandler for MockEventHandler {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         *count += 1;
+    }
+
+    fn on_mcp_startup_complete(&self, report: McpStartupReportFFI) {
+        self.mcp_startup_reports
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(report);
     }
 
     fn on_agent_started(&self, plan_id: String, total_steps: u32, description: String) {

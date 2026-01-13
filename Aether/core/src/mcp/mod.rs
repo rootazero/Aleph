@@ -46,7 +46,7 @@ pub mod jsonrpc;
 pub mod transport;
 pub mod types;
 
-pub use client::{ExternalServerConfig, McpClient, McpClientBuilder};
+pub use client::{ExternalServerConfig, McpClient, McpClientBuilder, McpStartupReport};
 pub use external::{check_runtime, McpServerConnection, RuntimeKind};
 pub use jsonrpc::{IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 pub use transport::StdioTransport;

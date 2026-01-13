@@ -45,6 +45,7 @@ impl AetherEventHandler for TestEventHandler {
     fn on_confirmation_expired(&self, _confirmation_id: String) {}
     fn on_tools_changed(&self, _tool_count: u32) {}
     fn on_tools_refresh_needed(&self) {}
+    fn on_mcp_startup_complete(&self, _report: aethecore::McpStartupReportFFI) {}
     fn on_agent_started(&self, _plan_id: String, _total_steps: u32, _description: String) {}
     fn on_agent_tool_started(&self, _plan_id: String, _step_index: u32, _tool_name: String, _tool_description: String) {}
     fn on_agent_tool_completed(&self, _plan_id: String, _step_index: u32, _tool_name: String, _success: bool, _result_preview: String) {}

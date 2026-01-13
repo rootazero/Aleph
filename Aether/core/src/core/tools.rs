@@ -255,6 +255,10 @@ impl AetherCore {
                             "MCP servers restart complete"
                         );
 
+                        // Notify Swift about MCP startup results
+                        let ffi_report = crate::McpStartupReportFFI::from_internal(&startup_report);
+                        event_handler.on_mcp_startup_complete(ffi_report);
+
                         // Create bridges and register tools
                         let mcp_bridges = create_bridges(client).await;
                         let mcp_tool_count = mcp_bridges.len();
@@ -328,6 +332,13 @@ impl AetherCore {
                                         server_name
                                     );
                                 }
+
+                                // Notify Swift about single server restart success
+                                let ffi_report = crate::McpStartupReportFFI {
+                                    succeeded_servers: vec![server_name.clone()],
+                                    failed_servers: vec![],
+                                };
+                                event_handler.on_mcp_startup_complete(ffi_report);
                             }
                             Err(e) => {
                                 warn!(
@@ -335,6 +346,16 @@ impl AetherCore {
                                     error = %e,
                                     "Failed to restart MCP server"
                                 );
+
+                                // Notify Swift about single server restart failure
+                                let ffi_report = crate::McpStartupReportFFI {
+                                    succeeded_servers: vec![],
+                                    failed_servers: vec![crate::McpServerErrorFFI {
+                                        server_name: server_name.clone(),
+                                        error_message: e.to_string(),
+                                    }],
+                                };
+                                event_handler.on_mcp_startup_complete(ffi_report);
                             }
                         }
                     } else {
@@ -478,6 +499,10 @@ impl AetherCore {
                     failed = startup_report.failed.len(),
                     "MCP servers startup complete"
                 );
+
+                // Notify Swift about MCP startup results
+                let ffi_report = crate::McpStartupReportFFI::from_internal(&startup_report);
+                event_handler.on_mcp_startup_complete(ffi_report);
 
                 // Create bridges for MCP tools and register them
                 let mcp_bridges = create_bridges(client).await;

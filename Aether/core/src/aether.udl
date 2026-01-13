@@ -527,6 +527,20 @@ interface AetherCore {
   string extract_text(sequence<u8> image_data);
 };
 
+// ===== MCP STARTUP REPORT (Phase 3.3 - mcp-startup-feedback) =====
+
+// Information about a failed MCP server
+dictionary McpServerErrorFFI {
+  string server_name;
+  string error_message;
+};
+
+// Report of MCP server startup results
+dictionary McpStartupReportFFI {
+  sequence<string> succeeded_servers;
+  sequence<McpServerErrorFFI> failed_servers;
+};
+
 // Callback interface for events from Rust to client
 callback interface AetherEventHandler {
   // Called when processing state changes
@@ -604,6 +618,11 @@ callback interface AetherEventHandler {
   // Called when tool registry needs to be refreshed (triggered by config hot-reload)
   // Swift layer should call refresh_skills() or similar to trigger full refresh
   void on_tools_refresh_needed();
+
+  // MCP STARTUP CALLBACKS (Phase 3.3 - mcp-startup-feedback)
+  // Called when MCP servers finish starting with success/failure information
+  // UI can use this to show notifications or update server status indicators
+  void on_mcp_startup_complete(McpStartupReportFFI report);
 
   // AGENT LOOP CALLBACKS (enhance-intent-routing-pipeline)
   // Called when agent loop starts executing a multi-step plan

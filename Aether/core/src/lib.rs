@@ -125,7 +125,9 @@ pub use crate::core::{
 };
 pub use crate::memory::context::CompressionResult;
 pub use crate::error::{AetherError, AetherException, Result};
-pub use crate::event_handler::{AetherEventHandler, ErrorType, ProcessingState};
+pub use crate::event_handler::{
+    AetherEventHandler, ErrorType, McpServerErrorFFI, McpStartupReportFFI, ProcessingState,
+};
 pub use crate::initialization::{
     check_embedding_model_exists, download_embedding_model_standalone,
     get_skills_dir, get_skills_dir_string, initialize_builtin_skills, initialize_builtin_skills_ffi,

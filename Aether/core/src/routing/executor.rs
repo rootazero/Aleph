@@ -590,6 +590,7 @@ mod tests {
         fn on_confirmation_expired(&self, _: String) {}
         fn on_tools_changed(&self, _: u32) {}
         fn on_tools_refresh_needed(&self) {}
+        fn on_mcp_startup_complete(&self, _: crate::McpStartupReportFFI) {}
         fn on_agent_started(&self, _: String, _: u32, _: String) {}
         fn on_agent_tool_started(&self, _: String, _: u32, _: String, _: String) {}
         fn on_agent_tool_completed(&self, _: String, _: u32, _: String, _: bool, _: String) {}
