@@ -45,21 +45,23 @@ impl AetherCore {
     /// # Returns
     /// * `Result<()>` - Success or error
     pub fn update_mcp_config(&self, new_config: crate::mcp::McpSettingsConfig) -> Result<()> {
-        let mut config = self.lock_config();
+        {
+            let mut config = self.lock_config();
 
-        // Update config
-        config.mcp.enabled = new_config.enabled;
-        config.tools.fs_enabled = new_config.fs_enabled;
-        config.tools.git_enabled = new_config.git_enabled;
-        config.tools.shell_enabled = new_config.shell_enabled;
-        config.tools.system_info_enabled = new_config.system_info_enabled;
-        config.tools.allowed_roots = new_config.allowed_roots;
-        config.tools.allowed_repos = new_config.allowed_repos;
-        config.tools.allowed_commands = new_config.allowed_commands;
-        config.tools.shell_timeout_seconds = new_config.shell_timeout_seconds;
+            // Update config
+            config.mcp.enabled = new_config.enabled;
+            config.tools.fs_enabled = new_config.fs_enabled;
+            config.tools.git_enabled = new_config.git_enabled;
+            config.tools.shell_enabled = new_config.shell_enabled;
+            config.tools.system_info_enabled = new_config.system_info_enabled;
+            config.tools.allowed_roots = new_config.allowed_roots;
+            config.tools.allowed_repos = new_config.allowed_repos;
+            config.tools.allowed_commands = new_config.allowed_commands;
+            config.tools.shell_timeout_seconds = new_config.shell_timeout_seconds;
 
-        // Persist to disk
-        config.save()?;
+            // Persist to disk
+            config.save()?;
+        } // Release config lock before refreshing tool registry
 
         // Notify event handler
         self.event_handler.on_config_changed();

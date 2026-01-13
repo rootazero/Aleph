@@ -114,8 +114,13 @@ impl AetherCore {
             }
 
             // 4. Register skills
-            if let Ok(skills) = crate::initialization::list_installed_skills() {
-                registry.register_skills(&skills).await;
+            match crate::initialization::list_installed_skills() {
+                Ok(skills) => {
+                    registry.register_skills(&skills).await;
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to list installed skills, skipping skill registration");
+                }
             }
 
             // 5. Register custom commands from routing rules

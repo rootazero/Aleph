@@ -443,9 +443,9 @@ impl ToolRegistry {
                 ToolSource::Custom { rule_index } => format!("custom:{}:{}", rule_index, new_name),
             };
 
-            warn!(
-                "Tool conflict: renamed '{}' (id: {}) to '{}' (new id: {})",
-                original_name, existing_id, new_name, new_id
+            debug!(
+                "Tool conflict resolved: '{}' renamed to '{}' (priority system)",
+                original_name, new_name
             );
 
             tool.id = new_id.clone();
@@ -498,8 +498,8 @@ impl ToolRegistry {
                         ToolSource::Custom { rule_index } => format!("custom:{}:{}", rule_index, new_name),
                     };
 
-                    warn!(
-                        "Conflict resolved: new tool '{}' renamed to '{}' (existing '{}' has priority)",
+                    debug!(
+                        "Tool conflict resolved: '{}' renamed to '{}' (existing '{}' has priority)",
                         original_name, new_name, conflict.existing_name
                     );
                 }
