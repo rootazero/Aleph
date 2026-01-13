@@ -450,6 +450,35 @@ interface AetherCore {
   [Throws=AetherException]
   void import_mcp_config_json(string json);
 
+  // SKILL MANAGEMENT METHODS (auto-register-skills)
+
+  // List all installed skills
+  [Throws=AetherException]
+  sequence<SkillInfo> list_skills();
+
+  // Install a skill from a GitHub URL
+  // Automatically refreshes the tool registry after installation
+  [Throws=AetherException]
+  SkillInfo install_skill(string url);
+
+  // Install skills from a local ZIP file
+  // Automatically refreshes the tool registry after installation
+  [Throws=AetherException]
+  sequence<string> install_skills_from_zip(string zip_path);
+
+  // Delete a skill by ID
+  // Automatically refreshes the tool registry after deletion
+  [Throws=AetherException]
+  void delete_skill(string skill_id);
+
+  // Get the skills directory path
+  [Throws=AetherException]
+  string get_skills_dir();
+
+  // Refresh skills in the tool registry
+  // Call this when skills are modified outside of AetherCore
+  void refresh_skills();
+
   // DISPATCHER LAYER METHODS (implement-dispatcher-layer)
 
   // List all available tools from unified registry

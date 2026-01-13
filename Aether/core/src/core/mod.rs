@@ -5,6 +5,7 @@
 //! - `memory`: Memory storage and retrieval operations
 //! - `config_ops`: Configuration management
 //! - `mcp_ops`: MCP capability methods
+//! - `skill_ops`: Skill management methods
 //! - `search_ops`: Search capability methods
 //! - `tools`: Dispatcher and tool registry
 //! - `conversation`: Multi-turn conversation management
@@ -17,6 +18,7 @@ mod mcp_ops;
 mod memory;
 mod processing;
 mod search_ops;
+mod skill_ops;
 pub mod tool_executor;
 mod tools;
 pub mod types;
