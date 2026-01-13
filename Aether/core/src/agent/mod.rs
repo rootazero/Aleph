@@ -61,5 +61,5 @@ pub use adapter::{
 pub use config::RigAgentConfig;
 pub use conversation::{ChatMessage, ConversationHistory, MessageRole};
 pub use executor::{AgentLoop, ChatResponse, ToolCallingProvider};
-pub use manager::RigAgentManager;
+pub use manager::{AgentResponse, RigAgentManager};
 pub use types::{AgentConfig, AgentResult, ToolCallInfo, ToolCallResult};
