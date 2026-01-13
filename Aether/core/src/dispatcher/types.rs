@@ -519,31 +519,76 @@ impl UnifiedTool {
 
     /// Create UnifiedTool from ToolDefinition (AgentTool interface)
     ///
-    /// Converts native `AgentTool` definitions to `UnifiedTool` for unified
-    /// registry management. The source is set to `Native` and appropriate
-    /// defaults are applied based on the tool category.
+    /// Converts `AgentTool` definitions to `UnifiedTool` for unified
+    /// registry management. The source is automatically determined from
+    /// the tool's category:
+    /// - `ToolCategory::Native` → `ToolSource::Native`
+    /// - `ToolCategory::Builtin` → `ToolSource::Builtin`
+    /// - `ToolCategory::Mcp` → `ToolSource::Mcp { server: service_name }`
+    /// - `ToolCategory::Skills` → `ToolSource::Skill { id: tool_name }`
+    /// - `ToolCategory::Custom` → `ToolSource::Custom { rule_index: 0 }`
     ///
     /// # Arguments
     ///
     /// * `def` - The tool definition from an AgentTool implementation
-    /// * `service_name` - Optional service grouping name (e.g., "filesystem", "git")
+    /// * `service_name` - Optional service grouping name. For MCP tools, this
+    ///   should be the actual MCP server name (e.g., "github", "filesystem").
+    ///   For native tools, this is a grouping name (e.g., "filesystem", "git").
     ///
     /// # Example
     ///
     /// ```rust,ignore
+    /// // Native tool
     /// let tool = FileReadTool::new(ctx);
     /// let unified = UnifiedTool::from_tool_definition(tool.definition(), Some("filesystem"));
+    ///
+    /// // MCP tool
+    /// let mcp_bridge = McpToolBridge::new(tool_def, client, "github".to_string());
+    /// let unified = UnifiedTool::from_tool_definition(mcp_bridge.definition(), Some("github"));
     /// ```
     pub fn from_tool_definition(def: ToolDefinition, service_name: Option<&str>) -> Self {
-        let id = match service_name {
-            Some(svc) => format!("native:{}:{}", svc, def.name),
-            None => format!("native:{}", def.name),
+        // Determine ToolSource from ToolCategory
+        let (source, id) = match def.category {
+            ToolCategory::Builtin => {
+                let id = format!("builtin:{}", def.name);
+                (ToolSource::Builtin, id)
+            }
+            ToolCategory::Native => {
+                let id = match service_name {
+                    Some(svc) => format!("native:{}:{}", svc, def.name),
+                    None => format!("native:{}", def.name),
+                };
+                (ToolSource::Native, id)
+            }
+            ToolCategory::Mcp => {
+                let server = service_name.unwrap_or("unknown").to_string();
+                let id = format!("mcp:{}:{}", server, def.name);
+                (ToolSource::Mcp { server }, id)
+            }
+            ToolCategory::Skills => {
+                let skill_id = service_name.unwrap_or(&def.name).to_string();
+                let id = format!("skill:{}", skill_id);
+                (ToolSource::Skill { id: skill_id.clone() }, id)
+            }
+            ToolCategory::Custom => {
+                let id = format!("custom:{}", def.name);
+                (ToolSource::Custom { rule_index: 0 }, id)
+            }
         };
 
         let icon = Self::icon_for_category(def.category);
         let safety_level = Self::infer_safety_level(&def.name, def.category);
 
-        let mut tool = Self::new(&id, &def.name, &def.description, ToolSource::Native)
+        // Determine intent type based on source
+        let intent_type = match &source {
+            ToolSource::Builtin => format!("builtin:{}", def.name),
+            ToolSource::Native => format!("native:{}", def.name),
+            ToolSource::Mcp { server } => format!("mcp:{}:{}", server, def.name),
+            ToolSource::Skill { id } => format!("skill:{}", id),
+            ToolSource::Custom { .. } => format!("custom:{}", def.name),
+        };
+
+        let mut tool = Self::new(&id, &def.name, &def.description, source)
             .with_display_name(&def.name)
             .with_parameters_schema(def.parameters.clone())
             .with_requires_confirmation(def.requires_confirmation)
@@ -552,7 +597,7 @@ impl UnifiedTool {
             .with_usage(format!("/{} [args]", def.name))
             // Generate routing regex for flat namespace
             .with_routing_regex(format!(r"^/{}\s*", regex::escape(&def.name)))
-            .with_routing_intent_type(format!("native:{}", def.name))
+            .with_routing_intent_type(intent_type)
             .with_routing_strip_prefix(true);
 
         if let Some(svc) = service_name {

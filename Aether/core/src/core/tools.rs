@@ -101,8 +101,12 @@ impl AetherCore {
                         // Register MCP tools in native registry for execution
                         native_registry.register_all(mcp_bridges.clone()).await;
 
-                        // Also register in dispatcher registry for UI display
-                        registry.register_agent_tools(&mcp_bridges, "mcp").await;
+                        // Group MCP tools by server name for proper categorization
+                        // MCP tool names have format "server_name:tool_name"
+                        let mcp_groups = Self::group_mcp_tools_by_server(&mcp_bridges);
+                        for (server_name, tools) in mcp_groups {
+                            registry.register_agent_tools(&tools, &server_name).await;
+                        }
 
                         debug!("Registered {} MCP tools from external servers", mcp_tool_count);
                     }
@@ -193,6 +197,35 @@ impl AetherCore {
 
             groups
                 .entry(service_name.to_string())
+                .or_default()
+                .push(Arc::clone(tool));
+        }
+
+        groups.into_iter().collect()
+    }
+
+    /// Group MCP tools by server name for dispatcher registration
+    ///
+    /// MCP tool names have the format "server_name:tool_name".
+    /// This function extracts the server name and groups tools accordingly.
+    fn group_mcp_tools_by_server(
+        tools: &[Arc<dyn crate::tools::AgentTool>],
+    ) -> Vec<(String, Vec<Arc<dyn crate::tools::AgentTool>>)> {
+        use std::collections::HashMap;
+
+        let mut groups: HashMap<String, Vec<Arc<dyn crate::tools::AgentTool>>> = HashMap::new();
+
+        for tool in tools {
+            // Extract server name from tool name (format: "server_name:tool_name")
+            let server_name = tool
+                .name()
+                .split(':')
+                .next()
+                .unwrap_or("unknown")
+                .to_string();
+
+            groups
+                .entry(server_name)
                 .or_default()
                 .push(Arc::clone(tool));
         }

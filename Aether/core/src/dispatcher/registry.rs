@@ -946,7 +946,7 @@ mod tests {
 
         // Verify sorted by sort_order (no /mcp or /skill)
         let names: Vec<_> = builtins.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, vec!["search", "youtube", "chat", "fetch"]);
+        assert_eq!(names, vec!["search", "youtube", "chat", "webfetch"]);
 
         // Check metadata
         let search = registry.get_by_id("builtin:search").await.unwrap();
