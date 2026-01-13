@@ -14,6 +14,10 @@ use crate::mcp::jsonrpc::{IdGenerator, JsonRpcNotification, JsonRpcRequest, mcp 
 use crate::mcp::transport::StdioTransport;
 use crate::mcp::types::McpTool;
 
+/// Default timeout for the entire MCP server connection process
+/// This includes: process spawn + initialize handshake + tools/list
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Connection state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionState {
@@ -44,7 +48,7 @@ pub struct McpServerConnection {
 }
 
 impl McpServerConnection {
-    /// Connect to an external MCP server
+    /// Connect to an external MCP server with timeout protection
     ///
     /// # Arguments
     /// * `name` - Server name for identification
@@ -52,7 +56,8 @@ impl McpServerConnection {
     /// * `args` - Command arguments
     /// * `env` - Environment variables
     /// * `cwd` - Working directory
-    /// * `timeout` - Request timeout
+    /// * `timeout` - Connection timeout (defaults to 30s). This covers the entire
+    ///   connection process: process spawn + initialize handshake + tools/list
     pub async fn connect(
         name: impl Into<String>,
         command: impl AsRef<str>,
@@ -62,22 +67,50 @@ impl McpServerConnection {
         timeout: Option<Duration>,
     ) -> Result<Self> {
         let name = name.into();
+        let connect_timeout = timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT);
 
+        // Wrap entire connection process with timeout
+        tokio::time::timeout(
+            connect_timeout,
+            Self::connect_internal(&name, command, args, env, cwd, timeout),
+        )
+        .await
+        .map_err(|_| {
+            AetherError::Timeout {
+                suggestion: Some(format!(
+                    "MCP server '{}' connection timed out after {}s. Check if the server is installed and responding.",
+                    name,
+                    connect_timeout.as_secs()
+                )),
+            }
+        })?
+    }
+
+    /// Internal connection logic (without timeout wrapper)
+    async fn connect_internal(
+        name: &str,
+        command: impl AsRef<str>,
+        args: &[String],
+        env: &HashMap<String, String>,
+        cwd: Option<&PathBuf>,
+        timeout: Option<Duration>,
+    ) -> Result<Self> {
         // Spawn the server process
         let mut transport = StdioTransport::spawn(
-            &name,
+            name,
             command,
             args,
             env,
             cwd,
         ).await?;
 
+        // Set per-request timeout if provided
         if let Some(t) = timeout {
             transport = transport.with_timeout(t);
         }
 
         let conn = Self {
-            name: name.clone(),
+            name: name.to_string(),
             transport,
             id_gen: IdGenerator::new(),
             capabilities: RwLock::new(None),
