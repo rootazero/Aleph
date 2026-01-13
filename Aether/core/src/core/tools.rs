@@ -42,6 +42,7 @@ impl AetherCore {
         let config = self.lock_config().clone();
         let mcp_client = self.mcp_client.clone();
         let event_handler = Arc::clone(&self.event_handler);
+        let intent_pipeline = self.intent_pipeline.clone();
 
         // Run refresh synchronously using block_on to ensure tools are available
         // immediately after AetherCore::new() returns. This is safe because
@@ -79,6 +80,14 @@ impl AetherCore {
 
             let tool_count = registry.active_count().await;
             info!("Tool registry refreshed: {} tools ({} native)", tool_count, native_tool_count);
+
+            // 6. Update intent pipeline with the new tool list
+            // This enables L3 LLM routing to be aware of available tools
+            if let Some(ref pipeline) = intent_pipeline {
+                let tools = registry.list_all().await;
+                pipeline.update_tools(tools).await;
+                debug!("Intent pipeline updated with {} tools", tool_count);
+            }
 
             // Notify Swift that tools have changed
             event_handler.on_tools_changed(tool_count as u32);

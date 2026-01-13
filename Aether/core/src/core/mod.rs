@@ -490,16 +490,35 @@ impl AetherCore {
             return None;
         }
 
-        // Create semantic matcher for pipeline
+        // Create semantic matcher for pipeline with routing rules loaded
         // Uses smart_matching config from Config to configure the matcher
         use crate::semantic::{MatcherConfig, SemanticMatcher};
-        let semantic_matcher = Arc::new(SemanticMatcher::new(MatcherConfig {
+        let matcher_config = MatcherConfig {
             enabled: cfg.smart_matching.enabled,
             regex_threshold: cfg.smart_matching.regex_threshold,
             keyword_threshold: cfg.smart_matching.keyword_threshold as f32,
             ai_threshold: cfg.smart_matching.ai_threshold,
             ..MatcherConfig::default()
-        }));
+        };
+
+        // Load routing rules into SemanticMatcher for L1 regex matching
+        // This is critical for /youtube, /search, /chat commands to work
+        let semantic_matcher = match SemanticMatcher::from_rules(&cfg.rules, matcher_config.clone()) {
+            Ok(matcher) => {
+                info!(
+                    rule_count = cfg.rules.len(),
+                    "SemanticMatcher initialized with routing rules"
+                );
+                Arc::new(matcher)
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "Failed to load routing rules into SemanticMatcher, using empty matcher"
+                );
+                Arc::new(SemanticMatcher::new(matcher_config))
+            }
+        };
 
         // Get provider for L3 if enabled
         let provider = if cfg.pipeline.layers.l3_enabled {
