@@ -1,5 +1,4 @@
 use crate::error::{AetherError, Result};
-use crate::search::providers::*;
 use crate::search::{ProviderTestResult, SearchOptions, SearchProvider, SearchResult};
 /// Search provider registry and router
 ///
@@ -180,56 +179,6 @@ impl SearchRegistry {
         }
 
         result
-    }
-}
-
-/// Create a provider from type and config
-///
-/// This is a public API for dynamic provider creation, reserved for future use
-/// when search configuration is loaded from TOML files.
-#[allow(dead_code)]
-pub fn create_provider_from_type(
-    provider_type: &str,
-    api_key: Option<String>,
-    base_url: Option<String>,
-    engine_id: Option<String>,
-) -> Result<Arc<dyn SearchProvider>> {
-    match provider_type {
-        "tavily" => {
-            let key =
-                api_key.ok_or_else(|| AetherError::invalid_config("Tavily requires api_key"))?;
-            Ok(Arc::new(TavilyProvider::new(key)?))
-        }
-        "searxng" => {
-            let url =
-                base_url.ok_or_else(|| AetherError::invalid_config("SearXNG requires base_url"))?;
-            Ok(Arc::new(SearxngProvider::new(url)?))
-        }
-        "brave" => {
-            let key =
-                api_key.ok_or_else(|| AetherError::invalid_config("Brave requires api_key"))?;
-            Ok(Arc::new(BraveProvider::new(key)?))
-        }
-        "google" => {
-            let key =
-                api_key.ok_or_else(|| AetherError::invalid_config("Google requires api_key"))?;
-            let id = engine_id
-                .ok_or_else(|| AetherError::invalid_config("Google requires engine_id"))?;
-            Ok(Arc::new(GoogleProvider::new(key, id)?))
-        }
-        "bing" => {
-            let key =
-                api_key.ok_or_else(|| AetherError::invalid_config("Bing requires api_key"))?;
-            Ok(Arc::new(BingProvider::new(key)?))
-        }
-        "exa" => {
-            let key = api_key.ok_or_else(|| AetherError::invalid_config("Exa requires api_key"))?;
-            Ok(Arc::new(ExaProvider::new(key)?))
-        }
-        _ => Err(AetherError::invalid_config(format!(
-            "Unknown search provider type: {}",
-            provider_type
-        ))),
     }
 }
 
@@ -419,29 +368,5 @@ mod tests {
 
         // Should only get max_results
         assert_eq!(results.len(), 5);
-    }
-
-    #[test]
-    fn test_create_provider_from_type_tavily() {
-        let provider =
-            create_provider_from_type("tavily", Some("test-key".to_string()), None, None);
-        assert!(provider.is_ok());
-    }
-
-    #[test]
-    fn test_create_provider_from_type_google() {
-        let provider = create_provider_from_type(
-            "google",
-            Some("test-key".to_string()),
-            None,
-            Some("test-engine".to_string()),
-        );
-        assert!(provider.is_ok());
-    }
-
-    #[test]
-    fn test_create_provider_from_type_invalid() {
-        let result = create_provider_from_type("unknown", Some("key".to_string()), None, None);
-        assert!(result.is_err());
     }
 }

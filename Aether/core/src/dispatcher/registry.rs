@@ -36,8 +36,9 @@ use super::types::ToolPriority;
 /// let registry = ToolRegistry::new();
 ///
 /// // Register tools from various sources
-/// registry.register_native_tools().await;
-/// registry.register_mcp_tools(&mcp_tools).await;
+/// registry.register_builtin_tools().await;
+/// registry.register_agent_tools(&native_tools, "filesystem").await;
+/// registry.register_mcp_tools(&mcp_tools, "server", false).await;
 /// registry.register_skills(&skills).await;
 /// registry.register_custom_commands(&rules).await;
 ///
@@ -104,20 +105,6 @@ impl ToolRegistry {
         }
 
         debug!("Registered {} builtin tools from BUILTIN_COMMANDS", BUILTIN_COMMANDS.len());
-    }
-
-    /// Register native OS command tools
-    ///
-    /// Native tools are for registering operating system command tools
-    /// that directly invoke OS-level commands (e.g., shell commands, OS utilities).
-    ///
-    /// Note: Native tools are now implemented via the `AgentTool` trait
-    /// in the `tools` module. Use `register_agent_tools()` to register them.
-    ///
-    /// This method is reserved for future direct OS command integration.
-    pub async fn register_native_tools(&self) {
-        // Reserved for future OS command tools registration
-        debug!("Native tools registration reserved for OS command tools");
     }
 
     /// Register MCP tools from tool info list (Flat Namespace Mode)
@@ -1132,17 +1119,6 @@ mod tests {
         // Custom commands come after builtins
         let custom_idx = roots.iter().position(|t| t.name == "en").unwrap();
         assert!(custom_idx >= 4, "Custom commands should come after builtins");
-    }
-
-    #[tokio::test]
-    async fn test_register_native_tools() {
-        // Native tools registration is reserved for future OS command tools
-        // Currently no tools are registered
-        let registry = ToolRegistry::new();
-        registry.register_native_tools().await;
-
-        // Should be empty - no native tools registered yet
-        assert_eq!(registry.count().await, 0);
     }
 
     #[tokio::test]

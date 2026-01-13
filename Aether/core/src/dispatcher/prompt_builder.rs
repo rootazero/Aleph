@@ -13,11 +13,11 @@
 //! use aethecore::dispatcher::{PromptBuilder, ToolRegistry};
 //!
 //! let registry = ToolRegistry::new();
-//! registry.register_native_tools().await;
+//! registry.register_builtin_tools().await;
 //!
 //! // Build tool list for L3 prompt
 //! let tools = registry.list_all().await;
-//! let tool_list = PromptBuilder::build_tool_list(&tools);
+//! let tool_list = PromptBuilder::build_tool_list(&tools, PromptFormat::default(), None);
 //!
 //! // Build complete L3 routing prompt
 //! let system_prompt = PromptBuilder::build_l3_routing_prompt(&tools, None);
