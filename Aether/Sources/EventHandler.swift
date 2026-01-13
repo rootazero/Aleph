@@ -564,14 +564,19 @@ class EventHandler: AetherEventHandler {
             announceToVoiceOver("Processing request")
 
         case .success:
-            // Success state removed from HaloState - just hide and announce
+            // Show success checkmark then auto-hide (consistent with OCR flow)
             // Skip in conversation mode - the conversation input UI should remain visible
             if case .conversationInput = haloWindow?.viewModel.state {
                 print("[EventHandler] Skipping success state - conversation input mode active")
                 return
             }
-            haloWindow?.hide()
+            haloWindow?.updateState(.success(message: nil))
             announceToVoiceOver("Request completed successfully")
+
+            // Auto-hide after 0.8 seconds (same as OCR)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                self?.haloWindow?.hide()
+            }
 
         case .error:
             // Do NOT hide Halo here - errors are now shown via toast notification
