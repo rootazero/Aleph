@@ -256,8 +256,10 @@ impl AetherV2Core {
 
             handler.on_thinking();
 
-            // Create a fresh manager in the new thread
-            let manager = RigAgentManager::new(config);
+            // Create a fresh manager in the new thread with tools enabled
+            let manager = RigAgentManager::new(config)
+                .with_search_tool()
+                .with_web_fetch_tool();
 
             let result = runtime.block_on(async {
                 tokio::select! {
