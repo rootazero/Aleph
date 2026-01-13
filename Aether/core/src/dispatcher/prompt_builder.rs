@@ -263,12 +263,24 @@ Your task is to analyze user input and determine which tool (if any) should hand
 
 {tool_list}
 {context_section}
+## Tool Priority (IMPORTANT)
+
+When multiple tools can handle a request, prefer tools marked as "Preferred" in this order:
+1. **[Builtin - Preferred]** - System commands, always available and most reliable
+2. **[Native - Preferred]** - Built-in system capabilities
+3. **[Custom]** - User-defined commands
+4. **[MCP:xxx]** - External server tools (may not always be available)
+5. **[Skill:xxx]** - Agent skills
+
+Only use MCP/Skill tools when user explicitly mentions them or no Builtin/Native alternative exists.
+
 ## Instructions
 
 1. Analyze the user's input to understand their intent
 2. Determine if any available tool is appropriate for handling this request
-3. If a tool matches, extract any parameters from the input
-4. Provide a confidence score (0.0 - 1.0) for your decision
+3. **Prefer higher-priority tools** when multiple tools can handle the request
+4. If a tool matches, extract any parameters from the input
+5. Provide a confidence score (0.0 - 1.0) for your decision
 
 ## Confidence Scoring Guidelines
 

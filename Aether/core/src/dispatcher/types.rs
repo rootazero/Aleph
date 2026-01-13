@@ -659,10 +659,11 @@ impl UnifiedTool {
     /// Format tool for LLM prompt inclusion
     ///
     /// Returns a markdown-formatted line for system prompt injection.
+    /// Builtin and Native tools are marked as "Preferred" to guide L3 routing priority.
     pub fn to_prompt_line(&self) -> String {
         let source_badge = match &self.source {
-            ToolSource::Native => String::new(),
-            ToolSource::Builtin => " [Builtin]".to_string(),
+            ToolSource::Native => " [Native - Preferred]".to_string(),
+            ToolSource::Builtin => " [Builtin - Preferred]".to_string(),
             ToolSource::Mcp { server } => format!(" [MCP:{}]", server),
             ToolSource::Skill { id } => format!(" [Skill:{}]", id),
             ToolSource::Custom { .. } => " [Custom]".to_string(),
