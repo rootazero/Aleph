@@ -48,6 +48,8 @@ image = { version = "0.24", default-features = false, features = ["png", "jpeg",
 base64 = "0.21"
 # For async trait methods
 async-trait = "0.1"
+# For async combinators (join_all, etc.)
+futures = "0.3"
 # For local embedding inference (bge-small-zh-v1.5)
 fastembed = "4"
 # For stable get_or_try_init support

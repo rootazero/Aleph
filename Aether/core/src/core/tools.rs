@@ -88,10 +88,24 @@ impl AetherCore {
                     .collect();
 
                 if !server_configs.is_empty() {
-                    // Start external servers
-                    if let Err(e) = client.start_external_servers(server_configs).await {
-                        warn!(error = %e, "Failed to start some MCP servers");
+                    // Start external servers concurrently
+                    let startup_report = client.start_external_servers(server_configs).await;
+
+                    // Log startup results
+                    if !startup_report.failed.is_empty() {
+                        for (server_name, error_msg) in &startup_report.failed {
+                            warn!(
+                                server = %server_name,
+                                error = %error_msg,
+                                "Failed to start MCP server"
+                            );
+                        }
                     }
+                    info!(
+                        succeeded = startup_report.succeeded.len(),
+                        failed = startup_report.failed.len(),
+                        "MCP servers startup complete"
+                    );
 
                     // Create bridges for MCP tools and register them
                     let mcp_bridges = create_bridges(client).await;

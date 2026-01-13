@@ -233,27 +233,36 @@ impl SkillsInstaller {
                 }
             };
 
-            // Skip if already exists
+            // Validate SKILL.md format first (before touching filesystem)
             let target_dir = self.skills_dir.join(&skill_dir_name);
-            if target_dir.exists() {
-                info!(
-                    skill = %skill_dir_name,
-                    "Skill already exists, skipping"
-                );
-                continue;
-            }
-
-            // Validate SKILL.md format
             match Skill::parse(&skill_dir_name, &content) {
                 Ok(skill) => {
-                    // Create skill directory
-                    std::fs::create_dir_all(&target_dir).map_err(|e| {
-                        AetherError::config(format!(
-                            "Failed to create skill directory {}: {}",
-                            target_dir.display(),
-                            e
-                        ))
-                    })?;
+                    // Try to create skill directory atomically (TOCTOU fix)
+                    // Using create_dir instead of exists() + create_dir_all
+                    // to avoid race condition between check and creation
+                    match std::fs::create_dir(&target_dir) {
+                        Ok(()) => {
+                            // Successfully created, continue with installation
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                            // Skill already exists, skip it
+                            info!(
+                                skill = %skill_dir_name,
+                                "Skill already exists, skipping"
+                            );
+                            continue;
+                        }
+                        Err(_) => {
+                            // Parent directory might not exist, try create_dir_all
+                            std::fs::create_dir_all(&target_dir).map_err(|e| {
+                                AetherError::config(format!(
+                                    "Failed to create skill directory {}: {}",
+                                    target_dir.display(),
+                                    e
+                                ))
+                            })?;
+                        }
+                    }
 
                     // Write SKILL.md
                     let skill_md_path = target_dir.join("SKILL.md");

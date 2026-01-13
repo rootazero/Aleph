@@ -154,6 +154,17 @@ pub trait AetherEventHandler: Send + Sync {
     /// * `tool_count` - Total number of active tools in the registry
     fn on_tools_changed(&self, tool_count: u32);
 
+    /// Called when the tool registry needs to be refreshed.
+    ///
+    /// This is triggered by config hot-reload when tools configuration changes.
+    /// Swift layer should call `refresh_skills()` or similar method to trigger
+    /// a full tool registry refresh.
+    ///
+    /// Note: This is separate from `on_tools_changed` because the config watcher
+    /// callback doesn't have access to AetherCore to call refresh_tool_registry()
+    /// directly.
+    fn on_tools_refresh_needed(&self);
+
     // ========================================================================
     // Agent Loop Callbacks (enhance-intent-routing-pipeline)
     // ========================================================================
@@ -242,6 +253,7 @@ pub struct MockEventHandler {
     pub confirmations_expired: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     // Tool registry tracking
     pub tools_changed: std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+    pub tools_refresh_needed_count: std::sync::Arc<std::sync::Mutex<u32>>,
     // Agent loop tracking
     pub agent_started: std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String)>>>, // (plan_id, total_steps, description)
     pub agent_tool_started: std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String, String)>>>, // (plan_id, step_index, tool_name, description)
@@ -273,6 +285,7 @@ impl MockEventHandler {
             confirmations_needed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             confirmations_expired: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             tools_changed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            tools_refresh_needed_count: std::sync::Arc::new(std::sync::Mutex::new(0)),
             agent_started: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             agent_tool_started: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             agent_tool_completed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -580,6 +593,14 @@ impl AetherEventHandler for MockEventHandler {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(tool_count);
+    }
+
+    fn on_tools_refresh_needed(&self) {
+        let mut count = self
+            .tools_refresh_needed_count
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *count += 1;
     }
 
     fn on_agent_started(&self, plan_id: String, total_steps: u32, description: String) {

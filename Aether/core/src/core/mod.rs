@@ -637,6 +637,11 @@ impl AetherCore {
 
                     // Notify Swift via callback
                     handler.on_config_changed();
+
+                    // Notify Swift that tool registry needs refresh
+                    // This is needed because ConfigWatcher callback doesn't have access
+                    // to AetherCore to call refresh_tool_registry() directly
+                    handler.on_tools_refresh_needed();
                 }
                 Err(e) => {
                     log::error!("Failed to reload config: {}", e);

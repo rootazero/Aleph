@@ -601,6 +601,10 @@ callback interface AetherEventHandler {
   // Called when tool registry is refreshed (tools added/removed/changed)
   void on_tools_changed(u32 tool_count);
 
+  // Called when tool registry needs to be refreshed (triggered by config hot-reload)
+  // Swift layer should call refresh_skills() or similar to trigger full refresh
+  void on_tools_refresh_needed();
+
   // AGENT LOOP CALLBACKS (enhance-intent-routing-pipeline)
   // Called when agent loop starts executing a multi-step plan
   void on_agent_started(string plan_id, u32 total_steps, string description);

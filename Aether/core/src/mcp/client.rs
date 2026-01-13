@@ -8,11 +8,36 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::future::join_all;
 use tokio::sync::RwLock;
 
 use crate::error::{AetherError, Result};
 use crate::mcp::external::{check_runtime, McpServerConnection, RuntimeKind};
 use crate::mcp::types::{McpTool, McpToolResult};
+
+/// MCP server startup report
+///
+/// Contains information about which servers started successfully
+/// and which ones failed (with error messages).
+#[derive(Debug, Clone, Default)]
+pub struct McpStartupReport {
+    /// Names of servers that started successfully
+    pub succeeded: Vec<String>,
+    /// Failed servers: (server_name, error_message)
+    pub failed: Vec<(String, String)>,
+}
+
+impl McpStartupReport {
+    /// Check if all servers started successfully
+    pub fn all_succeeded(&self) -> bool {
+        self.failed.is_empty()
+    }
+
+    /// Get total number of servers attempted
+    pub fn total(&self) -> usize {
+        self.succeeded.len() + self.failed.len()
+    }
+}
 
 /// External server configuration
 #[derive(Debug, Clone)]
@@ -62,54 +87,73 @@ impl McpClient {
         }
     }
 
-    /// Start external MCP servers
+    /// Start external MCP servers concurrently
     ///
     /// Checks runtime availability before starting each server.
     /// Servers with missing runtimes are skipped with a warning.
-    pub async fn start_external_servers(&self, configs: Vec<ExternalServerConfig>) -> Result<()> {
-        for config in configs {
-            // Check runtime if required
-            if let Some(ref runtime_str) = config.requires_runtime {
-                let runtime = RuntimeKind::from_str(runtime_str);
-                if runtime != RuntimeKind::None {
-                    let check = check_runtime(runtime);
-                    if !check.available {
-                        tracing::warn!(
+    ///
+    /// Returns a startup report with success/failure information for each server.
+    /// This allows callers to handle partial failures appropriately.
+    pub async fn start_external_servers(&self, configs: Vec<ExternalServerConfig>) -> McpStartupReport {
+        // Pre-filter configs based on runtime availability (sync operation)
+        let valid_configs: Vec<_> = configs
+            .into_iter()
+            .filter(|config| {
+                if let Some(ref runtime_str) = config.requires_runtime {
+                    let runtime = RuntimeKind::from_str(runtime_str);
+                    if runtime != RuntimeKind::None {
+                        let check = check_runtime(runtime);
+                        if !check.available {
+                            tracing::warn!(
+                                server = %config.name,
+                                runtime = %runtime,
+                                "Skipping MCP server: {} not found",
+                                runtime.display_name()
+                            );
+                            return false;
+                        }
+                        tracing::debug!(
                             server = %config.name,
                             runtime = %runtime,
-                            "Skipping MCP server: {} not found",
-                            runtime.display_name()
+                            version = ?check.version,
+                            "Runtime check passed"
                         );
-                        continue;
                     }
-                    tracing::debug!(
-                        server = %config.name,
-                        runtime = %runtime,
-                        version = ?check.version,
-                        "Runtime check passed"
-                    );
                 }
-            }
+                true
+            })
+            .collect();
 
-            // Start the server
-            match self.start_external_server(config.clone()).await {
+        // Start all servers concurrently
+        let futures: Vec<_> = valid_configs
+            .into_iter()
+            .map(|config| {
+                let name = config.name.clone();
+                async move {
+                    let result = self.start_external_server(config).await;
+                    (name, result)
+                }
+            })
+            .collect();
+
+        let results = join_all(futures).await;
+
+        // Collect results into report
+        let mut report = McpStartupReport::default();
+        for (name, result) in results {
+            match result {
                 Ok(()) => {
-                    tracing::info!(
-                        server = %config.name,
-                        "External MCP server started"
-                    );
+                    tracing::info!(server = %name, "External MCP server started");
+                    report.succeeded.push(name);
                 }
                 Err(e) => {
-                    tracing::error!(
-                        server = %config.name,
-                        error = %e,
-                        "Failed to start external MCP server"
-                    );
+                    tracing::error!(server = %name, error = %e, "Failed to start external MCP server");
+                    report.failed.push((name, e.to_string()));
                 }
             }
         }
 
-        Ok(())
+        report
     }
 
     /// Start a single external server
@@ -293,10 +337,12 @@ impl McpClientBuilder {
     }
 
     /// Build the client and start external servers
-    pub async fn build_and_start(self) -> Result<McpClient> {
+    ///
+    /// Returns the client and startup report (which contains success/failure info)
+    pub async fn build_and_start(self) -> (McpClient, McpStartupReport) {
         let client = self.client;
-        client.start_external_servers(self.external_configs).await?;
-        Ok(client)
+        let report = client.start_external_servers(self.external_configs).await;
+        (client, report)
     }
 }
 
