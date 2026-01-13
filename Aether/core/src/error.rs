@@ -140,6 +140,10 @@ pub enum AetherError {
         name: String,
         suggestion: Option<String>,
     },
+
+    /// Operation was cancelled by user
+    #[error("Operation cancelled")]
+    Cancelled,
 }
 
 impl AetherError {
@@ -304,7 +308,8 @@ impl AetherError {
             | AetherError::IoError(_)
             | AetherError::GitError(_)
             | AetherError::McpToolNotFound(_)
-            | AetherError::McpTimeout => None,
+            | AetherError::McpTimeout
+            | AetherError::Cancelled => None,
         }
     }
 
@@ -427,6 +432,9 @@ impl AetherError {
                     format!("Tool '{}' not found", name)
                 }
             }
+            AetherError::Cancelled => {
+                "Operation cancelled.".to_string()
+            }
         }
     }
 
@@ -444,6 +452,13 @@ impl AetherError {
             name: name.into(),
             suggestion: Some(suggestion.into()),
         }
+    }
+
+    /// Create a cancelled error
+    ///
+    /// Used when an operation is cancelled by the user via CancellationToken.
+    pub fn cancelled() -> Self {
+        AetherError::Cancelled
     }
 }
 

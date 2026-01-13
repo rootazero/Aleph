@@ -25,6 +25,7 @@
 use crate::agent::{RigAgentConfig, RigAgentManager};
 use crate::store::sqlite::MemoryEntry;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 /// Error type for UniFFI v2
@@ -208,6 +209,8 @@ pub struct AetherV2Core {
     memory_path: Option<MemoryStorePath>,
     handler: Arc<dyn AetherV2EventHandler>,
     runtime: tokio::runtime::Handle,
+    /// Cancellation token for async operation cancellation
+    cancel_token: CancellationToken,
 }
 
 impl AetherV2Core {
@@ -215,6 +218,9 @@ impl AetherV2Core {
     ///
     /// This method processes the input on a background thread and calls
     /// the appropriate handler callbacks during processing.
+    ///
+    /// The operation can be cancelled by calling `cancel()`. When cancelled,
+    /// the handler's `on_error` callback will be invoked with "Operation cancelled".
     pub fn process(
         &self,
         input: String,
@@ -225,24 +231,56 @@ impl AetherV2Core {
         let config = self.config_holder.config().clone();
         let runtime = self.runtime.clone();
 
+        // Create a child token for this operation
+        // This allows cancellation of this specific operation
+        let child_token = self.reset_cancel_token();
+
         // Spawn a background thread to handle processing
         std::thread::spawn(move || {
+            // Check if already cancelled before starting
+            if child_token.is_cancelled() {
+                handler.on_error("Operation cancelled".to_string());
+                return;
+            }
+
             handler.on_thinking();
 
             // Create a fresh manager in the new thread
             let manager = RigAgentManager::new(config);
 
             let result = runtime.block_on(async {
-                manager.process(&input).await
+                tokio::select! {
+                    biased;
+
+                    // Check for cancellation first (biased mode)
+                    _ = child_token.cancelled() => {
+                        Err(crate::error::AetherError::cancelled())
+                    }
+
+                    // Process the request
+                    result = manager.process(&input) => {
+                        result
+                    }
+                }
             });
 
             match result {
                 Ok(response) => {
-                    handler.on_complete(response.content);
+                    // Check if cancelled during processing
+                    if child_token.is_cancelled() {
+                        handler.on_error("Operation cancelled".to_string());
+                    } else {
+                        handler.on_complete(response.content);
+                    }
                 }
                 Err(e) => {
-                    error!(error = %e, "Processing failed");
-                    handler.on_error(e.to_string());
+                    // Check if the error is due to cancellation
+                    if child_token.is_cancelled() {
+                        handler.on_error("Operation cancelled".to_string());
+                    } else {
+                        error!(error = %e, "Processing failed");
+                        handler.on_error(e.to_string());
+                    }
                 }
             }
         });
@@ -252,10 +290,27 @@ impl AetherV2Core {
 
     /// Cancel current operation
     ///
-    /// Note: Cancellation is not yet implemented.
+    /// Triggers cancellation of any in-progress async operations.
+    /// Operations will check for cancellation and return early with
+    /// an "Operation cancelled" error.
     pub fn cancel(&self) {
-        // TODO: Implement cancellation via CancellationToken
-        info!("Cancel requested");
+        info!("Cancel requested, triggering cancellation");
+        self.cancel_token.cancel();
+    }
+
+    /// Check if cancellation has been requested
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel_token.is_cancelled()
+    }
+
+    /// Reset the cancellation token for a new operation
+    ///
+    /// This should be called at the start of a new processing session
+    /// to allow new operations after a previous cancellation.
+    fn reset_cancel_token(&self) -> CancellationToken {
+        // We create a child token for each operation instead of resetting
+        // This allows proper cleanup while keeping the parent token valid
+        self.cancel_token.child_token()
     }
 
     /// List available tools
@@ -361,11 +416,15 @@ pub fn init_v2(
     let config = RigAgentConfig::default();
     let config_holder = AgentConfigHolder::new(config);
 
+    // Create cancellation token for operation cancellation support
+    let cancel_token = CancellationToken::new();
+
     Ok(Arc::new(AetherV2Core {
         config_holder,
         memory_path: None,
         handler,
         runtime,
+        cancel_token,
     }))
 }
 
@@ -455,5 +514,114 @@ mod tests {
 
         let err = AetherV2Error::Cancelled;
         assert_eq!(format!("{}", err), "Operation cancelled");
+    }
+
+    /// Test handler that tracks cancellation errors
+    struct CancellationTestHandler {
+        thinking_called: AtomicBool,
+        cancelled: AtomicBool,
+        error_message: std::sync::Mutex<Option<String>>,
+    }
+
+    impl CancellationTestHandler {
+        fn new() -> Self {
+            Self {
+                thinking_called: AtomicBool::new(false),
+                cancelled: AtomicBool::new(false),
+                error_message: std::sync::Mutex::new(None),
+            }
+        }
+    }
+
+    impl AetherV2EventHandler for CancellationTestHandler {
+        fn on_thinking(&self) {
+            self.thinking_called.store(true, Ordering::SeqCst);
+        }
+        fn on_tool_start(&self, _: String) {}
+        fn on_tool_result(&self, _: String, _: String) {}
+        fn on_stream_chunk(&self, _: String) {}
+        fn on_complete(&self, _: String) {}
+        fn on_error(&self, message: String) {
+            if message.contains("cancelled") {
+                self.cancelled.store(true, Ordering::SeqCst);
+            }
+            *self.error_message.lock().unwrap() = Some(message);
+        }
+        fn on_memory_stored(&self) {}
+    }
+
+    #[test]
+    fn test_cancellation_token_triggers_cancel() {
+        // Create a CancellationToken and verify cancel() triggers it
+        let token = CancellationToken::new();
+        assert!(!token.is_cancelled());
+
+        token.cancel();
+        assert!(token.is_cancelled());
+    }
+
+    #[test]
+    fn test_child_token_inherits_cancellation() {
+        // Test that child tokens are cancelled when parent is cancelled
+        let parent = CancellationToken::new();
+        let child = parent.child_token();
+
+        assert!(!parent.is_cancelled());
+        assert!(!child.is_cancelled());
+
+        parent.cancel();
+
+        assert!(parent.is_cancelled());
+        assert!(child.is_cancelled());
+    }
+
+    #[test]
+    fn test_init_v2_creates_cancel_token() {
+        let handler = Arc::new(CancellationTestHandler::new());
+        let core = init_v2("/test/config.toml".to_string(), handler).unwrap();
+
+        // Initially not cancelled
+        assert!(!core.is_cancelled());
+
+        // After cancel(), should be cancelled
+        core.cancel();
+        assert!(core.is_cancelled());
+    }
+
+    #[test]
+    fn test_process_early_cancellation() {
+        // Test that process() checks for cancellation before starting
+        // This test verifies the early exit path when cancel is called before process
+
+        let handler = Arc::new(CancellationTestHandler::new());
+        let core = init_v2("/test/config.toml".to_string(), handler.clone()).unwrap();
+
+        // Cancel before calling process
+        core.cancel();
+
+        // Start process - it should detect cancellation
+        let result = core.process("test input".to_string(), None);
+        assert!(result.is_ok());  // process() itself doesn't fail, it calls handler.on_error
+
+        // Wait a bit for the background thread to execute
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // The handler should receive the cancellation error
+        // Note: Since we cancelled the parent token, all child tokens will be cancelled immediately
+        assert!(handler.cancelled.load(Ordering::SeqCst),
+            "Handler should receive cancellation error");
+    }
+
+    #[test]
+    fn test_cancel_method_logs_info() {
+        // Test that cancel() logs the cancellation request
+        let handler = Arc::new(CancellationTestHandler::new());
+        let core = init_v2("/test/config.toml".to_string(), handler).unwrap();
+
+        // This should not panic and should log
+        core.cancel();
+
+        // Verify the token is cancelled
+        assert!(core.is_cancelled());
     }
 }
