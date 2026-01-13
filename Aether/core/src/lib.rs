@@ -100,6 +100,7 @@ pub mod mcp; // NEW: MCP (Model Context Protocol) capability
 pub mod agent; // NEW: Agent loop for tool calling
 pub mod store; // NEW: Rig-based vector store for memory
 pub mod rig_tools; // NEW: Rig-compatible tool wrapper
+pub mod uniffi_v2; // NEW: UniFFI v2 bindings for rig-based architecture
 pub mod dispatcher; // NEW: Intelligent tool routing (Dispatcher Layer)
 pub mod routing; // NEW: Unified multi-layer routing framework
 mod title_generator; // Title generation for conversation topics
