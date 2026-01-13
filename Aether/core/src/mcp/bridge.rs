@@ -1,19 +1,23 @@
 //! MCP Tool Bridge
 //!
-//! Bridges MCP tools (both builtin and external) to the AgentTool interface.
-//! This allows MCP tools to be used seamlessly with the native function calling
-//! infrastructure.
+//! Bridges external MCP server tools to the AgentTool interface.
+//! This allows external MCP tools to be used seamlessly with the native function
+//! calling infrastructure.
+//!
+//! Note: Native tools (fs, git, shell, etc.) are implemented directly via the
+//! `AgentTool` trait in the `tools` module. This bridge is only for external
+//! MCP servers.
 //!
 //! # Architecture
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────────┐
 //! │                     McpToolBridge                                │
-//! │  (Implements AgentTool trait for MCP tools)                     │
+//! │  (Implements AgentTool trait for external MCP tools)            │
 //! ├─────────────────────────────────────────────────────────────────┤
 //! │  tool_def: McpTool      │  Metadata from MCP server             │
 //! │  client: Arc<McpClient> │  Reference for tool execution         │
-//! │  source: McpToolSource  │  Tool origin (builtin/external)       │
+//! │  server_name: String    │  External server name                 │
 //! └─────────────────────────────────────────────────────────────────┘
 //!                                   │
 //!                                   ▼
@@ -26,14 +30,14 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aether_core::mcp::{McpClient, McpToolBridge, McpToolSource};
+//! use aether_core::mcp::{McpClient, McpToolBridge};
 //! use aether_core::tools::NativeToolRegistry;
 //! use std::sync::Arc;
 //!
 //! // Create MCP client
 //! let client = Arc::new(McpClient::new());
 //!
-//! // Create bridges for all MCP tools
+//! // Create bridges for all external MCP tools
 //! let bridges = McpToolBridge::from_client(client.clone()).await;
 //!
 //! // Register in native tool registry
@@ -51,47 +55,18 @@ use crate::mcp::client::McpClient;
 use crate::mcp::types::McpTool;
 use crate::tools::{AgentTool, ToolCategory, ToolDefinition, ToolResult};
 
-/// Tool source - where the MCP tool originates from
-#[derive(Debug, Clone)]
-pub enum McpToolSource {
-    /// Builtin service (Tier 1 - native Rust)
-    Builtin {
-        /// Service name (e.g., "fs", "git", "shell")
-        service_name: String,
-    },
-    /// External MCP server (Tier 2 - external process)
-    External {
-        /// Server name
-        server_name: String,
-    },
-}
-
-impl McpToolSource {
-    /// Get the source identifier
-    pub fn identifier(&self) -> &str {
-        match self {
-            McpToolSource::Builtin { service_name } => service_name,
-            McpToolSource::External { server_name } => server_name,
-        }
-    }
-
-    /// Check if this is a builtin source
-    pub fn is_builtin(&self) -> bool {
-        matches!(self, McpToolSource::Builtin { .. })
-    }
-}
 
 /// MCP Tool Bridge
 ///
-/// Bridges an MCP tool (either builtin or external) to the AgentTool interface.
-/// This allows MCP tools to be used with the native function calling system.
+/// Bridges an external MCP tool to the AgentTool interface.
+/// This allows external MCP tools to be used with the native function calling system.
 pub struct McpToolBridge {
     /// Tool definition from MCP
     tool_def: McpTool,
     /// MCP client for tool execution
     client: Arc<McpClient>,
-    /// Tool source (builtin or external)
-    source: McpToolSource,
+    /// External server name
+    server_name: String,
 }
 
 impl McpToolBridge {
@@ -101,26 +76,21 @@ impl McpToolBridge {
     ///
     /// * `tool_def` - The MCP tool definition
     /// * `client` - Arc reference to the MCP client
-    /// * `source` - The tool source (builtin/external)
-    pub fn new(tool_def: McpTool, client: Arc<McpClient>, source: McpToolSource) -> Self {
+    /// * `server_name` - The external server name
+    pub fn new(tool_def: McpTool, client: Arc<McpClient>, server_name: String) -> Self {
         Self {
             tool_def,
             client,
-            source,
+            server_name,
         }
     }
 
     /// Create bridges for all tools from an MCP client
     ///
     /// Creates `McpToolBridge` instances for all registered external MCP server tools.
-    ///
-    /// Note: Native tools (fs, git, shell, etc.) are now handled via the `AgentTool`
-    /// infrastructure in the `tools` module, not via MCP bridges.
     pub async fn from_client(client: Arc<McpClient>) -> Vec<Self> {
         let mut bridges = Vec::new();
 
-        // Bridge external server tools only
-        // Native tools are now handled via AgentTool infrastructure
         let all_tools = client.list_tools().await;
         for tool in all_tools {
             // External tools have format "server_name:tool_name"
@@ -131,46 +101,25 @@ impl McpToolBridge {
                 .unwrap_or("unknown")
                 .to_string();
 
-            bridges.push(Self::new(
-                tool,
-                Arc::clone(&client),
-                McpToolSource::External { server_name },
-            ));
+            bridges.push(Self::new(tool, Arc::clone(&client), server_name));
         }
 
         bridges
     }
 
-    /// Get the tool source
-    pub fn source(&self) -> &McpToolSource {
-        &self.source
-    }
-
-    /// Get the service/server name
-    pub fn source_name(&self) -> &str {
-        self.source.identifier()
+    /// Get the server name
+    pub fn server_name(&self) -> &str {
+        &self.server_name
     }
 
     /// Convert McpTool to ToolDefinition
     fn to_tool_definition(&self) -> ToolDefinition {
-        let category = self.infer_category();
-
         ToolDefinition {
             name: self.tool_def.name.clone(),
             description: self.tool_def.description.clone(),
             parameters: self.tool_def.input_schema.clone(),
             requires_confirmation: self.tool_def.requires_confirmation,
-            category,
-        }
-    }
-
-    /// Infer tool category from source and tool name
-    fn infer_category(&self) -> ToolCategory {
-        match &self.source {
-            // Builtin MCP tools are actually Native Rust tools
-            McpToolSource::Builtin { .. } => ToolCategory::Native,
-            // External MCP server tools
-            McpToolSource::External { .. } => ToolCategory::Mcp,
+            category: ToolCategory::Mcp,
         }
     }
 
@@ -229,7 +178,7 @@ impl AgentTool for McpToolBridge {
     }
 
     fn category(&self) -> ToolCategory {
-        self.infer_category()
+        ToolCategory::Mcp
     }
 }
 
@@ -264,72 +213,24 @@ mod tests {
     }
 
     #[test]
-    fn test_mcp_tool_source_builtin() {
-        let source = McpToolSource::Builtin {
-            service_name: "fs".to_string(),
-        };
-
-        assert!(source.is_builtin());
-        assert_eq!(source.identifier(), "fs");
-    }
-
-    #[test]
-    fn test_mcp_tool_source_external() {
-        let source = McpToolSource::External {
-            server_name: "my-server".to_string(),
-        };
-
-        assert!(!source.is_builtin());
-        assert_eq!(source.identifier(), "my-server");
-    }
-
-    #[test]
     fn test_bridge_to_definition() {
         let tool = create_test_tool();
         let client = Arc::new(McpClient::new());
-        let bridge = McpToolBridge::new(
-            tool,
-            client,
-            McpToolSource::Builtin {
-                service_name: "fs".to_string(),
-            },
-        );
+        let bridge = McpToolBridge::new(tool, client, "test-server".to_string());
 
         let def = bridge.definition();
         assert_eq!(def.name, "test_tool");
         assert_eq!(def.description, "A test tool");
         assert!(!def.requires_confirmation);
-        // Builtin MCP tools are categorized as Native
-        assert_eq!(def.category, ToolCategory::Native);
+        // All MCP tools are categorized as Mcp
+        assert_eq!(def.category, ToolCategory::Mcp);
     }
 
     #[test]
-    fn test_bridge_category_inference_builtin() {
+    fn test_bridge_category() {
         let tool = create_test_tool();
         let client = Arc::new(McpClient::new());
-        let bridge = McpToolBridge::new(
-            tool,
-            client,
-            McpToolSource::Builtin {
-                service_name: "fs".to_string(),
-            },
-        );
-
-        // All builtin MCP tools are categorized as Native
-        assert_eq!(bridge.category(), ToolCategory::Native);
-    }
-
-    #[test]
-    fn test_bridge_category_inference_mcp_external() {
-        let tool = create_test_tool();
-        let client = Arc::new(McpClient::new());
-        let bridge = McpToolBridge::new(
-            tool,
-            client,
-            McpToolSource::External {
-                server_name: "some-server".to_string(),
-            },
-        );
+        let bridge = McpToolBridge::new(tool, client, "some-server".to_string());
 
         // External MCP tools are categorized as Mcp
         assert_eq!(bridge.category(), ToolCategory::Mcp);
@@ -371,28 +272,25 @@ mod tests {
     fn test_bridge_name() {
         let tool = create_test_tool();
         let client = Arc::new(McpClient::new());
-        let bridge = McpToolBridge::new(
-            tool,
-            client,
-            McpToolSource::Builtin {
-                service_name: "test".to_string(),
-            },
-        );
+        let bridge = McpToolBridge::new(tool, client, "test-server".to_string());
 
         assert_eq!(bridge.name(), "test_tool");
+    }
+
+    #[test]
+    fn test_bridge_server_name() {
+        let tool = create_test_tool();
+        let client = Arc::new(McpClient::new());
+        let bridge = McpToolBridge::new(tool, client, "my-server".to_string());
+
+        assert_eq!(bridge.server_name(), "my-server");
     }
 
     #[test]
     fn test_bridge_requires_confirmation_false() {
         let tool = create_test_tool();
         let client = Arc::new(McpClient::new());
-        let bridge = McpToolBridge::new(
-            tool,
-            client,
-            McpToolSource::Builtin {
-                service_name: "test".to_string(),
-            },
-        );
+        let bridge = McpToolBridge::new(tool, client, "test-server".to_string());
 
         assert!(!bridge.requires_confirmation());
     }
@@ -403,13 +301,7 @@ mod tests {
         tool.requires_confirmation = true;
 
         let client = Arc::new(McpClient::new());
-        let bridge = McpToolBridge::new(
-            tool,
-            client,
-            McpToolSource::Builtin {
-                service_name: "shell".to_string(),
-            },
-        );
+        let bridge = McpToolBridge::new(tool, client, "shell-server".to_string());
 
         assert!(bridge.requires_confirmation());
     }

@@ -56,5 +56,5 @@ pub use types::{
     McpToolInfo, McpToolResult,
 };
 
-// MCP Tool Bridge - implements AgentTool for MCP tools
-pub use bridge::{create_bridges, McpToolBridge, McpToolSource};
+// MCP Tool Bridge - implements AgentTool for external MCP tools
+pub use bridge::{create_bridges, McpToolBridge};
