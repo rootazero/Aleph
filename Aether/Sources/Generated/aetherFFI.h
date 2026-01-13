@@ -577,6 +577,11 @@ void uniffi_aethecore_fn_method_aethercore_delete_memory(void*_Nonnull ptr, Rust
 void uniffi_aethecore_fn_method_aethercore_delete_provider(void*_Nonnull ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_DELETE_SKILL
+void uniffi_aethecore_fn_method_aethercore_delete_skill(void*_Nonnull ptr, RustBuffer skill_id, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_END_CONVERSATION
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_END_CONVERSATION
 void uniffi_aethecore_fn_method_aethercore_end_conversation(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -687,6 +692,11 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_get_root_commands(void*_Nonnull
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_root_commands_from_registry(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_SKILLS_DIR
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_SKILLS_DIR
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_skills_dir(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_SUBCOMMANDS_FROM_REGISTRY
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_SUBCOMMANDS_FROM_REGISTRY
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_subcommands_from_registry(void*_Nonnull ptr, RustBuffer parent_key, RustCallStatus *_Nonnull out_status
@@ -705,6 +715,16 @@ int8_t uniffi_aethecore_fn_method_aethercore_has_active_conversation(void*_Nonnu
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IMPORT_MCP_CONFIG_JSON
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IMPORT_MCP_CONFIG_JSON
 void uniffi_aethecore_fn_method_aethercore_import_mcp_config_json(void*_Nonnull ptr, RustBuffer json, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_SKILL
+RustBuffer uniffi_aethecore_fn_method_aethercore_install_skill(void*_Nonnull ptr, RustBuffer url, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_SKILLS_FROM_ZIP
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_SKILLS_FROM_ZIP
+RustBuffer uniffi_aethecore_fn_method_aethercore_install_skills_from_zip(void*_Nonnull ptr, RustBuffer zip_path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_BUILTIN_TOOLS
@@ -737,6 +757,11 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_list_preset_tools(void*_Nonnull
 RustBuffer uniffi_aethecore_fn_method_aethercore_list_root_tools(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_SKILLS
+RustBuffer uniffi_aethecore_fn_method_aethercore_list_skills(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_TOOLS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_TOOLS
 RustBuffer uniffi_aethecore_fn_method_aethercore_list_tools(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -760,6 +785,11 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_process_input(void*_Nonnull ptr
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROCESS_VISION
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROCESS_VISION
 uint64_t uniffi_aethecore_fn_method_aethercore_process_vision(void*_Nonnull ptr, RustBuffer request
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_REFRESH_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_REFRESH_SKILLS
+void uniffi_aethecore_fn_method_aethercore_refresh_skills(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_SEARCH_MEMORIES
@@ -898,11 +928,6 @@ int8_t uniffi_aethecore_fn_func_check_embedding_model_exists(RustCallStatus *_No
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_DELETE_SKILL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_DELETE_SKILL
-void uniffi_aethecore_fn_func_delete_skill(RustBuffer skill_id, RustCallStatus *_Nonnull out_status
-);
-#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_DOWNLOAD_EMBEDDING_MODEL_STANDALONE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_DOWNLOAD_EMBEDDING_MODEL_STANDALONE
 int8_t uniffi_aethecore_fn_func_download_embedding_model_standalone(RustBuffer progress_handler, RustCallStatus *_Nonnull out_status
@@ -917,16 +942,6 @@ RustBuffer uniffi_aethecore_fn_func_get_skills_dir_string(RustCallStatus *_Nonnu
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
 void uniffi_aethecore_fn_func_initialize_builtin_skills_ffi(RustBuffer bundle_skills_dir, RustCallStatus *_Nonnull out_status
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INSTALL_SKILL_FROM_URL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INSTALL_SKILL_FROM_URL
-RustBuffer uniffi_aethecore_fn_func_install_skill_from_url(RustBuffer url, RustCallStatus *_Nonnull out_status
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INSTALL_SKILLS_FROM_ZIP
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_INSTALL_SKILLS_FROM_ZIP
-RustBuffer uniffi_aethecore_fn_func_install_skills_from_zip(RustBuffer zip_path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_FUNC_IS_FRESH_INSTALL
@@ -1232,12 +1247,6 @@ uint16_t uniffi_aethecore_checksum_func_check_embedding_model_exists(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_DELETE_SKILL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_DELETE_SKILL
-uint16_t uniffi_aethecore_checksum_func_delete_skill(void
-    
-);
-#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_DOWNLOAD_EMBEDDING_MODEL_STANDALONE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_DOWNLOAD_EMBEDDING_MODEL_STANDALONE
 uint16_t uniffi_aethecore_checksum_func_download_embedding_model_standalone(void
@@ -1253,18 +1262,6 @@ uint16_t uniffi_aethecore_checksum_func_get_skills_dir_string(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INITIALIZE_BUILTIN_SKILLS_FFI
 uint16_t uniffi_aethecore_checksum_func_initialize_builtin_skills_ffi(void
-    
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INSTALL_SKILL_FROM_URL
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INSTALL_SKILL_FROM_URL
-uint16_t uniffi_aethecore_checksum_func_install_skill_from_url(void
-    
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INSTALL_SKILLS_FROM_ZIP
-#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_FUNC_INSTALL_SKILLS_FROM_ZIP
-uint16_t uniffi_aethecore_checksum_func_install_skills_from_zip(void
     
 );
 #endif
@@ -1361,6 +1358,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_delete_memory(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_PROVIDER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_PROVIDER
 uint16_t uniffi_aethecore_checksum_method_aethercore_delete_provider(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_DELETE_SKILL
+uint16_t uniffi_aethecore_checksum_method_aethercore_delete_skill(void
     
 );
 #endif
@@ -1496,6 +1499,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_get_root_commands_from_regi
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_SKILLS_DIR
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_SKILLS_DIR
+uint16_t uniffi_aethecore_checksum_method_aethercore_get_skills_dir(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_SUBCOMMANDS_FROM_REGISTRY
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_SUBCOMMANDS_FROM_REGISTRY
 uint16_t uniffi_aethecore_checksum_method_aethercore_get_subcommands_from_registry(void
@@ -1517,6 +1526,18 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_has_active_conversation(voi
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_IMPORT_MCP_CONFIG_JSON
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_IMPORT_MCP_CONFIG_JSON
 uint16_t uniffi_aethecore_checksum_method_aethercore_import_mcp_config_json(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_INSTALL_SKILL
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_INSTALL_SKILL
+uint16_t uniffi_aethecore_checksum_method_aethercore_install_skill(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_INSTALL_SKILLS_FROM_ZIP
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_INSTALL_SKILLS_FROM_ZIP
+uint16_t uniffi_aethecore_checksum_method_aethercore_install_skills_from_zip(void
     
 );
 #endif
@@ -1556,6 +1577,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_list_root_tools(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_SKILLS
+uint16_t uniffi_aethecore_checksum_method_aethercore_list_skills(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_TOOLS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_TOOLS
 uint16_t uniffi_aethecore_checksum_method_aethercore_list_tools(void
@@ -1583,6 +1610,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_process_input(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_PROCESS_VISION
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_PROCESS_VISION
 uint16_t uniffi_aethecore_checksum_method_aethercore_process_vision(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_REFRESH_SKILLS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_REFRESH_SKILLS
+uint16_t uniffi_aethecore_checksum_method_aethercore_refresh_skills(void
     
 );
 #endif

@@ -203,7 +203,7 @@ struct SkillsSettingsView: View {
     private func performDeleteSkill(_ skill: SkillInfo) {
         Task {
             do {
-                try deleteSkill(skillId: skill.id)
+                try core.deleteSkill(skillId: skill.id)
                 await MainActor.run {
                     skills.removeAll { $0.id == skill.id }
                     skillToDelete = nil
@@ -220,7 +220,7 @@ struct SkillsSettingsView: View {
     private func installSkillFromURL(_ url: String) {
         Task {
             do {
-                let installedSkill = try installSkillFromUrl(url: url)
+                let installedSkill = try core.installSkill(url: url)
                 await MainActor.run {
                     skills.append(installedSkill)
                     showInstallSheet = false
@@ -236,7 +236,7 @@ struct SkillsSettingsView: View {
     private func installSkillFromZIP(_ path: String) {
         Task {
             do {
-                let installedIds = try installSkillsFromZip(zipPath: path)
+                let installedIds = try core.installSkillsFromZip(zipPath: path)
                 // Reload skills list to show newly installed skills
                 let loadedSkills = try listInstalledSkills()
                 await MainActor.run {

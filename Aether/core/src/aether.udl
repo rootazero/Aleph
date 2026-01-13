@@ -36,23 +36,13 @@ namespace aether {
   [Throws=AetherException]
   void initialize_builtin_skills_ffi(string bundle_skills_dir);
 
-  // List all installed skills
+  // List all installed skills (read-only, no refresh needed)
   [Throws=AetherException]
   sequence<SkillInfo> list_installed_skills();
 
-  // Delete a skill by ID
-  [Throws=AetherException]
-  void delete_skill(string skill_id);
-
-  // Install a skill from a GitHub URL (e.g., https://github.com/user/repo)
-  // Returns the installed skill info
-  [Throws=AetherException]
-  SkillInfo install_skill_from_url(string url);
-
-  // Install skills from a local ZIP file path
-  // Returns list of installed skill IDs
-  [Throws=AetherException]
-  sequence<string> install_skills_from_zip(string zip_path);
+  // NOTE: Skill modification functions (delete, install) have been moved to
+  // AetherCore interface to ensure automatic tool registry refresh.
+  // Use AetherCore.delete_skill(), AetherCore.install_skill(), etc.
 };
 
 // ===== VISION CAPABILITY (rust-native-vision) =====

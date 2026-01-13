@@ -659,7 +659,11 @@ pub fn list_installed_skills() -> Result<Vec<crate::skills::SkillInfo>> {
 /// Delete a skill by ID
 ///
 /// Removes the skill directory from the skills folder.
-pub fn delete_skill(skill_id: String) -> Result<()> {
+/// Delete a skill by ID (internal use only)
+///
+/// For external callers, use `AetherCore::delete_skill()` which triggers
+/// automatic tool registry refresh.
+pub(crate) fn delete_skill(skill_id: String) -> Result<()> {
     let skills_dir = get_skills_dir()?;
     let skill_path = skills_dir.join(&skill_id);
 
@@ -684,7 +688,11 @@ pub fn delete_skill(skill_id: String) -> Result<()> {
 /// Downloads and installs a skill from a GitHub repository URL.
 /// The URL can be a repository URL (e.g., https://github.com/user/repo)
 /// or a specific branch/tag URL.
-pub fn install_skill_from_url(url: String) -> Result<crate::skills::SkillInfo> {
+/// Install a skill from URL (internal use only)
+///
+/// For external callers, use `AetherCore::install_skill()` which triggers
+/// automatic tool registry refresh.
+pub(crate) fn install_skill_from_url(url: String) -> Result<crate::skills::SkillInfo> {
     use crate::skills::SkillsInstaller;
 
     let skills_dir = get_skills_dir()?;
@@ -710,7 +718,11 @@ pub fn install_skill_from_url(url: String) -> Result<crate::skills::SkillInfo> {
 ///
 /// Extracts and installs skills from a ZIP file at the given path.
 /// Returns a list of installed skill IDs.
-pub fn install_skills_from_zip(zip_path: String) -> Result<Vec<String>> {
+/// Install skills from ZIP (internal use only)
+///
+/// For external callers, use `AetherCore::install_skills_from_zip()` which
+/// triggers automatic tool registry refresh.
+pub(crate) fn install_skills_from_zip(zip_path: String) -> Result<Vec<String>> {
     use crate::skills::SkillsInstaller;
     use std::path::PathBuf;
 

@@ -604,6 +604,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func deleteProvider(name: String) throws 
     
+    func deleteSkill(skillId: String) throws 
+    
     func endConversation() 
     
     func exportMcpConfigJson()  -> String
@@ -648,6 +650,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func getRootCommandsFromRegistry()  -> [CommandNode]
     
+    func getSkillsDir() throws  -> String
+    
     func getSubcommandsFromRegistry(parentKey: String)  -> [CommandNode]
     
     func getSubtoolsFromRegistry(parentKey: String)  -> [UnifiedToolInfo]
@@ -655,6 +659,10 @@ public protocol AetherCoreProtocol : AnyObject {
     func hasActiveConversation()  -> Bool
     
     func importMcpConfigJson(json: String) throws 
+    
+    func installSkill(url: String) throws  -> SkillInfo
+    
+    func installSkillsFromZip(zipPath: String) throws  -> [String]
     
     func listBuiltinTools()  -> [UnifiedToolInfo]
     
@@ -668,6 +676,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func listRootTools()  -> [UnifiedToolInfo]
     
+    func listSkills() throws  -> [SkillInfo]
+    
     func listTools()  -> [UnifiedToolInfo]
     
     func listToolsBySource(sourceType: ToolSourceType)  -> [UnifiedToolInfo]
@@ -677,6 +687,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func processInput(userInput: String, context: CapturedContext) throws  -> String
     
     func processVision(request: VisionRequest) async throws  -> VisionResult
+    
+    func refreshSkills() 
     
     func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32) throws  -> [MemoryEntry]
     
@@ -884,6 +896,13 @@ open func deleteProvider(name: String)throws  {try rustCallWithError(FfiConverte
 }
 }
     
+open func deleteSkill(skillId: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_delete_skill(self.uniffiClonePointer(),
+        FfiConverterString.lower(skillId),$0
+    )
+}
+}
+    
 open func endConversation() {try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_end_conversation(self.uniffiClonePointer(),$0
     )
@@ -1056,6 +1075,13 @@ open func getRootCommandsFromRegistry() -> [CommandNode] {
 })
 }
     
+open func getSkillsDir()throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_get_skills_dir(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func getSubcommandsFromRegistry(parentKey: String) -> [CommandNode] {
     return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_get_subcommands_from_registry(self.uniffiClonePointer(),
@@ -1084,6 +1110,22 @@ open func importMcpConfigJson(json: String)throws  {try rustCallWithError(FfiCon
         FfiConverterString.lower(json),$0
     )
 }
+}
+    
+open func installSkill(url: String)throws  -> SkillInfo {
+    return try  FfiConverterTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_install_skill(self.uniffiClonePointer(),
+        FfiConverterString.lower(url),$0
+    )
+})
+}
+    
+open func installSkillsFromZip(zipPath: String)throws  -> [String] {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_install_skills_from_zip(self.uniffiClonePointer(),
+        FfiConverterString.lower(zipPath),$0
+    )
+})
 }
     
 open func listBuiltinTools() -> [UnifiedToolInfo] {
@@ -1124,6 +1166,13 @@ open func listPresetTools() -> [UnifiedToolInfo] {
 open func listRootTools() -> [UnifiedToolInfo] {
     return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_list_root_tools(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func listSkills()throws  -> [SkillInfo] {
+    return try  FfiConverterSequenceTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
+    uniffi_aethecore_fn_method_aethercore_list_skills(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -1174,6 +1223,12 @@ open func processVision(request: VisionRequest)async throws  -> VisionResult {
             liftFunc: FfiConverterTypeVisionResult.lift,
             errorHandler: FfiConverterTypeAetherException.lift
         )
+}
+    
+open func refreshSkills() {try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_refresh_skills(self.uniffiClonePointer(),$0
+    )
+}
 }
     
 open func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32)throws  -> [MemoryEntry] {
@@ -8661,12 +8716,6 @@ public func checkEmbeddingModelExists()throws  -> Bool {
     )
 })
 }
-public func deleteSkill(skillId: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_func_delete_skill(
-        FfiConverterString.lower(skillId),$0
-    )
-}
-}
 public func downloadEmbeddingModelStandalone(progressHandler: InitializationProgressHandler?)throws  -> Bool {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_func_download_embedding_model_standalone(
@@ -8685,20 +8734,6 @@ public func initializeBuiltinSkillsFfi(bundleSkillsDir: String)throws  {try rust
         FfiConverterString.lower(bundleSkillsDir),$0
     )
 }
-}
-public func installSkillFromUrl(url: String)throws  -> SkillInfo {
-    return try  FfiConverterTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_func_install_skill_from_url(
-        FfiConverterString.lower(url),$0
-    )
-})
-}
-public func installSkillsFromZip(zipPath: String)throws  -> [String] {
-    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_func_install_skills_from_zip(
-        FfiConverterString.lower(zipPath),$0
-    )
-})
 }
 public func isFreshInstall()throws  -> Bool {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
@@ -8737,9 +8772,6 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_func_check_embedding_model_exists() != 65318) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_func_delete_skill() != 41346) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_aethecore_checksum_func_download_embedding_model_standalone() != 33400) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8747,12 +8779,6 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_func_initialize_builtin_skills_ffi() != 33816) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_func_install_skill_from_url() != 56852) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_func_install_skills_from_zip() != 10047) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_func_is_fresh_install() != 56701) {
@@ -8801,6 +8827,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_delete_provider() != 56010) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_delete_skill() != 7419) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_end_conversation() != 48231) {
@@ -8869,6 +8898,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_get_root_commands_from_registry() != 64284) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_get_skills_dir() != 11635) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_get_subcommands_from_registry() != 57765) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8879,6 +8911,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_import_mcp_config_json() != 36470) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_install_skill() != 48308) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_install_skills_from_zip() != 40422) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_list_builtin_tools() != 62441) {
@@ -8899,6 +8937,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_list_root_tools() != 53812) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_list_skills() != 2819) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_list_tools() != 25812) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8912,6 +8953,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_process_vision() != 25227) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_refresh_skills() != 30751) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_search_memories() != 31229) {
