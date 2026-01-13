@@ -436,4 +436,48 @@ mod tests {
         // Unknown tools should require confirmation by default
         assert!(client.requires_confirmation("unknown").await);
     }
+
+    #[tokio::test]
+    async fn test_startup_with_failing_server() {
+        // Create a config with a non-existent command to simulate failure
+        let failing_config = ExternalServerConfig {
+            name: "failing-server".to_string(),
+            command: "/nonexistent/command/that/does/not/exist".to_string(),
+            args: vec![],
+            env: std::collections::HashMap::new(),
+            requires_runtime: None,
+            cwd: None,
+            timeout_seconds: Some(5),
+        };
+
+        let client = McpClient::new();
+        let report = client.start_external_servers(vec![failing_config]).await;
+
+        // Should have 0 succeeded and 1 failed
+        assert_eq!(report.succeeded.len(), 0);
+        assert_eq!(report.failed.len(), 1);
+
+        // Check failure details
+        let (server_name, error_message) = &report.failed[0];
+        assert_eq!(server_name, "failing-server");
+        assert!(!error_message.is_empty());
+        println!("Expected failure: {} - {}", server_name, error_message);
+    }
+
+    #[tokio::test]
+    async fn test_startup_report_structure() {
+        // Test McpStartupReport default and methods
+        let report = McpStartupReport::default();
+        assert!(report.succeeded.is_empty());
+        assert!(report.failed.is_empty());
+
+        // Test with mixed results
+        let mut report = McpStartupReport::default();
+        report.succeeded.push("server1".to_string());
+        report.succeeded.push("server2".to_string());
+        report.failed.push(("failing-server".to_string(), "connection refused".to_string()));
+
+        assert_eq!(report.succeeded.len(), 2);
+        assert_eq!(report.failed.len(), 1);
+    }
 }
