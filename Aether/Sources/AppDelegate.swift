@@ -665,6 +665,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // Set core reference in event handler for cancellation
             eventHandlerV2.setCore(coreV2!)
 
+            // Configure InputCoordinator with v2 dependencies
+            inputCoordinator?.configureV2(
+                coreV2: coreV2,
+                eventHandlerV2: eventHandlerV2
+            )
+
+            // Set InputCoordinator reference in EventHandlerV2 for callbacks
+            eventHandlerV2.setInputCoordinator(inputCoordinator)
+
+            // Configure MultiTurnCoordinator with v2 dependencies
+            MultiTurnCoordinator.shared.configureV2(coreV2: coreV2)
+
+            print("[Aether] V2 coordinators configured")
+
             // Log available tools
             if let tools = coreV2?.listTools() {
                 print("[Aether] V2 has \(tools.count) tools available:")

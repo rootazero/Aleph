@@ -23,14 +23,20 @@ final class InputCoordinator {
 
     // MARK: - Dependencies
 
-    /// Reference to core for processing
+    /// Reference to core for processing (v1 interface)
     private weak var core: AetherCore?
+
+    /// Reference to v2 core for processing (rig-core based)
+    private weak var coreV2: AetherV2Core?
 
     /// Reference to Halo window for state updates
     private weak var haloWindow: HaloWindow?
 
-    /// Reference to event handler for error callbacks
+    /// Reference to event handler for error callbacks (v1)
     private weak var eventHandler: EventHandler?
+
+    /// Reference to v2 event handler for callbacks
+    private weak var eventHandlerV2: EventHandlerV2?
 
     /// Reference to output coordinator for response output
     private weak var outputCoordinator: OutputCoordinator?
@@ -48,6 +54,15 @@ final class InputCoordinator {
 
     /// Whether permission gate is active (blocks input)
     var isPermissionGateActive: Bool = false
+
+    /// Whether to use v2 interface for processing
+    var useV2Interface: Bool = false
+
+    /// Pending output context for v2 async callbacks
+    private var pendingV2OutputContext: OutputContext?
+
+    /// Original clipboard text for v2 restoration on error
+    private var pendingV2OriginalClipboard: String?
 
     // MARK: - Initialization
 
@@ -67,9 +82,9 @@ final class InputCoordinator {
     /// Configure dependencies after initialization
     ///
     /// - Parameters:
-    ///   - core: AetherCore instance
+    ///   - core: AetherCore instance (v1)
     ///   - haloWindow: HaloWindow for state updates
-    ///   - eventHandler: EventHandler for error callbacks
+    ///   - eventHandler: EventHandler for error callbacks (v1)
     ///   - outputCoordinator: OutputCoordinator for response output
     func configure(
         core: AetherCore,
@@ -81,6 +96,25 @@ final class InputCoordinator {
         self.haloWindow = haloWindow
         self.eventHandler = eventHandler
         self.outputCoordinator = outputCoordinator
+    }
+
+    /// Configure v2 dependencies (rig-core based)
+    ///
+    /// - Parameters:
+    ///   - coreV2: AetherV2Core instance
+    ///   - eventHandlerV2: EventHandlerV2 for callbacks
+    func configureV2(
+        coreV2: AetherV2Core?,
+        eventHandlerV2: EventHandlerV2?
+    ) {
+        self.coreV2 = coreV2
+        self.eventHandlerV2 = eventHandlerV2
+
+        // Auto-enable v2 if both are available
+        if coreV2 != nil && eventHandlerV2 != nil {
+            print("[InputCoordinator] V2 interface configured and enabled")
+            // Note: useV2Interface can be toggled externally for A/B testing
+        }
     }
 
     // MARK: - Trigger Handlers
@@ -397,22 +431,7 @@ final class InputCoordinator {
                 // Double-tap Shift always uses single-turn mode
                 // Multi-turn conversations are only triggered by Cmd+Opt+/ hotkey
 
-                // Call Rust core's process_input()
-                guard let core = self.core else {
-                    print("[InputCoordinator] ERROR: Core became nil during processing")
-                    return
-                }
-                let response = try core.processInput(
-                    userInput: userInput,
-                    context: capturedContext
-                )
-
-                print("[InputCoordinator] Received AI response (\(response.count) chars)")
-
-                // Hide processing indicator
-                self.hideProcessingIndicator()
-
-                // Use unified output pipeline via OutputCoordinator
+                // Prepare output context
                 let outputContext = OutputContext(
                     useReplaceMode: useCutMode,
                     textSource: textSource,
@@ -421,8 +440,52 @@ final class InputCoordinator {
                     turnId: nil,
                     conversationSessionId: nil
                 )
-                self.outputCoordinator?.previousFrontmostApp = self.previousFrontmostApp
-                self.outputCoordinator?.performOutput(response: response, context: outputContext)
+
+                // Choose processing interface: v2 (rig-core) or v1 (legacy)
+                if self.useV2Interface, let coreV2 = self.coreV2 {
+                    // V2 async processing - store context for callback
+                    print("[InputCoordinator] 🚀 Using V2 interface (rig-core)")
+
+                    DispatchQueue.main.async {
+                        self.pendingV2OutputContext = outputContext
+                        self.pendingV2OriginalClipboard = originalClipboardText
+                    }
+
+                    // Create v2 process options
+                    let options = ProcessOptionsV2(
+                        appContext: capturedContext.appBundleId,
+                        windowTitle: capturedContext.windowTitle,
+                        stream: true
+                    )
+
+                    // Call v2 async process - response comes via EventHandlerV2 callbacks
+                    try coreV2.process(input: userInput, options: options)
+                    print("[InputCoordinator] V2 process initiated, awaiting callbacks")
+
+                    // Note: Output will be triggered by handleV2Completion()
+                    // which is called from EventHandlerV2.onComplete()
+
+                } else {
+                    // V1 synchronous processing (legacy path)
+                    guard let core = self.core else {
+                        print("[InputCoordinator] ERROR: Core became nil during processing")
+                        return
+                    }
+
+                    let response = try core.processInput(
+                        userInput: userInput,
+                        context: capturedContext
+                    )
+
+                    print("[InputCoordinator] Received AI response (\(response.count) chars)")
+
+                    // Hide processing indicator
+                    self.hideProcessingIndicator()
+
+                    // Use unified output pipeline via OutputCoordinator
+                    self.outputCoordinator?.previousFrontmostApp = self.previousFrontmostApp
+                    self.outputCoordinator?.performOutput(response: response, context: outputContext)
+                }
             } catch {
                 print("[InputCoordinator] ❌ Error processing input: \(error)")
 
@@ -500,5 +563,66 @@ final class InputCoordinator {
         print("[InputCoordinator] Simulating Cmd+C to copy all text...")
         KeyboardSimulator.shared.simulateCopy()
         Thread.sleep(forTimeInterval: 0.1)
+    }
+
+    // MARK: - V2 Callback Handlers
+
+    /// Handle V2 processing completion
+    /// Called by EventHandlerV2.onComplete() when async processing finishes
+    ///
+    /// - Parameter response: The AI response text
+    func handleV2Completion(response: String) {
+        print("[InputCoordinator] V2 completion received (\(response.count) chars)")
+
+        // Hide processing indicator
+        hideProcessingIndicator()
+
+        // Get pending context
+        guard let outputContext = pendingV2OutputContext else {
+            print("[InputCoordinator] Warning: No pending output context for V2 completion")
+            return
+        }
+
+        // Clear pending context
+        pendingV2OutputContext = nil
+        pendingV2OriginalClipboard = nil
+
+        // Perform output
+        outputCoordinator?.previousFrontmostApp = previousFrontmostApp
+        outputCoordinator?.performOutput(response: response, context: outputContext)
+    }
+
+    /// Handle V2 processing error
+    /// Called by EventHandlerV2.onError() when async processing fails
+    ///
+    /// - Parameter message: Error message
+    func handleV2Error(message: String) {
+        print("[InputCoordinator] V2 error received: \(message)")
+
+        // Hide processing indicator
+        hideProcessingIndicator()
+
+        // Clear clipboard monitor history
+        clipboardMonitor.clearHistory()
+        print("[InputCoordinator] 🗑️ Cleared clipboard monitor history after V2 error")
+
+        // Restore original clipboard
+        if let original = pendingV2OriginalClipboard {
+            DispatchQueue.main.async { [weak self] in
+                self?.clipboardManager.setText(original)
+                print("[InputCoordinator] ♻️ Restored original clipboard content (after V2 error)")
+            }
+        }
+
+        // Clear pending context
+        pendingV2OutputContext = nil
+        pendingV2OriginalClipboard = nil
+
+        // Error is already shown via EventHandlerV2
+    }
+
+    /// Check if V2 processing is pending
+    var isV2ProcessingPending: Bool {
+        pendingV2OutputContext != nil
     }
 }

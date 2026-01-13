@@ -28,6 +28,9 @@ class EventHandlerV2: AetherV2EventHandler {
     // Weak reference to AetherV2Core for cancellation functionality
     private weak var coreV2: AetherV2Core?
 
+    // Weak reference to InputCoordinator for output handling
+    private weak var inputCoordinator: InputCoordinator?
+
     // Managers accessed through DependencyContainer
     private var conversationManager: any ConversationManagerProtocol {
         DependencyContainer.shared.conversationManager
@@ -60,6 +63,11 @@ class EventHandlerV2: AetherV2EventHandler {
     // Set HaloWindow reference (for DependencyContainer use)
     func setHaloWindow(_ window: HaloWindow?) {
         self.haloWindow = window
+    }
+
+    // Set InputCoordinator reference for output handling
+    func setInputCoordinator(_ coordinator: InputCoordinator?) {
+        self.inputCoordinator = coordinator
     }
 
     // MARK: - AetherV2EventHandler Protocol
@@ -147,6 +155,18 @@ class EventHandlerV2: AetherV2EventHandler {
         currentToolName = nil
 
         DispatchQueue.mainAsync(weakRef: self) { slf in
+            // Notify InputCoordinator if V2 processing is pending
+            if slf.inputCoordinator?.isV2ProcessingPending == true {
+                slf.inputCoordinator?.handleV2Completion(response: response)
+                return
+            }
+
+            // Notify MultiTurnCoordinator if V2 processing is pending
+            if MultiTurnCoordinator.shared.isV2ProcessingPending {
+                MultiTurnCoordinator.shared.handleV2Completion(response: response)
+                return
+            }
+
             // Skip halo in multi-turn mode - conversation UI handles it
             guard !slf.isInMultiTurnMode else {
                 print("[EventHandlerV2] Skipping completion state (multi-turn mode)")
@@ -173,6 +193,21 @@ class EventHandlerV2: AetherV2EventHandler {
         currentToolName = nil
 
         DispatchQueue.mainAsync(weakRef: self) { slf in
+            // Notify InputCoordinator if V2 processing is pending
+            if slf.inputCoordinator?.isV2ProcessingPending == true {
+                slf.inputCoordinator?.handleV2Error(message: message)
+                // Still show error notification
+                slf.showErrorNotification(message: message)
+                return
+            }
+
+            // Notify MultiTurnCoordinator if V2 processing is pending
+            if MultiTurnCoordinator.shared.isV2ProcessingPending {
+                MultiTurnCoordinator.shared.handleV2Error(message: message)
+                // Multi-turn mode shows error in conversation UI, no halo notification
+                return
+            }
+
             // Show error notification even in multi-turn mode
             slf.showErrorNotification(message: message)
         }

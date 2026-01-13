@@ -21,6 +21,15 @@ final class MultiTurnCoordinator {
     // MARK: - Dependencies
 
     private weak var core: AetherCore?
+    private weak var coreV2: AetherV2Core?
+
+    /// Whether to use v2 interface for processing
+    var useV2Interface: Bool = false
+
+    /// Pending context for v2 async callbacks
+    private var pendingV2Topic: Topic?
+    private var pendingV2UserInput: String?
+    private var pendingV2IsFirstMessage: Bool = false
 
     // MARK: - Windows
 
@@ -56,10 +65,18 @@ final class MultiTurnCoordinator {
 
     // MARK: - Configuration
 
-    /// Configure with dependencies
+    /// Configure with dependencies (v1)
     func configure(core: AetherCore) {
         self.core = core
-        print("[MultiTurnCoordinator] Configured with core")
+        print("[MultiTurnCoordinator] Configured with v1 core")
+    }
+
+    /// Configure v2 dependencies (rig-core based)
+    func configureV2(coreV2: AetherV2Core?) {
+        self.coreV2 = coreV2
+        if coreV2 != nil {
+            print("[MultiTurnCoordinator] V2 interface configured")
+        }
     }
 
     // MARK: - Hotkey Handling
@@ -194,6 +211,37 @@ final class MultiTurnCoordinator {
     ///   - attachments: Media attachments from clipboard (images, etc.)
     ///   - isFirstMessage: Whether this is the first message in the topic
     private func processWithAI(text: String, topic: Topic, userDisplayText: String, attachments: [MediaAttachment], isFirstMessage: Bool) {
+
+        // Choose processing interface: v2 (rig-core) or v1 (legacy)
+        if useV2Interface, let coreV2 = coreV2 {
+            // V2 async processing - store context for callback
+            print("[MultiTurnCoordinator] 🚀 Using V2 interface (rig-core)")
+
+            // Store pending context for callbacks
+            pendingV2Topic = topic
+            pendingV2UserInput = userDisplayText
+            pendingV2IsFirstMessage = isFirstMessage
+
+            let options = ProcessOptionsV2(
+                appContext: "com.aether.multi-turn",
+                windowTitle: nil,
+                stream: true
+            )
+
+            do {
+                try coreV2.process(input: text, options: options)
+                print("[MultiTurnCoordinator] V2 process initiated, awaiting callbacks")
+            } catch {
+                print("[MultiTurnCoordinator] V2 AI error: \(error)")
+                clearPendingV2Context()
+                DispatchQueue.main.async { [weak self] in
+                    self?.displayWindow.viewModel.setError(error.localizedDescription)
+                }
+            }
+            return
+        }
+
+        // V1 synchronous processing (legacy path)
         guard let core = core else { return }
 
         do {
@@ -353,5 +401,51 @@ final class MultiTurnCoordinator {
     /// Check if multi-turn mode is currently active
     var isMultiTurnActive: Bool {
         isActive
+    }
+
+    // MARK: - V2 Callback Handlers
+
+    /// Handle V2 processing completion
+    /// Called by EventHandlerV2.onComplete() when async processing finishes
+    func handleV2Completion(response: String) {
+        print("[MultiTurnCoordinator] V2 completion received (\(response.count) chars)")
+
+        guard let topic = pendingV2Topic,
+              let userInput = pendingV2UserInput else {
+            print("[MultiTurnCoordinator] Warning: No pending V2 context")
+            return
+        }
+
+        let isFirstMessage = pendingV2IsFirstMessage
+        clearPendingV2Context()
+
+        // Route to existing response handler
+        DispatchQueue.main.async { [weak self] in
+            self?.handleAIResponse(response, topic: topic, userInput: userInput, isFirstMessage: isFirstMessage)
+        }
+    }
+
+    /// Handle V2 processing error
+    /// Called by EventHandlerV2.onError() when async processing fails
+    func handleV2Error(message: String) {
+        print("[MultiTurnCoordinator] V2 error received: \(message)")
+
+        clearPendingV2Context()
+
+        DispatchQueue.main.async { [weak self] in
+            self?.displayWindow.viewModel.setError(message)
+        }
+    }
+
+    /// Check if V2 processing is pending
+    var isV2ProcessingPending: Bool {
+        pendingV2Topic != nil
+    }
+
+    /// Clear pending V2 context
+    private func clearPendingV2Context() {
+        pendingV2Topic = nil
+        pendingV2UserInput = nil
+        pendingV2IsFirstMessage = false
     }
 }
