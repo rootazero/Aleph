@@ -56,7 +56,7 @@ final class InputCoordinator {
     var isPermissionGateActive: Bool = false
 
     /// Whether to use v2 interface for processing
-    var useV2Interface: Bool = false
+    var useV2Interface: Bool = true  // Enable v2 for testing
 
     /// Pending output context for v2 async callbacks
     private var pendingV2OutputContext: OutputContext?
