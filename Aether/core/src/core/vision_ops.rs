@@ -5,6 +5,7 @@
 use crate::config::Config;
 use crate::error::Result;
 use crate::vision::{VisionRequest, VisionResult, VisionService};
+use tracing::{debug, error, info};
 
 use super::AetherCore;
 
@@ -70,17 +71,91 @@ impl AetherCore {
     /// println!("OCR result: {}", text);
     /// ```
     pub async fn extract_text(&self, image_data: Vec<u8>) -> Result<String> {
+        info!(
+            image_size = image_data.len(),
+            "[OCR] extract_text START"
+        );
+
         // Clone config to avoid holding lock across await
         let config: Config = {
             let guard = self.config.lock().unwrap_or_else(|e| e.into_inner());
             guard.clone()
         };
 
+        // Log config details for debugging
+        let default_provider = config.general.default_provider.as_ref();
+        info!(
+            default_provider = ?default_provider,
+            provider_count = config.providers.len(),
+            "[OCR] Config loaded"
+        );
+
+        if default_provider.is_none() {
+            error!("[OCR] No default_provider configured in [general] section");
+            return Err(crate::error::AetherError::invalid_config(
+                "No default_provider configured. Set default_provider in [general] section of config.toml"
+            ));
+        }
+
+        let provider_name = default_provider.unwrap();
+        if let Some(provider_config) = config.providers.get(provider_name) {
+            info!(
+                provider = %provider_name,
+                provider_type = ?provider_config.provider_type,
+                model = %provider_config.model,
+                has_api_key = provider_config.api_key.is_some(),
+                "[OCR] Provider config found"
+            );
+        } else {
+            error!(
+                provider = %provider_name,
+                "[OCR] Provider '{}' not found in [providers] section",
+                provider_name
+            );
+            return Err(crate::error::AetherError::invalid_config(format!(
+                "Provider '{}' not found in [providers] section of config.toml",
+                provider_name
+            )));
+        }
+
         // Create VisionService with default config
         let vision_service = VisionService::with_defaults();
 
-        // Extract text
-        vision_service.extract_text(image_data, &config).await
+        // Use the core's runtime to execute the async code
+        // This ensures Tokio reactor is available for HTTP calls (reqwest)
+        info!("[OCR] Spawning vision task on tokio runtime...");
+        let runtime = self.runtime.clone();
+
+        match runtime
+            .spawn(async move { vision_service.extract_text(image_data, &config).await })
+            .await
+        {
+            Ok(Ok(text)) => {
+                info!(
+                    result_length = text.len(),
+                    "[OCR] extract_text SUCCESS"
+                );
+                debug!(
+                    result_preview = %text.chars().take(100).collect::<String>(),
+                    "[OCR] Result preview"
+                );
+                Ok(text)
+            }
+            Ok(Err(e)) => {
+                error!(
+                    error = %e,
+                    "[OCR] VisionService returned error"
+                );
+                Err(e)
+            }
+            Err(e) => {
+                error!(
+                    error = %e,
+                    "[OCR] Task join error"
+                );
+                Err(crate::error::AetherError::other(format!("Task join error: {}", e)))
+            }
+        }
     }
 }
 

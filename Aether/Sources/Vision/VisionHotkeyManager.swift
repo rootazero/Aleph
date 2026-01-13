@@ -2,6 +2,26 @@ import AppKit
 import Carbon
 import Foundation
 
+// Debug file logger for crash investigation
+private func debugLog(_ message: String) {
+    let timestamp = ISO8601DateFormatter().string(from: Date())
+    let logMessage = "[\(timestamp)] [VisionHotkey] \(message)\n"
+    let logPath = NSHomeDirectory() + "/Desktop/aether_debug.log"
+
+    if let data = logMessage.data(using: .utf8) {
+        if FileManager.default.fileExists(atPath: logPath) {
+            if let handle = FileHandle(forWritingAtPath: logPath) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                handle.closeFile()
+            }
+        } else {
+            FileManager.default.createFile(atPath: logPath, contents: data)
+        }
+    }
+    NSLog("[VisionHotkey] \(message)")
+}
+
 /// Manager for vision-related hotkeys
 ///
 /// Handles registration and dispatch of screen capture hotkey:
@@ -70,10 +90,12 @@ final class VisionHotkeyManager {
 
         // Check for OCR capture hotkey
         if keyCode == ocrKeyCode, modifiers == ocrModifiers {
+            debugLog(" >>> OCR hotkey triggered! Dispatching to coordinator...")
             // Dispatch to MainActor to call the coordinator
             // The coordinator's startCapture() has its own reentry protection
             // that sets isCapturing=true immediately to prevent race conditions
             Task { @MainActor in
+                debugLog(" >>> MainActor task executing, calling startCapture...")
                 ScreenCaptureCoordinator.shared.startCapture(mode: .region)
             }
             return true

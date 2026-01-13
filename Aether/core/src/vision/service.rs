@@ -142,31 +142,57 @@ impl VisionService {
 
     /// Get the vision-capable AI provider from user configuration
     fn get_vision_provider(&self, config: &Config) -> Result<Arc<dyn AiProvider>> {
+        debug!("[OCR-Vision] get_vision_provider START");
+
         // Get default provider name from config
         let default_provider_name = config
             .general
             .default_provider
             .as_ref()
             .ok_or_else(|| {
+                tracing::error!("[OCR-Vision] No default_provider in config.general");
                 AetherError::invalid_config(
                     "No default provider configured. Please set a default provider in settings."
                         .to_string(),
                 )
             })?;
 
+        debug!(
+            provider = %default_provider_name,
+            "[OCR-Vision] Default provider name"
+        );
+
         // Get provider config
         let provider_config = config
             .providers
             .get(default_provider_name)
             .ok_or_else(|| {
+                tracing::error!(
+                    provider = %default_provider_name,
+                    available_providers = ?config.providers.keys().collect::<Vec<_>>(),
+                    "[OCR-Vision] Provider not found in config.providers"
+                );
                 AetherError::invalid_config(format!(
-                    "Default provider '{}' not found in configuration",
-                    default_provider_name
+                    "Default provider '{}' not found in configuration. Available: {:?}",
+                    default_provider_name,
+                    config.providers.keys().collect::<Vec<_>>()
                 ))
             })?;
 
+        debug!(
+            provider = %default_provider_name,
+            enabled = provider_config.enabled,
+            model = %provider_config.model,
+            provider_type = ?provider_config.provider_type,
+            "[OCR-Vision] Provider config loaded"
+        );
+
         // Check if provider is enabled
         if !provider_config.enabled {
+            tracing::error!(
+                provider = %default_provider_name,
+                "[OCR-Vision] Provider is disabled"
+            );
             return Err(AetherError::invalid_config(format!(
                 "Default provider '{}' is disabled",
                 default_provider_name
@@ -174,7 +200,25 @@ impl VisionService {
         }
 
         // Create provider instance
-        create_provider(default_provider_name, provider_config.clone())
+        debug!("[OCR-Vision] Creating provider instance...");
+        let provider = create_provider(default_provider_name, provider_config.clone())?;
+
+        // Check vision capability
+        let supports_vision = provider.supports_vision();
+        info!(
+            provider = %default_provider_name,
+            supports_vision = supports_vision,
+            "[OCR-Vision] Provider created"
+        );
+
+        if !supports_vision {
+            tracing::error!(
+                provider = %default_provider_name,
+                "[OCR-Vision] Provider does not support vision!"
+            );
+        }
+
+        Ok(provider)
     }
 
     /// Preprocess image: resize if needed and convert to JPEG

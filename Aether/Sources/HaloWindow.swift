@@ -110,7 +110,7 @@ final class HaloWindow: NSWindow {
         switch viewModel.state {
         case .idle:
             size = NSSize(width: 0, height: 0)
-        case .listening, .processing, .processingWithAI, .retrievingMemory:
+        case .listening, .processing, .processingWithAI, .retrievingMemory, .success:
             size = NSSize(width: 80, height: 60)
         case .typewriting:
             size = NSSize(width: 100, height: 60)

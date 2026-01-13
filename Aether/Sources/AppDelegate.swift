@@ -543,8 +543,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             initializeTriggerSystem()
 
             // Initialize vision hotkey manager for screen capture OCR
-            // Hotkeys: Cmd+Shift+Ctrl+3 (full screen), Cmd+Shift+Ctrl+4 (region), Cmd+Shift+Ctrl+5 (window)
+            // Hotkeys: Cmd+Option+O (Region selection capture + OCR)
+            NSLog("[Aether] Initializing VisionHotkeys...")
             initializeVisionHotkeys()
+            NSLog("[Aether] VisionHotkeys initialized")
 
             // Check if monitoring started successfully
             guard hotkeyMonitor != nil else {

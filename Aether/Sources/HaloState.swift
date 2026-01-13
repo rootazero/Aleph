@@ -28,7 +28,8 @@ enum HaloState {
     /// Typewriter output in progress
     case typewriting(progress: Float)
 
-    // NOTE: success state REMOVED - AI response completion is implicit
+    /// Success state with checkmark (for OCR and other quick operations)
+    case success(message: String?)
 
     /// Error state with retry/dismiss actions
     case error(type: ErrorType, message: String, suggestion: String?)
@@ -119,6 +120,8 @@ extension HaloState: Equatable {
             return lText == rText
         case (.typewriting(let lProgress), .typewriting(let rProgress)):
             return lProgress == rProgress
+        case (.success(let lMsg), .success(let rMsg)):
+            return lMsg == rMsg
         case (.error(let lType, let lMsg, let lSug), .error(let rType, let rMsg, let rSug)):
             return lType == rType && lMsg == rMsg && lSug == rSug
         case (.toast(let lType, let lTitle, let lMsg, let lAuto), .toast(let rType, let rTitle, let rMsg, let rAuto)):

@@ -1,6 +1,26 @@
 import AppKit
 import Foundation
 
+// Debug file logger for crash investigation
+private func debugLog(_ message: String) {
+    let timestamp = ISO8601DateFormatter().string(from: Date())
+    let logMessage = "[\(timestamp)] [OverlayView] \(message)\n"
+    let logPath = NSHomeDirectory() + "/Desktop/aether_debug.log"
+
+    if let data = logMessage.data(using: .utf8) {
+        if FileManager.default.fileExists(atPath: logPath) {
+            if let handle = FileHandle(forWritingAtPath: logPath) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                handle.closeFile()
+            }
+        } else {
+            FileManager.default.createFile(atPath: logPath, contents: data)
+        }
+    }
+    NSLog("[OverlayView] \(message)")
+}
+
 /// Overlay view for screen region selection
 ///
 /// This view displays a semi-transparent overlay and allows users to
@@ -23,6 +43,13 @@ final class ScreenCaptureOverlayView: NSView {
     /// Tracking area for mouse events
     private var trackingArea: NSTrackingArea?
 
+    /// Flag indicating the view is being dismissed - prevents callbacks and updates
+    /// CRITICAL: This flag is essential for preventing EXC_BAD_ACCESS crashes.
+    /// Without it, AppKit can call updateTrackingAreas() or other methods
+    /// after prepareForDismissal() but before the window is fully closed,
+    /// leading to dangling references and crashes during autorelease pool drain.
+    private var isDismissed = false
+
     /// Overlay background color
     private let overlayColor = NSColor.black.withAlphaComponent(0.3)
 
@@ -34,11 +61,23 @@ final class ScreenCaptureOverlayView: NSView {
 
     // MARK: - Initialization
 
+    /// Initialize with callbacks (legacy API for compatibility)
     init(onComplete: @escaping (CGRect) -> Void, onCancel: @escaping () -> Void) {
+        debugLog(" >>> init START")
         self.onComplete = onComplete
         self.onCancel = onCancel
         super.init(frame: .zero)
         setupView()
+        debugLog(" >>> init COMPLETE")
+    }
+
+    /// Initialize without callbacks (for window reuse pattern)
+    /// Use setCallbacks() to set callbacks before showing
+    override init(frame frameRect: NSRect) {
+        debugLog(" >>> init(frame:) START")
+        super.init(frame: frameRect)
+        setupView()
+        debugLog(" >>> init(frame:) COMPLETE")
     }
 
     @available(*, unavailable)
@@ -46,12 +85,64 @@ final class ScreenCaptureOverlayView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    // MARK: - Window Reuse Support
+
+    /// Set callbacks for the next capture session
+    /// Call this before showing the window
+    func setCallbacks(
+        onComplete: @escaping (CGRect) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        debugLog(" setCallbacks()")
+        self.onComplete = onComplete
+        self.onCancel = onCancel
+    }
+
+    /// Reset view state for reuse
+    /// Call this before showing the window for a new capture session
+    func reset() {
+        debugLog(" >>> reset() START")
+
+        // 1. Reset dismissed flag - CRITICAL for reuse
+        isDismissed = false
+
+        // 2. Clear selection state
+        startPoint = nil
+        currentRect = nil
+
+        // 3. Recreate tracking area (safe since window is hidden)
+        if let existingArea = trackingArea {
+            removeTrackingArea(existingArea)
+            trackingArea = nil
+        }
+
+        // Only create tracking area if we have valid bounds
+        if bounds.width > 0 && bounds.height > 0 {
+            let newArea = NSTrackingArea(
+                rect: bounds,
+                options: [.activeAlways, .mouseMoved, .mouseEnteredAndExited],
+                owner: self,
+                userInfo: nil
+            )
+            addTrackingArea(newArea)
+            trackingArea = newArea
+        }
+
+        // 4. Request redraw to clear any previous selection visuals
+        setNeedsDisplay(bounds)
+
+        debugLog(" >>> reset() COMPLETE")
+    }
+
     deinit {
+        debugLog(" >>> deinit START")
         // Defensive cleanup - should already be done by prepareForDismissal()
         if let area = trackingArea {
+            debugLog(" deinit: removing tracking area")
             removeTrackingArea(area)
             trackingArea = nil
         }
+        debugLog(" >>> deinit COMPLETE")
     }
 
     // MARK: - Dismissal
@@ -59,16 +150,31 @@ final class ScreenCaptureOverlayView: NSView {
     /// Prepare the view for safe dismissal
     /// Must be called by the coordinator before closing the containing window
     func prepareForDismissal() {
-        // Remove tracking area to break owner reference
+        debugLog(" >>> prepareForDismissal() START")
+
+        // Set flag FIRST to prevent any concurrent operations from other methods
+        // This is critical for thread safety and preventing race conditions
+        isDismissed = true
+
+        // Immediately remove tracking area to break owner reference
+        // This prevents AppKit from calling methods on this view via the tracking area
         if let area = trackingArea {
+            debugLog(" Removing tracking area...")
             removeTrackingArea(area)
             trackingArea = nil
         }
 
-        // Clear callbacks - this is the key safety mechanism
-        // After this, onComplete?() and onCancel?() become no-ops
+        // Clear callbacks to prevent any pending invocations
+        // This breaks potential retain cycles
+        debugLog(" Clearing callbacks...")
         onComplete = nil
         onCancel = nil
+
+        // Reset state to prevent any stale data access
+        startPoint = nil
+        currentRect = nil
+
+        debugLog(" >>> prepareForDismissal() COMPLETE")
     }
 
     // MARK: - Setup
@@ -84,6 +190,12 @@ final class ScreenCaptureOverlayView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
+
+        // CRITICAL: Don't create new tracking areas after dismissal
+        // Without this guard, AppKit can call this method after prepareForDismissal()
+        // but before window.close(), creating new tracking areas that reference `self`.
+        // This leads to dangling pointers and EXC_BAD_ACCESS during autorelease pool drain.
+        guard !isDismissed else { return }
 
         // Remove old tracking area
         if let existingArea = trackingArea {
@@ -110,12 +222,18 @@ final class ScreenCaptureOverlayView: NSView {
     // MARK: - Mouse Events
 
     override func mouseDown(with event: NSEvent) {
+        // Guard against dismissed state
+        guard !isDismissed else { return }
+
         startPoint = convert(event.locationInWindow, from: nil)
         currentRect = nil
         needsDisplay = true
     }
 
     override func mouseDragged(with event: NSEvent) {
+        // Guard against dismissed state
+        guard !isDismissed else { return }
+
         guard let start = startPoint else { return }
 
         let current = convert(event.locationInWindow, from: nil)
@@ -131,6 +249,9 @@ final class ScreenCaptureOverlayView: NSView {
     }
 
     override func mouseUp(with _: NSEvent) {
+        // Guard against dismissed state - callbacks are nil but avoid any work
+        guard !isDismissed else { return }
+
         guard let rect = currentRect, rect.width > 10, rect.height > 10 else {
             // Selection too small, cancel
             onCancel?()
@@ -149,6 +270,9 @@ final class ScreenCaptureOverlayView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        // Guard against dismissed state
+        guard !isDismissed else { return }
+
         // Escape key cancels selection
         if event.keyCode == 53 {
             onCancel?()
@@ -159,6 +283,9 @@ final class ScreenCaptureOverlayView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+
+        // Guard against dismissed state - prevent drawing after dismissal
+        guard !isDismissed else { return }
 
         guard let context = NSGraphicsContext.current?.cgContext else { return }
 

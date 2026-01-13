@@ -36,6 +36,9 @@ struct HaloView: View {
             case .typewriting(let progress):
                 HaloTypewritingView(progress: progress)
 
+            case .success(let message):
+                HaloSuccessView(message: message)
+
             case .error(let type, let message, let suggestion):
                 HaloErrorView(
                     errorType: type,
@@ -142,6 +145,27 @@ struct HaloTypewritingView: View {
                 .progressViewStyle(.linear)
                 .frame(width: 60)
         }
+    }
+}
+
+/// Success state view with checkmark (for OCR and other quick operations)
+struct HaloSuccessView: View {
+    var message: String?
+    @State private var scale: CGFloat = 0.5
+    @State private var opacity: Double = 0.0
+
+    var body: some View {
+        Image(systemName: "checkmark.circle.fill")
+            .font(.system(size: 16, weight: .medium))
+            .foregroundColor(.green)
+            .scaleEffect(scale)
+            .opacity(opacity)
+            .onAppear {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                    scale = 1.0
+                    opacity = 1.0
+                }
+            }
     }
 }
 
