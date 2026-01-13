@@ -5,7 +5,10 @@
 //! - MCP server listing and management
 //! - MCP tool discovery
 //! - Config import/export
+//!
+//! Uses scoped refresh for incremental updates to improve performance.
 
+use super::tools::RefreshScope;
 use super::AetherCore;
 use crate::error::{AetherError, Result};
 use tracing::info;
@@ -66,8 +69,8 @@ impl AetherCore {
         // Notify event handler
         self.event_handler.on_config_changed();
 
-        // Refresh tool registry to pick up config changes
-        self.refresh_tool_registry_background();
+        // Scoped refresh: native tools config changed
+        self.refresh_tool_registry_scoped(RefreshScope::NativeToolsOnly);
 
         info!("MCP configuration updated");
         Ok(())
@@ -285,8 +288,8 @@ impl AetherCore {
         // Notify event handler
         self.event_handler.on_config_changed();
 
-        // Refresh tool registry to start new MCP server and register its tools
-        self.refresh_tool_registry_background();
+        // Scoped refresh: start new MCP server and register its tools
+        self.refresh_tool_registry_scoped(RefreshScope::McpServersOnly);
 
         Ok(())
     }
@@ -332,12 +335,13 @@ impl AetherCore {
             }
         }
 
+        let server_id = config.id.clone();
         cfg.save()?;
         drop(cfg);
         self.event_handler.on_config_changed();
 
-        // Refresh tool registry to restart MCP servers with updated config
-        self.refresh_tool_registry_background();
+        // Scoped refresh: restart only the specific MCP server
+        self.refresh_tool_registry_scoped(RefreshScope::McpServer(server_id));
 
         Ok(())
     }
@@ -364,8 +368,8 @@ impl AetherCore {
         drop(cfg);
         self.event_handler.on_config_changed();
 
-        // Refresh tool registry to remove deleted server's tools
-        self.refresh_tool_registry_background();
+        // Scoped refresh: remove deleted server's tools
+        self.refresh_tool_registry_scoped(RefreshScope::McpServersOnly);
 
         Ok(())
     }
@@ -476,8 +480,8 @@ impl AetherCore {
         drop(cfg);
         self.event_handler.on_config_changed();
 
-        // Refresh tool registry to start imported MCP servers
-        self.refresh_tool_registry_background();
+        // Scoped refresh: start imported MCP servers
+        self.refresh_tool_registry_scoped(RefreshScope::McpServersOnly);
 
         Ok(())
     }

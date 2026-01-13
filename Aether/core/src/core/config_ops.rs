@@ -5,7 +5,10 @@
 //! - Provider management
 //! - Routing rules management
 //! - Shortcuts and behavior configuration
+//!
+//! Uses scoped refresh for incremental updates to improve performance.
 
+use super::tools::RefreshScope;
 use super::AetherCore;
 use crate::config::{GeneralConfig, TestConnectionResult};
 use crate::error::{AetherError, Result};
@@ -150,8 +153,8 @@ impl AetherCore {
         // Reinitialize router with updated config
         self.reload_router()?;
 
-        // Refresh tool registry in background to pick up custom command changes
-        self.refresh_tool_registry_background();
+        // Scoped refresh: only update custom commands from routing rules
+        self.refresh_tool_registry_scoped(RefreshScope::CustomCommandsOnly);
 
         log::info!("Routing rules updated and router reinitialized");
         Ok(())

@@ -2,7 +2,7 @@
 //!
 //! This module contains all tool registry methods:
 //! - Tool listing and searching
-//! - Tool registry refresh
+//! - Tool registry refresh (full and scoped)
 //! - Command completion
 //! - Async confirmation handling
 //! - Native tool execution (AgentTool)
@@ -18,6 +18,26 @@ use crate::tools::{
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+
+/// Scope for incremental tool registry refresh
+///
+/// Instead of clearing and rebuilding the entire registry, scoped refresh
+/// only updates the affected tool sources, improving hot-reload performance.
+#[derive(Debug, Clone)]
+pub enum RefreshScope {
+    /// Full refresh - clear and rebuild everything (used for initialization)
+    Full,
+    /// Refresh only skills (install/delete skill)
+    SkillsOnly,
+    /// Refresh only custom commands (update routing rules)
+    CustomCommandsOnly,
+    /// Refresh all MCP servers (add/delete external server)
+    McpServersOnly,
+    /// Refresh a specific MCP server (update server config)
+    McpServer(String),
+    /// Refresh only native tools (rarely needed)
+    NativeToolsOnly,
+}
 
 impl AetherCore {
     // ========================================================================
@@ -77,6 +97,295 @@ impl AetherCore {
         });
 
         debug!("Tool registry background refresh initiated");
+    }
+
+    /// Scoped refresh - update only specific tool sources (non-blocking)
+    ///
+    /// This method provides incremental updates instead of full refresh,
+    /// improving hot-reload performance by only affecting changed tools.
+    ///
+    /// # Arguments
+    /// * `scope` - The scope of tools to refresh
+    ///
+    /// # Usage
+    /// ```rust,ignore
+    /// // After installing a skill
+    /// core.refresh_tool_registry_scoped(RefreshScope::SkillsOnly);
+    ///
+    /// // After updating routing rules
+    /// core.refresh_tool_registry_scoped(RefreshScope::CustomCommandsOnly);
+    /// ```
+    pub fn refresh_tool_registry_scoped(&self, scope: RefreshScope) {
+        // For full refresh, delegate to existing method
+        if matches!(scope, RefreshScope::Full) {
+            self.refresh_tool_registry_background();
+            return;
+        }
+
+        let registry = Arc::clone(&self.tool_registry);
+        let native_registry = Arc::clone(&self.native_tool_registry);
+        let config = self.lock_config().clone();
+        let mcp_client = self.mcp_client.clone();
+        let event_handler = Arc::clone(&self.event_handler);
+        let intent_pipeline = self.intent_pipeline.clone();
+
+        // Spawn scoped refresh task on the runtime
+        self.runtime.spawn(async move {
+            Self::refresh_tool_registry_scoped_impl(
+                scope,
+                registry,
+                native_registry,
+                config,
+                mcp_client,
+                event_handler,
+                intent_pipeline,
+            )
+            .await;
+        });
+
+        debug!("Tool registry scoped refresh initiated");
+    }
+
+    /// Scoped refresh implementation
+    ///
+    /// Performs incremental updates based on the specified scope.
+    async fn refresh_tool_registry_scoped_impl(
+        scope: RefreshScope,
+        registry: Arc<crate::dispatcher::ToolRegistry>,
+        native_registry: Arc<crate::tools::NativeToolRegistry>,
+        config: crate::Config,
+        mcp_client: Option<Arc<crate::mcp::McpClient>>,
+        event_handler: Arc<dyn crate::AetherEventHandler>,
+        intent_pipeline: Option<Arc<crate::routing::IntentRoutingPipeline>>,
+    ) {
+        match scope {
+            RefreshScope::Full => {
+                // Should not reach here, but handle gracefully
+                Self::refresh_tool_registry_impl(
+                    registry,
+                    native_registry,
+                    config,
+                    mcp_client,
+                    event_handler,
+                    intent_pipeline,
+                )
+                .await;
+            }
+
+            RefreshScope::SkillsOnly => {
+                // 1. Remove existing skills from registry
+                let removed = registry.remove_skills().await;
+                debug!("Removed {} skill tools", removed);
+
+                // 2. Re-register skills
+                match crate::initialization::list_installed_skills() {
+                    Ok(skills) => {
+                        registry.register_skills(&skills).await;
+                        debug!("Re-registered {} skills", skills.len());
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to list installed skills during scoped refresh");
+                    }
+                }
+
+                // 3. Update intent pipeline and notify
+                Self::finalize_scoped_refresh(&registry, &intent_pipeline, &event_handler).await;
+            }
+
+            RefreshScope::CustomCommandsOnly => {
+                // 1. Remove existing custom commands from registry
+                let removed = registry.remove_custom_commands().await;
+                debug!("Removed {} custom commands", removed);
+
+                // 2. Re-register custom commands from config rules
+                registry.register_custom_commands(&config.rules).await;
+                debug!("Re-registered custom commands from {} rules", config.rules.len());
+
+                // 3. Update intent pipeline and notify
+                Self::finalize_scoped_refresh(&registry, &intent_pipeline, &event_handler).await;
+            }
+
+            RefreshScope::McpServersOnly => {
+                // 1. Remove all MCP tools from both registries
+                let removed_dispatcher = registry.remove_all_mcp_tools().await;
+                let removed_native = native_registry.remove_mcp_tools().await;
+                debug!(
+                    "Removed {} MCP tools from dispatcher, {} from native registry",
+                    removed_dispatcher, removed_native
+                );
+
+                // 2. Restart all MCP servers and re-register tools
+                if let Some(ref client) = mcp_client {
+                    // Stop all existing servers first
+                    let _ = client.stop_all().await;
+
+                    // Convert config to ExternalServerConfig
+                    let server_configs: Vec<ExternalServerConfig> = config
+                        .mcp
+                        .external_servers
+                        .iter()
+                        .map(|s| ExternalServerConfig {
+                            name: s.name.clone(),
+                            command: s.command.clone(),
+                            args: s.args.clone(),
+                            env: s.env.clone(),
+                            cwd: s.cwd.as_ref().map(PathBuf::from),
+                            requires_runtime: s.requires_runtime.clone(),
+                            timeout_seconds: Some(s.timeout_seconds),
+                        })
+                        .collect();
+
+                    if !server_configs.is_empty() {
+                        // Start external servers concurrently
+                        let startup_report = client.start_external_servers(server_configs).await;
+
+                        // Log startup results
+                        if !startup_report.failed.is_empty() {
+                            for (server_name, error_msg) in &startup_report.failed {
+                                warn!(
+                                    server = %server_name,
+                                    error = %error_msg,
+                                    "Failed to start MCP server during scoped refresh"
+                                );
+                            }
+                        }
+                        info!(
+                            succeeded = startup_report.succeeded.len(),
+                            failed = startup_report.failed.len(),
+                            "MCP servers restart complete"
+                        );
+
+                        // Create bridges and register tools
+                        let mcp_bridges = create_bridges(client).await;
+                        let mcp_tool_count = mcp_bridges.len();
+
+                        if mcp_tool_count > 0 {
+                            native_registry.register_all(mcp_bridges.clone()).await;
+
+                            let mcp_groups = Self::group_mcp_tools_by_server(&mcp_bridges);
+                            for (server_name, tools) in mcp_groups {
+                                registry.register_agent_tools(&tools, &server_name).await;
+                            }
+
+                            debug!("Re-registered {} MCP tools", mcp_tool_count);
+                        }
+                    }
+                }
+
+                // 3. Update intent pipeline and notify
+                Self::finalize_scoped_refresh(&registry, &intent_pipeline, &event_handler).await;
+            }
+
+            RefreshScope::McpServer(server_name) => {
+                // 1. Remove tools for the specific MCP server
+                let removed_dispatcher = registry.remove_by_mcp_server(&server_name).await;
+                let removed_native = native_registry.remove_by_name_prefix(&format!("{}:", server_name)).await;
+                debug!(
+                    "Removed {} tools for MCP server '{}' ({} from native)",
+                    removed_dispatcher, server_name, removed_native
+                );
+
+                // 2. Find and restart only the specified server
+                if let Some(ref client) = mcp_client {
+                    // Find the server config
+                    if let Some(server_config) = config
+                        .mcp
+                        .external_servers
+                        .iter()
+                        .find(|s| s.name == server_name)
+                    {
+                        // Stop the specific server
+                        client.stop_server(&server_name).await;
+
+                        // Restart with new config
+                        let ext_config = ExternalServerConfig {
+                            name: server_config.name.clone(),
+                            command: server_config.command.clone(),
+                            args: server_config.args.clone(),
+                            env: server_config.env.clone(),
+                            cwd: server_config.cwd.as_ref().map(PathBuf::from),
+                            requires_runtime: server_config.requires_runtime.clone(),
+                            timeout_seconds: Some(server_config.timeout_seconds),
+                        };
+
+                        match client.start_external_server(ext_config).await {
+                            Ok(()) => {
+                                info!(server = %server_name, "MCP server restarted successfully");
+
+                                // Re-register tools for this server
+                                let mcp_bridges = create_bridges(client).await;
+                                let server_tools: Vec<_> = mcp_bridges
+                                    .into_iter()
+                                    .filter(|t| t.name().starts_with(&format!("{}:", server_name)))
+                                    .collect();
+
+                                if !server_tools.is_empty() {
+                                    native_registry.register_all(server_tools.clone()).await;
+                                    registry.register_agent_tools(&server_tools, &server_name).await;
+                                    debug!(
+                                        "Re-registered {} tools for MCP server '{}'",
+                                        server_tools.len(),
+                                        server_name
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    server = %server_name,
+                                    error = %e,
+                                    "Failed to restart MCP server"
+                                );
+                            }
+                        }
+                    } else {
+                        // Server was deleted, tools already removed
+                        info!(server = %server_name, "MCP server config not found (may have been deleted)");
+                    }
+                }
+
+                // 3. Update intent pipeline and notify
+                Self::finalize_scoped_refresh(&registry, &intent_pipeline, &event_handler).await;
+            }
+
+            RefreshScope::NativeToolsOnly => {
+                // 1. Remove native tools from both registries
+                let removed_dispatcher = registry.remove_native_tools().await;
+                native_registry.clear().await;
+                debug!("Removed {} native tools from dispatcher", removed_dispatcher);
+
+                // 2. Re-create and register native tools
+                let native_tools = Self::create_native_agent_tools();
+                let native_tool_count = native_registry.register_all(native_tools.clone()).await;
+
+                for (service_name, tools) in Self::group_native_tools_by_service(&native_tools) {
+                    registry.register_agent_tools(&tools, &service_name).await;
+                }
+                debug!("Re-registered {} native AgentTools", native_tool_count);
+
+                // 3. Update intent pipeline and notify
+                Self::finalize_scoped_refresh(&registry, &intent_pipeline, &event_handler).await;
+            }
+        }
+    }
+
+    /// Finalize scoped refresh - update intent pipeline and notify Swift
+    async fn finalize_scoped_refresh(
+        registry: &Arc<crate::dispatcher::ToolRegistry>,
+        intent_pipeline: &Option<Arc<crate::routing::IntentRoutingPipeline>>,
+        event_handler: &Arc<dyn crate::AetherEventHandler>,
+    ) {
+        let tool_count = registry.active_count().await;
+
+        // Update intent pipeline with the new tool list
+        if let Some(ref pipeline) = intent_pipeline {
+            let tools = registry.list_all().await;
+            pipeline.update_tools(tools).await;
+            debug!("Intent pipeline updated with {} tools after scoped refresh", tool_count);
+        }
+
+        // Notify Swift that tools have changed
+        event_handler.on_tools_changed(tool_count as u32);
+        info!("Scoped refresh complete: {} total tools", tool_count);
     }
 
     /// Internal async refresh implementation

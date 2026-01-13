@@ -132,6 +132,81 @@ impl NativeToolRegistry {
     }
 
     // =========================================================================
+    // Incremental Update Methods (Phase 2.3)
+    // =========================================================================
+
+    /// Remove tools by category
+    ///
+    /// This enables incremental updates - only refresh tools of a specific category
+    /// instead of clearing and re-registering everything.
+    ///
+    /// # Arguments
+    ///
+    /// * `category` - The tool category to remove
+    ///
+    /// # Returns
+    ///
+    /// Number of tools removed
+    pub async fn remove_by_category(&self, category: ToolCategory) -> usize {
+        let mut tools = self.tools.write().await;
+        let initial_count = tools.len();
+
+        tools.retain(|_, tool| tool.category() != category);
+
+        let removed = initial_count - tools.len();
+        debug!(
+            category = ?category,
+            removed = removed,
+            "Removed tools by category"
+        );
+        removed
+    }
+
+    /// Remove tools whose names start with a specific prefix
+    ///
+    /// Useful for removing MCP server tools (format: "server_name:tool_name")
+    ///
+    /// # Arguments
+    ///
+    /// * `prefix` - The name prefix to match (e.g., "github:" for github server tools)
+    ///
+    /// # Returns
+    ///
+    /// Number of tools removed
+    pub async fn remove_by_name_prefix(&self, prefix: &str) -> usize {
+        let mut tools = self.tools.write().await;
+        let initial_count = tools.len();
+
+        tools.retain(|name, _| !name.starts_with(prefix));
+
+        let removed = initial_count - tools.len();
+        debug!(
+            prefix = prefix,
+            removed = removed,
+            "Removed tools by name prefix"
+        );
+        removed
+    }
+
+    /// Remove all MCP tools (tools with ":" in the name)
+    ///
+    /// MCP tools follow the naming convention "server_name:tool_name"
+    ///
+    /// # Returns
+    ///
+    /// Number of tools removed
+    pub async fn remove_mcp_tools(&self) -> usize {
+        let mut tools = self.tools.write().await;
+        let initial_count = tools.len();
+
+        tools.retain(|name, _| !name.contains(':'));
+
+        let removed = initial_count - tools.len();
+        debug!(removed = removed, "Removed all MCP tools");
+        removed
+    }
+
+    // =========================================================================
     // Execution Methods
     // =========================================================================
 

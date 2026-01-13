@@ -6,7 +6,9 @@
 //! - Skill listing
 //!
 //! All methods automatically refresh the tool registry after changes.
+//! Uses scoped refresh (RefreshScope::SkillsOnly) for incremental updates.
 
+use super::tools::RefreshScope;
 use super::AetherCore;
 use crate::error::Result;
 use crate::skills::SkillInfo;
@@ -39,10 +41,10 @@ impl AetherCore {
     pub fn install_skill(&self, url: String) -> Result<SkillInfo> {
         let skill_info = crate::initialization::install_skill_from_url(url)?;
 
-        // Refresh tool registry in background (non-blocking)
-        self.refresh_tool_registry_background();
+        // Scoped refresh: only update skills (non-blocking, incremental)
+        self.refresh_tool_registry_scoped(RefreshScope::SkillsOnly);
 
-        info!(skill_id = %skill_info.id, "Skill installed, registry refresh initiated");
+        info!(skill_id = %skill_info.id, "Skill installed, scoped refresh initiated");
         Ok(skill_info)
     }
 
@@ -61,10 +63,10 @@ impl AetherCore {
     pub fn install_skills_from_zip(&self, zip_path: String) -> Result<Vec<String>> {
         let skill_ids = crate::initialization::install_skills_from_zip(zip_path)?;
 
-        // Refresh tool registry in background (non-blocking)
-        self.refresh_tool_registry_background();
+        // Scoped refresh: only update skills (non-blocking, incremental)
+        self.refresh_tool_registry_scoped(RefreshScope::SkillsOnly);
 
-        info!(count = skill_ids.len(), "Skills installed from ZIP, registry refresh initiated");
+        info!(count = skill_ids.len(), "Skills installed from ZIP, scoped refresh initiated");
         Ok(skill_ids)
     }
 
@@ -83,10 +85,10 @@ impl AetherCore {
     pub fn delete_skill(&self, skill_id: String) -> Result<()> {
         crate::initialization::delete_skill(skill_id.clone())?;
 
-        // Refresh tool registry in background (non-blocking)
-        self.refresh_tool_registry_background();
+        // Scoped refresh: only update skills (non-blocking, incremental)
+        self.refresh_tool_registry_scoped(RefreshScope::SkillsOnly);
 
-        info!(skill_id = %skill_id, "Skill deleted, registry refresh initiated");
+        info!(skill_id = %skill_id, "Skill deleted, scoped refresh initiated");
         Ok(())
     }
 
@@ -99,12 +101,12 @@ impl AetherCore {
 
     /// Refresh skills in the tool registry
     ///
-    /// Triggers a background refresh of the tool registry to pick up any skill changes.
+    /// Triggers a scoped refresh of the tool registry to pick up any skill changes.
     /// This is useful when skills are modified outside of AetherCore.
     /// When complete, `on_tools_changed()` callback will be invoked.
     pub fn refresh_skills(&self) {
-        self.refresh_tool_registry_background();
-        info!("Skills refresh initiated in background");
+        self.refresh_tool_registry_scoped(RefreshScope::SkillsOnly);
+        info!("Skills scoped refresh initiated in background");
     }
 }
 

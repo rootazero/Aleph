@@ -157,7 +157,10 @@ impl McpClient {
     }
 
     /// Start a single external server
-    async fn start_external_server(&self, config: ExternalServerConfig) -> Result<()> {
+    ///
+    /// This method is public to support incremental refresh (scoped refresh)
+    /// where only a single MCP server needs to be restarted.
+    pub async fn start_external_server(&self, config: ExternalServerConfig) -> Result<()> {
         let timeout = config.timeout_seconds.map(Duration::from_secs);
 
         let connection = McpServerConnection::connect(
@@ -289,6 +292,29 @@ impl McpClient {
         }
 
         Ok(())
+    }
+
+    /// Stop a specific external server by name
+    ///
+    /// Used for incremental refresh when only one server needs to be restarted.
+    /// Returns true if the server was found and stopped.
+    pub async fn stop_server(&self, name: &str) -> bool {
+        let mut servers = self.external_servers.write().await;
+
+        if let Some(connection) = servers.remove(name) {
+            tracing::info!(server = %name, "Stopping specific MCP server");
+            if let Err(e) = connection.close().await {
+                tracing::warn!(
+                    server = %name,
+                    error = %e,
+                    "Error stopping MCP server"
+                );
+            }
+            true
+        } else {
+            tracing::debug!(server = %name, "MCP server not found (may already be stopped)");
+            false
+        }
     }
 
     /// Check health of all external servers
