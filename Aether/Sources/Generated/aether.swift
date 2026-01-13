@@ -3022,6 +3022,72 @@ public func FfiConverterTypeMcpServerConfig_lower(_ value: McpServerConfig) -> R
 }
 
 
+public struct McpServerErrorFfi {
+    public var serverName: String
+    public var errorMessage: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(serverName: String, errorMessage: String) {
+        self.serverName = serverName
+        self.errorMessage = errorMessage
+    }
+}
+
+
+
+extension McpServerErrorFfi: Equatable, Hashable {
+    public static func ==(lhs: McpServerErrorFfi, rhs: McpServerErrorFfi) -> Bool {
+        if lhs.serverName != rhs.serverName {
+            return false
+        }
+        if lhs.errorMessage != rhs.errorMessage {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(serverName)
+        hasher.combine(errorMessage)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMcpServerErrorFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> McpServerErrorFfi {
+        return
+            try McpServerErrorFfi(
+                serverName: FfiConverterString.read(from: &buf), 
+                errorMessage: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: McpServerErrorFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.serverName, into: &buf)
+        FfiConverterString.write(value.errorMessage, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServerErrorFFI_lift(_ buf: RustBuffer) throws -> McpServerErrorFfi {
+    return try FfiConverterTypeMcpServerErrorFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServerErrorFFI_lower(_ value: McpServerErrorFfi) -> RustBuffer {
+    return FfiConverterTypeMcpServerErrorFFI.lower(value)
+}
+
+
 public struct McpServerPermissions {
     public var requiresConfirmation: Bool
     public var allowedPaths: [String]
@@ -3379,6 +3445,72 @@ public func FfiConverterTypeMcpSettingsConfig_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeMcpSettingsConfig_lower(_ value: McpSettingsConfig) -> RustBuffer {
     return FfiConverterTypeMcpSettingsConfig.lower(value)
+}
+
+
+public struct McpStartupReportFfi {
+    public var succeededServers: [String]
+    public var failedServers: [McpServerErrorFfi]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(succeededServers: [String], failedServers: [McpServerErrorFfi]) {
+        self.succeededServers = succeededServers
+        self.failedServers = failedServers
+    }
+}
+
+
+
+extension McpStartupReportFfi: Equatable, Hashable {
+    public static func ==(lhs: McpStartupReportFfi, rhs: McpStartupReportFfi) -> Bool {
+        if lhs.succeededServers != rhs.succeededServers {
+            return false
+        }
+        if lhs.failedServers != rhs.failedServers {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(succeededServers)
+        hasher.combine(failedServers)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMcpStartupReportFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> McpStartupReportFfi {
+        return
+            try McpStartupReportFfi(
+                succeededServers: FfiConverterSequenceString.read(from: &buf), 
+                failedServers: FfiConverterSequenceTypeMcpServerErrorFFI.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: McpStartupReportFfi, into buf: inout [UInt8]) {
+        FfiConverterSequenceString.write(value.succeededServers, into: &buf)
+        FfiConverterSequenceTypeMcpServerErrorFFI.write(value.failedServers, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpStartupReportFFI_lift(_ buf: RustBuffer) throws -> McpStartupReportFfi {
+    return try FfiConverterTypeMcpStartupReportFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpStartupReportFFI_lower(_ value: McpStartupReportFfi) -> RustBuffer {
+    return FfiConverterTypeMcpStartupReportFFI.lower(value)
 }
 
 
@@ -6888,6 +7020,10 @@ public protocol AetherEventHandler : AnyObject {
     
     func onToolsChanged(toolCount: UInt32) 
     
+    func onToolsRefreshNeeded() 
+    
+    func onMcpStartupComplete(report: McpStartupReportFfi) 
+    
     func onAgentStarted(planId: String, totalSteps: UInt32, description: String) 
     
     func onAgentToolStarted(planId: String, stepIndex: UInt32, toolName: String, toolDescription: String) 
@@ -7361,6 +7497,52 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
                 }
                 return uniffiObj.onToolsChanged(
                      toolCount: try FfiConverterUInt32.lift(toolCount)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onToolsRefreshNeeded: { (
+            uniffiHandle: UInt64,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onToolsRefreshNeeded(
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onMcpStartupComplete: { (
+            uniffiHandle: UInt64,
+            report: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onMcpStartupComplete(
+                     report: try FfiConverterTypeMcpStartupReportFFI.lift(report)
                 )
             }
 
@@ -8417,6 +8599,31 @@ fileprivate struct FfiConverterSequenceTypeMcpServerConfig: FfiConverterRustBuff
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeMcpServerErrorFFI: FfiConverterRustBuffer {
+    typealias SwiftType = [McpServerErrorFfi]
+
+    public static func write(_ value: [McpServerErrorFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeMcpServerErrorFFI.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [McpServerErrorFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [McpServerErrorFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeMcpServerErrorFFI.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeMcpServiceInfo: FfiConverterRustBuffer {
     typealias SwiftType = [McpServiceInfo]
 
@@ -9088,6 +9295,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_tools_changed() != 46377) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tools_refresh_needed() != 36583) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_mcp_startup_complete() != 1232) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_agent_started() != 58953) {

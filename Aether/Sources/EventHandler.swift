@@ -462,16 +462,17 @@ class EventHandler: AetherEventHandler {
         let succeeded = report.succeededServers.count
         let failed = report.failedServers.count
 
-        print("[EventHandler] MCP startup complete: \(succeeded) succeeded, \(failed) failed")
+        // Use NSLog for reliable console output (visible in Console.app and terminal)
+        NSLog("[EventHandler] MCP startup complete: %d succeeded, %d failed", succeeded, failed)
 
         // Log successful servers
         for server in report.succeededServers {
-            print("[EventHandler]   ✓ \(server)")
+            NSLog("[EventHandler]   ✓ %@", server)
         }
 
         // Log and optionally notify about failed servers
         for error in report.failedServers {
-            print("[EventHandler]   ✗ \(error.serverName): \(error.errorMessage)")
+            NSLog("[EventHandler]   ✗ %@: %@", error.serverName, error.errorMessage)
         }
 
         DispatchQueue.main.async { [weak self] in
