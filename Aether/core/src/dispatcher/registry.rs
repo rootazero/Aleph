@@ -522,6 +522,36 @@ impl ToolRegistry {
         debug!("Cleared all tools from registry");
     }
 
+    /// Atomic refresh - build new HashMap and replace in one operation
+    ///
+    /// This method prevents the race condition where `clear()` and `register()`
+    /// have a brief window of empty tool list. Instead, we build a completely
+    /// new HashMap with all tools, then atomically replace the old one.
+    ///
+    /// # Arguments
+    ///
+    /// * `new_tools` - Vector of tools to register (replaces all existing)
+    ///
+    /// # Thread Safety
+    ///
+    /// This uses a single write lock operation, so UI will never see
+    /// an empty or partially populated tool list during refresh.
+    pub async fn refresh_atomic(&self, new_tools: Vec<UnifiedTool>) {
+        let new_map: HashMap<String, UnifiedTool> = new_tools
+            .into_iter()
+            .map(|t| (t.id.clone(), t))
+            .collect();
+
+        let count = new_map.len();
+
+        // Single write lock operation - atomic replacement
+        let mut tools = self.tools.write().await;
+        *tools = new_map;
+        // Lock released here - UI immediately sees new tools, no empty window
+
+        info!("Tool registry atomically refreshed: {} tools", count);
+    }
+
     // =========================================================================
     // Incremental Update Methods (Phase 2.3)
     // =========================================================================
@@ -1475,6 +1505,91 @@ mod tests {
         assert_eq!(mcp.name, "test-mcp");
         assert_eq!(mcp.original_name, Some("test".to_string()));
         assert!(mcp.was_renamed);
+    }
+
+    // =========================================================================
+    // Atomic Refresh Tests (Phase 3.4)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_refresh_atomic_replaces_all_tools() {
+        let registry = ToolRegistry::new();
+
+        // Register some initial tools
+        registry.register_builtin_tools().await;
+        let initial_count = registry.count().await;
+        assert!(initial_count > 0);
+
+        // Create new tool list
+        let new_tools = vec![
+            UnifiedTool::new(
+                "test:tool1",
+                "tool1",
+                "Test Tool 1",
+                ToolSource::Custom { rule_index: 0 },
+            ),
+            UnifiedTool::new(
+                "test:tool2",
+                "tool2",
+                "Test Tool 2",
+                ToolSource::Custom { rule_index: 1 },
+            ),
+        ];
+
+        // Atomic refresh should replace all tools
+        registry.refresh_atomic(new_tools).await;
+
+        // Should have exactly 2 tools now
+        assert_eq!(registry.count().await, 2);
+
+        // Old builtin tools should be gone
+        assert!(registry.get_by_id("builtin:search").await.is_none());
+
+        // New tools should exist
+        assert!(registry.get_by_id("test:tool1").await.is_some());
+        assert!(registry.get_by_id("test:tool2").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_refresh_atomic_empty_list() {
+        let registry = ToolRegistry::new();
+
+        // Register some tools first
+        registry.register_builtin_tools().await;
+        assert!(registry.count().await > 0);
+
+        // Refresh with empty list
+        registry.refresh_atomic(vec![]).await;
+
+        // Should have 0 tools
+        assert_eq!(registry.count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_atomic_preserves_tool_properties() {
+        let registry = ToolRegistry::new();
+
+        // Create tool with all properties
+        let tool = UnifiedTool::new(
+            "custom:mytool",
+            "mytool",
+            "My Tool Description",
+            ToolSource::Custom { rule_index: 0 },
+        )
+        .with_display_name("My Tool")
+        .with_icon("star.fill")
+        .with_usage("/mytool [args]")
+        .with_requires_confirmation(true);
+
+        registry.refresh_atomic(vec![tool]).await;
+
+        let retrieved = registry.get_by_id("custom:mytool").await.unwrap();
+        assert_eq!(retrieved.name, "mytool");
+        assert_eq!(retrieved.display_name, "My Tool");
+        assert_eq!(retrieved.description, "My Tool Description");
+        assert_eq!(retrieved.icon, Some("star.fill".to_string()));
+        assert_eq!(retrieved.usage, Some("/mytool [args]".to_string()));
+        assert!(retrieved.requires_confirmation);
     }
 }
 
