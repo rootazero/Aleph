@@ -292,7 +292,7 @@ impl IntentRoutingPipeline {
         match &intent.action {
             IntentAction::Execute => {
                 // Execute the tool directly
-                self.execute_tool(intent).await
+                self.execute_tool(&ctx, intent).await
             }
             IntentAction::ExecutePlan { plan } => {
                 // Execute multi-step plan
@@ -313,7 +313,7 @@ impl IntentRoutingPipeline {
                 // Note: In real implementation, this would go to UI
                 // For now, auto-execute if we have high-ish confidence
                 if intent.final_confidence >= self.config.confidence.requires_confirmation {
-                    self.execute_tool(intent).await
+                    self.execute_tool(&ctx, intent).await
                 } else {
                     PipelineResult::general_chat(&ctx.input)
                 }
@@ -328,20 +328,29 @@ impl IntentRoutingPipeline {
         }
     }
 
-    /// Execute a tool
-    async fn execute_tool(&self, intent: crate::routing::AggregatedIntent) -> PipelineResult {
+    /// Signal that a tool was matched and needs execution by the caller.
+    ///
+    /// The pipeline only handles intent routing and clarification.
+    /// Actual tool execution is delegated to AetherCore which has access
+    /// to capability executors (VideoStrategy, SearchExecutor, etc.)
+    async fn execute_tool(
+        &self,
+        ctx: &RoutingContext,
+        intent: crate::routing::AggregatedIntent,
+    ) -> PipelineResult {
         let tool = match &intent.primary.tool {
             Some(t) => t,
             None => return PipelineResult::general_chat("No tool matched"),
         };
 
-        // TODO: Actually execute the tool via dispatcher
-        // For now, return a placeholder result
-        PipelineResult::executed(
-            &tool.name,
-            format!("Tool {} would be executed", tool.name),
-            intent.primary.parameters.clone(),
-        )
+        info!(
+            tool_name = %tool.name,
+            confidence = %intent.final_confidence,
+            "Pipeline: Tool matched, delegating execution to caller"
+        );
+
+        // Return ToolMatched to signal that caller should execute this tool
+        PipelineResult::tool_matched(&tool.name, intent.primary.parameters.clone(), &ctx.input)
     }
 
     /// Start a clarification flow

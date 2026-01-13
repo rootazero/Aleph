@@ -150,6 +150,18 @@ impl AetherCore {
                 );
                 Ok(content)
             }
+            PipelineResult::ToolMatched {
+                tool_name,
+                parameters,
+                input,
+            } => {
+                // Execute the matched tool using capability executor
+                info!(
+                    tool = %tool_name,
+                    "Pipeline: Tool matched, executing capability"
+                );
+                self.execute_matched_tool(tool_name, parameters, input, context, start_time)
+            }
             PipelineResult::GeneralChat { input, .. } => {
                 // Fall back to AI-first processing for general chat
                 debug!(
@@ -190,6 +202,19 @@ impl AetherCore {
 
                         match resume_result {
                             PipelineResult::Executed { content, .. } => Ok(content),
+                            PipelineResult::ToolMatched {
+                                tool_name,
+                                parameters,
+                                input,
+                            } => {
+                                self.execute_matched_tool(
+                                    tool_name,
+                                    parameters,
+                                    input,
+                                    context.clone(),
+                                    start_time,
+                                )
+                            }
                             PipelineResult::GeneralChat { .. } => {
                                 Err(AetherError::other("Pipeline returned GeneralChat after clarification"))
                             }
@@ -211,6 +236,163 @@ impl AetherCore {
                 Err(AetherError::other(format!("Pipeline skipped: {}", reason)))
             }
         }
+    }
+
+    /// Execute a matched tool from the intent routing pipeline.
+    ///
+    /// This method handles the actual execution of tools/capabilities that were
+    /// matched by the pipeline. It:
+    /// 1. Maps tool names to capabilities (e.g., "youtube" -> Video)
+    /// 2. Extracts query from parameters
+    /// 3. Executes capabilities via build_enriched_payload
+    /// 4. Calls AI provider to generate response with capability results
+    fn execute_matched_tool(
+        &self,
+        tool_name: String,
+        parameters: serde_json::Value,
+        input: String,
+        context: CapturedContext,
+        start_time: std::time::Instant,
+    ) -> Result<String> {
+        use crate::payload::{Capability, ContextFormat};
+
+        // Map tool name to Capability enum
+        let capability = match tool_name.as_str() {
+            "youtube" | "video" => Capability::Video,
+            "search" => Capability::Search,
+            "memory" => Capability::Memory,
+            _ => {
+                // Unknown tool, fall back to general chat
+                debug!(tool = %tool_name, "Unknown tool, falling back to AI-first");
+                return Err(AetherError::other(format!(
+                    "Unknown tool: {}, falling back to AI-first",
+                    tool_name
+                )));
+            }
+        };
+
+        info!(
+            tool = %tool_name,
+            capability = ?capability,
+            "Executing matched tool capability"
+        );
+
+        // Update UI state
+        self.event_handler
+            .on_state_changed(ProcessingState::RetrievingMemory);
+
+        // Extract query from parameters or use input
+        let query = parameters
+            .get("url")
+            .or_else(|| parameters.get("query"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| {
+                // Try to extract URL or query from input
+                // For YouTube, the input might be "/youtube https://..."
+                input
+                    .strip_prefix("/youtube")
+                    .or_else(|| input.strip_prefix("/video"))
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or(input.clone())
+            });
+
+        info!(
+            query = %query,
+            original_input = %input,
+            "Extracted query for capability execution"
+        );
+
+        // Build capabilities list - always include memory if available
+        let mut capabilities = vec![capability];
+        if self.memory_db.is_some() && !capabilities.contains(&Capability::Memory) {
+            capabilities.push(Capability::Memory);
+        }
+
+        // Get AI provider
+        let provider = self
+            .get_default_provider_instance()
+            .ok_or_else(|| AetherError::config("No AI provider available"))?;
+
+        // Build enriched payload using capability executor
+        let enriched_payload = self.runtime.block_on(self.build_enriched_payload(
+            query.clone(),
+            context.clone(),
+            provider.name().to_string(),
+            capabilities,
+        ))?;
+
+        // Check if we got capability results
+        let has_video = enriched_payload.context.video_transcript.is_some();
+        let has_search = enriched_payload.context.search_results.is_some();
+        let has_memory = enriched_payload.context.memory_snippets.is_some();
+
+        info!(
+            has_video = %has_video,
+            has_search = %has_search,
+            has_memory = %has_memory,
+            "Capability execution completed"
+        );
+
+        // Use default system prompt for tool execution
+        // The prompt assembler will add capability context
+        let base_prompt = "You are a helpful AI assistant.";
+
+        // Assemble enriched prompt with capability results
+        let assembler = crate::payload::PromptAssembler::new(ContextFormat::Markdown);
+        let enriched_prompt = assembler.assemble_system_prompt(&base_prompt, &enriched_payload);
+
+        info!(
+            enriched_prompt_length = enriched_prompt.len(),
+            "Making AI call with enriched context"
+        );
+
+        // Make AI call with enriched context
+        let attachments = context.attachments.as_ref().map(|a| a.as_slice());
+        let response = self.runtime.block_on(
+            provider.process_with_attachments(&input, attachments, Some(&enriched_prompt)),
+        )?;
+
+        info!(
+            response_length = response.len(),
+            elapsed_ms = start_time.elapsed().as_millis(),
+            "Pipeline: Tool execution completed"
+        );
+
+        // Store in memory asynchronously if enabled
+        if self.memory_db.is_some() {
+            let user_input = input.clone();
+            let ai_output = response.clone();
+            let core_clone = self.clone_for_storage();
+
+            self.runtime.spawn(async move {
+                match core_clone
+                    .store_interaction_memory(user_input, ai_output)
+                    .await
+                {
+                    Ok(memory_id) => {
+                        debug!(
+                            memory_id = %memory_id,
+                            "Pipeline tool response stored in memory"
+                        );
+                    }
+                    Err(e) => {
+                        error!(
+                            error = %e,
+                            "Failed to store pipeline tool response in memory"
+                        );
+                    }
+                }
+            });
+        }
+
+        // Record turn for compression scheduling
+        self.record_conversation_turn();
+
+        self.event_handler
+            .on_state_changed(ProcessingState::Success);
+
+        Ok(response)
     }
 
     /// AI-First processing mode.

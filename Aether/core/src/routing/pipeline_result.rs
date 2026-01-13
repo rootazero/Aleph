@@ -28,6 +28,20 @@ pub enum PipelineResult {
         parameters: serde_json::Value,
     },
 
+    /// Tool was matched but needs external execution
+    ///
+    /// This variant is used when the pipeline has identified a tool to execute,
+    /// but the actual execution should be done by the caller (e.g., AetherCore)
+    /// which has access to capability executors.
+    ToolMatched {
+        /// Tool/capability name that was matched
+        tool_name: String,
+        /// Parameters extracted from user input
+        parameters: serde_json::Value,
+        /// Original user input
+        input: String,
+    },
+
     /// Waiting for user clarification
     PendingClarification(ClarificationRequest),
 
@@ -61,6 +75,19 @@ impl PipelineResult {
             tool_name: tool_name.into(),
             content: content.into(),
             parameters,
+        }
+    }
+
+    /// Create a tool matched result (needs external execution)
+    pub fn tool_matched(
+        tool_name: impl Into<String>,
+        parameters: serde_json::Value,
+        input: impl Into<String>,
+    ) -> Self {
+        Self::ToolMatched {
+            tool_name: tool_name.into(),
+            parameters,
+            input: input.into(),
         }
     }
 
@@ -113,6 +140,9 @@ impl fmt::Display for PipelineResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Executed { tool_name, .. } => write!(f, "Executed tool: {}", tool_name),
+            Self::ToolMatched { tool_name, .. } => {
+                write!(f, "Tool matched (needs execution): {}", tool_name)
+            }
             Self::PendingClarification(req) => {
                 write!(f, "Pending clarification: {}", req.prompt)
             }

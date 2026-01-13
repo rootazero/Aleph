@@ -105,11 +105,16 @@ async fn test_pipeline_with_mock_provider() {
     let ctx = RoutingContext::new("find information about rust programming");
     let result = pipeline.process(ctx).await;
 
-    // Should fall back to general chat since L1/L2 won't match
-    // and L3 mock response format may not be parsed correctly
+    // Should match a tool (ToolMatched), fall back to general chat, or execute directly
+    // ToolMatched is returned when a tool is matched but needs external execution
     assert!(
-        matches!(result, PipelineResult::GeneralChat { .. } | PipelineResult::Executed { .. }),
-        "Expected GeneralChat or Executed, got {:?}",
+        matches!(
+            result,
+            PipelineResult::GeneralChat { .. }
+                | PipelineResult::Executed { .. }
+                | PipelineResult::ToolMatched { .. }
+        ),
+        "Expected GeneralChat, Executed, or ToolMatched, got {:?}",
         result
     );
 }
