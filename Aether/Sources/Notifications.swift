@@ -77,6 +77,12 @@ extension Notification.Name {
     /// - UserInfo: ["toolCount": UInt32]
     static let toolsDidChange = Notification.Name("AetherToolsDidChange")
 
+    // MARK: - MCP Servers (hot-reload-optimization)
+
+    /// Posted when MCP servers finish starting with success/failure info
+    /// - UserInfo: ["succeededServers": [String], "failedServers": [McpServerErrorFfi]]
+    static let mcpStartupComplete = Notification.Name("AetherMcpStartupComplete")
+
     // MARK: - Agent Loop (enhance-l3-agent-planning)
 
     /// Posted when agent loop starts executing a multi-step plan

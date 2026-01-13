@@ -495,6 +495,8 @@ class PreviewEventHandler: AetherEventHandler {
     func onConfirmationNeeded(confirmation: PendingConfirmationInfo) {}
     func onConfirmationExpired(confirmationId: String) {}
     func onToolsChanged(toolCount: UInt32) {}
+    func onToolsRefreshNeeded() {}
+    func onMcpStartupComplete(report: McpStartupReportFfi) {}
     func onAgentStarted(planId: String, totalSteps: UInt32, description: String) {}
     func onAgentToolStarted(planId: String, stepIndex: UInt32, toolName: String, toolDescription: String) {}
     func onAgentToolCompleted(planId: String, stepIndex: UInt32, toolName: String, success: Bool, resultPreview: String) {}

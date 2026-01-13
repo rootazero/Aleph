@@ -793,3 +793,7 @@
 "ocr.no_text_found" = "No text found in the selected area";
 "ocr.permission_required_title" = "Screen Recording Permission Required";
 "ocr.permission_required_message" = "Please grant Screen Recording permission in System Settings to use OCR.";
+
+// MARK: - MCP Startup (hot-reload-optimization)
+"mcp.startup_partial" = "MCP Startup Warning";
+"mcp.servers_failed" = "Some MCP servers failed to start: %@";

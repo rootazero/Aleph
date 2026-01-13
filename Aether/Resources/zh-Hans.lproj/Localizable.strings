@@ -795,3 +795,7 @@
 "ocr.no_text_found" = "所选区域未找到文字";
 "ocr.permission_required_title" = "需要屏幕录制权限";
 "ocr.permission_required_message" = "请在系统设置中授予屏幕录制权限以使用 OCR 功能。";
+
+// MARK: - MCP Startup (hot-reload-optimization)
+"mcp.startup_partial" = "MCP 启动警告";
+"mcp.servers_failed" = "部分 MCP 服务器启动失败: %@";

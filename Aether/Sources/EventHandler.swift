@@ -430,6 +430,74 @@ class EventHandler: AetherEventHandler {
         }
     }
 
+    /// Called when config watcher detects changes that require tool refresh
+    ///
+    /// This callback is triggered when the config file is modified externally
+    /// and the tool registry needs to be refreshed from Swift side.
+    ///
+    /// NOTE: This method is called from a background thread by Rust/UniFFI.
+    func onToolsRefreshNeeded() {
+        print("[EventHandler] Tools refresh needed (config changed)")
+
+        DispatchQueue.main.async { [weak self] in
+            guard let core = self?.core else {
+                print("[EventHandler] Warning: Cannot refresh tools - no AetherCore reference")
+                return
+            }
+
+            // Trigger tool registry refresh via refreshSkills()
+            // This refreshes all tool sources including skills, MCP, and custom commands
+            core.refreshSkills()
+            print("[EventHandler] Tool registry refresh triggered")
+        }
+    }
+
+    /// Called when MCP servers finish starting with success/failure info
+    ///
+    /// This callback provides detailed feedback about which MCP servers
+    /// started successfully and which failed with error messages.
+    ///
+    /// NOTE: This method is called from a background thread by Rust/UniFFI.
+    func onMcpStartupComplete(report: McpStartupReportFfi) {
+        let succeeded = report.succeededServers.count
+        let failed = report.failedServers.count
+
+        print("[EventHandler] MCP startup complete: \(succeeded) succeeded, \(failed) failed")
+
+        // Log successful servers
+        for server in report.succeededServers {
+            print("[EventHandler]   ✓ \(server)")
+        }
+
+        // Log and optionally notify about failed servers
+        for error in report.failedServers {
+            print("[EventHandler]   ✗ \(error.serverName): \(error.errorMessage)")
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            // Post notification for UI updates
+            NotificationCenter.default.post(
+                name: .mcpStartupComplete,
+                object: nil,
+                userInfo: [
+                    "succeededServers": report.succeededServers,
+                    "failedServers": report.failedServers
+                ]
+            )
+
+            // Show toast notification if there were failures
+            if !report.failedServers.isEmpty {
+                let failedNames = report.failedServers.map { $0.serverName }.joined(separator: ", ")
+                self?.showToast(
+                    type: .warning,
+                    title: L("mcp.startup_partial"),
+                    message: String(format: L("mcp.servers_failed"), failedNames),
+                    autoDismiss: true
+                )
+            }
+        }
+    }
+
     // MARK: - Agent Loop Callbacks (enhance-l3-agent-planning)
 
     /// Called when agent loop starts executing a multi-step plan
