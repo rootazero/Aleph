@@ -88,7 +88,7 @@ pub struct CommandNode {
     /// Tool source type for UI badge display (flat namespace mode)
     ///
     /// Indicates where the command comes from:
-    /// - Builtin/Native: System commands (/search, /youtube, /chat)
+    /// - Builtin/Native: System commands (/search, /youtube, /webfetch)
     /// - Mcp: MCP server tools
     /// - Skill: Claude Agent skills
     /// - Custom: User-defined rules

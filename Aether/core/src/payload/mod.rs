@@ -151,9 +151,28 @@ pub struct AgentContext {
     /// Contains extracted transcript from YouTube or other video platforms
     pub video_transcript: Option<crate::video::VideoTranscript>,
 
+    /// Web page content fetched via WebFetch capability
+    /// Contains the extracted content from a URL in markdown format
+    pub webfetch_content: Option<WebFetchContent>,
+
     /// Skills instructions - dynamically injected from matched SKILL.md
     /// Contains the instructions from the skill's markdown body
     pub skill_instructions: Option<String>,
+}
+
+/// Result of web page content fetching
+#[derive(Debug, Clone)]
+pub struct WebFetchContent {
+    /// The URL that was fetched
+    pub url: String,
+    /// Page title
+    pub title: Option<String>,
+    /// Extracted content in markdown format
+    pub content: String,
+    /// Content length in bytes
+    pub content_length: usize,
+    /// Whether content was truncated
+    pub was_truncated: bool,
 }
 
 /// Result of an MCP tool execution

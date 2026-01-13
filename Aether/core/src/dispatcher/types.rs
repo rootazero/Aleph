@@ -18,7 +18,7 @@ use crate::tools::{ToolCategory, ToolDefinition};
 /// and the lower priority tool is renamed with a suffix.
 ///
 /// Priority order (highest to lowest):
-/// 1. Builtin (5) - System commands like /search, /youtube, /chat
+/// 1. Builtin (5) - System commands like /search, /youtube, /webfetch
 /// 2. Native (4) - System capabilities implementations
 /// 3. Custom (3) - User-defined rules from config.toml
 /// 4. Mcp (2) - External MCP server tools
@@ -82,7 +82,7 @@ pub enum ToolSource {
     /// These are always available without any configuration.
     Native,
 
-    /// System builtin commands (/search, /youtube, /chat)
+    /// System builtin commands (/search, /youtube, /webfetch)
     /// These are always-available slash commands that may or may not have
     /// special capability execution logic.
     Builtin,
@@ -251,7 +251,7 @@ pub struct UnifiedTool {
     pub localization_key: Option<String>,
 
     /// Quick check for builtin status
-    /// True for system builtin commands (/search, /youtube, /chat)
+    /// True for system builtin commands (/search, /youtube, /webfetch)
     #[serde(default)]
     pub is_builtin: bool,
 
@@ -803,7 +803,7 @@ impl RoutingLayer {
 pub enum ToolSourceType {
     /// Built-in native capabilities (Search, YouTube)
     Native,
-    /// System builtin commands (/search, /youtube, /chat)
+    /// System builtin commands (/search, /youtube, /webfetch)
     Builtin,
     /// MCP server tool
     Mcp,

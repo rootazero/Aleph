@@ -152,10 +152,78 @@ User Input → Router → PayloadBuilder → CapabilityExecutor → PromptAssemb
 
 **Key Features**:
 - **AgentPayload**: Type-safe data structure replaces string concatenation
-- **Dynamic Capabilities**: Memory, Search, MCP tools
+- **Dynamic Capabilities**: Memory, Search, Tool execution
 - **Intent Classification**: BuiltinSearch, Custom, Skills, GeneralChat
 
 See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for details.
+
+### Unified Tool Architecture
+
+Aether implements a **unified tool dispatch system** with five independent tool categories and priority-based routing.
+
+#### Five Tool Categories (Priority Order)
+
+| Priority | Category | Description | Examples |
+|----------|----------|-------------|----------|
+| 5 (Highest) | **Builtin** | System commands with routing config | `/search`, `/youtube`, `/chat`, `/webfetch` |
+| 4 | **Native** | Built-in AgentTool implementations | `web_fetch`, `screen_capture`, `file_read` |
+| 3 | **Custom** | User-defined routing rules | Custom regex patterns in config.toml |
+| 2 | **MCP** | External MCP server tools | Context7, filesystem servers |
+| 1 (Lowest) | **Skill** | Agent skills | Future implementation |
+
+#### Tool Execution Flow
+
+```
+AI sees tools via ToolRegistry.to_prompt_block()
+    → Shows all 5 types with priority badges: [Builtin-Preferred], [Native-Preferred], [MCP:xxx], etc.
+    ↓
+AI requests tool via capability: {"capability": "mcp", "parameters": {"tool": "web_fetch", "args": {...}}}
+    ↓
+execute_tool_and_continue() in processing.rs
+    ↓
+UnifiedToolExecutor.execute() in tool_executor.rs
+    ↓
+Routes to correct backend:
+    - ToolSource::Native → NativeToolRegistry.execute()
+    - ToolSource::Mcp → McpClient.call_tool()
+    - ToolSource::Builtin → CapabilityExecutor (Search/Video/Memory)
+```
+
+#### Key Files
+
+| File | Purpose |
+|------|---------|
+| `core/tool_executor.rs` | `UnifiedToolExecutor` - unified execution entry point |
+| `core/processing.rs` | `execute_tool_and_continue()` - AI tool request handler |
+| `core/tools.rs` | `get_tool_prompt_block()` - generates tool list for AI |
+| `dispatcher/types.rs` | `ToolSource`, `ToolPriority` - type definitions |
+| `dispatcher/registry.rs` | `ToolRegistry` - tool registration and lookup |
+| `payload/assembler.rs` | `format_available_tools()` - prompt formatting |
+
+#### Tool Registration
+
+```rust
+// Tools are registered in ToolRegistry with proper sources
+ToolSource::Builtin           // System commands (sort_order: 10-40)
+ToolSource::Native            // AgentTool implementations
+ToolSource::Mcp { server }    // External MCP server tools
+ToolSource::Skill { id }      // Agent skills
+ToolSource::Custom { rule }   // User-defined rules
+```
+
+#### Adding New Tools
+
+1. **Native Tool**: Implement `AgentTool` trait in `tools/` module
+2. **Builtin Command**: Add to `register_builtin_tools()` in `dispatcher/registry.rs`
+3. **MCP Tool**: Configure external server in `config.toml` under `[mcp.servers]`
+4. **Custom Rule**: Add routing rule in `config.toml` under `[[routing.rules]]`
+
+#### Important Design Principles
+
+- **Never wrap tools in MCP**: Each category is independent, not nested
+- **Priority resolves conflicts**: Higher priority wins when names collide
+- **Unified execution**: All tools route through `UnifiedToolExecutor`
+- **Source badges in prompts**: AI sees `[Native - Preferred]` etc. to guide selection
 
 ### Dispatcher Layer
 
@@ -211,6 +279,9 @@ Use trait-based abstractions for all core components:
 - DO NOT block main thread during API calls (use tokio async)
 - DO NOT put business logic in Swift (belongs in Rust core only)
 - DO NOT manually write FFI bindings (use UniFFI)
+- DO NOT wrap Native/Custom/Skill tools inside MCP capability (each tool type is independent)
+- DO NOT bypass UnifiedToolExecutor for tool calls (all tools route through it)
+- DO NOT convert tool types (e.g., NativeToolDef → McpToolInfo) - show each type with its proper badge
 
 ---
 

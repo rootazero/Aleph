@@ -303,9 +303,8 @@ pub enum ContextAction {
 fn parse_capability(s: &str) -> Option<Capability> {
     match s.to_lowercase().as_str() {
         "memory" => Some(Capability::Memory),
-        "search" => Some(Capability::Search),
         "mcp" => Some(Capability::Mcp),
-        "video" => Some(Capability::Video),
+        "skills" => Some(Capability::Skills),
         _ => None,
     }
 }

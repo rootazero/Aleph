@@ -50,6 +50,30 @@ impl PromptAssembler {
         capabilities: &[CapabilityDeclaration],
         context: Option<&AgentContext>,
     ) -> String {
+        self.build_capability_aware_prompt_with_tools(base_prompt, capabilities, None, context)
+    }
+
+    /// Complete system prompt with capability instructions and unified tool list.
+    ///
+    /// This method builds a prompt that includes:
+    /// 1. Base prompt
+    /// 2. Capability instructions (Search, Video, Tool execution, etc.)
+    /// 3. Available Tools section (all 5 types with proper categorization)
+    /// 4. Optional context (memory, search results, etc.)
+    ///
+    /// # Arguments
+    ///
+    /// * `base_prompt` - Base system prompt from routing rule or provider
+    /// * `capabilities` - List of available capabilities
+    /// * `tools_prompt_block` - Optional unified tools list from ToolRegistry.to_prompt_block()
+    /// * `context` - Optional existing context (memory snippets, etc.)
+    pub fn build_capability_aware_prompt_with_tools(
+        &self,
+        base_prompt: &str,
+        capabilities: &[CapabilityDeclaration],
+        tools_prompt_block: Option<&str>,
+        context: Option<&AgentContext>,
+    ) -> String {
         let mut prompt = base_prompt.to_string();
 
         // Add capability instructions if any capabilities are available
@@ -57,6 +81,15 @@ impl PromptAssembler {
         if !available_caps.is_empty() {
             prompt.push_str("\n\n");
             prompt.push_str(&self.format_capability_instructions(&available_caps));
+        }
+
+        // Add unified tools section if provided
+        // This shows all 5 tool types (Builtin, Native, MCP, Skills, Custom) with proper categorization
+        if let Some(tools_block) = tools_prompt_block {
+            if !tools_block.is_empty() {
+                prompt.push_str("\n\n");
+                prompt.push_str(&self.format_available_tools(tools_block));
+            }
         }
 
         // Add existing context if provided
@@ -68,6 +101,47 @@ impl PromptAssembler {
         }
 
         prompt
+    }
+
+    /// Format the Available Tools section.
+    ///
+    /// This renders the unified tool list with priority information.
+    fn format_available_tools(&self, tools_block: &str) -> String {
+        let mut lines = vec![
+            "## Available Tools".to_string(),
+            String::new(),
+            "The following tools are available for you to use. When invoking a tool, use the Tool Execution capability:".to_string(),
+            "```json".to_string(),
+            r#"{"__capability_request__": true, "capability": "mcp", "parameters": {"tool": "tool_name", "args": {...}}, "query": "original user request"}"#.to_string(),
+            "```".to_string(),
+            String::new(),
+            "### Tool Priority (Higher = Preferred)".to_string(),
+            "- **[Builtin - Preferred]**: System commands, highest reliability".to_string(),
+            "- **[Native - Preferred]**: Built-in tools, optimized for local execution".to_string(),
+            "- **[Custom]**: User-defined commands".to_string(),
+            "- **[MCP:xxx]**: External MCP server tools".to_string(),
+            "- **[Skill:xxx]**: Agent skills".to_string(),
+            String::new(),
+            "### Tool List".to_string(),
+            String::new(),
+        ];
+
+        lines.push(tools_block.to_string());
+
+        lines.push(String::new());
+        lines.push("**Examples**:".to_string());
+        lines.push("- User: \"分析这个网页 https://example.com\"".to_string());
+        lines.push("  ```json".to_string());
+        lines.push(r#"  {"__capability_request__": true, "capability": "mcp", "parameters": {"tool": "web_fetch", "args": {"url": "https://example.com", "prompt": "分析网页内容"}}, "query": "分析这个网页 https://example.com"}"#.to_string());
+        lines.push("  ```".to_string());
+        lines.push("- User: \"截屏\"".to_string());
+        lines.push("  ```json".to_string());
+        lines.push(r#"  {"__capability_request__": true, "capability": "mcp", "parameters": {"tool": "screen_capture", "args": {}}, "query": "截屏"}"#.to_string());
+        lines.push("  ```".to_string());
+        lines.push(String::new());
+        lines.push("**CRITICAL**: When a tool can help answer the user's request, USE IT. Do not claim you cannot access web pages, files, or perform system operations when the appropriate tool is available.".to_string());
+
+        lines.join("\n")
     }
 
     /// Format capability instructions for the AI.
@@ -138,44 +212,9 @@ impl PromptAssembler {
                 }
             }
 
-            // Add detailed MCP tool information if available
-            if cap.id == "mcp" {
-                if let Some(ref tools) = cap.mcp_tools {
-                    lines.push(String::new());
-                    lines.push("- **Available MCP Tools**:".to_string());
-                    for tool in tools {
-                        lines.push(format!("  - `{}`: {}", tool.name, tool.description));
-                        // Add input schema hints for better AI understanding
-                        if let Some(properties) = tool.input_schema.get("properties") {
-                            if let Some(props_obj) = properties.as_object() {
-                                if !props_obj.is_empty() {
-                                    let param_names: Vec<&str> = props_obj.keys().map(|s| s.as_str()).collect();
-                                    lines.push(format!("    - Parameters: {}", param_names.join(", ")));
-                                }
-                            }
-                        }
-                    }
-                    lines.push(String::new());
-                    lines.push("- **How to invoke MCP tools**:".to_string());
-                    lines.push("  When user asks to perform a system operation (screenshot, file read, etc.):".to_string());
-                    lines.push("  ```json".to_string());
-                    lines.push(r#"  {"__capability_request__": true, "capability": "mcp", "parameters": {"tool": "tool_name", "args": {...}}, "query": "original user request"}"#.to_string());
-                    lines.push("  ```".to_string());
-                    lines.push(String::new());
-                    lines.push("  **MCP Tool Examples**:".to_string());
-                    lines.push("  - User: \"截屏\" or \"Take a screenshot\"".to_string());
-                    lines.push("    ```json".to_string());
-                    lines.push(r#"    {"__capability_request__": true, "capability": "mcp", "parameters": {"tool": "screen_capture", "args": {}}, "query": "截屏"}"#.to_string());
-                    lines.push("    ```".to_string());
-                    lines.push("  - User: \"Read file /path/to/file.txt\"".to_string());
-                    lines.push("    ```json".to_string());
-                    lines.push(r#"    {"__capability_request__": true, "capability": "mcp", "parameters": {"tool": "file_read", "args": {"path": "/path/to/file.txt"}}, "query": "Read file /path/to/file.txt"}"#.to_string());
-                    lines.push("    ```".to_string());
-                    lines.push(String::new());
-                    lines.push("  **CRITICAL**: DO NOT say \"I cannot access your screen\" or \"I cannot read files\".".to_string());
-                    lines.push("  You HAVE these capabilities through MCP tools. Use them proactively!".to_string());
-                }
-            }
+            // Note: Tool list is now rendered separately via format_available_tools()
+            // The Tool capability just describes HOW to call tools
+            // The actual tool list with 5 categories is in the "Available Tools" section
 
             lines.push(String::new());
         }
@@ -307,6 +346,12 @@ impl PromptAssembler {
         // MCP resources section (tool listing, less commonly used)
         if let Some(_resources) = &context.mcp_resources {
             // Tool listing is handled in capability instructions, not here
+        }
+
+        // WebFetch content section
+        if let Some(webfetch) = &context.webfetch_content {
+            let webfetch_section = self.format_webfetch_content_markdown(webfetch);
+            sections.push(webfetch_section);
         }
 
         // Skills instructions section
@@ -531,6 +576,39 @@ impl PromptAssembler {
 
         lines.push(String::new());
         lines.push("_IMPORTANT: Use the above tool result to answer the user's question. If the tool execution failed, explain what went wrong and suggest alternatives._".to_string());
+
+        lines.join("\n")
+    }
+
+    /// Format web page content fetched via WebFetch capability
+    fn format_webfetch_content_markdown(&self, content: &super::WebFetchContent) -> String {
+        let mut lines = vec![
+            "**Web Page Content** (Fetched by WebFetch capability):".to_string(),
+            String::new(),
+            "_CRITICAL: This content was just fetched by YOUR WebFetch capability from the URL. You HAVE successfully accessed this web page. Answer directly based on this content._".to_string(),
+            String::new(),
+        ];
+
+        // URL and title
+        lines.push(format!("**URL**: {}", content.url));
+        if let Some(ref title) = content.title {
+            lines.push(format!("**Title**: {}", title));
+        }
+        lines.push(String::new());
+
+        // Content
+        let truncated = truncate_text(&content.content, 8000);
+        lines.push("**Content**:".to_string());
+        lines.push("```".to_string());
+        lines.push(truncated);
+        lines.push("```".to_string());
+
+        // Metadata
+        lines.push(String::new());
+        lines.push(format!("_Content length: {} bytes{}_",
+            content.content_length,
+            if content.was_truncated { " (truncated)" } else { "" }
+        ));
 
         lines.join("\n")
     }
@@ -953,6 +1031,7 @@ mod tests {
             mcp_resources: None,
             mcp_tool_result: None,
             video_transcript: None,
+            webfetch_content: None,
             workflow_state: None,
             attachments: None,
             skill_instructions: None,

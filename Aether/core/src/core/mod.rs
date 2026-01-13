@@ -38,6 +38,7 @@ use types::RequestContext;
 use crate::config::{Config, ConfigWatcher};
 use crate::conversation::ConversationManager;
 use crate::dispatcher::{AsyncConfirmationHandler, ToolRegistry};
+use tool_executor::UnifiedToolExecutor;
 use crate::tools::NativeToolRegistry;
 use crate::error::{AetherError, Result};
 use crate::event_handler::{AetherEventHandler, ProcessingState};
@@ -105,6 +106,8 @@ pub struct AetherCore {
     pub(crate) async_confirmation: Arc<AsyncConfirmationHandler>,
     /// Intent routing pipeline (enhanced routing system)
     pub(crate) intent_pipeline: Option<Arc<IntentRoutingPipeline>>,
+    /// Unified tool executor for routing tool calls to correct backend
+    pub(crate) unified_executor: Arc<UnifiedToolExecutor>,
 }
 
 impl AetherCore {
@@ -280,6 +283,12 @@ impl AetherCore {
         // Initialize async confirmation handler
         let async_confirmation = Arc::new(AsyncConfirmationHandler::new());
 
+        // Initialize unified tool executor for routing tool calls
+        let unified_executor = Arc::new(UnifiedToolExecutor::new(
+            Arc::clone(&native_tool_registry),
+            mcp_client.clone(),
+        ));
+
         // Initialize intent routing pipeline if enabled
         let intent_pipeline = Self::init_intent_pipeline(&config, &router);
 
@@ -303,6 +312,7 @@ impl AetherCore {
             native_tool_registry,
             async_confirmation,
             intent_pipeline,
+            unified_executor,
         };
 
         // Initialize tool registry with builtin tools and configured tools
@@ -505,7 +515,7 @@ impl AetherCore {
         };
 
         // Load routing rules into SemanticMatcher for L1 regex matching
-        // This is critical for /youtube, /search, /chat commands to work
+        // This is critical for /youtube, /search, /webfetch commands to work
         let semantic_matcher = match SemanticMatcher::from_rules(&cfg.rules, matcher_config.clone()) {
             Ok(matcher) => {
                 info!(

@@ -1003,7 +1003,7 @@ dictionary CommandNode {
 // Tool source type for unified tool registry
 enum ToolSourceType {
   "Native",   // Built-in native capabilities (Search, Video)
-  "Builtin",  // System builtin commands (/search, /mcp, /skill, /video, /chat)
+  "Builtin",  // System builtin commands (/search, /youtube, /webfetch)
   "Mcp",      // MCP server tool
   "Skill",    // Claude Agent Skill
   "Custom",   // User-defined custom command

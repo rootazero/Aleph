@@ -106,9 +106,7 @@ pub trait CapabilityStrategy: Send + Sync {
     fn name(&self) -> &str {
         match self.capability_type() {
             Capability::Memory => "memory",
-            Capability::Search => "search",
             Capability::Mcp => "mcp",
-            Capability::Video => "video",
             Capability::Skills => "skills",
         }
     }
@@ -591,18 +589,18 @@ mod tests {
     #[tokio::test]
     async fn test_composite_executor_priority_ordering() {
         let executor = CompositeCapabilityExecutor::new()
-            .with_strategy(Arc::new(MockStrategy::new(Capability::Search, 1, true)))
+            .with_strategy(Arc::new(MockStrategy::new(Capability::Mcp, 1, true)))
             .with_strategy(Arc::new(MockStrategy::new(Capability::Memory, 0, true)));
 
         // Verify strategies are sorted by priority
         assert_eq!(executor.strategies()[0].capability_type(), Capability::Memory);
-        assert_eq!(executor.strategies()[1].capability_type(), Capability::Search);
+        assert_eq!(executor.strategies()[1].capability_type(), Capability::Mcp);
     }
 
     #[tokio::test]
     async fn test_composite_executor_skips_unavailable() {
         let memory_strategy = Arc::new(MockStrategy::new(Capability::Memory, 0, false));
-        let search_strategy = Arc::new(MockStrategy::new(Capability::Search, 1, true));
+        let search_strategy = Arc::new(MockStrategy::new(Capability::Mcp, 1, true));
 
         let executor = CompositeCapabilityExecutor::new()
             .with_strategy(memory_strategy.clone())
@@ -614,7 +612,7 @@ mod tests {
             .meta(Intent::GeneralChat, 1000, anchor)
             .config(
                 "openai".to_string(),
-                vec![Capability::Memory, Capability::Search],
+                vec![Capability::Memory, Capability::Mcp],
                 ContextFormat::Markdown,
             )
             .user_input("Test".to_string())
@@ -635,7 +633,7 @@ mod tests {
             .with_strategy(Arc::new(MockStrategy::new(Capability::Memory, 0, true)));
 
         assert!(executor.has_strategy(&Capability::Memory));
-        assert!(!executor.has_strategy(&Capability::Search));
+        assert!(!executor.has_strategy(&Capability::Mcp));
     }
 
     #[tokio::test]
@@ -643,7 +641,7 @@ mod tests {
         let executor = CompositeCapabilityExecutor::new()
             .with_strategy(Arc::new(MockStrategy::new(Capability::Memory, 0, true)))
             .with_strategy(Arc::new(
-                MockStrategy::new(Capability::Search, 1, true).with_config_valid(false),
+                MockStrategy::new(Capability::Mcp, 1, true).with_config_valid(false),
             ));
 
         let results = executor.validate_all();
@@ -654,7 +652,7 @@ mod tests {
         assert!(memory_result.unwrap().1.is_ok());
 
         // Search should be invalid
-        let search_result = results.iter().find(|(c, _)| c == &Capability::Search);
+        let search_result = results.iter().find(|(c, _)| c == &Capability::Mcp);
         assert!(search_result.unwrap().1.is_err());
     }
 
@@ -666,7 +664,7 @@ mod tests {
             ));
 
         assert!(executor.validate(&Capability::Memory).is_err());
-        assert!(executor.validate(&Capability::Search).is_ok()); // Not registered
+        assert!(executor.validate(&Capability::Mcp).is_ok()); // Not registered
     }
 
     #[tokio::test]
@@ -674,7 +672,7 @@ mod tests {
         let executor = CompositeCapabilityExecutor::new()
             .with_strategy(Arc::new(MockStrategy::new(Capability::Memory, 0, true)))
             .with_strategy(Arc::new(
-                MockStrategy::new(Capability::Search, 1, true).with_healthy(false),
+                MockStrategy::new(Capability::Mcp, 1, true).with_healthy(false),
             ));
 
         let health = executor.health_check_all().await;
@@ -688,7 +686,7 @@ mod tests {
         assert!(memory_health.is_operational());
 
         // Search should be unhealthy
-        let search_health = health.iter().find(|h| h.capability == Capability::Search).unwrap();
+        let search_health = health.iter().find(|h| h.capability == Capability::Mcp).unwrap();
         assert!(search_health.config_valid);
         assert!(search_health.available);
         assert!(!search_health.healthy);
@@ -704,7 +702,7 @@ mod tests {
         assert!(health.is_some());
         assert!(health.unwrap().is_operational());
 
-        let health = executor.health_check(&Capability::Search).await;
+        let health = executor.health_check(&Capability::Mcp).await;
         assert!(health.is_none());
     }
 
@@ -713,9 +711,9 @@ mod tests {
         let executor = CompositeCapabilityExecutor::new()
             .with_strategy(Arc::new(MockStrategy::new(Capability::Memory, 0, true)))
             .with_strategy(Arc::new(
-                MockStrategy::new(Capability::Search, 1, false), // Not available
+                MockStrategy::new(Capability::Mcp, 1, false), // Not available
             ))
-            .with_strategy(Arc::new(MockStrategy::new(Capability::Video, 2, true)));
+            .with_strategy(Arc::new(MockStrategy::new(Capability::Skills, 2, true)));
 
         assert_eq!(executor.operational_count().await, 2);
         assert!(!executor.all_operational().await);
@@ -725,7 +723,7 @@ mod tests {
     async fn test_unregister() {
         let mut executor = CompositeCapabilityExecutor::new()
             .with_strategy(Arc::new(MockStrategy::new(Capability::Memory, 0, true)))
-            .with_strategy(Arc::new(MockStrategy::new(Capability::Search, 1, true)));
+            .with_strategy(Arc::new(MockStrategy::new(Capability::Mcp, 1, true)));
 
         assert_eq!(executor.strategies().len(), 2);
 
@@ -743,7 +741,7 @@ mod tests {
     async fn test_clear() {
         let mut executor = CompositeCapabilityExecutor::new()
             .with_strategy(Arc::new(MockStrategy::new(Capability::Memory, 0, true)))
-            .with_strategy(Arc::new(MockStrategy::new(Capability::Search, 1, true)));
+            .with_strategy(Arc::new(MockStrategy::new(Capability::Mcp, 1, true)));
 
         assert_eq!(executor.strategies().len(), 2);
 

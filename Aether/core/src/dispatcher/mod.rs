@@ -62,7 +62,6 @@
 //! ```
 
 mod async_confirmation;
-mod builtin_defs;
 mod confirmation;
 mod integration;
 mod l3_router;
@@ -74,7 +73,6 @@ pub use async_confirmation::{
     AsyncConfirmationConfig, AsyncConfirmationHandler, ConfirmationState, PendingConfirmation,
     PendingConfirmationInfo, PendingConfirmationStore, UserConfirmationDecision,
 };
-pub use builtin_defs::{get_builtin_routing_rules, BuiltinCommandDef, BUILTIN_COMMANDS};
 pub use confirmation::{
     ConfirmationAction, ConfirmationConfig, ConfirmationDecision, ToolConfirmation,
     OPTION_CANCEL, OPTION_EDIT, OPTION_EXECUTE,

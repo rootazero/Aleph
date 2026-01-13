@@ -153,9 +153,8 @@ impl MatchingLayer for KeywordLayer {
 fn parse_capability(s: &str) -> Option<Capability> {
     match s.to_lowercase().as_str() {
         "memory" => Some(Capability::Memory),
-        "search" => Some(Capability::Search),
         "mcp" => Some(Capability::Mcp),
-        "video" => Some(Capability::Video),
+        "skills" => Some(Capability::Skills),
         _ => None,
     }
 }
@@ -236,9 +235,11 @@ mod tests {
     #[test]
     fn test_parse_capability() {
         assert_eq!(parse_capability("memory"), Some(Capability::Memory));
-        assert_eq!(parse_capability("search"), Some(Capability::Search));
         assert_eq!(parse_capability("mcp"), Some(Capability::Mcp));
-        assert_eq!(parse_capability("video"), Some(Capability::Video));
+        assert_eq!(parse_capability("skills"), Some(Capability::Skills));
+        // Removed capabilities should return None
+        assert_eq!(parse_capability("search"), None);
+        assert_eq!(parse_capability("video"), None);
         assert_eq!(parse_capability("unknown"), None);
     }
 }

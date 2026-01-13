@@ -615,12 +615,12 @@ mod tests {
         let system = CapabilitySystem::new();
 
         system.register(Arc::new(MockStrategy::new(Capability::Memory))).await;
-        system.register(Arc::new(MockStrategy::new(Capability::Search))).await;
+        system.register(Arc::new(MockStrategy::new(Capability::Mcp))).await;
 
         assert_eq!(system.registered_capabilities().await.len(), 2);
         assert!(system.has_capability(&Capability::Memory).await);
-        assert!(system.has_capability(&Capability::Search).await);
-        assert!(!system.has_capability(&Capability::Video).await);
+        assert!(system.has_capability(&Capability::Mcp).await);
+        assert!(!system.has_capability(&Capability::Skills).await);
     }
 
     #[tokio::test]
@@ -670,7 +670,7 @@ mod tests {
         let system = CapabilitySystem::new();
         system.register(Arc::new(MockStrategy::new(Capability::Memory))).await;
         system
-            .register(Arc::new(MockStrategy::new(Capability::Search).with_healthy(false)))
+            .register(Arc::new(MockStrategy::new(Capability::Mcp).with_healthy(false)))
             .await;
 
         let status = system.health_check_all().await;
@@ -685,7 +685,7 @@ mod tests {
         let system = CapabilitySystem::new();
         system.register(Arc::new(MockStrategy::new(Capability::Memory))).await;
         system
-            .register(Arc::new(MockStrategy::new(Capability::Search).with_available(false)))
+            .register(Arc::new(MockStrategy::new(Capability::Mcp).with_available(false)))
             .await;
 
         let diagnostics = system.diagnostics().await;
@@ -694,7 +694,7 @@ mod tests {
         let memory = diagnostics.iter().find(|d| d.capability == Capability::Memory).unwrap();
         assert_eq!(memory.status, CapabilityStatus::Operational);
 
-        let search = diagnostics.iter().find(|d| d.capability == Capability::Search).unwrap();
+        let search = diagnostics.iter().find(|d| d.capability == Capability::Mcp).unwrap();
         assert_eq!(search.status, CapabilityStatus::Unavailable);
     }
 
@@ -702,7 +702,7 @@ mod tests {
     async fn test_capability_system_builder() {
         let system = CapabilitySystem::builder()
             .with_strategy(Arc::new(MockStrategy::new(Capability::Memory)))
-            .with_strategy(Arc::new(MockStrategy::new(Capability::Search)))
+            .with_strategy(Arc::new(MockStrategy::new(Capability::Mcp)))
             .validate_on_startup(false)
             .build()
             .unwrap();
@@ -737,7 +737,7 @@ mod tests {
     async fn test_capability_system_clear() {
         let system = CapabilitySystem::new();
         system.register(Arc::new(MockStrategy::new(Capability::Memory))).await;
-        system.register(Arc::new(MockStrategy::new(Capability::Search))).await;
+        system.register(Arc::new(MockStrategy::new(Capability::Mcp))).await;
 
         assert_eq!(system.registered_capabilities().await.len(), 2);
 

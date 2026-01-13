@@ -114,33 +114,41 @@ impl CapabilityDeclaration {
         .with_example("分析这个 YouTube 视频")
     }
 
-    /// Create the MCP capability declaration.
+    /// Create the Tool capability declaration.
     ///
-    /// When MCP tools are available, this capability allows the AI to invoke
-    /// system tools like screen_capture, file operations, git commands, etc.
+    /// This capability allows the AI to invoke tools from all 5 categories:
+    /// - Builtin: System commands (/search, /youtube, /webfetch)
+    /// - Native: Built-in tools (web_fetch, screen_capture, file_read, etc.)
+    /// - MCP: External MCP server tools
+    /// - Skills: Agent skills
+    /// - Custom: User-defined commands
+    ///
+    /// Note: Uses "mcp" as the capability ID for backward compatibility.
+    /// The UnifiedToolExecutor routes tool calls to the correct backend.
     pub fn mcp() -> Self {
         Self::new(
             "mcp",
-            "MCP Tools",
-            "Execute Model Context Protocol (MCP) tools for system operations. Use this when the user wants to interact with the system, such as taking screenshots, reading/writing files, running git commands, or executing shell commands.",
+            "Tool Execution",
+            "Execute tools for system operations. Available tool types: Builtin (system commands), Native (built-in tools like web_fetch, screen_capture), MCP (external server tools), Skills (agent skills), and Custom (user-defined). Refer to the Available Tools section below for the full list.",
         )
         .with_parameter(CapabilityParameter::new(
             "tool",
             "string",
-            "The MCP tool name to invoke (e.g., 'screen_capture', 'file_read', 'git_status')",
+            "The tool name to invoke (e.g., 'web_fetch', 'screen_capture', 'git_status')",
             true,
         ))
         .with_parameter(CapabilityParameter::new(
             "args",
             "object",
-            "Arguments to pass to the MCP tool (tool-specific parameters)",
+            "Arguments to pass to the tool (tool-specific parameters)",
             false,
         ))
         .with_example("Take a screenshot")
         .with_example("截屏")
+        .with_example("Fetch this webpage: https://example.com")
+        .with_example("分析这个网页")
         .with_example("Read file /path/to/file")
         .with_example("Show git status")
-        .with_example("List files in current directory")
     }
 
     /// Create the MCP capability declaration with a specific tool list.
@@ -288,7 +296,44 @@ impl CapabilityRegistry {
         Self::with_all_capabilities(search_enabled, video_enabled, None)
     }
 
+    /// Build a registry with capabilities and tool execution support.
+    ///
+    /// This method creates a capability registry for the new unified tool architecture.
+    /// The Tool capability (id="mcp") is registered when tools_enabled is true,
+    /// but the actual tool list is injected separately via PromptAssembler.
+    ///
+    /// # Arguments
+    ///
+    /// * `search_enabled` - Whether search capability is available
+    /// * `video_enabled` - Whether video capability is available
+    /// * `tools_enabled` - Whether tool execution capability is available
+    pub fn with_capabilities(
+        search_enabled: bool,
+        video_enabled: bool,
+        tools_enabled: bool,
+    ) -> Self {
+        let mut registry = Self::new();
+
+        if search_enabled {
+            registry.register(CapabilityDeclaration::search());
+        }
+
+        if video_enabled {
+            registry.register(CapabilityDeclaration::youtube());
+        }
+
+        // Register Tool capability (uses "mcp" id for backward compatibility)
+        // The actual tool list is provided separately via get_tool_prompt_block()
+        if tools_enabled {
+            registry.register(CapabilityDeclaration::mcp());
+        }
+
+        registry
+    }
+
     /// Build a registry with all capabilities including MCP tools.
+    ///
+    /// @deprecated Use `with_capabilities()` instead for the new unified tool architecture.
     ///
     /// # Arguments
     ///

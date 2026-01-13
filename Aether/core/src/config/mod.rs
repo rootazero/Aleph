@@ -11,7 +11,6 @@
 //! Phase 6: Added Keychain integration and file watching support.
 //! Phase 8: Added config file loading from ~/.config/aether/config.toml
 
-use crate::dispatcher::get_builtin_routing_rules;
 use crate::error::{AetherError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -158,8 +157,8 @@ impl Default for Config {
             general: GeneralConfig::default(),
             memory: MemoryConfig::default(),
             providers: HashMap::new(),
-            // Use get_builtin_routing_rules() from dispatcher (single source of truth)
-            rules: get_builtin_routing_rules(),
+            // AI-first: no builtin rules, user defines custom rules in config.toml
+            rules: vec![],
             shortcuts: Some(ShortcutsConfig::default()),
             behavior: Some(BehaviorConfig::default()),
             search: None,
@@ -375,64 +374,15 @@ impl Config {
         }
     }
 
-    // NOTE: builtin_rules() has been REMOVED (unify-tool-registry)
-    // Builtin routing rules are now generated from dispatcher::get_builtin_routing_rules()
-    // which uses BUILTIN_COMMANDS as the single source of truth.
-    // See: dispatcher/builtin_defs.rs
-
-    /// Merge builtin rules with user-defined rules
+    /// Process user-defined routing rules (AI-first architecture)
     ///
-    /// Builtin rules (/search, /mcp, /skill, /video, /chat) are prepended to user rules
-    /// unless the user has defined a rule with the same regex pattern.
-    /// This ensures builtin commands always work while allowing user overrides.
-    ///
-    /// Builtin rules will use the user's default_provider if configured,
-    /// otherwise fall back to the first configured provider.
-    ///
-    /// Uses get_builtin_routing_rules() from dispatcher as the single source of truth.
+    /// In AI-first mode, there are no builtin rules. This method is kept
+    /// for backward compatibility but does minimal processing.
     fn merge_builtin_rules(&mut self) {
-        let mut builtin = get_builtin_routing_rules();
-
-        // Determine the provider to use for builtin rules
-        // Priority: default_provider > first configured provider > "openai" (fallback)
-        let builtin_provider = self
-            .general
-            .default_provider
-            .clone()
-            .or_else(|| self.providers.keys().next().cloned())
-            .unwrap_or_else(|| "openai".to_string());
-
-        // Update builtin rules to use the resolved provider
-        for rule in &mut builtin {
-            rule.provider = Some(builtin_provider.clone());
-        }
-
-        // Collect user regex patterns as owned strings to avoid borrowing issues
-        let user_regexes: std::collections::HashSet<String> = self
-            .rules
-            .iter()
-            .map(|r| r.regex.clone())
-            .collect();
-
-        let user_count = user_regexes.len();
-
-        // Prepend builtin rules that user hasn't overridden
-        let mut merged_rules: Vec<RoutingRuleConfig> = builtin
-            .into_iter()
-            .filter(|r| !user_regexes.contains(&r.regex))
-            .collect();
-
-        // Take ownership of user rules and append
-        let user_rules = std::mem::take(&mut self.rules);
-        merged_rules.extend(user_rules);
-        self.rules = merged_rules;
-
+        // AI-first: no builtin rules to merge, just log user rules count
         debug!(
-            builtin_count = get_builtin_routing_rules().len(),
-            user_count = user_count,
-            merged_count = self.rules.len(),
-            builtin_provider = %builtin_provider,
-            "Merged builtin rules with user rules (from dispatcher)"
+            user_rules_count = self.rules.len(),
+            "Processing user-defined routing rules (AI-first mode)"
         );
     }
 

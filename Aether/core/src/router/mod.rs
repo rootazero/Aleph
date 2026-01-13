@@ -1316,18 +1316,18 @@ impl Router {
                     // Use the actual rule configuration (has capabilities, intent_type, etc.)
                     let rule_config = &self.rule_configs[index];
 
-                    let mut decision = RoutingDecision::from_rule(
+                    let decision = RoutingDecision::from_rule(
                         provider.as_ref(),
                         rule.provider_name.clone(),
                         rule_config,
                         fallback,
                     );
 
-                    // Auto-add Video capability if YouTube URL detected and not already present
-                    if has_youtube_url && !decision.capabilities.contains(&Capability::Video) {
-                        decision.capabilities.push(Capability::Video);
+                    // In AI-first architecture, AI decides which tools to use
+                    // YouTube URL detection is logged for debugging but capability selection is AI's choice
+                    if has_youtube_url {
                         info!(
-                            "Auto-enabled Video capability due to YouTube URL in context"
+                            "YouTube URL detected in context - AI will decide tool usage"
                         );
                     }
 
@@ -1353,13 +1353,11 @@ impl Router {
                     "Using default provider (no rules matched)"
                 );
 
-                // For default routing, also auto-add Video capability if YouTube URL detected
-                let capabilities = if has_youtube_url {
-                    info!("Auto-enabled Video capability for default route due to YouTube URL");
-                    vec![Capability::Video]
-                } else {
-                    vec![]
-                };
+                // In AI-first architecture, AI decides which tools to use
+                let capabilities = vec![];
+                if has_youtube_url {
+                    info!("YouTube URL detected for default route - AI will decide tool usage");
+                }
 
                 return Some(RoutingDecision {
                     provider: provider.as_ref(),
@@ -1651,9 +1649,8 @@ mod tests {
         let router = Router::new(&config).unwrap();
 
         assert_eq!(router.provider_count(), 1);
-        // Config::default() includes 4 preset rules (flat namespace: /search, /youtube, /chat, /fetch)
-        // /mcp and /skill removed - MCP tools and Skills are registered directly
-        assert_eq!(router.rule_count(), 4);
+        // AI-first mode: no builtin rules, all tool selection handled by AI
+        assert_eq!(router.rule_count(), 0);
         assert!(router.has_provider("openai"));
         assert!(!router.has_provider("claude"));
         assert_eq!(router.default_provider_name(), Some("openai"));
@@ -1704,8 +1701,8 @@ mod tests {
 
         let router = Router::new(&config).unwrap();
 
-        // 4 preset rules (flat namespace) + 2 custom rules = 6 total
-        assert_eq!(router.rule_count(), 6);
+        // AI-first mode: no builtin rules, only the 2 custom rules we added
+        assert_eq!(router.rule_count(), 2);
     }
 
     #[test]
@@ -2245,9 +2242,8 @@ mod tests {
     }
 
     #[test]
-    fn test_flat_namespace_routing_intent() {
-        // In flat namespace mode, skills are registered directly in ToolRegistry
-        // This test verifies the routing behavior for builtin commands
+    fn test_ai_first_no_builtin_commands() {
+        // AI-first mode: no builtin commands, all tool selection handled by AI
         let mut config = Config::default();
 
         // Add provider
@@ -2258,15 +2254,18 @@ mod tests {
 
         let router = Router::new(&config).unwrap();
 
-        // /search should still work as a builtin
+        // /search should NOT match - no builtin commands in AI-first mode
         let result = router.match_rules("/search weather forecast");
-        assert!(result.command_rule.is_some());
+        assert!(
+            result.command_rule.is_none(),
+            "/search should not exist in AI-first mode"
+        );
 
-        // /skill should NOT exist - no match
+        // /skill should NOT exist either
         let result = router.match_rules("/skill pdf Extract text");
         assert!(
             result.command_rule.is_none(),
-            "/skill command should not exist in flat namespace mode"
+            "/skill command should not exist in AI-first mode"
         );
     }
 
@@ -2291,7 +2290,7 @@ mod tests {
     }
 
     #[test]
-    fn test_routing_match_to_intent_search_command() {
+    fn test_routing_match_to_intent_ai_first_mode() {
         let mut config = Config::default();
 
         // Add provider
@@ -2302,13 +2301,16 @@ mod tests {
 
         let router = Router::new(&config).unwrap();
 
-        // Match /search command (builtin rule)
+        // In AI-first mode, /search is not a builtin command
+        // It should fall through to GeneralChat intent
         let result = router.match_rules("/search latest news");
 
-        // Should return BuiltinSearch intent
+        // No builtin rules in AI-first mode, so should return GeneralChat
         let intent = result.to_intent(router.rule_configs());
-        // Note: builtin_search is the intent_type for /search
-        assert!(matches!(intent, Intent::BuiltinSearch | Intent::Custom(_)));
+        assert!(
+            matches!(intent, Intent::GeneralChat),
+            "In AI-first mode, /search should not match any rule and return GeneralChat"
+        );
     }
 
     // ============================================================================

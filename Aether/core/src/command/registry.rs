@@ -24,7 +24,7 @@ pub fn get_builtin_hint(command_key: &str, language: &str) -> Option<String> {
     static BUILTIN_HINTS: &[(&str, &str, &str)] = &[
         ("search", "Web search", "网页搜索"),
         ("youtube", "YouTube videos", "YouTube视频"),
-        ("chat", "Chat", "对话"),
+        ("webfetch", "Fetch web page", "获取网页"),
     ];
 
     let is_chinese = language.starts_with("zh");
@@ -570,20 +570,20 @@ mod tests {
     }
 
     #[test]
-    fn test_flat_namespace_builtins() {
-        // In flat namespace mode, only 3 builtins: search, youtube, chat
+    fn test_ai_first_no_builtins() {
+        // In AI-first mode, there are no builtin commands
+        // All tool selection is handled by the AI through MCP capability
         let config = Config::default();
         let registry = CommandRegistry::from_config(&config, "en");
 
         let commands = registry.get_root_commands();
 
-        // Verify the 3 builtins exist
-        assert!(commands.iter().any(|c| c.key == "search"), "search should exist");
-        assert!(commands.iter().any(|c| c.key == "youtube"), "youtube should exist");
-        assert!(commands.iter().any(|c| c.key == "chat"), "chat should exist");
-
-        // Verify no /mcp or /skill namespace
+        // Verify no builtin commands exist (AI-first architecture)
+        assert!(!commands.iter().any(|c| c.key == "search"), "search should not exist in AI-first mode");
+        assert!(!commands.iter().any(|c| c.key == "youtube"), "youtube should not exist in AI-first mode");
+        assert!(!commands.iter().any(|c| c.key == "webfetch"), "webfetch should not exist in AI-first mode");
         assert!(!commands.iter().any(|c| c.key == "mcp"), "/mcp should not exist");
         assert!(!commands.iter().any(|c| c.key == "skill"), "/skill should not exist");
+        assert!(!commands.iter().any(|c| c.key == "chat"), "/chat should not exist");
     }
 }

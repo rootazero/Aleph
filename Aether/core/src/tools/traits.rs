@@ -22,7 +22,7 @@ use std::fmt;
 /// Tool category for UI grouping and filtering
 ///
 /// Tools are classified into 5 categories based on their source:
-/// - **Builtin**: 4 built-in commands (/search, /chat, /youtube, /fetch)
+/// - **Builtin**: 3 built-in commands (/search, /youtube, /webfetch)
 /// - **Native**: Rust-implemented tools (file ops, git, shell, system info, etc.)
 /// - **Skills**: User-configured skills (registered via UI settings)
 /// - **Mcp**: User-configured MCP server tools (registered via UI settings)
@@ -30,7 +30,7 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ToolCategory {
-    /// Built-in commands: /search, /chat, /youtube, /fetch
+    /// Built-in commands: /search, /youtube, /webfetch
     Builtin,
     /// Native Rust tools: filesystem, git, shell, system, clipboard, screen, search
     Native,

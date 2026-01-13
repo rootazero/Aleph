@@ -552,7 +552,7 @@ impl AetherCore {
         start_time: std::time::Instant,
     ) -> Result<String> {
         use crate::capability::{
-            AiResponse, CapabilityDeclaration, CapabilityRegistry, McpToolInfo, ResponseParser,
+            AiResponse, CapabilityDeclaration, CapabilityRegistry, ResponseParser,
         };
         use crate::payload::ContextFormat;
 
@@ -592,37 +592,19 @@ impl AetherCore {
         let memory_enabled = config.memory.enabled;
         drop(config);
 
-        // Step 2: Get native tools from NativeToolRegistry
-        // MCP tools are now handled via AgentTool infrastructure
-        let mcp_tools: Option<Vec<McpToolInfo>> = {
-            let definitions = self.get_native_tool_definitions();
-            if definitions.is_empty() {
-                None
-            } else {
-                Some(
-                    definitions
-                        .into_iter()
-                        .map(|def| McpToolInfo {
-                            name: def.name,
-                            description: def.description,
-                            input_schema: def.parameters,
-                            requires_confirmation: def.requires_confirmation,
-                        })
-                        .collect(),
-                )
-            }
-        };
+        // Step 2: Get unified tool list from ToolRegistry
+        // Shows all 5 tool types: Builtin, Native, MCP, Skills, Custom
+        let tools_prompt_block = self.get_tool_prompt_block();
+        let tools_enabled = !tools_prompt_block.is_empty();
 
-        let mcp_tool_count = mcp_tools.as_ref().map(|t: &Vec<McpToolInfo>| t.len()).unwrap_or(0);
-
-        // Step 3: Build capability declarations (including MCP tools)
-        let registry = CapabilityRegistry::with_all_capabilities(search_enabled, video_enabled, mcp_tools);
+        // Step 3: Build capability declarations (Tool capability is separate from tool list)
+        let registry = CapabilityRegistry::with_capabilities(search_enabled, video_enabled, tools_enabled);
         let capabilities: Vec<CapabilityDeclaration> = registry.all().to_vec();
 
         info!(
             search_enabled = search_enabled,
             video_enabled = video_enabled,
-            mcp_tool_count = mcp_tool_count,
+            tools_enabled = tools_enabled,
             capability_count = capabilities.len(),
             "Built capability registry for AI-first mode"
         );
@@ -658,16 +640,20 @@ impl AetherCore {
         };
 
         let assembler = crate::payload::PromptAssembler::new(ContextFormat::Markdown);
-        let system_prompt = assembler.build_capability_aware_prompt(
+        // Use the new method that injects the unified tool list separately
+        let tools_block = if tools_enabled { Some(tools_prompt_block.as_str()) } else { None };
+        let system_prompt = assembler.build_capability_aware_prompt_with_tools(
             &base_prompt,
             &capabilities,
+            tools_block,
             memory_context.as_ref(),
         );
 
         info!(
             provider = %provider_name,
             system_prompt_length = system_prompt.len(),
-            "Making AI-first call with capability-aware prompt"
+            tools_enabled = tools_enabled,
+            "Making AI-first call with capability-aware prompt and unified tool list"
         );
 
         // Step 5: Notify UI and make AI call
@@ -835,11 +821,9 @@ impl AetherCore {
     ) -> Result<String> {
         use crate::payload::{Capability, ContextFormat};
 
-        // Map capability ID to Capability enum
+        // In AI-first architecture, all tool requests go through Mcp capability
         let capability = match request.capability.as_str() {
-            "search" => Capability::Search,
-            "video" => Capability::Video,
-            "mcp" => Capability::Mcp,
+            "mcp" | "tool" | "search" | "video" | "webfetch" => Capability::Mcp,
             _ => {
                 return Err(AetherError::config(format!(
                     "Unknown capability: {}",
@@ -850,18 +834,15 @@ impl AetherCore {
 
         info!(
             capability = ?capability,
+            requested = %request.capability,
             "Executing capability from AI-first request"
         );
 
-        // Update UI state
-        if capability == Capability::Search {
-            self.event_handler
-                .on_state_changed(ProcessingState::RetrievingMemory); // Reusing state
-        }
-
-        // Handle MCP capability specially - execute the tool directly
+        // Handle Tool capability - execute via unified tool dispatcher
+        // Note: Capability::Mcp is used for all tool types (Builtin/Native/MCP/Skills/Custom)
+        // The actual routing is done by UnifiedToolExecutor based on tool source
         if capability == Capability::Mcp {
-            return self.execute_mcp_tool_and_continue(
+            return self.execute_tool_and_continue(
                 request,
                 original_input,
                 context,
@@ -963,14 +944,24 @@ impl AetherCore {
         Ok(response)
     }
 
-    /// Execute MCP tool and continue with a second AI call with tool results.
+    /// Execute tool and continue with a second AI call with tool results.
     ///
-    /// This method handles MCP capability requests by:
-    /// 1. Extracting tool name and args from the request
-    /// 2. Calling the MCP tool via McpClient
-    /// 3. Building a payload with the tool results
-    /// 4. Making a second AI call to interpret the results
-    fn execute_mcp_tool_and_continue(
+    /// This is the unified tool execution entry point that handles all 5 tool types:
+    /// - Builtin: System commands (/search, /youtube, /webfetch)
+    /// - Native: Built-in tools (web_fetch, screen_capture, etc.)
+    /// - MCP: External MCP server tools
+    /// - Skills: Agent skills
+    /// - Custom: User-defined commands
+    ///
+    /// The method routes execution via UnifiedToolExecutor which dispatches
+    /// to the correct backend based on tool source.
+    ///
+    /// Flow:
+    /// 1. Extract tool name and args from the request
+    /// 2. Execute via UnifiedToolExecutor (routes to Native/MCP/etc.)
+    /// 3. Build a payload with the tool results
+    /// 4. Make a second AI call to interpret the results
+    fn execute_tool_and_continue(
         &self,
         request: crate::capability::CapabilityRequest,
         original_input: &str,
@@ -997,31 +988,37 @@ impl AetherCore {
         info!(
             tool = %tool_name,
             args = %tool_args,
-            "Executing MCP tool from AI capability request"
+            "Executing tool from AI capability request via UnifiedToolExecutor"
         );
 
-        // Get MCP client
-        let mcp_client = self.mcp_client.as_ref().ok_or_else(|| {
-            AetherError::config("MCP capability requested but no MCP client available")
-        })?;
-
-        // Execute the tool
+        // Execute the tool via UnifiedToolExecutor (routes to Native/MCP/Builtin)
+        let executor = Arc::clone(&self.unified_executor);
         let tool_result = self.runtime.block_on(async {
-            mcp_client.call_tool(tool_name, tool_args).await
+            executor.execute(tool_name, tool_args).await
         });
 
         // Build the MCP tool result for the payload
+        // Note: PayloadMcpToolResult is used for all tool types, not just MCP
         let mcp_tool_result = match tool_result {
             Ok(result) => {
                 info!(
                     tool = %tool_name,
                     success = result.success,
-                    "MCP tool execution completed"
+                    source = ?result.source,
+                    execution_time_ms = result.execution_time_ms,
+                    "Tool execution completed via UnifiedToolExecutor"
                 );
                 PayloadMcpToolResult {
-                    tool_name: tool_name.to_string(),
+                    tool_name: result.tool_name,
                     success: result.success,
-                    content: result.content,
+                    // Convert string content to JSON value
+                    content: if result.content.is_empty() {
+                        serde_json::json!({})
+                    } else {
+                        // Try to parse as JSON, fallback to string wrapper
+                        serde_json::from_str(&result.content)
+                            .unwrap_or_else(|_| serde_json::json!({"result": result.content}))
+                    },
                     error: result.error,
                 }
             }
@@ -1029,7 +1026,7 @@ impl AetherCore {
                 tracing::warn!(
                     tool = %tool_name,
                     error = %e,
-                    "MCP tool execution failed"
+                    "Tool execution failed"
                 );
                 PayloadMcpToolResult {
                     tool_name: tool_name.to_string(),
@@ -1327,46 +1324,22 @@ impl AetherCore {
             None
         };
 
-        // Execute capabilities to enrich payload
+        // Execute capabilities to enrich payload (AI-first architecture)
         let executor = CapabilityExecutor::new(
             self.memory_db.as_ref().map(Arc::clone),
             {
                 let cfg = self.lock_config();
                 Some(Arc::new(cfg.memory.clone()))
             },
+        )
+        // Configure MCP for AI tool access
+        .with_mcp(
+            self.mcp_client.clone(),
             {
-                // Pass SearchRegistry from persistent field (integrate-search-registry)
-                let registry = self.search_registry.read().unwrap_or_else(|e| e.into_inner());
-                registry.as_ref().map(Arc::clone)
-            },
-            {
-                // Pass SearchOptions from config (integrate-search-registry)
                 let cfg = self.lock_config();
-                cfg.search
-                    .as_ref()
-                    .map(|s| crate::search::SearchOptions {
-                        max_results: s.max_results,
-                        timeout_seconds: s.timeout_seconds,
-                        ..Default::default()
-                    })
-            },
-            {
-                // Read PII config from search.pii.enabled (integrate-search-registry)
-                // Fallback to behavior.pii_scrubbing_enabled for backward compatibility
-                let cfg = self.lock_config();
-                cfg.search
-                    .as_ref()
-                    .and_then(|s| s.pii.as_ref())
-                    .map(|p| p.enabled)
-                    .or_else(|| cfg.behavior.as_ref().map(|b| b.pii_scrubbing_enabled))
-                    .unwrap_or(false)
+                Some(Arc::new(cfg.mcp.clone()))
             },
         )
-        .with_video_config({
-            // Pass VideoConfig from config
-            let cfg = self.lock_config();
-            cfg.video.as_ref().map(|v| Arc::new(v.clone()))
-        })
         // Configure AI-based memory retrieval
         .with_ai_retrieval(
             ai_provider,

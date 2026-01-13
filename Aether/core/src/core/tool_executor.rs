@@ -25,6 +25,7 @@ use crate::tools::NativeToolRegistry;
 
 /// Source of a tool
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum ToolSource {
     /// Builtin capability (search, video, memory)
     Builtin,
@@ -81,6 +82,7 @@ impl ToolExecutionResult {
 
 /// Information about an available tool
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ToolInfo {
     /// Tool name
     pub name: String,
@@ -120,16 +122,18 @@ impl UnifiedToolExecutor {
     }
 
     /// Refresh the tool source cache
+    ///
+    /// In AI-first architecture:
+    /// - Only `memory` remains as a Builtin capability (context enrichment)
+    /// - All other tools (search, video, web_fetch, etc.) are Native tools
     pub async fn refresh_tool_sources(&self) {
         let mut sources = self.tool_sources.write().await;
         sources.clear();
 
-        // Builtin capabilities
-        for name in ["search", "video", "youtube", "memory"] {
-            sources.insert(name.to_string(), ToolSource::Builtin);
-        }
+        // Builtin capabilities - only memory in AI-first mode
+        sources.insert("memory".to_string(), ToolSource::Builtin);
 
-        // Native tools
+        // Native tools - includes search, video, web_fetch, file_*, git_*, etc.
         for def in self.native_registry.get_definitions().await {
             sources.insert(def.name.clone(), ToolSource::Native);
         }
@@ -142,7 +146,7 @@ impl UnifiedToolExecutor {
         }
 
         debug!(
-            builtin_count = 4,
+            builtin_count = 1,
             native_count = sources.values().filter(|s| **s == ToolSource::Native).count(),
             mcp_count = sources.values().filter(|s| **s == ToolSource::Mcp).count(),
             "Tool sources refreshed"
@@ -156,13 +160,14 @@ impl UnifiedToolExecutor {
     }
 
     /// Check if a tool exists
+    #[allow(dead_code)]
     pub async fn has_tool(&self, tool_name: &str) -> bool {
-        // Check builtin first
-        if matches!(tool_name, "search" | "video" | "youtube" | "memory") {
+        // Check builtin first (only memory in AI-first mode)
+        if tool_name == "memory" {
             return true;
         }
 
-        // Check native registry
+        // Check native registry (includes search, video, web_fetch, etc.)
         if self.native_registry.contains(tool_name).await {
             return true;
         }
@@ -192,7 +197,8 @@ impl UnifiedToolExecutor {
         // Determine tool source (with fallback check)
         let source = self.resolve_source(tool_name).await.unwrap_or_else(|| {
             // If not in cache, try to detect source
-            if matches!(tool_name, "search" | "video" | "youtube" | "memory") {
+            // In AI-first mode, only memory is builtin
+            if tool_name == "memory" {
                 ToolSource::Builtin
             } else {
                 // Default to Native, will fail if not found
@@ -292,27 +298,18 @@ impl UnifiedToolExecutor {
     }
 
     /// Get list of all available tools
+    #[allow(dead_code)]
     pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
         let mut tools = Vec::new();
 
-        // Builtins
-        tools.push(ToolInfo {
-            name: "search".to_string(),
-            description: "Search the web for information".to_string(),
-            source: ToolSource::Builtin,
-        });
-        tools.push(ToolInfo {
-            name: "video".to_string(),
-            description: "Get transcript from YouTube videos".to_string(),
-            source: ToolSource::Builtin,
-        });
+        // Builtins - only memory in AI-first mode
         tools.push(ToolInfo {
             name: "memory".to_string(),
             description: "Search conversation memory".to_string(),
             source: ToolSource::Builtin,
         });
 
-        // Native tools
+        // Native tools (includes search, video, web_fetch, file_*, git_*, etc.)
         for def in self.native_registry.get_definitions().await {
             tools.push(ToolInfo {
                 name: def.name,
@@ -335,30 +332,30 @@ impl UnifiedToolExecutor {
         tools
     }
 
-    /// Map a tool name to Capability (for builtin tools)
+    /// Map a tool name to Capability
     ///
-    /// Note: "fetch" and "web_fetch" are native tools, not builtin capabilities.
-    /// They are handled by the NativeToolRegistry, not the CapabilityExecutor.
+    /// In AI-first architecture, only Memory remains as a context enrichment capability.
+    /// All tools (search, video, web_fetch, etc.) are now native tools executed via
+    /// NativeToolRegistry and routed through the Mcp capability.
     pub fn resolve_builtin_capability(tool_name: &str) -> Option<Capability> {
         match tool_name {
-            "search" => Some(Capability::Search),
-            "video" | "youtube" => Some(Capability::Video),
             "memory" => Some(Capability::Memory),
-            // "fetch" and "web_fetch" are NOT builtin capabilities
-            // They are native tools executed via NativeToolRegistry
+            // All other tools go through Mcp capability for AI tool access
             _ => None,
         }
     }
 
     /// Check if a tool is a builtin capability
+    #[allow(dead_code)]
     pub fn is_builtin(tool_name: &str) -> bool {
-        matches!(tool_name, "search" | "video" | "youtube" | "memory")
+        matches!(tool_name, "memory")
     }
 
     /// Check if a tool name should be handled as a native tool
     ///
     /// These tools are registered in NativeToolRegistry and executed
     /// via UnifiedToolExecutor, not the CapabilityExecutor.
+    #[allow(dead_code)]
     pub fn is_native_tool(tool_name: &str) -> bool {
         matches!(tool_name, "fetch" | "web_fetch" | "file_read" | "file_write" | "file_list" |
                  "git_status" | "git_diff" | "git_log" | "shell_execute" |
@@ -381,21 +378,19 @@ mod tests {
 
     #[test]
     fn test_resolve_builtin_capability() {
-        assert_eq!(
-            UnifiedToolExecutor::resolve_builtin_capability("search"),
-            Some(Capability::Search)
-        );
-        assert_eq!(
-            UnifiedToolExecutor::resolve_builtin_capability("video"),
-            Some(Capability::Video)
-        );
-        assert_eq!(
-            UnifiedToolExecutor::resolve_builtin_capability("youtube"),
-            Some(Capability::Video)
-        );
+        // In AI-first architecture, only Memory remains as a builtin capability
         assert_eq!(
             UnifiedToolExecutor::resolve_builtin_capability("memory"),
             Some(Capability::Memory)
+        );
+        // All other tools go through Mcp capability
+        assert_eq!(
+            UnifiedToolExecutor::resolve_builtin_capability("search"),
+            None
+        );
+        assert_eq!(
+            UnifiedToolExecutor::resolve_builtin_capability("video"),
+            None
         );
         assert_eq!(
             UnifiedToolExecutor::resolve_builtin_capability("web_fetch"),
@@ -405,10 +400,11 @@ mod tests {
 
     #[test]
     fn test_is_builtin() {
-        assert!(UnifiedToolExecutor::is_builtin("search"));
-        assert!(UnifiedToolExecutor::is_builtin("video"));
-        assert!(UnifiedToolExecutor::is_builtin("youtube"));
+        // In AI-first architecture, only memory is builtin
         assert!(UnifiedToolExecutor::is_builtin("memory"));
+        // All other tools are native tools or MCP tools
+        assert!(!UnifiedToolExecutor::is_builtin("search"));
+        assert!(!UnifiedToolExecutor::is_builtin("video"));
         assert!(!UnifiedToolExecutor::is_builtin("web_fetch"));
         assert!(!UnifiedToolExecutor::is_builtin("file_read"));
     }
@@ -416,8 +412,7 @@ mod tests {
     #[tokio::test]
     async fn test_has_tool_builtin() {
         let executor = create_test_executor();
-        assert!(executor.has_tool("search").await);
-        assert!(executor.has_tool("video").await);
+        // Memory is the only builtin in AI-first architecture
         assert!(executor.has_tool("memory").await);
     }
 
@@ -426,9 +421,7 @@ mod tests {
         let executor = create_test_executor();
         let tools = executor.list_all_tools().await;
 
-        // Should have at least builtins
-        assert!(tools.iter().any(|t| t.name == "search"));
-        assert!(tools.iter().any(|t| t.name == "video"));
+        // Should have at least memory builtin
         assert!(tools.iter().any(|t| t.name == "memory"));
     }
 

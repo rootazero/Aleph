@@ -682,6 +682,7 @@ mod tests {
             mcp_resources: None,
             mcp_tool_result: None,
             video_transcript: None,
+            webfetch_content: None,
             workflow_state: None,
             attachments: None,
             skill_instructions: None,

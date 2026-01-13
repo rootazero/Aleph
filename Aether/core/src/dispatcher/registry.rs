@@ -12,7 +12,6 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use super::builtin_defs::BUILTIN_COMMANDS;
 use super::types::{ConflictInfo, ConflictResolution, ToolSource, UnifiedTool};
 #[cfg(test)]
 use super::types::ToolPriority;
@@ -70,41 +69,14 @@ impl ToolRegistry {
     // Registration Methods
     // =========================================================================
 
-    /// Register system builtin commands (/search, /youtube, /chat)
+    /// Register builtin tools (deprecated - AI-first architecture)
     ///
-    /// These are always-available slash commands that serve as the entry points
-    /// for various capabilities. They are the single source of truth for:
-    /// - Settings UI preset rules list
-    /// - Command completion root commands
-    /// - L3 router tool awareness
-    ///
-    /// Uses BUILTIN_COMMANDS from builtin_defs module as the single source of truth.
+    /// In AI-first architecture, there are no builtin commands.
+    /// All tool selection is handled by the AI through MCP capability.
+    /// This method is kept for API compatibility but does nothing.
     pub async fn register_builtin_tools(&self) {
-        let mut tools = self.tools.write().await;
-
-        for def in BUILTIN_COMMANDS {
-            let tool = UnifiedTool::builtin(def.name)
-                .with_display_name(def.display_name)
-                .with_description(def.description)
-                .with_icon(def.icon)
-                .with_usage(def.usage)
-                .with_localization_key(def.localization_key)
-                .with_sort_order(def.sort_order)
-                .with_has_subtools(def.has_subtools)
-                .with_requires_confirmation(false)
-                // Routing config from definition
-                .with_routing_regex(def.routing_regex)
-                .with_routing_system_prompt(def.routing_system_prompt)
-                .with_routing_capabilities(
-                    def.routing_capabilities.iter().map(|s| s.to_string()).collect()
-                )
-                .with_routing_intent_type(def.routing_intent_type)
-                .with_routing_strip_prefix(true)
-                .with_routing_context_format("markdown");
-            tools.insert(tool.id.clone(), tool);
-        }
-
-        debug!("Registered {} builtin tools from BUILTIN_COMMANDS", BUILTIN_COMMANDS.len());
+        // No-op in AI-first architecture
+        debug!("register_builtin_tools called (no-op in AI-first mode)");
     }
 
     /// Register MCP tools from tool info list (Flat Namespace Mode)
@@ -354,7 +326,7 @@ impl ToolRegistry {
     /// gets renamed with a suffix based on priority.
     ///
     /// Priority order (highest to lowest):
-    /// 1. Builtin - System commands (/search, /youtube, /chat)
+    /// 1. Builtin - System commands (/search, /youtube, /webfetch)
     /// 2. Native - System capabilities
     /// 3. Custom - User-defined rules
     /// 4. MCP - External MCP tools
@@ -661,7 +633,7 @@ impl ToolRegistry {
     ///
     /// # Registration Order
     ///
-    /// 1. Builtin commands (/search, /youtube, /chat)
+    /// 1. Builtin commands (/search, /youtube, /webfetch)
     /// 2. Native AgentTools (filesystem, git, shell, etc.)
     /// 3. External MCP tools
     /// 4. Skills
@@ -719,7 +691,7 @@ impl ToolRegistry {
 
     /// List builtin tools only
     ///
-    /// Returns the 3 system builtin commands (/search, /youtube, /chat)
+    /// Returns the 3 system builtin commands (/search, /youtube, /webfetch)
     /// sorted by sort_order.
     pub async fn list_builtin_tools(&self) -> Vec<UnifiedTool> {
         let tools = self.tools.read().await;
@@ -1060,39 +1032,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_builtin_tools() {
+        // AI-first architecture: no builtin tools
         let registry = ToolRegistry::new();
         registry.register_builtin_tools().await;
 
-        // Flat namespace mode: 4 builtin commands
-        assert_eq!(registry.count().await, 4);
+        // Should register 0 tools (AI-first mode)
+        assert_eq!(registry.count().await, 0);
 
-        // Check all 4 builtins are registered
+        // No builtins should exist
         let builtins = registry.list_builtin_tools().await;
-        assert_eq!(builtins.len(), 4);
-
-        // Verify sorted by sort_order (no /mcp or /skill)
-        let names: Vec<_> = builtins.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, vec!["search", "youtube", "chat", "webfetch"]);
-
-        // Check metadata
-        let search = registry.get_by_id("builtin:search").await.unwrap();
-        assert!(search.is_builtin);
-        assert_eq!(search.icon, Some("magnifyingglass".to_string()));
-        assert_eq!(search.localization_key, Some("tool.search".to_string()));
-        assert_eq!(search.sort_order, 1);
-
-        // In flat namespace mode, no builtins have subtools
-        for builtin in &builtins {
-            assert!(
-                !builtin.has_subtools,
-                "Builtin '{}' should not have subtools in flat namespace",
-                builtin.name
-            );
-        }
-
-        // Verify /mcp and /skill are NOT registered
-        assert!(registry.get_by_id("builtin:mcp").await.is_none());
-        assert!(registry.get_by_id("builtin:skill").await.is_none());
+        assert_eq!(builtins.len(), 0);
     }
 
     #[tokio::test]
@@ -1109,16 +1058,9 @@ mod tests {
         registry.register_custom_commands(&rules).await;
 
         let roots = registry.list_root_commands().await;
-        // Flat namespace: 4 builtins + 1 custom = 5
-        assert_eq!(roots.len(), 5);
-
-        // Builtins should come first (higher priority in sort)
-        assert!(roots[0].is_builtin);
-        assert_eq!(roots[0].name, "search");
-
-        // Custom commands come after builtins
-        let custom_idx = roots.iter().position(|t| t.name == "en").unwrap();
-        assert!(custom_idx >= 4, "Custom commands should come after builtins");
+        // AI-first: 0 builtins + 1 custom = 1
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].name, "en");
     }
 
     #[tokio::test]
@@ -1190,8 +1132,7 @@ mod tests {
     #[tokio::test]
     async fn test_list_by_source_type() {
         let registry = ToolRegistry::new();
-        registry.register_builtin_tools().await;
-
+        // AI-first: no builtin tools
         let skills = vec![SkillInfo {
             id: "test".to_string(),
             name: "Test".to_string(),
@@ -1201,7 +1142,7 @@ mod tests {
         registry.register_skills(&skills).await;
 
         let builtin = registry.list_by_source_type("Builtin").await;
-        assert_eq!(builtin.len(), 4); // search, youtube, chat, fetch
+        assert_eq!(builtin.len(), 0); // AI-first: no builtins
 
         let skill = registry.list_by_source_type("Skill").await;
         assert_eq!(skill.len(), 1);
@@ -1214,43 +1155,71 @@ mod tests {
     #[tokio::test]
     async fn test_search() {
         let registry = ToolRegistry::new();
-        registry.register_builtin_tools().await;
+
+        // Register a custom command to test search
+        let rules = vec![RoutingRuleConfig {
+            regex: "^/search".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Search assistant".to_string()),
+            ..Default::default()
+        }];
+        registry.register_custom_commands(&rules).await;
 
         let results = registry.search("search").await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "search");
-
-        let results = registry.search("web").await;
-        assert!(!results.is_empty()); // Should match description
     }
 
     #[tokio::test]
     async fn test_set_tool_active() {
         let registry = ToolRegistry::new();
-        registry.register_builtin_tools().await;
 
-        // Deactivate search builtin
-        let updated = registry.set_tool_active("builtin:search", false).await;
+        // Register a custom command to test
+        let rules = vec![RoutingRuleConfig {
+            regex: "^/test".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Test assistant".to_string()),
+            ..Default::default()
+        }];
+        registry.register_custom_commands(&rules).await;
+
+        // Deactivate test command
+        let updated = registry.set_tool_active("custom:test", false).await;
         assert!(updated);
 
         // Should not appear in active list
         let all = registry.list_all().await;
-        assert!(!all.iter().any(|t| t.id == "builtin:search"));
+        assert!(!all.iter().any(|t| t.id == "custom:test"));
 
         // Should appear in full list
         let all_with_inactive = registry.list_all_with_inactive().await;
-        assert!(all_with_inactive.iter().any(|t| t.id == "builtin:search"));
+        assert!(all_with_inactive.iter().any(|t| t.id == "custom:test"));
     }
 
     #[tokio::test]
     async fn test_to_prompt_block() {
         let registry = ToolRegistry::new();
-        registry.register_builtin_tools().await;
+
+        // Register custom commands to test prompt block
+        let rules = vec![
+            RoutingRuleConfig {
+                regex: "^/translate".to_string(),
+                provider: Some("openai".to_string()),
+                system_prompt: Some("Translate".to_string()),
+                ..Default::default()
+            },
+            RoutingRuleConfig {
+                regex: "^/code".to_string(),
+                provider: Some("openai".to_string()),
+                system_prompt: Some("Code assistant".to_string()),
+                ..Default::default()
+            },
+        ];
+        registry.register_custom_commands(&rules).await;
 
         let prompt = registry.to_prompt_block().await;
-        assert!(prompt.contains("**search**"));
-        assert!(prompt.contains("**youtube**"));
-        assert!(prompt.contains("**chat**"));
+        assert!(prompt.contains("**translate**"));
+        assert!(prompt.contains("**code**"));
     }
 
     #[test]
@@ -1278,7 +1247,15 @@ mod tests {
     #[tokio::test]
     async fn test_check_conflict_no_conflict() {
         let registry = ToolRegistry::new();
-        registry.register_builtin_tools().await;
+
+        // Register a custom command
+        let rules = vec![RoutingRuleConfig {
+            regex: "^/translate".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Translate".to_string()),
+            ..Default::default()
+        }];
+        registry.register_custom_commands(&rules).await;
 
         // No conflict for a new unique name
         let conflict = registry.check_conflict("git").await;
@@ -1288,21 +1265,37 @@ mod tests {
     #[tokio::test]
     async fn test_check_conflict_exists() {
         let registry = ToolRegistry::new();
-        registry.register_builtin_tools().await;
 
-        // Conflict with builtin "search"
+        // Register a custom command
+        let rules = vec![RoutingRuleConfig {
+            regex: "^/search".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Search".to_string()),
+            ..Default::default()
+        }];
+        registry.register_custom_commands(&rules).await;
+
+        // Conflict with custom "search"
         let conflict = registry.check_conflict("search").await;
         assert!(conflict.is_some());
 
         let info = conflict.unwrap();
         assert_eq!(info.existing_name, "search");
-        assert_eq!(info.existing_priority, ToolPriority::Builtin);
+        assert_eq!(info.existing_priority, ToolPriority::Custom);
     }
 
     #[tokio::test]
     async fn test_check_conflict_case_insensitive() {
         let registry = ToolRegistry::new();
-        registry.register_builtin_tools().await;
+
+        // Register a custom command
+        let rules = vec![RoutingRuleConfig {
+            regex: "^/search".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Search".to_string()),
+            ..Default::default()
+        }];
+        registry.register_custom_commands(&rules).await;
 
         // Should find conflict even with different case
         let conflict = registry.check_conflict("SEARCH").await;
@@ -1419,10 +1412,16 @@ mod tests {
     async fn test_register_with_conflict_resolution_new_renamed() {
         let registry = ToolRegistry::new();
 
-        // Register builtin first
-        registry.register_builtin_tools().await;
+        // Register Custom tool first (higher priority than MCP)
+        let custom_tool = UnifiedTool::new(
+            "custom:search",
+            "search",
+            "Custom Search",
+            ToolSource::Custom { rule_index: 0 },
+        );
+        registry.register_with_conflict_resolution(custom_tool).await;
 
-        // Try to register MCP tool with same name as builtin
+        // Try to register MCP tool with same name as custom
         let mcp_tool = UnifiedTool::new(
             "mcp:server:search",
             "search",
@@ -1432,7 +1431,7 @@ mod tests {
 
         let id = registry.register_with_conflict_resolution(mcp_tool).await;
 
-        // MCP tool should be renamed
+        // MCP tool should be renamed (Custom has higher priority)
         assert_eq!(id, "mcp:server:search-mcp");
 
         let registered = registry.get_by_id(&id).await.unwrap();
@@ -1440,10 +1439,10 @@ mod tests {
         assert_eq!(registered.original_name, Some("search".to_string()));
         assert!(registered.was_renamed);
 
-        // Builtin should still have original name
-        let builtin = registry.get_by_id("builtin:search").await.unwrap();
-        assert_eq!(builtin.name, "search");
-        assert!(!builtin.was_renamed);
+        // Custom should still have original name
+        let custom = registry.get_by_id("custom:search").await.unwrap();
+        assert_eq!(custom.name, "search");
+        assert!(!custom.was_renamed);
     }
 
     #[tokio::test]
@@ -1492,9 +1491,17 @@ mod tests {
         let registry = ToolRegistry::new();
 
         // Register some initial tools
-        registry.register_builtin_tools().await;
+        let rules = vec![
+            RoutingRuleConfig {
+                regex: "^/old".to_string(),
+                provider: Some("openai".to_string()),
+                system_prompt: Some("Old command".to_string()),
+                ..Default::default()
+            },
+        ];
+        registry.register_custom_commands(&rules).await;
         let initial_count = registry.count().await;
-        assert!(initial_count > 0);
+        assert_eq!(initial_count, 1);
 
         // Create new tool list
         let new_tools = vec![
@@ -1518,8 +1525,8 @@ mod tests {
         // Should have exactly 2 tools now
         assert_eq!(registry.count().await, 2);
 
-        // Old builtin tools should be gone
-        assert!(registry.get_by_id("builtin:search").await.is_none());
+        // Old custom tools should be gone
+        assert!(registry.get_by_id("custom:old").await.is_none());
 
         // New tools should exist
         assert!(registry.get_by_id("test:tool1").await.is_some());
@@ -1531,7 +1538,13 @@ mod tests {
         let registry = ToolRegistry::new();
 
         // Register some tools first
-        registry.register_builtin_tools().await;
+        let rules = vec![RoutingRuleConfig {
+            regex: "^/test".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Test".to_string()),
+            ..Default::default()
+        }];
+        registry.register_custom_commands(&rules).await;
         assert!(registry.count().await > 0);
 
         // Refresh with empty list

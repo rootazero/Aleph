@@ -105,7 +105,7 @@ mod tests {
     fn test_decision_with_capabilities() {
         let provider = MockProvider::new("Test Provider");
         let mut rule = RoutingRuleConfig::test_config("^/research", "openai");
-        rule.capabilities = Some(vec!["memory".to_string(), "search".to_string()]);
+        rule.capabilities = Some(vec!["memory".to_string(), "mcp".to_string()]);
 
         let decision = RoutingDecision::from_rule(
             &provider as &dyn AiProvider,
@@ -116,7 +116,7 @@ mod tests {
 
         assert_eq!(decision.capabilities.len(), 2);
         assert!(decision.capabilities.contains(&Capability::Memory));
-        assert!(decision.capabilities.contains(&Capability::Search));
+        assert!(decision.capabilities.contains(&Capability::Mcp));
     }
 
     #[test]

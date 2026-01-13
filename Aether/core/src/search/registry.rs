@@ -185,6 +185,7 @@ impl SearchRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::search::providers::TavilyProvider;
 
     /// Mock provider for testing
     struct MockProvider {

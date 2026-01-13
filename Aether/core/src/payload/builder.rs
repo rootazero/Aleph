@@ -286,10 +286,10 @@ mod tests {
         let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
 
         let payload = PayloadBuilder::new()
-            .meta(Intent::BuiltinSearch, 1000, anchor)
+            .meta(Intent::GeneralChat, 1000, anchor)
             .config(
                 "openai".to_string(),
-                vec![Capability::Memory, Capability::Search, Capability::Mcp],
+                vec![Capability::Memory, Capability::Mcp, Capability::Skills],
                 ContextFormat::Markdown,
             )
             .user_input("Test".to_string())

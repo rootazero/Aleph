@@ -82,6 +82,7 @@ impl AetherCore {
         let mcp_client = self.mcp_client.clone();
         let event_handler = Arc::clone(&self.event_handler);
         let intent_pipeline = self.intent_pipeline.clone();
+        let unified_executor = Arc::clone(&self.unified_executor);
 
         // Spawn refresh task on the runtime - returns immediately
         self.runtime.spawn(async move {
@@ -92,6 +93,7 @@ impl AetherCore {
                 mcp_client,
                 event_handler,
                 intent_pipeline,
+                unified_executor,
             )
             .await;
         });
@@ -128,6 +130,7 @@ impl AetherCore {
         let mcp_client = self.mcp_client.clone();
         let event_handler = Arc::clone(&self.event_handler);
         let intent_pipeline = self.intent_pipeline.clone();
+        let unified_executor = Arc::clone(&self.unified_executor);
 
         // Spawn scoped refresh task on the runtime
         self.runtime.spawn(async move {
@@ -139,6 +142,7 @@ impl AetherCore {
                 mcp_client,
                 event_handler,
                 intent_pipeline,
+                unified_executor,
             )
             .await;
         });
@@ -157,6 +161,7 @@ impl AetherCore {
         mcp_client: Option<Arc<crate::mcp::McpClient>>,
         event_handler: Arc<dyn crate::AetherEventHandler>,
         intent_pipeline: Option<Arc<crate::routing::IntentRoutingPipeline>>,
+        unified_executor: Arc<super::tool_executor::UnifiedToolExecutor>,
     ) {
         match scope {
             RefreshScope::Full => {
@@ -168,6 +173,7 @@ impl AetherCore {
                     mcp_client,
                     event_handler,
                     intent_pipeline,
+                    unified_executor,
                 )
                 .await;
             }
@@ -189,7 +195,7 @@ impl AetherCore {
                 }
 
                 // 3. Update intent pipeline and notify
-                Self::finalize_scoped_refresh(&registry, &intent_pipeline, &event_handler).await;
+                Self::finalize_scoped_refresh(&registry, &intent_pipeline, &event_handler, &unified_executor).await;
             }
 
             RefreshScope::CustomCommandsOnly => {
@@ -202,7 +208,7 @@ impl AetherCore {
                 debug!("Re-registered custom commands from {} rules", config.rules.len());
 
                 // 3. Update intent pipeline and notify
-                Self::finalize_scoped_refresh(&registry, &intent_pipeline, &event_handler).await;
+                Self::finalize_scoped_refresh(&registry, &intent_pipeline, &event_handler, &unified_executor).await;
             }
 
             RefreshScope::McpServersOnly => {
@@ -277,7 +283,7 @@ impl AetherCore {
                 }
 
                 // 3. Update intent pipeline and notify
-                Self::finalize_scoped_refresh(&registry, &intent_pipeline, &event_handler).await;
+                Self::finalize_scoped_refresh(&registry, &intent_pipeline, &event_handler, &unified_executor).await;
             }
 
             RefreshScope::McpServer(server_name) => {
@@ -365,7 +371,7 @@ impl AetherCore {
                 }
 
                 // 3. Update intent pipeline and notify
-                Self::finalize_scoped_refresh(&registry, &intent_pipeline, &event_handler).await;
+                Self::finalize_scoped_refresh(&registry, &intent_pipeline, &event_handler, &unified_executor).await;
             }
 
             RefreshScope::NativeToolsOnly => {
@@ -384,16 +390,17 @@ impl AetherCore {
                 debug!("Re-registered {} native AgentTools", native_tool_count);
 
                 // 3. Update intent pipeline and notify
-                Self::finalize_scoped_refresh(&registry, &intent_pipeline, &event_handler).await;
+                Self::finalize_scoped_refresh(&registry, &intent_pipeline, &event_handler, &unified_executor).await;
             }
         }
     }
 
-    /// Finalize scoped refresh - update intent pipeline and notify Swift
+    /// Finalize scoped refresh - update intent pipeline, executor and notify Swift
     async fn finalize_scoped_refresh(
         registry: &Arc<crate::dispatcher::ToolRegistry>,
         intent_pipeline: &Option<Arc<crate::routing::IntentRoutingPipeline>>,
         event_handler: &Arc<dyn crate::AetherEventHandler>,
+        unified_executor: &Arc<super::tool_executor::UnifiedToolExecutor>,
     ) {
         let tool_count = registry.active_count().await;
 
@@ -403,6 +410,10 @@ impl AetherCore {
             pipeline.update_tools(tools).await;
             debug!("Intent pipeline updated with {} tools after scoped refresh", tool_count);
         }
+
+        // Refresh unified executor tool source cache
+        unified_executor.refresh_tool_sources().await;
+        debug!("Unified executor refreshed after scoped refresh");
 
         // Notify Swift that tools have changed
         event_handler.on_tools_changed(tool_count as u32);
@@ -419,6 +430,7 @@ impl AetherCore {
         let mcp_client = self.mcp_client.clone();
         let event_handler = Arc::clone(&self.event_handler);
         let intent_pipeline = self.intent_pipeline.clone();
+        let unified_executor = Arc::clone(&self.unified_executor);
 
         Self::refresh_tool_registry_impl(
             registry,
@@ -427,6 +439,7 @@ impl AetherCore {
             mcp_client,
             event_handler,
             intent_pipeline,
+            unified_executor,
         )
         .await;
     }
@@ -442,6 +455,7 @@ impl AetherCore {
         mcp_client: Option<Arc<crate::mcp::McpClient>>,
         event_handler: Arc<dyn crate::AetherEventHandler>,
         intent_pipeline: Option<Arc<crate::routing::IntentRoutingPipeline>>,
+        unified_executor: Arc<super::tool_executor::UnifiedToolExecutor>,
     ) {
         // 0. Clear existing tools
         registry.clear().await;
@@ -550,6 +564,11 @@ impl AetherCore {
             pipeline.update_tools(tools).await;
             debug!("Intent pipeline updated with {} tools", tool_count);
         }
+
+        // 7. Refresh unified executor tool source cache
+        // This ensures the executor can route tools to correct backends
+        unified_executor.refresh_tool_sources().await;
+        debug!("Unified executor tool sources refreshed");
 
         // Notify Swift that tools have changed
         event_handler.on_tools_changed(tool_count as u32);
@@ -695,7 +714,7 @@ impl AetherCore {
 
     /// List builtin tools only
     ///
-    /// Returns the 3 system builtin commands (/search, /youtube, /chat)
+    /// Returns the 3 system builtin commands (/search, /youtube, /webfetch)
     /// sorted by sort_order.
     pub fn list_builtin_tools(&self) -> Vec<crate::dispatcher::UnifiedToolInfo> {
         self.runtime

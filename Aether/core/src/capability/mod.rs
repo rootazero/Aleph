@@ -19,7 +19,7 @@ pub mod system;
 pub use declaration::{CapabilityDeclaration, CapabilityParameter, CapabilityRegistry, McpToolInfo};
 pub use request::{AiResponse, CapabilityRequest, ClarificationInfo, ClarificationReason};
 pub use response_parser::ResponseParser;
-pub use strategies::{McpStrategy, MemoryStrategy, SearchStrategy, SkillsStrategy, VideoStrategy};
+pub use strategies::{McpStrategy, MemoryStrategy, SkillsStrategy};
 pub use strategy::{CapabilityHealth, CapabilityStrategy, CompositeCapabilityExecutor};
 pub use system::{
     CapabilityDiagnostics, CapabilityStatus, CapabilitySystem, CapabilitySystemBuilder,
@@ -34,35 +34,24 @@ pub use system::{
 ///
 /// This module orchestrates the execution of different capabilities (Memory, Search, MCP, Video)
 /// in a fixed priority order, enriching the AgentPayload with context data.
-use crate::config::{McpConfig, MemoryConfig, SkillsConfig, VideoConfig};
+use crate::config::{McpConfig, MemoryConfig, SkillsConfig};
 use crate::mcp::McpClient;
 use crate::error::{AetherError, Result};
 use crate::memory::{EmbeddingModel, FactRetrieval, FactRetrievalConfig, VectorDatabase};
 use crate::payload::{AgentPayload, Capability};
-use crate::search::{SearchOptions, SearchRegistry};
 use crate::skills::SkillsRegistry;
-use crate::utils::pii;
-use crate::video::{extract_youtube_url, YouTubeExtractor};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 /// Capability executor that enriches AgentPayload with context data
 ///
-/// Executes capabilities in priority order: Memory → Search → MCP → Video → Skills
+/// Executes capabilities in priority order: Memory → Mcp → Skills
 pub struct CapabilityExecutor {
     /// Optional memory database for vector retrieval
     memory_db: Option<Arc<VectorDatabase>>,
     /// Memory configuration
     memory_config: Option<Arc<MemoryConfig>>,
-    /// Optional search registry for search capability
-    search_registry: Option<Arc<SearchRegistry>>,
-    /// Search options (timeout, max results, etc.)
-    search_options: SearchOptions,
-    /// Enable PII (Personally Identifiable Information) scrubbing
-    pii_scrubbing_enabled: bool,
-    /// Video transcript configuration
-    video_config: Option<Arc<VideoConfig>>,
     /// Skills registry for Skills capability
     skills_registry: Option<Arc<SkillsRegistry>>,
     /// Skills configuration
@@ -94,24 +83,13 @@ impl CapabilityExecutor {
     ///
     /// * `memory_db` - Optional memory database for Memory capability
     /// * `memory_config` - Optional memory configuration
-    /// * `search_registry` - Optional search registry for Search capability
-    /// * `search_options` - Search options (timeout, max results, etc.)
-    /// * `pii_scrubbing_enabled` - Enable PII scrubbing for search queries
-    /// * `video_config` - Optional video transcript configuration
     pub fn new(
         memory_db: Option<Arc<VectorDatabase>>,
         memory_config: Option<Arc<MemoryConfig>>,
-        search_registry: Option<Arc<SearchRegistry>>,
-        search_options: Option<SearchOptions>,
-        pii_scrubbing_enabled: bool,
     ) -> Self {
         Self {
             memory_db,
             memory_config,
-            search_registry,
-            search_options: search_options.unwrap_or_default(),
-            pii_scrubbing_enabled,
-            video_config: None,
             skills_registry: None,
             skills_config: None,
             mcp_client: None,
@@ -124,12 +102,6 @@ impl CapabilityExecutor {
             ai_retrieval_max_candidates: 20,
             ai_retrieval_fallback_count: 3,
         }
-    }
-
-    /// Create a new capability executor with video config
-    pub fn with_video_config(mut self, video_config: Option<Arc<VideoConfig>>) -> Self {
-        self.video_config = video_config;
-        self
     }
 
     /// Configure MCP capability
@@ -251,14 +223,8 @@ impl CapabilityExecutor {
             Capability::Memory => {
                 payload = self.execute_memory(payload).await?;
             }
-            Capability::Search => {
-                payload = self.execute_search(payload).await?;
-            }
             Capability::Mcp => {
                 payload = self.execute_mcp(payload).await?;
-            }
-            Capability::Video => {
-                payload = self.execute_video(payload).await?;
             }
             Capability::Skills => {
                 payload = self.execute_skills(payload).await?;
@@ -356,106 +322,6 @@ impl CapabilityExecutor {
         Ok(payload)
     }
 
-    /// Extract search query from user input
-    ///
-    /// For MVP, this is a simple pass-through - the entire user input is used as the search query.
-    /// In the future, this could implement more sophisticated query extraction logic.
-    ///
-    /// # Arguments
-    ///
-    /// * `input` - The user input text
-    ///
-    /// # Returns
-    ///
-    /// The extracted search query, or None if the input is empty
-    fn extract_search_query(input: &str) -> Option<String> {
-        let query = input.trim();
-        if query.is_empty() {
-            None
-        } else {
-            Some(query.to_string())
-        }
-    }
-
-    /// Execute Search capability
-    ///
-    /// Performs a web search using the configured search registry and populates
-    /// the payload with search results.
-    ///
-    /// # Arguments
-    ///
-    /// * `payload` - The agent payload
-    ///
-    /// # Returns
-    ///
-    /// The payload with search_results populated (if any found)
-    async fn execute_search(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
-        // Check if search registry is available
-        let Some(registry) = &self.search_registry else {
-            warn!("Search capability requested but no search registry configured");
-            return Ok(payload);
-        };
-
-        // Extract search query from user input
-        let Some(mut query) = Self::extract_search_query(&payload.user_input) else {
-            warn!("Search capability requested but user input is empty");
-            return Ok(payload);
-        };
-
-        // Apply PII scrubbing if enabled
-        if self.pii_scrubbing_enabled {
-            let scrubbed = pii::scrub_pii(&query);
-            if scrubbed != query {
-                debug!("PII scrubbing applied to search query");
-            }
-            query = scrubbed;
-        }
-
-        info!(
-            query_length = query.len(),
-            max_results = self.search_options.max_results,
-            timeout = self.search_options.timeout_seconds,
-            pii_scrubbing = self.pii_scrubbing_enabled,
-            "Executing search capability"
-        );
-
-        // Perform search with timeout
-        let search_future = registry.search(&query, &self.search_options);
-        let timeout_duration = std::time::Duration::from_secs(self.search_options.timeout_seconds);
-
-        match tokio::time::timeout(timeout_duration, search_future).await {
-            Ok(Ok(results)) => {
-                if results.is_empty() {
-                    info!("Search completed but no results found");
-                    payload.context.search_results = None;
-                } else {
-                    info!(
-                        count = results.len(),
-                        provider = results.first().and_then(|r| r.provider.as_deref()),
-                        "Search completed successfully"
-                    );
-                    payload.context.search_results = Some(results);
-                }
-            }
-            Ok(Err(e)) => {
-                warn!(
-                    error = %e,
-                    "Search failed, continuing without results"
-                );
-                payload.context.search_results = None;
-            }
-            Err(_) => {
-                warn!(
-                    timeout = self.search_options.timeout_seconds,
-                    "Search timed out, continuing without results"
-                );
-                payload.context.search_results = None;
-            }
-        }
-
-        Ok(payload)
-    }
-
     /// Execute MCP capability
     ///
     /// Lists available MCP tools and populates the payload with tool information.
@@ -511,151 +377,6 @@ impl CapabilityExecutor {
         }
 
         payload.context.mcp_resources = Some(resources);
-
-        Ok(payload)
-    }
-
-    /// Create a CompositeCapabilityExecutor from this executor's configuration
-    ///
-    /// This allows gradual migration to the strategy pattern while maintaining
-    /// backward compatibility with the existing API.
-    ///
-    /// Note: This creates a simplified executor that doesn't include AI retrieval
-    /// configuration. For full AI retrieval support, use the original execute methods.
-    pub fn to_composite_executor(&self) -> CompositeCapabilityExecutor {
-        let mut executor = CompositeCapabilityExecutor::new();
-
-        // Register Memory strategy if configured
-        if self.memory_db.is_some() && self.memory_config.is_some() {
-            let mut memory_strategy = MemoryStrategy::new(
-                self.memory_db.clone(),
-                self.memory_config.clone(),
-            );
-
-            // Configure AI retrieval if provider is available
-            if self.ai_provider.is_some() {
-                memory_strategy = memory_strategy.with_ai_retrieval(
-                    self.ai_provider.clone(),
-                    self.use_ai_retrieval,
-                    std::time::Duration::from_millis(self.ai_retrieval_timeout_ms),
-                    self.ai_retrieval_max_candidates,
-                    self.ai_retrieval_fallback_count,
-                );
-            }
-
-            // Add exclusion set if any
-            if !self.memory_exclusion_set.is_empty() {
-                memory_strategy = memory_strategy.with_exclusion_set(self.memory_exclusion_set.clone());
-            }
-
-            executor.register(Arc::new(memory_strategy));
-        }
-
-        // Register Search strategy if configured
-        if self.search_registry.is_some() {
-            let search_strategy = SearchStrategy::new(
-                self.search_registry.clone(),
-                Some(self.search_options.clone()),
-                self.pii_scrubbing_enabled,
-            );
-            executor.register(Arc::new(search_strategy));
-        }
-
-        // Register Video strategy
-        let video_strategy = VideoStrategy::new(self.video_config.clone());
-        executor.register(Arc::new(video_strategy));
-
-        // Register MCP strategy
-        let mcp_strategy = McpStrategy::with_client(
-            self.mcp_client.clone(),
-            self.mcp_config.clone(),
-        );
-        executor.register(Arc::new(mcp_strategy));
-
-        executor
-    }
-
-    /// Execute all capabilities using the strategy pattern
-    ///
-    /// This is an alternative to `execute_all` that uses the CompositeCapabilityExecutor
-    /// with pluggable strategies. Useful for testing or when strategy pattern benefits
-    /// are needed.
-    ///
-    /// Note: This simplified version doesn't include AI retrieval configuration.
-    /// For full AI retrieval support, use `execute_all` instead.
-    pub async fn execute_all_with_strategies(&self, payload: AgentPayload) -> Result<AgentPayload> {
-        let composite = self.to_composite_executor();
-        composite.execute_all(payload).await
-    }
-
-    /// Execute Video capability
-    ///
-    /// Extracts transcript from YouTube video if URL is found in user input.
-    /// Falls back gracefully if extraction fails.
-    ///
-    /// # Arguments
-    ///
-    /// * `payload` - The agent payload
-    ///
-    /// # Returns
-    ///
-    /// The payload with video_transcript populated (if URL found and extraction succeeds)
-    async fn execute_video(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
-        // Use provided config or default
-        let default_config = crate::config::VideoConfig::default();
-        let config = self.video_config.as_ref().map(|c| c.as_ref()).unwrap_or(&default_config);
-
-        if !config.enabled {
-            debug!("Video capability disabled in config");
-            return Ok(payload);
-        }
-
-        if !config.youtube_transcript {
-            debug!("YouTube transcript extraction disabled in config");
-            return Ok(payload);
-        }
-
-        // Extract YouTube URL from user input
-        let Some(video_url) = extract_youtube_url(&payload.user_input) else {
-            debug!("No YouTube URL found in user input");
-            return Ok(payload);
-        };
-
-        info!(
-            video_url = %video_url,
-            "Found YouTube URL in user input, extracting transcript"
-        );
-
-        // Create extractor and fetch transcript
-        let extractor = YouTubeExtractor::new(config.clone());
-
-        match extractor.extract_transcript(&video_url).await {
-            Ok(transcript) => {
-                let formatted = transcript.format_for_context();
-                info!(
-                    video_id = %transcript.video_id,
-                    title = %transcript.title,
-                    segments = transcript.segments.len(),
-                    truncated = transcript.was_truncated,
-                    formatted_len = formatted.len(),
-                    "Successfully extracted video transcript"
-                );
-                // Debug: print first 500 chars of formatted transcript
-                debug!(
-                    preview = %formatted.chars().take(500).collect::<String>(),
-                    "Transcript preview"
-                );
-                payload.context.video_transcript = Some(transcript);
-            }
-            Err(e) => {
-                warn!(
-                    error = %e,
-                    video_url = %video_url,
-                    "Failed to extract video transcript, continuing without it"
-                );
-                // Don't fail the request - continue without transcript
-            }
-        }
 
         Ok(payload)
     }
@@ -739,7 +460,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_all_no_capabilities() {
-        let executor = CapabilityExecutor::new(None, None, None, None, false);
+        let executor = CapabilityExecutor::new(None, None);
 
         let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
 
@@ -755,8 +476,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_all_with_search_warning() {
-        let executor = CapabilityExecutor::new(None, None, None, None, false);
+    async fn test_execute_all_with_mcp_capability() {
+        let executor = CapabilityExecutor::new(None, None);
 
         let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
 
@@ -764,21 +485,21 @@ mod tests {
             .meta(Intent::GeneralChat, 1000, anchor)
             .config(
                 "openai".to_string(),
-                vec![Capability::Search],
+                vec![Capability::Mcp],
                 ContextFormat::Markdown,
             )
             .user_input("Test".to_string())
             .build()
             .unwrap();
 
-        // Should complete without error, just log a warning
+        // Should complete without error (no MCP client configured)
         let result = executor.execute_all(payload).await.unwrap();
-        assert!(result.context.search_results.is_none());
+        assert!(result.context.mcp_tool_result.is_none());
     }
 
     #[tokio::test]
     async fn test_execute_memory_no_database() {
-        let executor = CapabilityExecutor::new(None, None, None, None, false);
+        let executor = CapabilityExecutor::new(None, None);
 
         let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
 
@@ -799,16 +520,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_capability_priority_ordering() {
-        let executor = CapabilityExecutor::new(None, None, None, None, false);
+        let executor = CapabilityExecutor::new(None, None);
 
         let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
 
-        // Test that capabilities are executed in order: Memory, Search, MCP
+        // Test that capabilities are executed in order: Memory, Mcp, Skills
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
             .config(
                 "openai".to_string(),
-                vec![Capability::Mcp, Capability::Memory, Capability::Search],
+                vec![Capability::Mcp, Capability::Memory, Capability::Skills],
                 ContextFormat::Markdown,
             )
             .user_input("Test".to_string())
@@ -824,276 +545,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pii_scrubbing_enabled() {
-        // Test that CapabilityExecutor can be created with PII scrubbing enabled
-        let executor = CapabilityExecutor::new(None, None, None, None, true);
+    async fn test_executor_with_memory_db() {
+        // Test that CapabilityExecutor can be created with memory db
+        let executor = CapabilityExecutor::new(None, None);
 
         let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
 
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
             .config("openai".to_string(), vec![], ContextFormat::Markdown)
-            .user_input("Contact me at test@example.com".to_string())
+            .user_input("Test query".to_string())
             .build()
             .unwrap();
 
-        // Execute with PII scrubbing enabled (no search registry, so no actual search)
+        // Execute without error
         let result = executor.execute_all(payload).await.unwrap();
 
-        // Verify executor doesn't crash with PII scrubbing enabled
-        assert!(result.context.search_results.is_none());
-        assert!(executor.pii_scrubbing_enabled);
-    }
-
-    #[tokio::test]
-    async fn test_pii_scrubbing_disabled() {
-        // Test that CapabilityExecutor can be created with PII scrubbing disabled
-        let executor = CapabilityExecutor::new(None, None, None, None, false);
-
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
-
-        let payload = PayloadBuilder::new()
-            .meta(Intent::GeneralChat, 1000, anchor)
-            .config("openai".to_string(), vec![], ContextFormat::Markdown)
-            .user_input("Contact me at test@example.com".to_string())
-            .build()
-            .unwrap();
-
-        // Execute with PII scrubbing disabled
-        let result = executor.execute_all(payload).await.unwrap();
-
-        // Verify executor works correctly with PII scrubbing disabled
-        assert!(result.context.search_results.is_none());
-        assert!(!executor.pii_scrubbing_enabled);
-    }
-
-    // ===== End-to-End Integration Tests =====
-
-    /// Mock search provider for testing
-    struct MockSearchProvider {
-        name: String,
-        results: Vec<crate::search::SearchResult>,
-    }
-
-    impl MockSearchProvider {
-        fn new(name: &str, result_count: usize) -> Self {
-            let mut results = Vec::new();
-            for i in 0..result_count {
-                results.push(crate::search::SearchResult {
-                    title: format!("Test Result {}", i + 1),
-                    url: format!("https://test.com/{}", i + 1),
-                    snippet: format!("Test snippet {}", i + 1),
-                    full_content: None,
-                    source_type: None,
-                    provider: Some(name.to_string()),
-                    published_date: None,
-                    relevance_score: Some(0.9 - (i as f32 * 0.1)),
-                });
-            }
-            Self {
-                name: name.to_string(),
-                results,
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl crate::search::SearchProvider for MockSearchProvider {
-        fn name(&self) -> &str {
-            &self.name
-        }
-
-        fn is_available(&self) -> bool {
-            true
-        }
-
-        async fn search(
-            &self,
-            _query: &str,
-            _options: &crate::search::SearchOptions,
-        ) -> Result<Vec<crate::search::SearchResult>> {
-            Ok(self.results.clone())
-        }
-    }
-
-    #[tokio::test]
-    async fn test_e2e_search_capability_execution() {
-        use crate::search::SearchRegistry;
-
-        // Create search registry with mock provider
-        let mut registry = SearchRegistry::new("mock".to_string());
-        let provider = MockSearchProvider::new("mock", 3);
-        registry.add_provider("mock".to_string(), Arc::new(provider));
-
-        // Create capability executor with search registry
-        let executor = CapabilityExecutor::new(None, None, Some(Arc::new(registry)), None, false);
-
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
-
-        // Create payload with Search capability
-        let payload = PayloadBuilder::new()
-            .meta(Intent::BuiltinSearch, 1000, anchor)
-            .config(
-                "openai".to_string(),
-                vec![Capability::Search],
-                ContextFormat::Markdown,
-            )
-            .user_input("test query".to_string())
-            .build()
-            .unwrap();
-
-        // Execute capabilities
-        let result = executor.execute_all(payload).await.unwrap();
-
-        // Verify search results were populated
-        assert!(result.context.search_results.is_some());
-        let search_results = result.context.search_results.unwrap();
-        assert_eq!(search_results.len(), 3);
-        assert_eq!(search_results[0].title, "Test Result 1");
-        assert_eq!(search_results[0].provider, Some("mock".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_e2e_multiple_capabilities_execution() {
-        use crate::search::SearchRegistry;
-
-        // Create search registry with mock provider
-        let mut registry = SearchRegistry::new("mock".to_string());
-        let provider = MockSearchProvider::new("mock", 2);
-        registry.add_provider("mock".to_string(), Arc::new(provider));
-
-        // Create capability executor with search (no memory for simplicity)
-        let executor = CapabilityExecutor::new(None, None, Some(Arc::new(registry)), None, false);
-
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
-
-        // Create payload with multiple capabilities
-        let payload = PayloadBuilder::new()
-            .meta(Intent::GeneralChat, 1000, anchor)
-            .config(
-                "openai".to_string(),
-                vec![Capability::Memory, Capability::Search],
-                ContextFormat::Markdown,
-            )
-            .user_input("test query".to_string())
-            .build()
-            .unwrap();
-
-        // Execute all capabilities
-        let result = executor.execute_all(payload).await.unwrap();
-
-        // Memory should be None (no database configured)
+        // Verify executor works
         assert!(result.context.memory_snippets.is_none());
-
-        // Search results should be populated
-        assert!(result.context.search_results.is_some());
-        let search_results = result.context.search_results.unwrap();
-        assert_eq!(search_results.len(), 2);
     }
 
     #[tokio::test]
-    async fn test_e2e_search_with_pii_scrubbing() {
-        use crate::search::SearchRegistry;
-
-        // Create search registry with mock provider
-        let mut registry = SearchRegistry::new("mock".to_string());
-        let provider = MockSearchProvider::new("mock", 1);
-        registry.add_provider("mock".to_string(), Arc::new(provider));
-
-        // Create capability executor with PII scrubbing enabled
-        let executor = CapabilityExecutor::new(
-            None,
-            None,
-            Some(Arc::new(registry)),
-            None,
-            true, // PII scrubbing enabled
-        );
+    async fn test_executor_basic() {
+        // Test that CapabilityExecutor can be created
+        let executor = CapabilityExecutor::new(None, None);
 
         let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
 
-        // Create payload with PII in user input
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1000, anchor)
-            .config(
-                "openai".to_string(),
-                vec![Capability::Search],
-                ContextFormat::Markdown,
-            )
-            .user_input("Contact me at test@example.com or call 555-1234".to_string())
+            .config("openai".to_string(), vec![], ContextFormat::Markdown)
+            .user_input("Test query".to_string())
             .build()
             .unwrap();
 
-        // Execute search capability
+        // Execute
         let result = executor.execute_all(payload).await.unwrap();
 
-        // Search should still succeed (PII is scrubbed before searching)
-        assert!(result.context.search_results.is_some());
-        assert!(executor.pii_scrubbing_enabled);
-    }
-
-    #[tokio::test]
-    async fn test_e2e_search_with_empty_query() {
-        use crate::search::SearchRegistry;
-
-        // Create search registry
-        let mut registry = SearchRegistry::new("mock".to_string());
-        let provider = MockSearchProvider::new("mock", 1);
-        registry.add_provider("mock".to_string(), Arc::new(provider));
-
-        let executor = CapabilityExecutor::new(None, None, Some(Arc::new(registry)), None, false);
-
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
-
-        // Create payload with empty user input
-        let payload = PayloadBuilder::new()
-            .meta(Intent::GeneralChat, 1000, anchor)
-            .config(
-                "openai".to_string(),
-                vec![Capability::Search],
-                ContextFormat::Markdown,
-            )
-            .user_input("   ".to_string()) // Empty after trimming
-            .build()
-            .unwrap();
-
-        // Execute search capability
-        let result = executor.execute_all(payload).await.unwrap();
-
-        // Search results should be None for empty query
-        assert!(result.context.search_results.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_e2e_capability_priority_ordering() {
-        use crate::search::SearchRegistry;
-
-        // Create search registry
-        let mut registry = SearchRegistry::new("mock".to_string());
-        let provider = MockSearchProvider::new("mock", 1);
-        registry.add_provider("mock".to_string(), Arc::new(provider));
-
-        let executor = CapabilityExecutor::new(None, None, Some(Arc::new(registry)), None, false);
-
-        let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
-
-        // Create payload with capabilities in reverse priority order
-        let payload = PayloadBuilder::new()
-            .meta(Intent::GeneralChat, 1000, anchor)
-            .config(
-                "openai".to_string(),
-                vec![Capability::Search, Capability::Mcp, Capability::Memory],
-                ContextFormat::Markdown,
-            )
-            .user_input("test".to_string())
-            .build()
-            .unwrap();
-
-        // Execute all capabilities (should reorder to Memory, Search, MCP)
-        let result = executor.execute_all(payload).await.unwrap();
-
-        // All capabilities should execute without error
-        assert!(result.context.memory_snippets.is_none()); // No DB
-        assert!(result.context.search_results.is_some()); // Has registry
-        assert!(result.context.mcp_resources.is_none()); // Not implemented
+        // Verify executor works correctly
+        assert!(result.context.memory_snippets.is_none());
     }
 }

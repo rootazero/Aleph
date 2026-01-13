@@ -871,9 +871,8 @@ pub enum ContextAction {
 fn parse_capability(s: &str) -> Option<Capability> {
     match s.to_lowercase().as_str() {
         "memory" => Some(Capability::Memory),
-        "search" => Some(Capability::Search),
         "mcp" => Some(Capability::Mcp),
-        "video" => Some(Capability::Video),
+        "skills" => Some(Capability::Skills),
         _ => None,
     }
 }
@@ -900,7 +899,7 @@ mod tests {
             intent_type: "search".to_string(),
             provider_name: Some("openai".to_string()),
             system_prompt: Some("You are a search assistant.".to_string()),
-            capabilities: vec![Capability::Search],
+            capabilities: vec![Capability::Mcp],  // AI-first: AI decides tool usage
             strip_prefix: true,
         };
         matcher.command_rules.push(rule);
