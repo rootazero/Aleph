@@ -213,7 +213,11 @@ pub struct AetherV2Core {
     config_path: String,
     memory_path: Option<MemoryStorePath>,
     handler: Arc<dyn AetherV2EventHandler>,
+    /// Tokio runtime handle for async operations
     runtime: tokio::runtime::Handle,
+    /// Owned runtime to keep it alive (when we create our own)
+    /// This MUST be stored to prevent the runtime from being dropped
+    _owned_runtime: Option<tokio::runtime::Runtime>,
     /// Current operation's cancellation token
     /// Each new operation gets a fresh token, allowing cancellation state to be reset
     current_op_token: Arc<RwLock<CancellationToken>>,
@@ -483,14 +487,21 @@ pub fn init_v2(
     // Convert Box to Arc for internal use
     let handler: Arc<dyn AetherV2EventHandler> = Arc::from(handler);
 
-    // Create runtime if not in async context
-    let runtime = tokio::runtime::Handle::try_current()
-        .unwrap_or_else(|_| {
-            tokio::runtime::Runtime::new()
-                .expect("Failed to create Tokio runtime")
-                .handle()
-                .clone()
-        });
+    // Get or create runtime
+    // IMPORTANT: If we create our own runtime, we MUST store it to keep it alive
+    let (runtime, owned_runtime) = match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            // Already in async context, use existing runtime
+            (handle, None)
+        }
+        Err(_) => {
+            // Not in async context, create our own runtime
+            let rt = tokio::runtime::Runtime::new()
+                .expect("Failed to create Tokio runtime");
+            let handle = rt.handle().clone();
+            (handle, Some(rt))
+        }
+    };
 
     // Load config from file
     let full_config = if config_path.is_empty() {
@@ -577,6 +588,7 @@ pub fn init_v2(
         memory_path,
         handler,
         runtime,
+        _owned_runtime: owned_runtime,  // Keep runtime alive if we created it
         current_op_token,
     }))
 }
