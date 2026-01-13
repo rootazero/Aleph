@@ -150,8 +150,8 @@ impl AetherCore {
         // Reinitialize router with updated config
         self.reload_router()?;
 
-        // Refresh tool registry to pick up custom command changes
-        self.refresh_tool_registry();
+        // Refresh tool registry in background to pick up custom command changes
+        self.refresh_tool_registry_background();
 
         log::info!("Routing rules updated and router reinitialized");
         Ok(())

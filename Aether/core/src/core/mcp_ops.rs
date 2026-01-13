@@ -67,7 +67,7 @@ impl AetherCore {
         self.event_handler.on_config_changed();
 
         // Refresh tool registry to pick up config changes
-        self.refresh_tool_registry();
+        self.refresh_tool_registry_background();
 
         info!("MCP configuration updated");
         Ok(())
@@ -286,7 +286,7 @@ impl AetherCore {
         self.event_handler.on_config_changed();
 
         // Refresh tool registry to start new MCP server and register its tools
-        self.refresh_tool_registry();
+        self.refresh_tool_registry_background();
 
         Ok(())
     }
@@ -337,7 +337,7 @@ impl AetherCore {
         self.event_handler.on_config_changed();
 
         // Refresh tool registry to restart MCP servers with updated config
-        self.refresh_tool_registry();
+        self.refresh_tool_registry_background();
 
         Ok(())
     }
@@ -365,7 +365,7 @@ impl AetherCore {
         self.event_handler.on_config_changed();
 
         // Refresh tool registry to remove deleted server's tools
-        self.refresh_tool_registry();
+        self.refresh_tool_registry_background();
 
         Ok(())
     }
@@ -477,7 +477,7 @@ impl AetherCore {
         self.event_handler.on_config_changed();
 
         // Refresh tool registry to start imported MCP servers
-        self.refresh_tool_registry();
+        self.refresh_tool_registry_background();
 
         Ok(())
     }

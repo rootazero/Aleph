@@ -24,7 +24,7 @@ impl AetherCore {
     // Tool Registry Methods (implement-dispatcher-layer)
     // ========================================================================
 
-    /// Refresh the unified tool registry
+    /// Refresh the unified tool registry (synchronous)
     ///
     /// This method aggregates tools from all sources:
     /// - Native AgentTools (filesystem, git, shell, system, clipboard, screen)
@@ -34,11 +34,28 @@ impl AetherCore {
     /// - Custom commands from config rules
     ///
     /// Call this method when:
-    /// - Application starts (after initialization)
-    /// - Config file changes (hot-reload callback)
+    /// - Application starts (after initialization) - ensures tools available immediately
+    ///
+    /// For hot-reload scenarios (config changes, skill install/remove),
+    /// use `refresh_tool_registry_background()` instead to avoid blocking.
+    pub fn refresh_tool_registry(&self) {
+        // Run refresh synchronously using block_on to ensure tools are available
+        // immediately after AetherCore::new() returns. This is safe because
+        // AetherCore initialization runs on a background thread.
+        self.runtime.block_on(self.refresh_tool_registry_internal());
+    }
+
+    /// Refresh the unified tool registry in background (non-blocking)
+    ///
+    /// Use this method for hot-reload scenarios where blocking is undesirable:
+    /// - Config file changes (hot-reload callback from ConfigWatcher)
     /// - MCP servers connect/disconnect
     /// - Skills are installed/removed
-    pub fn refresh_tool_registry(&self) {
+    ///
+    /// This method returns immediately and spawns the refresh task on the
+    /// tokio runtime. When complete, `on_tools_changed()` will be called
+    /// to notify Swift.
+    pub fn refresh_tool_registry_background(&self) {
         let registry = Arc::clone(&self.tool_registry);
         let native_registry = Arc::clone(&self.native_tool_registry);
         let config = self.lock_config().clone();
@@ -46,117 +63,162 @@ impl AetherCore {
         let event_handler = Arc::clone(&self.event_handler);
         let intent_pipeline = self.intent_pipeline.clone();
 
-        // Run refresh synchronously using block_on to ensure tools are available
-        // immediately after AetherCore::new() returns. This is safe because
-        // AetherCore initialization runs on a background thread.
-        self.runtime.block_on(async move {
-            // 0. Clear existing tools
-            registry.clear().await;
-            native_registry.clear().await;
-
-            // 1. Register builtin commands (single source of truth)
-            registry.register_builtin_tools().await;
-
-            // 2. Register native AgentTools for execution
-            // These are the new native function calling tools
-            let native_tools = Self::create_native_agent_tools();
-            let native_tool_count = native_registry.register_all(native_tools.clone()).await;
-            debug!("Registered {} native AgentTools for execution", native_tool_count);
-
-            // 2b. Also register native tools in the dispatcher registry for UI display
-            for (service_name, tools) in Self::group_native_tools_by_service(&native_tools) {
-                registry.register_agent_tools(&tools, &service_name).await;
-            }
-
-            // 3. Start external MCP servers and register their tools
-            let mut mcp_tool_count = 0usize;
-            if let Some(ref client) = mcp_client {
-                // Convert config to ExternalServerConfig
-                let server_configs: Vec<ExternalServerConfig> = config
-                    .mcp
-                    .external_servers
-                    .iter()
-                    .map(|s| ExternalServerConfig {
-                        name: s.name.clone(),
-                        command: s.command.clone(),
-                        args: s.args.clone(),
-                        env: s.env.clone(),
-                        cwd: s.cwd.as_ref().map(PathBuf::from),
-                        requires_runtime: s.requires_runtime.clone(),
-                        timeout_seconds: Some(s.timeout_seconds),
-                    })
-                    .collect();
-
-                if !server_configs.is_empty() {
-                    // Start external servers concurrently
-                    let startup_report = client.start_external_servers(server_configs).await;
-
-                    // Log startup results
-                    if !startup_report.failed.is_empty() {
-                        for (server_name, error_msg) in &startup_report.failed {
-                            warn!(
-                                server = %server_name,
-                                error = %error_msg,
-                                "Failed to start MCP server"
-                            );
-                        }
-                    }
-                    info!(
-                        succeeded = startup_report.succeeded.len(),
-                        failed = startup_report.failed.len(),
-                        "MCP servers startup complete"
-                    );
-
-                    // Create bridges for MCP tools and register them
-                    let mcp_bridges = create_bridges(client).await;
-                    mcp_tool_count = mcp_bridges.len();
-
-                    if mcp_tool_count > 0 {
-                        // Register MCP tools in native registry for execution
-                        native_registry.register_all(mcp_bridges.clone()).await;
-
-                        // Group MCP tools by server name for proper categorization
-                        // MCP tool names have format "server_name:tool_name"
-                        let mcp_groups = Self::group_mcp_tools_by_server(&mcp_bridges);
-                        for (server_name, tools) in mcp_groups {
-                            registry.register_agent_tools(&tools, &server_name).await;
-                        }
-
-                        debug!("Registered {} MCP tools from external servers", mcp_tool_count);
-                    }
-                }
-            }
-
-            // 4. Register skills
-            match crate::initialization::list_installed_skills() {
-                Ok(skills) => {
-                    registry.register_skills(&skills).await;
-                }
-                Err(e) => {
-                    warn!(error = %e, "Failed to list installed skills, skipping skill registration");
-                }
-            }
-
-            // 5. Register custom commands from routing rules
-            registry.register_custom_commands(&config.rules).await;
-
-            let tool_count = registry.active_count().await;
-            info!(
-                "Tool registry refreshed: {} tools ({} native, {} mcp)",
-                tool_count, native_tool_count, mcp_tool_count
-            );
-
-            // 6. Update intent pipeline with the new tool list
-            // This enables L3 LLM routing to be aware of available tools
-            if let Some(ref pipeline) = intent_pipeline {
-                let tools = registry.list_all().await;
-                pipeline.update_tools(tools).await;
-                debug!("Intent pipeline updated with {} tools", tool_count);
-            }
-
-            // Notify Swift that tools have changed
-            event_handler.on_tools_changed(tool_count as u32);
+        // Spawn refresh task on the runtime - returns immediately
+        self.runtime.spawn(async move {
+            Self::refresh_tool_registry_impl(
+                registry,
+                native_registry,
+                config,
+                mcp_client,
+                event_handler,
+                intent_pipeline,
+            )
+            .await;
         });
+
+        debug!("Tool registry background refresh initiated");
+    }
+
+    /// Internal async refresh implementation
+    ///
+    /// This is the actual refresh logic used by both sync and async paths.
+    async fn refresh_tool_registry_internal(&self) {
+        let registry = Arc::clone(&self.tool_registry);
+        let native_registry = Arc::clone(&self.native_tool_registry);
+        let config = self.lock_config().clone();
+        let mcp_client = self.mcp_client.clone();
+        let event_handler = Arc::clone(&self.event_handler);
+        let intent_pipeline = self.intent_pipeline.clone();
+
+        Self::refresh_tool_registry_impl(
+            registry,
+            native_registry,
+            config,
+            mcp_client,
+            event_handler,
+            intent_pipeline,
+        )
+        .await;
+    }
+
+    /// Shared implementation for tool registry refresh
+    ///
+    /// Takes all dependencies as parameters to allow usage from both
+    /// synchronous (block_on) and background (spawn) contexts.
+    async fn refresh_tool_registry_impl(
+        registry: Arc<crate::dispatcher::ToolRegistry>,
+        native_registry: Arc<crate::tools::NativeToolRegistry>,
+        config: crate::Config,
+        mcp_client: Option<Arc<crate::mcp::McpClient>>,
+        event_handler: Arc<dyn crate::AetherEventHandler>,
+        intent_pipeline: Option<Arc<crate::routing::IntentRoutingPipeline>>,
+    ) {
+        // 0. Clear existing tools
+        registry.clear().await;
+        native_registry.clear().await;
+
+        // 1. Register builtin commands (single source of truth)
+        registry.register_builtin_tools().await;
+
+        // 2. Register native AgentTools for execution
+        // These are the new native function calling tools
+        let native_tools = Self::create_native_agent_tools();
+        let native_tool_count = native_registry.register_all(native_tools.clone()).await;
+        debug!("Registered {} native AgentTools for execution", native_tool_count);
+
+        // 2b. Also register native tools in the dispatcher registry for UI display
+        for (service_name, tools) in Self::group_native_tools_by_service(&native_tools) {
+            registry.register_agent_tools(&tools, &service_name).await;
+        }
+
+        // 3. Start external MCP servers and register their tools
+        let mut mcp_tool_count = 0usize;
+        if let Some(ref client) = mcp_client {
+            // Convert config to ExternalServerConfig
+            let server_configs: Vec<ExternalServerConfig> = config
+                .mcp
+                .external_servers
+                .iter()
+                .map(|s| ExternalServerConfig {
+                    name: s.name.clone(),
+                    command: s.command.clone(),
+                    args: s.args.clone(),
+                    env: s.env.clone(),
+                    cwd: s.cwd.as_ref().map(PathBuf::from),
+                    requires_runtime: s.requires_runtime.clone(),
+                    timeout_seconds: Some(s.timeout_seconds),
+                })
+                .collect();
+
+            if !server_configs.is_empty() {
+                // Start external servers concurrently
+                let startup_report = client.start_external_servers(server_configs).await;
+
+                // Log startup results
+                if !startup_report.failed.is_empty() {
+                    for (server_name, error_msg) in &startup_report.failed {
+                        warn!(
+                            server = %server_name,
+                            error = %error_msg,
+                            "Failed to start MCP server"
+                        );
+                    }
+                }
+                info!(
+                    succeeded = startup_report.succeeded.len(),
+                    failed = startup_report.failed.len(),
+                    "MCP servers startup complete"
+                );
+
+                // Create bridges for MCP tools and register them
+                let mcp_bridges = create_bridges(client).await;
+                mcp_tool_count = mcp_bridges.len();
+
+                if mcp_tool_count > 0 {
+                    // Register MCP tools in native registry for execution
+                    native_registry.register_all(mcp_bridges.clone()).await;
+
+                    // Group MCP tools by server name for proper categorization
+                    // MCP tool names have format "server_name:tool_name"
+                    let mcp_groups = Self::group_mcp_tools_by_server(&mcp_bridges);
+                    for (server_name, tools) in mcp_groups {
+                        registry.register_agent_tools(&tools, &server_name).await;
+                    }
+
+                    debug!("Registered {} MCP tools from external servers", mcp_tool_count);
+                }
+            }
+        }
+
+        // 4. Register skills
+        match crate::initialization::list_installed_skills() {
+            Ok(skills) => {
+                registry.register_skills(&skills).await;
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to list installed skills, skipping skill registration");
+            }
+        }
+
+        // 5. Register custom commands from routing rules
+        registry.register_custom_commands(&config.rules).await;
+
+        let tool_count = registry.active_count().await;
+        info!(
+            "Tool registry refreshed: {} tools ({} native, {} mcp)",
+            tool_count, native_tool_count, mcp_tool_count
+        );
+
+        // 6. Update intent pipeline with the new tool list
+        // This enables L3 LLM routing to be aware of available tools
+        if let Some(ref pipeline) = intent_pipeline {
+            let tools = registry.list_all().await;
+            pipeline.update_tools(tools).await;
+            debug!("Intent pipeline updated with {} tools", tool_count);
+        }
+
+        // Notify Swift that tools have changed
+        event_handler.on_tools_changed(tool_count as u32);
     }
 
     /// Create all native AgentTool instances

@@ -27,7 +27,8 @@ impl AetherCore {
     /// Install a skill from a GitHub URL
     ///
     /// Downloads and installs a skill from a GitHub repository URL.
-    /// Automatically refreshes the tool registry after installation.
+    /// Triggers a background refresh of the tool registry after installation.
+    /// When complete, `on_tools_changed()` callback will be invoked.
     ///
     /// # Arguments
     /// * `url` - GitHub repository URL (e.g., https://github.com/user/repo)
@@ -38,17 +39,18 @@ impl AetherCore {
     pub fn install_skill(&self, url: String) -> Result<SkillInfo> {
         let skill_info = crate::initialization::install_skill_from_url(url)?;
 
-        // Refresh tool registry to pick up new skill
-        self.refresh_tool_registry();
+        // Refresh tool registry in background (non-blocking)
+        self.refresh_tool_registry_background();
 
-        info!(skill_id = %skill_info.id, "Skill installed and registry refreshed");
+        info!(skill_id = %skill_info.id, "Skill installed, registry refresh initiated");
         Ok(skill_info)
     }
 
     /// Install skills from a local ZIP file
     ///
     /// Extracts and installs skills from a ZIP file.
-    /// Automatically refreshes the tool registry after installation.
+    /// Triggers a background refresh of the tool registry after installation.
+    /// When complete, `on_tools_changed()` callback will be invoked.
     ///
     /// # Arguments
     /// * `zip_path` - Path to the ZIP file
@@ -59,17 +61,18 @@ impl AetherCore {
     pub fn install_skills_from_zip(&self, zip_path: String) -> Result<Vec<String>> {
         let skill_ids = crate::initialization::install_skills_from_zip(zip_path)?;
 
-        // Refresh tool registry to pick up new skills
-        self.refresh_tool_registry();
+        // Refresh tool registry in background (non-blocking)
+        self.refresh_tool_registry_background();
 
-        info!(count = skill_ids.len(), "Skills installed from ZIP and registry refreshed");
+        info!(count = skill_ids.len(), "Skills installed from ZIP, registry refresh initiated");
         Ok(skill_ids)
     }
 
     /// Delete a skill by ID
     ///
     /// Removes a skill from the skills directory.
-    /// Automatically refreshes the tool registry after deletion.
+    /// Triggers a background refresh of the tool registry after deletion.
+    /// When complete, `on_tools_changed()` callback will be invoked.
     ///
     /// # Arguments
     /// * `skill_id` - The skill ID to delete
@@ -80,10 +83,10 @@ impl AetherCore {
     pub fn delete_skill(&self, skill_id: String) -> Result<()> {
         crate::initialization::delete_skill(skill_id.clone())?;
 
-        // Refresh tool registry to remove deleted skill
-        self.refresh_tool_registry();
+        // Refresh tool registry in background (non-blocking)
+        self.refresh_tool_registry_background();
 
-        info!(skill_id = %skill_id, "Skill deleted and registry refreshed");
+        info!(skill_id = %skill_id, "Skill deleted, registry refresh initiated");
         Ok(())
     }
 
@@ -96,11 +99,12 @@ impl AetherCore {
 
     /// Refresh skills in the tool registry
     ///
-    /// Forces a refresh of the tool registry to pick up any skill changes.
+    /// Triggers a background refresh of the tool registry to pick up any skill changes.
     /// This is useful when skills are modified outside of AetherCore.
+    /// When complete, `on_tools_changed()` callback will be invoked.
     pub fn refresh_skills(&self) {
-        self.refresh_tool_registry();
-        info!("Skills refreshed in tool registry");
+        self.refresh_tool_registry_background();
+        info!("Skills refresh initiated in background");
     }
 }
 
