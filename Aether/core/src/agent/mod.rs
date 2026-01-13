@@ -48,14 +48,18 @@
 //! ```
 
 mod adapter;
+pub mod config;
 mod conversation;
 mod executor;
+pub mod manager;
 mod types;
 
 pub use adapter::{
     create_tool_adapter, AnthropicToolAdapter, AnthropicToolConfig, OpenAiToolAdapter,
     OpenAiToolConfig,
 };
+pub use config::RigAgentConfig;
 pub use conversation::{ChatMessage, ConversationHistory, MessageRole};
 pub use executor::{AgentLoop, ChatResponse, ToolCallingProvider};
+pub use manager::RigAgentManager;
 pub use types::{AgentConfig, AgentResult, ToolCallInfo, ToolCallResult};
