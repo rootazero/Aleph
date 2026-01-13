@@ -9,11 +9,13 @@
 
 use super::AetherCore;
 use crate::error::Result;
+use crate::mcp::{create_bridges, ExternalServerConfig};
 use crate::tools::{
     create_clipboard_tools, create_filesystem_tools, create_git_tools, create_screen_tools,
     create_shell_tools, create_system_tools, create_web_tools, FilesystemConfig, GitConfig,
     ScreenConfig, ShellConfig, ToolResult, WebFetchConfig,
 };
+use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -66,9 +68,46 @@ impl AetherCore {
                 registry.register_agent_tools(&tools, &service_name).await;
             }
 
-            // 3. External MCP server tools will be registered when servers connect
-            // Native tools are now handled exclusively via AgentTool infrastructure above
-            let _ = mcp_client; // Suppress unused warning
+            // 3. Start external MCP servers and register their tools
+            let mut mcp_tool_count = 0usize;
+            if let Some(ref client) = mcp_client {
+                // Convert config to ExternalServerConfig
+                let server_configs: Vec<ExternalServerConfig> = config
+                    .mcp
+                    .external_servers
+                    .iter()
+                    .map(|s| ExternalServerConfig {
+                        name: s.name.clone(),
+                        command: s.command.clone(),
+                        args: s.args.clone(),
+                        env: s.env.clone(),
+                        cwd: s.cwd.as_ref().map(PathBuf::from),
+                        requires_runtime: s.requires_runtime.clone(),
+                        timeout_seconds: Some(s.timeout_seconds),
+                    })
+                    .collect();
+
+                if !server_configs.is_empty() {
+                    // Start external servers
+                    if let Err(e) = client.start_external_servers(server_configs).await {
+                        warn!(error = %e, "Failed to start some MCP servers");
+                    }
+
+                    // Create bridges for MCP tools and register them
+                    let mcp_bridges = create_bridges(client).await;
+                    mcp_tool_count = mcp_bridges.len();
+
+                    if mcp_tool_count > 0 {
+                        // Register MCP tools in native registry for execution
+                        native_registry.register_all(mcp_bridges.clone()).await;
+
+                        // Also register in dispatcher registry for UI display
+                        registry.register_agent_tools(&mcp_bridges, "mcp").await;
+
+                        debug!("Registered {} MCP tools from external servers", mcp_tool_count);
+                    }
+                }
+            }
 
             // 4. Register skills
             if let Ok(skills) = crate::initialization::list_installed_skills() {
@@ -79,7 +118,10 @@ impl AetherCore {
             registry.register_custom_commands(&config.rules).await;
 
             let tool_count = registry.active_count().await;
-            info!("Tool registry refreshed: {} tools ({} native)", tool_count, native_tool_count);
+            info!(
+                "Tool registry refreshed: {} tools ({} native, {} mcp)",
+                tool_count, native_tool_count, mcp_tool_count
+            );
 
             // 6. Update intent pipeline with the new tool list
             // This enables L3 LLM routing to be aware of available tools
