@@ -18,17 +18,26 @@ pub fn build_prompt(task: &VisionTask, config: &VisionConfig, user_prompt: Optio
     }
 }
 
-/// Default OCR prompt optimized for Chinese and English text extraction
-pub const DEFAULT_OCR_PROMPT: &str = r#"Please extract all text from the image, preserving the original format and line breaks.
+/// Default OCR prompt optimized for Chinese and English text extraction with Markdown formatting
+pub const DEFAULT_OCR_PROMPT: &str = r#"Extract all content from the image and output it in Markdown format, preserving the original structure and layout.
 
-Requirements:
-1. Output only the extracted text without any explanations
-2. Preserve the original layout and structure as much as possible
-3. If there are multiple columns, extract from left to right, top to bottom
-4. For mixed Chinese and English text, maintain the original language
-5. Do not add any commentary or interpretation
+Formatting Rules:
+1. **Tables**: Reproduce using Markdown table syntax (| column | headers |)
+2. **Lists**: Use - for bullet points, 1. 2. 3. for numbered lists
+3. **Headings**: Use # ## ### based on visual hierarchy
+4. **Code**: Wrap code snippets in ```language``` blocks
+5. **Math formulas**: Use LaTeX syntax wrapped in $ or $$ (e.g., $E=mc^2$)
+6. **Emphasis**: Use **bold** for bold text, *italic* for italic
+7. **Paragraphs**: Preserve paragraph breaks with blank lines
 
-Output the text now:"#;
+Content Requirements:
+- Output ONLY the extracted content in Markdown, no explanations
+- For multi-column layouts: left to right, top to bottom
+- Preserve original language (Chinese, English, or mixed)
+- Maintain the visual hierarchy and relationships between elements
+- If content structure is unclear, use best judgment to represent it
+
+Output the Markdown now:"#;
 
 /// Default description prompt for image analysis
 pub const DEFAULT_DESCRIBE_PROMPT: &str = r#"Please describe the content of this image in detail.
@@ -42,15 +51,19 @@ Include:
 Be concise but comprehensive."#;
 
 /// Default OCR with context prompt
-pub const DEFAULT_OCR_WITH_CONTEXT_PROMPT: &str = r#"Please analyze this image and respond to the user's question.
+pub const DEFAULT_OCR_WITH_CONTEXT_PROMPT: &str = r#"Analyze this image and respond to the user's question using Markdown format.
 
 Steps:
-1. First, extract any visible text from the image
-2. Then, use the extracted content to answer the user's question
+1. Extract visible content, preserving structure with Markdown:
+   - Tables → Markdown tables
+   - Lists → bullet/numbered lists
+   - Code → fenced code blocks
+   - Math → LaTeX ($...$)
+2. Answer the user's question based on the extracted content
 
 User question: {prompt}
 
-Your response:"#;
+Respond in Markdown:"#;
 
 #[cfg(test)]
 mod tests {
