@@ -230,8 +230,6 @@ callback interface InitializationProgressHandler {
 
 dictionary GeneralConfig {
   string? default_provider;
-  u32 log_retention_days;
-  boolean enable_performance_logging;
   string? language;
 };
 
@@ -358,14 +356,10 @@ dictionary ShortcutsConfig {
   string ocr_capture;      // OCR capture hotkey (e.g., "Command+Shift+Control+4")
 };
 
-// Behavior configuration (Phase 6 - Task 5.1)
+// Behavior configuration for output mode and typing speed
 dictionary BehaviorConfig {
-  string input_mode;
-  string output_mode;
-  u32 typing_speed;
-  boolean pii_scrubbing_enabled;
-  boolean multi_turn_enabled;
-  boolean keep_window_visible_during_processing;
+  string output_mode;    // "typewriter" or "instant"
+  u32 typing_speed;      // Characters per second for typewriter mode (10-200)
 };
 
 // Trigger configuration (hotkey-system-refactor)

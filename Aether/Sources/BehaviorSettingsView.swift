@@ -306,20 +306,26 @@ struct BehaviorSettingsView: View {
                 let config = try core.loadConfig()
 
                 await MainActor.run {
-                    // Load output settings from behavior
+                    // Load output settings from behavior config
                     if let behavior = config.behavior {
-                        // Load output mode
                         outputMode = OutputMode.from(string: behavior.outputMode)
                         savedOutputMode = outputMode
-
-                        // Load typing speed
                         typingSpeed = Double(behavior.typingSpeed)
                         savedTypingSpeed = typingSpeed
+                    }
 
-                        // Load PII settings
-                        piiEnabled = behavior.piiScrubbingEnabled
+                    // PII settings come from search.pii config
+                    if let search = config.search, let pii = search.pii {
+                        piiEnabled = pii.enabled
                         savedPiiEnabled = piiEnabled
-                        // Note: Individual PII type settings will be loaded when backend support is added
+                        piiScrubEmail = pii.scrubEmail
+                        savedPiiScrubEmail = piiScrubEmail
+                        piiScrubPhone = pii.scrubPhone
+                        savedPiiScrubPhone = piiScrubPhone
+                        piiScrubSSN = pii.scrubSsn
+                        savedPiiScrubSSN = piiScrubSSN
+                        piiScrubCreditCard = pii.scrubCreditCard
+                        savedPiiScrubCreditCard = piiScrubCreditCard
                     }
                 }
             } catch {
@@ -342,16 +348,38 @@ struct BehaviorSettingsView: View {
         }
 
         do {
-            // Save behavior config (output settings only, input_mode is legacy)
+            // Save behavior config (output mode and typing speed)
             let behaviorConfig = BehaviorConfig(
-                inputMode: "cut",  // Legacy field, not used in new system
                 outputMode: outputMode.rawValue,
-                typingSpeed: UInt32(typingSpeed),
-                piiScrubbingEnabled: piiEnabled,
-                multiTurnEnabled: false,  // Multi-turn is now controlled by hotkey, not config
-                keepWindowVisibleDuringProcessing: true  // Always keep window visible (simplified behavior)
+                typingSpeed: UInt32(typingSpeed)
             )
             try core.updateBehavior(behavior: behaviorConfig)
+
+            // Load current config to preserve other settings
+            let currentConfig = try core.loadConfig()
+
+            // Build updated search config with PII settings
+            // PII settings are stored in search.pii
+            var searchConfig = currentConfig.search ?? SearchConfig(
+                enabled: false,
+                defaultProvider: "",
+                fallbackProviders: nil,
+                maxResults: 5,
+                timeoutSeconds: 10,
+                backends: [],
+                pii: nil
+            )
+
+            // Update PII config
+            searchConfig.pii = PiiConfig(
+                enabled: piiEnabled,
+                scrubEmail: piiScrubEmail,
+                scrubPhone: piiScrubPhone,
+                scrubSsn: piiScrubSSN,
+                scrubCreditCard: piiScrubCreditCard
+            )
+
+            try core.updateSearchConfig(search: searchConfig)
 
             print("Behavior settings saved successfully:")
             print("  Output Mode: \(outputMode.rawValue)")

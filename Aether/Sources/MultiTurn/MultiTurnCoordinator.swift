@@ -235,8 +235,8 @@ final class MultiTurnCoordinator {
 
     /// Handle AI response
     private func handleAIResponse(_ response: String, topic: Topic, userInput: String, isFirstMessage: Bool) {
-        // Load output mode config
-        var outputMode = "instant"
+        // Load output mode config from behavior settings
+        var outputMode = "typewriter"
         var typingSpeed: Int = 50
 
         if let core = core {
@@ -247,7 +247,7 @@ final class MultiTurnCoordinator {
                     typingSpeed = Int(behavior.typingSpeed)
                 }
             } catch {
-                print("[MultiTurnCoordinator] Failed to load config, using instant mode: \(error)")
+                print("[MultiTurnCoordinator] Failed to load config, using defaults: \(error)")
             }
         }
 

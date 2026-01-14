@@ -324,28 +324,19 @@ fn test_shortcuts_config_serialization() {
 #[test]
 fn test_behavior_config_defaults() {
     let behavior = BehaviorConfig::default();
-    assert_eq!(behavior.input_mode, "cut");
     assert_eq!(behavior.output_mode, "typewriter");
     assert_eq!(behavior.typing_speed, 50);
-    assert!(!behavior.pii_scrubbing_enabled);
-    assert!(behavior.keep_window_visible_during_processing);
 }
 
 #[test]
 fn test_behavior_config_serialization() {
     let behavior = BehaviorConfig {
-        input_mode: "copy".to_string(),
         output_mode: "instant".to_string(),
         typing_speed: 100,
-        pii_scrubbing_enabled: true,
-        multi_turn_enabled: false,
-        keep_window_visible_during_processing: true,
     };
     let json = serde_json::to_string(&behavior).unwrap();
-    assert!(json.contains("copy"));
     assert!(json.contains("instant"));
     assert!(json.contains("100"));
-    assert!(json.contains("true"));
 }
 
 #[test]
@@ -485,12 +476,8 @@ fn test_config_toml_round_trip() {
     });
 
     config.behavior = Some(BehaviorConfig {
-        input_mode: "copy".to_string(),
         output_mode: "instant".to_string(),
         typing_speed: 100,
-        pii_scrubbing_enabled: true,
-        multi_turn_enabled: false,
-        keep_window_visible_during_processing: true,
     });
 
     let provider = ProviderConfig::test_config("gpt-4o");
@@ -515,7 +502,8 @@ fn test_config_toml_round_trip() {
         deserialized.shortcuts.as_ref().unwrap().summon,
         "Command+Shift+A"
     );
-    assert_eq!(deserialized.behavior.as_ref().unwrap().input_mode, "copy");
+    assert_eq!(deserialized.behavior.as_ref().unwrap().output_mode, "instant");
+    assert_eq!(deserialized.behavior.as_ref().unwrap().typing_speed, 100);
     assert_eq!(deserialized.providers.len(), 1);
     // AI-first mode: no builtin rules, only the 1 custom rule we added
     assert_eq!(deserialized.rules.len(), 1);
@@ -544,15 +532,11 @@ default_provider = "openai"
     // Check all defaults are applied
     assert_eq!(config.default_hotkey, "Grave");
 
-    // BehaviorConfig defaults
+    // BehaviorConfig defaults when not set in TOML
     assert!(config.behavior.is_none()); // Not set in TOML
     let behavior = BehaviorConfig::default();
-    assert_eq!(behavior.input_mode, "cut");
     assert_eq!(behavior.output_mode, "typewriter");
     assert_eq!(behavior.typing_speed, 50);
-    assert!(!behavior.pii_scrubbing_enabled);
-    assert!(!behavior.multi_turn_enabled);
-    assert!(behavior.keep_window_visible_during_processing);
 
     // SmartFlowConfig defaults
     assert!(config.smart_flow.enabled);

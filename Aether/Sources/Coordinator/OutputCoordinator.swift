@@ -152,6 +152,7 @@ final class OutputCoordinator {
         }
 
         // Load output config
+        // Load output config from behavior settings
         var outputMode = "instant"
         var typingSpeed: Int = 50
         do {

@@ -1127,67 +1127,16 @@ impl Config {
 
     /// Migrate PII config from behavior to search (integrate-search-registry)
     ///
-    /// This method performs automatic migration of PII settings:
-    /// 1. Detects old `behavior.pii_scrubbing_enabled` field
-    /// 2. Creates `search.pii.enabled` if missing
-    /// 3. Removes old field from behavior config
+    /// NOTE: This migration is now a no-op as BehaviorConfig has been deprecated
+    /// and the pii_scrubbing_enabled field no longer exists. Old config files
+    /// with this field will have it silently ignored by serde.
     ///
     /// # Returns
-    /// * `true` - Migration was performed
-    /// * `false` - No migration needed (already migrated or no old config)
+    /// * `false` - Always returns false (migration no longer applicable)
     fn migrate_pii_config(&mut self) -> bool {
-        // Check if migration is needed
-        let needs_migration = if let Some(ref behavior) = self.behavior {
-            // Old field exists, check if new config is missing
-            behavior.pii_scrubbing_enabled
-                && self.search.as_ref().and_then(|s| s.pii.as_ref()).is_none()
-        } else {
-            false
-        };
-
-        if !needs_migration {
-            return false;
-        }
-
-        // Get old PII value
-        let pii_enabled = self
-            .behavior
-            .as_ref()
-            .map(|b| b.pii_scrubbing_enabled)
-            .unwrap_or(false);
-
-        debug!(
-            pii_enabled = pii_enabled,
-            "Migrating PII config from behavior to search"
-        );
-
-        // Initialize search config if missing
-        if self.search.is_none() {
-            self.search = Some(SearchConfigInternal {
-                enabled: false,
-                default_provider: String::new(),
-                fallback_providers: None,
-                max_results: 5,
-                timeout_seconds: 10,
-                backends: HashMap::new(),
-                pii: None,
-            });
-        }
-
-        // Set PII config in search
-        if let Some(ref mut search_config) = self.search {
-            search_config.pii = Some(PIIConfig {
-                enabled: pii_enabled,
-                ..Default::default()
-            });
-        }
-
-        // Remove old field from behavior (by replacing with default)
-        if let Some(ref mut behavior) = self.behavior {
-            behavior.pii_scrubbing_enabled = false;
-        }
-
-        true
+        // BehaviorConfig deprecated - pii_scrubbing_enabled field removed
+        // Old configs will have the field ignored by serde
+        false
     }
 
     /// Migrate from old config to new trigger config

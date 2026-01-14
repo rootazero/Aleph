@@ -1284,22 +1284,14 @@ public func FfiConverterTypeAppMemoryInfo_lower(_ value: AppMemoryInfo) -> RustB
 
 
 public struct BehaviorConfig {
-    public var inputMode: String
     public var outputMode: String
     public var typingSpeed: UInt32
-    public var piiScrubbingEnabled: Bool
-    public var multiTurnEnabled: Bool
-    public var keepWindowVisibleDuringProcessing: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(inputMode: String, outputMode: String, typingSpeed: UInt32, piiScrubbingEnabled: Bool, multiTurnEnabled: Bool, keepWindowVisibleDuringProcessing: Bool) {
-        self.inputMode = inputMode
+    public init(outputMode: String, typingSpeed: UInt32) {
         self.outputMode = outputMode
         self.typingSpeed = typingSpeed
-        self.piiScrubbingEnabled = piiScrubbingEnabled
-        self.multiTurnEnabled = multiTurnEnabled
-        self.keepWindowVisibleDuringProcessing = keepWindowVisibleDuringProcessing
     }
 }
 
@@ -1307,34 +1299,18 @@ public struct BehaviorConfig {
 
 extension BehaviorConfig: Equatable, Hashable {
     public static func ==(lhs: BehaviorConfig, rhs: BehaviorConfig) -> Bool {
-        if lhs.inputMode != rhs.inputMode {
-            return false
-        }
         if lhs.outputMode != rhs.outputMode {
             return false
         }
         if lhs.typingSpeed != rhs.typingSpeed {
             return false
         }
-        if lhs.piiScrubbingEnabled != rhs.piiScrubbingEnabled {
-            return false
-        }
-        if lhs.multiTurnEnabled != rhs.multiTurnEnabled {
-            return false
-        }
-        if lhs.keepWindowVisibleDuringProcessing != rhs.keepWindowVisibleDuringProcessing {
-            return false
-        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
-        hasher.combine(inputMode)
         hasher.combine(outputMode)
         hasher.combine(typingSpeed)
-        hasher.combine(piiScrubbingEnabled)
-        hasher.combine(multiTurnEnabled)
-        hasher.combine(keepWindowVisibleDuringProcessing)
     }
 }
 
@@ -1346,22 +1322,14 @@ public struct FfiConverterTypeBehaviorConfig: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BehaviorConfig {
         return
             try BehaviorConfig(
-                inputMode: FfiConverterString.read(from: &buf), 
                 outputMode: FfiConverterString.read(from: &buf), 
-                typingSpeed: FfiConverterUInt32.read(from: &buf), 
-                piiScrubbingEnabled: FfiConverterBool.read(from: &buf), 
-                multiTurnEnabled: FfiConverterBool.read(from: &buf), 
-                keepWindowVisibleDuringProcessing: FfiConverterBool.read(from: &buf)
+                typingSpeed: FfiConverterUInt32.read(from: &buf)
         )
     }
 
     public static func write(_ value: BehaviorConfig, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.inputMode, into: &buf)
         FfiConverterString.write(value.outputMode, into: &buf)
         FfiConverterUInt32.write(value.typingSpeed, into: &buf)
-        FfiConverterBool.write(value.piiScrubbingEnabled, into: &buf)
-        FfiConverterBool.write(value.multiTurnEnabled, into: &buf)
-        FfiConverterBool.write(value.keepWindowVisibleDuringProcessing, into: &buf)
     }
 }
 
@@ -2363,16 +2331,12 @@ public func FfiConverterTypeFullConfig_lower(_ value: FullConfig) -> RustBuffer 
 
 public struct GeneralConfig {
     public var defaultProvider: String?
-    public var logRetentionDays: UInt32
-    public var enablePerformanceLogging: Bool
     public var language: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultProvider: String?, logRetentionDays: UInt32, enablePerformanceLogging: Bool, language: String?) {
+    public init(defaultProvider: String?, language: String?) {
         self.defaultProvider = defaultProvider
-        self.logRetentionDays = logRetentionDays
-        self.enablePerformanceLogging = enablePerformanceLogging
         self.language = language
     }
 }
@@ -2384,12 +2348,6 @@ extension GeneralConfig: Equatable, Hashable {
         if lhs.defaultProvider != rhs.defaultProvider {
             return false
         }
-        if lhs.logRetentionDays != rhs.logRetentionDays {
-            return false
-        }
-        if lhs.enablePerformanceLogging != rhs.enablePerformanceLogging {
-            return false
-        }
         if lhs.language != rhs.language {
             return false
         }
@@ -2398,8 +2356,6 @@ extension GeneralConfig: Equatable, Hashable {
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(defaultProvider)
-        hasher.combine(logRetentionDays)
-        hasher.combine(enablePerformanceLogging)
         hasher.combine(language)
     }
 }
@@ -2413,16 +2369,12 @@ public struct FfiConverterTypeGeneralConfig: FfiConverterRustBuffer {
         return
             try GeneralConfig(
                 defaultProvider: FfiConverterOptionString.read(from: &buf), 
-                logRetentionDays: FfiConverterUInt32.read(from: &buf), 
-                enablePerformanceLogging: FfiConverterBool.read(from: &buf), 
                 language: FfiConverterOptionString.read(from: &buf)
         )
     }
 
     public static func write(_ value: GeneralConfig, into buf: inout [UInt8]) {
         FfiConverterOptionString.write(value.defaultProvider, into: &buf)
-        FfiConverterUInt32.write(value.logRetentionDays, into: &buf)
-        FfiConverterBool.write(value.enablePerformanceLogging, into: &buf)
         FfiConverterOptionString.write(value.language, into: &buf)
     }
 }
