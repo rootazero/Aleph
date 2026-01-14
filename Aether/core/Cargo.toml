@@ -78,8 +78,8 @@ scraper = "0.22"
 # For URL parsing and validation
 url = "2.5"
 # Rig framework
-rig-core = "0.6"
-rig-sqlite = "0.1"
+rig-core = "0.28"
+rig-sqlite = "0.1.31"
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }

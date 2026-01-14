@@ -8,6 +8,7 @@ use crate::error::{AetherError, Result};
 use crate::rig_tools::{SearchTool, WebFetchTool};
 use crate::store::MemoryStore;
 use rig::completion::Prompt;
+use rig::prelude::*;
 use rig::providers::{anthropic, openai};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -129,33 +130,61 @@ impl RigAgentManager {
                     .as_deref()
                     .ok_or_else(|| AetherError::provider("OpenAI API key not configured"))?;
 
-                let client = if let Some(ref base_url) = self.config.base_url {
-                    openai::Client::from_url(api_key, base_url)
+                let client: openai::Client = if let Some(ref base_url) = self.config.base_url {
+                    openai::Client::builder()
+                        .api_key(api_key)
+                        .base_url(base_url)
+                        .build()
+                        .map_err(|e| AetherError::provider(format!("Failed to create OpenAI client: {}", e)))?
                 } else {
                     openai::Client::new(api_key)
+                        .map_err(|e| AetherError::provider(format!("Failed to create OpenAI client: {}", e)))?
                 };
 
-                // Build agent with optional tools
-                let mut agent_builder = client
-                    .agent(&self.config.model)
-                    .preamble(&self.config.system_prompt)
-                    .temperature(self.config.temperature as f64)
-                    .max_tokens(self.config.max_tokens as u64);
-
-                // Add tools if configured
-                if let Some(ref search_tool) = self.search_tool {
-                    agent_builder = agent_builder.tool(search_tool.clone());
-                }
-                if let Some(ref web_fetch_tool) = self.web_fetch_tool {
-                    agent_builder = agent_builder.tool(web_fetch_tool.clone());
-                }
-
-                let agent = agent_builder.build();
-
-                agent
-                    .prompt(input)
-                    .await
-                    .map_err(|e| AetherError::provider(format!("OpenAI error: {}", e)))?
+                // Build agent based on whether tools are configured
+                let response = match (&self.search_tool, &self.web_fetch_tool) {
+                    (Some(search), Some(fetch)) => {
+                        let agent = client
+                            .agent(&self.config.model)
+                            .preamble(&self.config.system_prompt)
+                            .temperature(self.config.temperature as f64)
+                            .max_tokens(self.config.max_tokens as u64)
+                            .tool(search.clone())
+                            .tool(fetch.clone())
+                            .build();
+                        agent.prompt(input).await
+                    }
+                    (Some(search), None) => {
+                        let agent = client
+                            .agent(&self.config.model)
+                            .preamble(&self.config.system_prompt)
+                            .temperature(self.config.temperature as f64)
+                            .max_tokens(self.config.max_tokens as u64)
+                            .tool(search.clone())
+                            .build();
+                        agent.prompt(input).await
+                    }
+                    (None, Some(fetch)) => {
+                        let agent = client
+                            .agent(&self.config.model)
+                            .preamble(&self.config.system_prompt)
+                            .temperature(self.config.temperature as f64)
+                            .max_tokens(self.config.max_tokens as u64)
+                            .tool(fetch.clone())
+                            .build();
+                        agent.prompt(input).await
+                    }
+                    (None, None) => {
+                        let agent = client
+                            .agent(&self.config.model)
+                            .preamble(&self.config.system_prompt)
+                            .temperature(self.config.temperature as f64)
+                            .max_tokens(self.config.max_tokens as u64)
+                            .build();
+                        agent.prompt(input).await
+                    }
+                };
+                response.map_err(|e| AetherError::provider(format!("OpenAI error: {}", e)))?
             }
             "anthropic" | "claude" => {
                 let api_key = self
@@ -165,33 +194,61 @@ impl RigAgentManager {
                     .ok_or_else(|| AetherError::provider("Anthropic API key not configured"))?;
 
                 // Use ClientBuilder to support custom base_url
-                let mut builder = anthropic::ClientBuilder::new(api_key);
-                if let Some(ref base_url) = self.config.base_url {
-                    builder = builder.base_url(base_url);
-                }
-                let client = builder.build();
+                let client: anthropic::Client = if let Some(ref base_url) = self.config.base_url {
+                    anthropic::Client::builder()
+                        .api_key(api_key)
+                        .base_url(base_url)
+                        .build()
+                        .map_err(|e| AetherError::provider(format!("Failed to create Anthropic client: {}", e)))?
+                } else {
+                    anthropic::Client::new(api_key)
+                        .map_err(|e| AetherError::provider(format!("Failed to create Anthropic client: {}", e)))?
+                };
 
-                // Build agent with optional tools
-                let mut agent_builder = client
-                    .agent(&self.config.model)
-                    .preamble(&self.config.system_prompt)
-                    .temperature(self.config.temperature as f64)
-                    .max_tokens(self.config.max_tokens as u64);
-
-                // Add tools if configured
-                if let Some(ref search_tool) = self.search_tool {
-                    agent_builder = agent_builder.tool(search_tool.clone());
-                }
-                if let Some(ref web_fetch_tool) = self.web_fetch_tool {
-                    agent_builder = agent_builder.tool(web_fetch_tool.clone());
-                }
-
-                let agent = agent_builder.build();
-
-                agent
-                    .prompt(input)
-                    .await
-                    .map_err(|e| AetherError::provider(format!("Anthropic error: {}", e)))?
+                // Build agent based on whether tools are configured
+                let response = match (&self.search_tool, &self.web_fetch_tool) {
+                    (Some(search), Some(fetch)) => {
+                        let agent = client
+                            .agent(&self.config.model)
+                            .preamble(&self.config.system_prompt)
+                            .temperature(self.config.temperature as f64)
+                            .max_tokens(self.config.max_tokens as u64)
+                            .tool(search.clone())
+                            .tool(fetch.clone())
+                            .build();
+                        agent.prompt(input).await
+                    }
+                    (Some(search), None) => {
+                        let agent = client
+                            .agent(&self.config.model)
+                            .preamble(&self.config.system_prompt)
+                            .temperature(self.config.temperature as f64)
+                            .max_tokens(self.config.max_tokens as u64)
+                            .tool(search.clone())
+                            .build();
+                        agent.prompt(input).await
+                    }
+                    (None, Some(fetch)) => {
+                        let agent = client
+                            .agent(&self.config.model)
+                            .preamble(&self.config.system_prompt)
+                            .temperature(self.config.temperature as f64)
+                            .max_tokens(self.config.max_tokens as u64)
+                            .tool(fetch.clone())
+                            .build();
+                        agent.prompt(input).await
+                    }
+                    (None, None) => {
+                        let agent = client
+                            .agent(&self.config.model)
+                            .preamble(&self.config.system_prompt)
+                            .temperature(self.config.temperature as f64)
+                            .max_tokens(self.config.max_tokens as u64)
+                            .build();
+                        agent.prompt(input).await
+                    }
+                };
+                response.map_err(|e| AetherError::provider(format!("Anthropic error: {}", e)))?
             }
             _ => {
                 // For unknown providers, require explicit configuration
@@ -210,29 +267,56 @@ impl RigAgentManager {
                         self.config.provider
                     )))?;
 
-                let client = openai::Client::from_url(api_key, base_url);
+                let client: openai::Client = openai::Client::builder()
+                    .api_key(api_key)
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| AetherError::provider(format!("Failed to create client: {}", e)))?;
 
-                // Build agent with optional tools
-                let mut agent_builder = client
-                    .agent(&self.config.model)
-                    .preamble(&self.config.system_prompt)
-                    .temperature(self.config.temperature as f64)
-                    .max_tokens(self.config.max_tokens as u64);
-
-                // Add tools if configured
-                if let Some(ref search_tool) = self.search_tool {
-                    agent_builder = agent_builder.tool(search_tool.clone());
-                }
-                if let Some(ref web_fetch_tool) = self.web_fetch_tool {
-                    agent_builder = agent_builder.tool(web_fetch_tool.clone());
-                }
-
-                let agent = agent_builder.build();
-
-                agent
-                    .prompt(input)
-                    .await
-                    .map_err(|e| AetherError::provider(format!("Provider error: {}", e)))?
+                // Build agent based on whether tools are configured
+                let response = match (&self.search_tool, &self.web_fetch_tool) {
+                    (Some(search), Some(fetch)) => {
+                        let agent = client
+                            .agent(&self.config.model)
+                            .preamble(&self.config.system_prompt)
+                            .temperature(self.config.temperature as f64)
+                            .max_tokens(self.config.max_tokens as u64)
+                            .tool(search.clone())
+                            .tool(fetch.clone())
+                            .build();
+                        agent.prompt(input).await
+                    }
+                    (Some(search), None) => {
+                        let agent = client
+                            .agent(&self.config.model)
+                            .preamble(&self.config.system_prompt)
+                            .temperature(self.config.temperature as f64)
+                            .max_tokens(self.config.max_tokens as u64)
+                            .tool(search.clone())
+                            .build();
+                        agent.prompt(input).await
+                    }
+                    (None, Some(fetch)) => {
+                        let agent = client
+                            .agent(&self.config.model)
+                            .preamble(&self.config.system_prompt)
+                            .temperature(self.config.temperature as f64)
+                            .max_tokens(self.config.max_tokens as u64)
+                            .tool(fetch.clone())
+                            .build();
+                        agent.prompt(input).await
+                    }
+                    (None, None) => {
+                        let agent = client
+                            .agent(&self.config.model)
+                            .preamble(&self.config.system_prompt)
+                            .temperature(self.config.temperature as f64)
+                            .max_tokens(self.config.max_tokens as u64)
+                            .build();
+                        agent.prompt(input).await
+                    }
+                };
+                response.map_err(|e| AetherError::provider(format!("Provider error: {}", e)))?
             }
         };
 
