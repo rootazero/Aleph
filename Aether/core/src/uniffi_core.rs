@@ -1500,6 +1500,25 @@ impl AetherCore {
                 sort_order: 20,
                 has_subtools: false,
             },
+            crate::dispatcher::UnifiedToolInfo {
+                id: "builtin:youtube".to_string(),
+                name: "youtube".to_string(),
+                display_name: "YouTube".to_string(),
+                description: "Extract YouTube video transcripts".to_string(),
+                source_type: crate::dispatcher::ToolSourceType::Builtin,
+                source_id: None,
+                parameters_schema: None,
+                is_active: true,
+                requires_confirmation: false,
+                safety_level: "Read Only".to_string(),
+                service_name: None,
+                icon: Some("play.rectangle".to_string()),
+                usage: Some("/youtube <video_url>".to_string()),
+                localization_key: Some("tool.youtube".to_string()),
+                is_builtin: true,
+                sort_order: 30,
+                has_subtools: false,
+            },
         ]
     }
 
