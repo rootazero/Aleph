@@ -312,12 +312,14 @@ impl YouTubeExtractor {
 
         debug!(video_id = %video_id, lang = %preferred_lang, "Fetching caption via yt-dlp");
 
-        // Build language priority list: preferred language, then English as fallback
-        // Use comma-separated list for --sub-langs to try multiple languages
+        // Build language priority list: preferred language, English, then all others
+        // The "all" keyword tells yt-dlp to download any available subtitle as last resort
         let lang_list = if preferred_lang == "en" {
-            "en".to_string()
+            "en,zh,ja,ko,all".to_string()
+        } else if preferred_lang == "zh" {
+            "zh,zh-Hans,zh-Hant,en,all".to_string()
         } else {
-            format!("{},en", preferred_lang)
+            format!("{},en,zh,all", preferred_lang)
         };
 
         // Run yt-dlp to download subtitles with language fallback
@@ -325,7 +327,8 @@ impl YouTubeExtractor {
             .args([
                 "--no-check-certificates",  // Bypass SSL issues
                 "--write-auto-sub",         // Download auto-generated subtitles
-                "--sub-langs", &lang_list,  // Try multiple languages (preferred, then en)
+                "--write-sub",              // Also try manual subtitles (often better quality)
+                "--sub-langs", &lang_list,  // Try multiple languages with "all" as fallback
                 "--sub-format", "vtt",
                 "--skip-download",          // Don't download video
                 "-o", output_template.to_str().unwrap_or("/tmp/aether_sub"),
@@ -346,41 +349,51 @@ impl YouTubeExtractor {
         }
 
         // Find the downloaded subtitle file, trying in priority order
-        let vtt_path = temp_dir.join(format!("aether_sub_{}.{}.vtt", video_id, preferred_lang));
-        let en_vtt_path = temp_dir.join(format!("aether_sub_{}.en.vtt", video_id));
+        // Build a list of candidate paths based on language preference
+        let mut candidate_paths: Vec<std::path::PathBuf> = Vec::new();
 
-        let subtitle_path = if vtt_path.exists() {
-            debug!(lang = %preferred_lang, "Found preferred language subtitle");
-            vtt_path
-        } else if en_vtt_path.exists() {
-            debug!("Preferred language not available, using English fallback");
-            en_vtt_path
+        // Add preferred language and its variants
+        if preferred_lang == "zh" {
+            candidate_paths.push(temp_dir.join(format!("aether_sub_{}.zh.vtt", video_id)));
+            candidate_paths.push(temp_dir.join(format!("aether_sub_{}.zh-Hans.vtt", video_id)));
+            candidate_paths.push(temp_dir.join(format!("aether_sub_{}.zh-Hant.vtt", video_id)));
+            candidate_paths.push(temp_dir.join(format!("aether_sub_{}.zh-CN.vtt", video_id)));
+            candidate_paths.push(temp_dir.join(format!("aether_sub_{}.zh-TW.vtt", video_id)));
         } else {
-            // Try to find any .vtt file that matches
+            candidate_paths.push(temp_dir.join(format!("aether_sub_{}.{}.vtt", video_id, preferred_lang)));
+        }
+
+        // Add English as fallback
+        if preferred_lang != "en" {
+            candidate_paths.push(temp_dir.join(format!("aether_sub_{}.en.vtt", video_id)));
+        }
+
+        // Find the first existing subtitle file from candidates
+        let subtitle_path = candidate_paths.iter().find(|p| p.exists()).cloned().or_else(|| {
+            // Try to find any .vtt file that matches as last resort
             let pattern = format!("aether_sub_{}.", video_id);
-            let mut found_path = None;
             if let Ok(entries) = fs::read_dir(&temp_dir) {
                 for entry in entries.flatten() {
                     let name = entry.file_name().to_string_lossy().to_string();
                     if name.starts_with(&pattern) && name.ends_with(".vtt") {
                         debug!(file = %name, "Found alternative subtitle file");
-                        found_path = Some(entry.path());
-                        break;
+                        return Some(entry.path());
                     }
                 }
             }
+            None
+        }).ok_or_else(|| {
+            // Log the stdout/stderr for debugging
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            debug!(stdout = %stdout, stderr = %stderr, "No subtitle files found after yt-dlp");
+            AetherError::video_with_suggestion(
+                "No subtitles available for this video",
+                "The video may not have captions (auto-generated or manual) in any supported language.",
+            )
+        })?;
 
-            found_path.ok_or_else(|| {
-                // Log the stdout/stderr for debugging
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                debug!(stdout = %stdout, stderr = %stderr, "No subtitle files found after yt-dlp");
-                AetherError::video_with_suggestion(
-                    "No subtitles available for this video",
-                    "The video may not have captions (auto-generated or manual) in any supported language.",
-                )
-            })?
-        };
+        debug!(path = ?subtitle_path, "Using subtitle file");
 
         // Read and convert VTT to our format
         let vtt_content = fs::read_to_string(&subtitle_path)
@@ -549,13 +562,25 @@ impl YouTubeExtractor {
             return Err(AetherError::video("No captions available for this video"));
         }
 
+        // Helper to check if language code matches (handles variants like zh-Hans, zh-Hant)
+        let lang_matches = |code: &str, target: &str| -> bool {
+            let code_lower = code.to_lowercase();
+            let target_lower = target.to_lowercase();
+            code_lower.starts_with(&target_lower)
+                || (target_lower == "zh"
+                    && (code_lower.starts_with("zh-hans")
+                        || code_lower.starts_with("zh-hant")
+                        || code_lower.starts_with("zh-cn")
+                        || code_lower.starts_with("zh-tw")))
+        };
+
         // Try to find preferred language first
         let track = caption_tracks
             .iter()
             .find(|t| {
                 t.get("languageCode")
                     .and_then(|l| l.as_str())
-                    .map(|l| l.starts_with(preferred_lang))
+                    .map(|l| lang_matches(l, preferred_lang))
                     .unwrap_or(false)
             })
             .or_else(|| {
@@ -563,7 +588,7 @@ impl YouTubeExtractor {
                 caption_tracks.iter().find(|t| {
                     t.get("languageCode")
                         .and_then(|l| l.as_str())
-                        .map(|l| l.starts_with("en"))
+                        .map(|l| lang_matches(l, "en"))
                         .unwrap_or(false)
                 })
             })
@@ -1019,6 +1044,56 @@ mod tests {
         let response = serde_json::json!({});
         let result = YouTubeExtractor::find_caption_url(&response, "en");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_find_caption_url_chinese_variants() {
+        // Test that "zh" matches "zh-Hans" (Simplified Chinese)
+        let response = serde_json::json!({
+            "captions": {
+                "playerCaptionsTracklistRenderer": {
+                    "captionTracks": [
+                        {"languageCode": "en", "baseUrl": "https://example.com/en"},
+                        {"languageCode": "zh-Hans", "baseUrl": "https://example.com/zh-hans"}
+                    ]
+                }
+            }
+        });
+
+        let (url, lang) = YouTubeExtractor::find_caption_url(&response, "zh").unwrap();
+        assert_eq!(url, "https://example.com/zh-hans");
+        assert_eq!(lang, "zh-Hans");
+
+        // Test that "zh" matches "zh-Hant" (Traditional Chinese)
+        let response = serde_json::json!({
+            "captions": {
+                "playerCaptionsTracklistRenderer": {
+                    "captionTracks": [
+                        {"languageCode": "en", "baseUrl": "https://example.com/en"},
+                        {"languageCode": "zh-Hant", "baseUrl": "https://example.com/zh-hant"}
+                    ]
+                }
+            }
+        });
+
+        let (url, lang) = YouTubeExtractor::find_caption_url(&response, "zh").unwrap();
+        assert_eq!(url, "https://example.com/zh-hant");
+        assert_eq!(lang, "zh-Hant");
+
+        // Test that "zh" matches "zh-CN"
+        let response = serde_json::json!({
+            "captions": {
+                "playerCaptionsTracklistRenderer": {
+                    "captionTracks": [
+                        {"languageCode": "zh-CN", "baseUrl": "https://example.com/zh-cn"}
+                    ]
+                }
+            }
+        });
+
+        let (url, lang) = YouTubeExtractor::find_caption_url(&response, "zh").unwrap();
+        assert_eq!(url, "https://example.com/zh-cn");
+        assert_eq!(lang, "zh-CN");
     }
 }
 

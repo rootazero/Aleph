@@ -41,6 +41,48 @@ pub fn default_youtube_transcript() -> bool {
 }
 
 pub fn default_preferred_language() -> String {
+    // Try to detect system language, fallback to English
+    // Check LANG environment variable (e.g., "zh_CN.UTF-8", "en_US.UTF-8")
+    if let Ok(lang) = std::env::var("LANG") {
+        let lang_lower = lang.to_lowercase();
+        if lang_lower.starts_with("zh") {
+            return "zh".to_string();
+        } else if lang_lower.starts_with("ja") {
+            return "ja".to_string();
+        } else if lang_lower.starts_with("ko") {
+            return "ko".to_string();
+        } else if lang_lower.starts_with("de") {
+            return "de".to_string();
+        } else if lang_lower.starts_with("fr") {
+            return "fr".to_string();
+        } else if lang_lower.starts_with("es") {
+            return "es".to_string();
+        } else if lang_lower.starts_with("pt") {
+            return "pt".to_string();
+        } else if lang_lower.starts_with("ru") {
+            return "ru".to_string();
+        }
+        // Extract language code from LANG (first 2 chars before underscore)
+        if let Some(code) = lang.split('_').next() {
+            if code.len() >= 2 {
+                return code[..2].to_lowercase();
+            }
+        }
+    }
+
+    // Also check LC_ALL and LC_MESSAGES
+    for var in ["LC_ALL", "LC_MESSAGES"] {
+        if let Ok(lang) = std::env::var(var) {
+            if !lang.is_empty() && lang != "C" && lang != "POSIX" {
+                if let Some(code) = lang.split('_').next() {
+                    if code.len() >= 2 {
+                        return code[..2].to_lowercase();
+                    }
+                }
+            }
+        }
+    }
+
     "en".to_string()
 }
 
