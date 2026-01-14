@@ -66,6 +66,7 @@ pub struct AetherCore {
     pub(crate) event_handler: Arc<dyn InternalEventHandler>,
     /// Tokio runtime for async operations
     pub(crate) runtime: Arc<tokio::runtime::Runtime>,
+    /// TODO: Reserved for future retry functionality - implements request replay on failure
     /// Last request context for retry functionality
     pub(crate) last_request: Arc<Mutex<Option<RequestContext>>>,
     /// Configuration (wrapped in Mutex for thread-safe updates)
@@ -76,11 +77,13 @@ pub struct AetherCore {
     pub(crate) current_context: Arc<Mutex<Option<CapturedContext>>>,
     /// Memory cleanup service
     pub(crate) cleanup_service: Option<Arc<CleanupService>>,
+    /// TODO: Keep alive for background cleanup task - prevents task cancellation on drop
     /// Background cleanup task handle
     #[allow(dead_code)]
     pub(crate) cleanup_task_handle: Option<JoinHandle<()>>,
     /// Memory compression service
     pub(crate) compression_service: Option<Arc<CompressionService>>,
+    /// TODO: Keep alive for background compression task - prevents task cancellation on drop
     /// Background compression task handle
     #[allow(dead_code)]
     pub(crate) compression_task_handle: Option<JoinHandle<()>>,
@@ -88,6 +91,7 @@ pub struct AetherCore {
     pub(crate) search_registry: Arc<RwLock<Option<Arc<SearchRegistry>>>>,
     /// MCP client for tool integration
     pub(crate) mcp_client: Option<Arc<McpClient>>,
+    /// TODO: Retains file watcher subscription - dropping would stop config hot-reload
     /// Configuration watcher for hot-reload
     #[allow(dead_code)]
     pub(crate) config_watcher: Option<Arc<ConfigWatcher>>,

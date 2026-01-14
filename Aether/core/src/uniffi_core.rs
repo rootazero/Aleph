@@ -172,14 +172,6 @@ impl From<MemoryEntry> for MemoryItem {
     }
 }
 
-/// Memory store path for lazy initialization
-///
-/// This wrapper allows us to store the path without the actual MemoryStore,
-/// enabling on-demand creation for each operation.
-#[derive(Clone)]
-struct MemoryStorePath {
-    path: String,
-}
 
 /// Agent configuration holder for thread-safe access
 ///
@@ -218,7 +210,8 @@ pub struct AetherCore {
     full_config: Arc<Mutex<Config>>,
     /// Config file path for reload capability (empty string means default path)
     config_path: String,
-    memory_path: Option<MemoryStorePath>,
+    /// Memory database path for lazy initialization (enables on-demand creation)
+    memory_path: Option<String>,
     handler: Arc<dyn AetherEventHandler>,
     /// Tokio runtime handle for async operations
     runtime: tokio::runtime::Handle,
@@ -493,7 +486,7 @@ impl AetherCore {
 
         // Create a temporary MemoryStore for the query
         // This is necessary because MemoryStore contains non-Send types
-        let db_path = memory_path.path.clone();
+        let db_path = memory_path.clone();
         let query_clone = query.clone();
 
         let result = self.runtime.block_on(async move {
@@ -514,7 +507,7 @@ impl AetherCore {
             AetherFfiError::Memory("Memory store not initialized".to_string())
         })?;
 
-        let db_path = memory_path.path.clone();
+        let db_path = memory_path.clone();
 
         let result = self.runtime.block_on(async move {
             use crate::store::MemoryStore;
@@ -1264,7 +1257,7 @@ impl AetherCore {
 
         use crate::memory::database::VectorDatabase;
         use std::path::PathBuf;
-        let db_path = PathBuf::from(&memory_path.path);
+        let db_path = PathBuf::from(&memory_path);
         let db = VectorDatabase::new(db_path)
             .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
@@ -1280,7 +1273,7 @@ impl AetherCore {
 
         use crate::memory::database::VectorDatabase;
         use std::path::PathBuf;
-        let db_path = PathBuf::from(&memory_path.path);
+        let db_path = PathBuf::from(&memory_path);
         let db = VectorDatabase::new(db_path)
             .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
@@ -1296,7 +1289,7 @@ impl AetherCore {
 
         use crate::memory::database::VectorDatabase;
         use std::path::PathBuf;
-        let db_path = PathBuf::from(&memory_path.path);
+        let db_path = PathBuf::from(&memory_path);
         let db = VectorDatabase::new(db_path)
             .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
@@ -1324,7 +1317,7 @@ impl AetherCore {
 
         use crate::memory::database::VectorDatabase;
         use std::path::PathBuf;
-        let db_path = PathBuf::from(&memory_path.path);
+        let db_path = PathBuf::from(&memory_path);
         let db = VectorDatabase::new(db_path)
             .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
@@ -1340,7 +1333,7 @@ impl AetherCore {
 
         use crate::memory::database::VectorDatabase;
         use std::path::PathBuf;
-        let db_path = PathBuf::from(&memory_path.path);
+        let db_path = PathBuf::from(&memory_path);
         let db = VectorDatabase::new(db_path)
             .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
@@ -1356,7 +1349,7 @@ impl AetherCore {
 
         use crate::memory::database::VectorDatabase;
         use std::path::PathBuf;
-        let db_path = PathBuf::from(&memory_path.path);
+        let db_path = PathBuf::from(&memory_path);
         let db = VectorDatabase::new(db_path)
             .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
@@ -1372,7 +1365,7 @@ impl AetherCore {
 
         use crate::memory::database::VectorDatabase;
         use std::path::PathBuf;
-        let db_path = PathBuf::from(&memory_path.path);
+        let db_path = PathBuf::from(&memory_path);
         let db = VectorDatabase::new(db_path)
             .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
@@ -1850,7 +1843,7 @@ pub fn init_core(
             .map(|h| h.join(".config/aether/memory.db"))
             .unwrap_or_else(|| std::path::PathBuf::from("memory.db"));
         info!(path = %db_path.display(), "Memory store enabled");
-        Some(MemoryStorePath { path: db_path.to_string_lossy().to_string() })
+        Some(db_path.to_string_lossy().to_string())
     } else {
         info!("Memory store disabled in config");
         None

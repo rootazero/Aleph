@@ -64,30 +64,35 @@ pub struct RigAgentManager {
     registered_tools: Arc<RwLock<Vec<String>>>,
 }
 
+/// Built-in tool names
+const BUILTIN_TOOLS: &[&str] = &["search", "web_fetch", "youtube"];
+
+/// Create a tool server with built-in tools
+fn create_builtin_tool_server() -> ToolServer {
+    ToolServer::new()
+        .tool(SearchTool::new())
+        .tool(WebFetchTool::new())
+        .tool(YouTubeTool::new())
+}
+
+/// Create initial registered tools list
+fn create_builtin_tools_list() -> Vec<String> {
+    BUILTIN_TOOLS.iter().map(|s| s.to_string()).collect()
+}
+
 impl RigAgentManager {
     /// Create a new RigAgentManager with built-in tools
     ///
     /// Built-in tools (search, web_fetch, youtube) are registered automatically.
     pub fn new(config: RigAgentConfig) -> Self {
-        // Create tool server with built-in tools
-        let tool_server = ToolServer::new()
-            .tool(SearchTool::new())
-            .tool(WebFetchTool::new())
-            .tool(YouTubeTool::new());
-
-        let tool_server_handle = tool_server.run();
-
-        let registered_tools = vec![
-            "search".to_string(),
-            "web_fetch".to_string(),
-            "youtube".to_string(),
-        ];
+        let tool_server_handle = create_builtin_tool_server().run();
+        let registered_tools = Arc::new(RwLock::new(create_builtin_tools_list()));
 
         Self {
             config,
             memory_store: None,
             tool_server_handle,
-            registered_tools: Arc::new(RwLock::new(registered_tools)),
+            registered_tools,
         }
     }
 
@@ -120,19 +125,8 @@ impl RigAgentManager {
     /// Use this to create a shared handle that can be passed to multiple
     /// RigAgentManager instances via `with_shared_handle()`.
     pub fn create_shared_handle() -> (ToolServerHandle, Arc<RwLock<Vec<String>>>) {
-        let tool_server = ToolServer::new()
-            .tool(SearchTool::new())
-            .tool(WebFetchTool::new())
-            .tool(YouTubeTool::new());
-
-        let tool_server_handle = tool_server.run();
-
-        let registered_tools = Arc::new(RwLock::new(vec![
-            "search".to_string(),
-            "web_fetch".to_string(),
-            "youtube".to_string(),
-        ]));
-
+        let tool_server_handle = create_builtin_tool_server().run();
+        let registered_tools = Arc::new(RwLock::new(create_builtin_tools_list()));
         (tool_server_handle, registered_tools)
     }
 

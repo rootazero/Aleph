@@ -106,23 +106,6 @@ impl PayloadBuilder {
         self
     }
 
-    /// Add MCP resources to context (reserved for future implementation)
-    #[cfg(feature = "mcp")]
-    pub fn mcp_resources(
-        mut self,
-        resources: std::collections::HashMap<String, serde_json::Value>,
-    ) -> Self {
-        self.context.mcp_resources = Some(resources);
-        self
-    }
-
-    /// Add workflow state to context (reserved for Solution C)
-    #[cfg(feature = "skills")]
-    pub fn workflow_state(mut self, state: super::WorkflowState) -> Self {
-        self.context.workflow_state = Some(state);
-        self
-    }
-
     /// Add media attachments to context (add-multimodal-content-support)
     pub fn attachments(mut self, attachments: Vec<crate::core::MediaAttachment>) -> Self {
         self.context.attachments = Some(attachments);
