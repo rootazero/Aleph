@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 import Compression
 
 struct LogViewerView: View {
-    let core: AetherCore
+    let core: AetherV2Core
     @State private var logContent: String = ""
     @State private var searchText: String = ""
     @State private var isLoading: Bool = true
@@ -465,7 +465,7 @@ struct LogViewerView: View {
 
 struct LogViewerView_Previews: PreviewProvider {
     static var previews: some View {
-        if let core = try? AetherCore(handler: PreviewEventHandler()) {
+        if let core = try? initV2(configPath: "", handler: PreviewV2EventHandler()) {
             LogViewerView(core: core)
         } else {
             Text("Preview unavailable")
@@ -473,32 +473,13 @@ struct LogViewerView_Previews: PreviewProvider {
     }
 }
 
-class PreviewEventHandler: AetherEventHandler {
-    func onStateChanged(state: ProcessingState) {}
-    func onError(message: String, suggestion: String?) {}
-    func onResponseChunk(text: String) {}
-    func onErrorTyped(errorType: ErrorType, message: String) {}
-    func onProgress(percent: Float) {}
-    func onAiProcessingStarted(providerName: String, providerColor: String) {}
-    func onAiResponseReceived(responsePreview: String) {}
-    func onProviderFallback(fromProvider: String, toProvider: String) {}
-    func onConfigChanged() {}
-    func onTypewriterProgress(percent: Float) {}
-    func onTypewriterCancelled() {}
-    func onClarificationNeeded(request: ClarificationRequest) -> ClarificationResult {
-        return ClarificationResult(resultType: .cancelled, selectedIndex: nil, value: nil)
-    }
-    func onConversationStarted(sessionId: String) {}
-    func onConversationTurnCompleted(turn: ConversationTurn) {}
-    func onConversationContinuationReady() {}
-    func onConversationEnded(sessionId: String, totalTurns: UInt32) {}
-    func onConfirmationNeeded(confirmation: PendingConfirmationInfo) {}
-    func onConfirmationExpired(confirmationId: String) {}
-    func onToolsChanged(toolCount: UInt32) {}
-    func onToolsRefreshNeeded() {}
-    func onMcpStartupComplete(report: McpStartupReportFfi) {}
-    func onAgentStarted(planId: String, totalSteps: UInt32, description: String) {}
-    func onAgentToolStarted(planId: String, stepIndex: UInt32, toolName: String, toolDescription: String) {}
-    func onAgentToolCompleted(planId: String, stepIndex: UInt32, toolName: String, success: Bool, resultPreview: String) {}
-    func onAgentCompleted(planId: String, success: Bool, totalDurationMs: UInt64, finalResponse: String) {}
+/// V2 Event handler for SwiftUI Preview
+class PreviewV2EventHandler: AetherV2EventHandler {
+    func onThinking() {}
+    func onToolStart(toolName: String) {}
+    func onToolResult(toolName: String, result: String) {}
+    func onStreamChunk(text: String) {}
+    func onComplete(response: String) {}
+    func onError(message: String) {}
+    func onMemoryStored() {}
 }

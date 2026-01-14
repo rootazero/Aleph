@@ -11,7 +11,7 @@ import SwiftUI
 /// Search settings view with provider configuration and PII scrubbing
 struct SearchSettingsView: View {
     // Dependencies
-    let core: AetherCore?
+    let core: AetherV2Core?
     @ObservedObject var saveBarState: SettingsSaveBarState
 
     // Provider field values (provider_id -> [field_key -> value])

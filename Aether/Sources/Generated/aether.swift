@@ -576,25 +576,17 @@ fileprivate struct FfiConverterString: FfiConverter {
 
 
 
-public protocol AetherCoreProtocol : AnyObject {
+public protocol AetherV2CoreProtocol : AnyObject {
     
     func addMcpServer(config: McpServerConfig) throws 
     
-    func cancelConfirmation(confirmationId: String)  -> Bool
-    
-    func cleanupExpiredConfirmations()  -> UInt32
+    func cancel() 
     
     func clearFacts() throws  -> UInt64
     
     func clearMemories(appBundleId: String?, windowTitle: String?) throws  -> UInt64
     
-    func clearRequestContext() 
-    
-    func confirmAction(confirmationId: String, decision: UserConfirmationDecision) throws  -> Bool
-    
-    func continueConversation(followUpInput: String, context: CapturedContext?) throws  -> String
-    
-    func conversationTurnCount()  -> UInt32
+    func clearMemory() throws 
     
     func deleteMcpServer(id: String) throws 
     
@@ -606,17 +598,11 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func deleteSkill(skillId: String) throws 
     
-    func endConversation() 
-    
     func exportMcpConfigJson()  -> String
     
-    func extractText(imageData: [UInt8]) async throws  -> String
-    
-    func filterCommands(prefix: String)  -> [CommandNode]
+    func extractText(imageData: [UInt8]) throws  -> String
     
     func generateTopicTitle(userInput: String, aiResponse: String) throws  -> String
-    
-    func getCommandChildren(parentKey: String)  -> [CommandNode]
     
     func getCompressionStats() throws  -> CompressionStats
     
@@ -642,879 +628,7 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func getMemoryStats() throws  -> MemoryStats
     
-    func getPendingConfirmation(confirmationId: String)  -> PendingConfirmationInfo?
-    
-    func getPendingConfirmationCount()  -> UInt32
-    
-    func getRootCommands()  -> [CommandNode]
-    
     func getRootCommandsFromRegistry()  -> [CommandNode]
-    
-    func getSkillsDir() throws  -> String
-    
-    func getSubcommandsFromRegistry(parentKey: String)  -> [CommandNode]
-    
-    func getSubtoolsFromRegistry(parentKey: String)  -> [UnifiedToolInfo]
-    
-    func hasActiveConversation()  -> Bool
-    
-    func importMcpConfigJson(json: String) throws 
-    
-    func installSkill(url: String) throws  -> SkillInfo
-    
-    func installSkillsFromZip(zipPath: String) throws  -> [String]
-    
-    func listBuiltinTools()  -> [UnifiedToolInfo]
-    
-    func listMcpServers()  -> [McpServerConfig]
-    
-    func listMcpServices()  -> [McpServiceInfo]
-    
-    func listMcpTools()  -> [McpToolInfo]
-    
-    func listPresetTools()  -> [UnifiedToolInfo]
-    
-    func listRootTools()  -> [UnifiedToolInfo]
-    
-    func listSkills() throws  -> [SkillInfo]
-    
-    func listTools()  -> [UnifiedToolInfo]
-    
-    func listToolsBySource(sourceType: ToolSourceType)  -> [UnifiedToolInfo]
-    
-    func loadConfig() throws  -> FullConfig
-    
-    func processInput(userInput: String, context: CapturedContext) throws  -> String
-    
-    func processVision(request: VisionRequest) async throws  -> VisionResult
-    
-    func refreshSkills() 
-    
-    func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32) throws  -> [MemoryEntry]
-    
-    func searchTools(query: String)  -> [UnifiedToolInfo]
-    
-    func setCurrentContext(context: CapturedContext) 
-    
-    func setDefaultProvider(providerName: String) throws 
-    
-    func setLogLevel(level: LogLevel) throws 
-    
-    func startConversation(initialInput: String, context: CapturedContext) throws  -> String
-    
-    func storeInteractionMemory(userInput: String, aiOutput: String) throws  -> String
-    
-    func storeRequestContext(clipboardContent: String, provider: String) 
-    
-    func testProviderConnection(providerName: String)  -> TestConnectionResult
-    
-    func testProviderConnectionWithConfig(providerName: String, providerConfig: ProviderConfig)  -> TestConnectionResult
-    
-    func testSearchProvider(providerName: String) throws  -> ProviderTestResult
-    
-    func testSearchProviderWithConfig(config: SearchProviderTestConfig) throws  -> ProviderTestResult
-    
-    func triggerCompression() throws  -> CompressionResult
-    
-    func updateBehavior(behavior: BehaviorConfig) throws 
-    
-    func updateGeneralConfig(config: GeneralConfig) throws 
-    
-    func updateMcpConfig(config: McpSettingsConfig) throws 
-    
-    func updateMcpServer(config: McpServerConfig) throws 
-    
-    func updateMemoryConfig(config: MemoryConfig) throws 
-    
-    func updateProvider(name: String, provider: ProviderConfig) throws 
-    
-    func updateRoutingRules(rules: [RoutingRuleConfig]) throws 
-    
-    func updateSearchConfig(search: SearchConfig) throws 
-    
-    func updateShortcuts(shortcuts: ShortcutsConfig) throws 
-    
-    func updateTriggerConfig(trigger: TriggerConfig) throws 
-    
-    func validateRegex(pattern: String) throws  -> Bool
-    
-}
-
-open class AetherCore:
-    AetherCoreProtocol {
-    fileprivate let pointer: UnsafeMutableRawPointer!
-
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public struct NoPointer {
-        public init() {}
-    }
-
-    // TODO: We'd like this to be `private` but for Swifty reasons,
-    // we can't implement `FfiConverter` without making this `required` and we can't
-    // make it `required` without making it `public`.
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
-    }
-
-    // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
-    //
-    // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
-    }
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_aethecore_fn_clone_aethercore(self.pointer, $0) }
-    }
-public convenience init(handler: AetherEventHandler)throws  {
-    let pointer =
-        try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_constructor_aethercore_new(
-        FfiConverterCallbackInterfaceAetherEventHandler.lower(handler),$0
-    )
-}
-    self.init(unsafeFromRawPointer: pointer)
-}
-
-    deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_aethecore_fn_free_aethercore(pointer, $0) }
-    }
-
-    
-
-    
-open func addMcpServer(config: McpServerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_add_mcp_server(self.uniffiClonePointer(),
-        FfiConverterTypeMcpServerConfig.lower(config),$0
-    )
-}
-}
-    
-open func cancelConfirmation(confirmationId: String) -> Bool {
-    return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_cancel_confirmation(self.uniffiClonePointer(),
-        FfiConverterString.lower(confirmationId),$0
-    )
-})
-}
-    
-open func cleanupExpiredConfirmations() -> UInt32 {
-    return try!  FfiConverterUInt32.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_cleanup_expired_confirmations(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func clearFacts()throws  -> UInt64 {
-    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_clear_facts(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func clearMemories(appBundleId: String?, windowTitle: String?)throws  -> UInt64 {
-    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_clear_memories(self.uniffiClonePointer(),
-        FfiConverterOptionString.lower(appBundleId),
-        FfiConverterOptionString.lower(windowTitle),$0
-    )
-})
-}
-    
-open func clearRequestContext() {try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_clear_request_context(self.uniffiClonePointer(),$0
-    )
-}
-}
-    
-open func confirmAction(confirmationId: String, decision: UserConfirmationDecision)throws  -> Bool {
-    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_confirm_action(self.uniffiClonePointer(),
-        FfiConverterString.lower(confirmationId),
-        FfiConverterTypeUserConfirmationDecision.lower(decision),$0
-    )
-})
-}
-    
-open func continueConversation(followUpInput: String, context: CapturedContext?)throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_continue_conversation(self.uniffiClonePointer(),
-        FfiConverterString.lower(followUpInput),
-        FfiConverterOptionTypeCapturedContext.lower(context),$0
-    )
-})
-}
-    
-open func conversationTurnCount() -> UInt32 {
-    return try!  FfiConverterUInt32.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_conversation_turn_count(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func deleteMcpServer(id: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_delete_mcp_server(self.uniffiClonePointer(),
-        FfiConverterString.lower(id),$0
-    )
-}
-}
-    
-open func deleteMemoriesByTopicId(topicId: String)throws  -> UInt64 {
-    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_delete_memories_by_topic_id(self.uniffiClonePointer(),
-        FfiConverterString.lower(topicId),$0
-    )
-})
-}
-    
-open func deleteMemory(id: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_delete_memory(self.uniffiClonePointer(),
-        FfiConverterString.lower(id),$0
-    )
-}
-}
-    
-open func deleteProvider(name: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_delete_provider(self.uniffiClonePointer(),
-        FfiConverterString.lower(name),$0
-    )
-}
-}
-    
-open func deleteSkill(skillId: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_delete_skill(self.uniffiClonePointer(),
-        FfiConverterString.lower(skillId),$0
-    )
-}
-}
-    
-open func endConversation() {try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_end_conversation(self.uniffiClonePointer(),$0
-    )
-}
-}
-    
-open func exportMcpConfigJson() -> String {
-    return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_export_mcp_config_json(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func extractText(imageData: [UInt8])async throws  -> String {
-    return
-        try  await uniffiRustCallAsync(
-            rustFutureFunc: {
-                uniffi_aethecore_fn_method_aethercore_extract_text(
-                    self.uniffiClonePointer(),
-                    FfiConverterSequenceUInt8.lower(imageData)
-                )
-            },
-            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
-            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
-            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
-            liftFunc: FfiConverterString.lift,
-            errorHandler: FfiConverterTypeAetherException.lift
-        )
-}
-    
-open func filterCommands(prefix: String) -> [CommandNode] {
-    return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_filter_commands(self.uniffiClonePointer(),
-        FfiConverterString.lower(prefix),$0
-    )
-})
-}
-    
-open func generateTopicTitle(userInput: String, aiResponse: String)throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_generate_topic_title(self.uniffiClonePointer(),
-        FfiConverterString.lower(userInput),
-        FfiConverterString.lower(aiResponse),$0
-    )
-})
-}
-    
-open func getCommandChildren(parentKey: String) -> [CommandNode] {
-    return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_command_children(self.uniffiClonePointer(),
-        FfiConverterString.lower(parentKey),$0
-    )
-})
-}
-    
-open func getCompressionStats()throws  -> CompressionStats {
-    return try  FfiConverterTypeCompressionStats.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_get_compression_stats(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func getDefaultProvider() -> String? {
-    return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_default_provider(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func getEnabledProviders() -> [String] {
-    return try!  FfiConverterSequenceString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_enabled_providers(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func getLogDirectory()throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_get_log_directory(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func getLogLevel() -> LogLevel {
-    return try!  FfiConverterTypeLogLevel.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_log_level(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func getMcpConfig() -> McpSettingsConfig {
-    return try!  FfiConverterTypeMcpSettingsConfig.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_mcp_config(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func getMcpServer(id: String) -> McpServerConfig? {
-    return try!  FfiConverterOptionTypeMcpServerConfig.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_mcp_server(self.uniffiClonePointer(),
-        FfiConverterString.lower(id),$0
-    )
-})
-}
-    
-open func getMcpServerLogs(id: String, maxLines: UInt32) -> [String] {
-    return try!  FfiConverterSequenceString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_mcp_server_logs(self.uniffiClonePointer(),
-        FfiConverterString.lower(id),
-        FfiConverterUInt32.lower(maxLines),$0
-    )
-})
-}
-    
-open func getMcpServerStatus(id: String) -> McpServerStatusInfo {
-    return try!  FfiConverterTypeMcpServerStatusInfo.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_mcp_server_status(self.uniffiClonePointer(),
-        FfiConverterString.lower(id),$0
-    )
-})
-}
-    
-open func getMemoryAppList()throws  -> [AppMemoryInfo] {
-    return try  FfiConverterSequenceTypeAppMemoryInfo.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_get_memory_app_list(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func getMemoryConfig() -> MemoryConfig {
-    return try!  FfiConverterTypeMemoryConfig.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_memory_config(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func getMemoryStats()throws  -> MemoryStats {
-    return try  FfiConverterTypeMemoryStats.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_get_memory_stats(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func getPendingConfirmation(confirmationId: String) -> PendingConfirmationInfo? {
-    return try!  FfiConverterOptionTypePendingConfirmationInfo.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_pending_confirmation(self.uniffiClonePointer(),
-        FfiConverterString.lower(confirmationId),$0
-    )
-})
-}
-    
-open func getPendingConfirmationCount() -> UInt32 {
-    return try!  FfiConverterUInt32.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_pending_confirmation_count(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func getRootCommands() -> [CommandNode] {
-    return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_root_commands(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func getRootCommandsFromRegistry() -> [CommandNode] {
-    return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_root_commands_from_registry(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func getSkillsDir()throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_get_skills_dir(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func getSubcommandsFromRegistry(parentKey: String) -> [CommandNode] {
-    return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_subcommands_from_registry(self.uniffiClonePointer(),
-        FfiConverterString.lower(parentKey),$0
-    )
-})
-}
-    
-open func getSubtoolsFromRegistry(parentKey: String) -> [UnifiedToolInfo] {
-    return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_get_subtools_from_registry(self.uniffiClonePointer(),
-        FfiConverterString.lower(parentKey),$0
-    )
-})
-}
-    
-open func hasActiveConversation() -> Bool {
-    return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_has_active_conversation(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func importMcpConfigJson(json: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_import_mcp_config_json(self.uniffiClonePointer(),
-        FfiConverterString.lower(json),$0
-    )
-}
-}
-    
-open func installSkill(url: String)throws  -> SkillInfo {
-    return try  FfiConverterTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_install_skill(self.uniffiClonePointer(),
-        FfiConverterString.lower(url),$0
-    )
-})
-}
-    
-open func installSkillsFromZip(zipPath: String)throws  -> [String] {
-    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_install_skills_from_zip(self.uniffiClonePointer(),
-        FfiConverterString.lower(zipPath),$0
-    )
-})
-}
-    
-open func listBuiltinTools() -> [UnifiedToolInfo] {
-    return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_list_builtin_tools(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func listMcpServers() -> [McpServerConfig] {
-    return try!  FfiConverterSequenceTypeMcpServerConfig.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_list_mcp_servers(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func listMcpServices() -> [McpServiceInfo] {
-    return try!  FfiConverterSequenceTypeMcpServiceInfo.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_list_mcp_services(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func listMcpTools() -> [McpToolInfo] {
-    return try!  FfiConverterSequenceTypeMcpToolInfo.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_list_mcp_tools(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func listPresetTools() -> [UnifiedToolInfo] {
-    return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_list_preset_tools(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func listRootTools() -> [UnifiedToolInfo] {
-    return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_list_root_tools(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func listSkills()throws  -> [SkillInfo] {
-    return try  FfiConverterSequenceTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_list_skills(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func listTools() -> [UnifiedToolInfo] {
-    return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_list_tools(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func listToolsBySource(sourceType: ToolSourceType) -> [UnifiedToolInfo] {
-    return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_list_tools_by_source(self.uniffiClonePointer(),
-        FfiConverterTypeToolSourceType.lower(sourceType),$0
-    )
-})
-}
-    
-open func loadConfig()throws  -> FullConfig {
-    return try  FfiConverterTypeFullConfig.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_load_config(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func processInput(userInput: String, context: CapturedContext)throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_process_input(self.uniffiClonePointer(),
-        FfiConverterString.lower(userInput),
-        FfiConverterTypeCapturedContext.lower(context),$0
-    )
-})
-}
-    
-open func processVision(request: VisionRequest)async throws  -> VisionResult {
-    return
-        try  await uniffiRustCallAsync(
-            rustFutureFunc: {
-                uniffi_aethecore_fn_method_aethercore_process_vision(
-                    self.uniffiClonePointer(),
-                    FfiConverterTypeVisionRequest.lower(request)
-                )
-            },
-            pollFunc: ffi_aethecore_rust_future_poll_rust_buffer,
-            completeFunc: ffi_aethecore_rust_future_complete_rust_buffer,
-            freeFunc: ffi_aethecore_rust_future_free_rust_buffer,
-            liftFunc: FfiConverterTypeVisionResult.lift,
-            errorHandler: FfiConverterTypeAetherException.lift
-        )
-}
-    
-open func refreshSkills() {try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_refresh_skills(self.uniffiClonePointer(),$0
-    )
-}
-}
-    
-open func searchMemories(appBundleId: String, windowTitle: String?, limit: UInt32)throws  -> [MemoryEntry] {
-    return try  FfiConverterSequenceTypeMemoryEntry.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_search_memories(self.uniffiClonePointer(),
-        FfiConverterString.lower(appBundleId),
-        FfiConverterOptionString.lower(windowTitle),
-        FfiConverterUInt32.lower(limit),$0
-    )
-})
-}
-    
-open func searchTools(query: String) -> [UnifiedToolInfo] {
-    return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_search_tools(self.uniffiClonePointer(),
-        FfiConverterString.lower(query),$0
-    )
-})
-}
-    
-open func setCurrentContext(context: CapturedContext) {try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_set_current_context(self.uniffiClonePointer(),
-        FfiConverterTypeCapturedContext.lower(context),$0
-    )
-}
-}
-    
-open func setDefaultProvider(providerName: String)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_set_default_provider(self.uniffiClonePointer(),
-        FfiConverterString.lower(providerName),$0
-    )
-}
-}
-    
-open func setLogLevel(level: LogLevel)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_set_log_level(self.uniffiClonePointer(),
-        FfiConverterTypeLogLevel.lower(level),$0
-    )
-}
-}
-    
-open func startConversation(initialInput: String, context: CapturedContext)throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_start_conversation(self.uniffiClonePointer(),
-        FfiConverterString.lower(initialInput),
-        FfiConverterTypeCapturedContext.lower(context),$0
-    )
-})
-}
-    
-open func storeInteractionMemory(userInput: String, aiOutput: String)throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_store_interaction_memory(self.uniffiClonePointer(),
-        FfiConverterString.lower(userInput),
-        FfiConverterString.lower(aiOutput),$0
-    )
-})
-}
-    
-open func storeRequestContext(clipboardContent: String, provider: String) {try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_store_request_context(self.uniffiClonePointer(),
-        FfiConverterString.lower(clipboardContent),
-        FfiConverterString.lower(provider),$0
-    )
-}
-}
-    
-open func testProviderConnection(providerName: String) -> TestConnectionResult {
-    return try!  FfiConverterTypeTestConnectionResult.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_test_provider_connection(self.uniffiClonePointer(),
-        FfiConverterString.lower(providerName),$0
-    )
-})
-}
-    
-open func testProviderConnectionWithConfig(providerName: String, providerConfig: ProviderConfig) -> TestConnectionResult {
-    return try!  FfiConverterTypeTestConnectionResult.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aethercore_test_provider_connection_with_config(self.uniffiClonePointer(),
-        FfiConverterString.lower(providerName),
-        FfiConverterTypeProviderConfig.lower(providerConfig),$0
-    )
-})
-}
-    
-open func testSearchProvider(providerName: String)throws  -> ProviderTestResult {
-    return try  FfiConverterTypeProviderTestResult.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_test_search_provider(self.uniffiClonePointer(),
-        FfiConverterString.lower(providerName),$0
-    )
-})
-}
-    
-open func testSearchProviderWithConfig(config: SearchProviderTestConfig)throws  -> ProviderTestResult {
-    return try  FfiConverterTypeProviderTestResult.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_test_search_provider_with_config(self.uniffiClonePointer(),
-        FfiConverterTypeSearchProviderTestConfig.lower(config),$0
-    )
-})
-}
-    
-open func triggerCompression()throws  -> CompressionResult {
-    return try  FfiConverterTypeCompressionResult.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_trigger_compression(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func updateBehavior(behavior: BehaviorConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_behavior(self.uniffiClonePointer(),
-        FfiConverterTypeBehaviorConfig.lower(behavior),$0
-    )
-}
-}
-    
-open func updateGeneralConfig(config: GeneralConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_general_config(self.uniffiClonePointer(),
-        FfiConverterTypeGeneralConfig.lower(config),$0
-    )
-}
-}
-    
-open func updateMcpConfig(config: McpSettingsConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_mcp_config(self.uniffiClonePointer(),
-        FfiConverterTypeMcpSettingsConfig.lower(config),$0
-    )
-}
-}
-    
-open func updateMcpServer(config: McpServerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_mcp_server(self.uniffiClonePointer(),
-        FfiConverterTypeMcpServerConfig.lower(config),$0
-    )
-}
-}
-    
-open func updateMemoryConfig(config: MemoryConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_memory_config(self.uniffiClonePointer(),
-        FfiConverterTypeMemoryConfig.lower(config),$0
-    )
-}
-}
-    
-open func updateProvider(name: String, provider: ProviderConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_provider(self.uniffiClonePointer(),
-        FfiConverterString.lower(name),
-        FfiConverterTypeProviderConfig.lower(provider),$0
-    )
-}
-}
-    
-open func updateRoutingRules(rules: [RoutingRuleConfig])throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_routing_rules(self.uniffiClonePointer(),
-        FfiConverterSequenceTypeRoutingRuleConfig.lower(rules),$0
-    )
-}
-}
-    
-open func updateSearchConfig(search: SearchConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_search_config(self.uniffiClonePointer(),
-        FfiConverterTypeSearchConfig.lower(search),$0
-    )
-}
-}
-    
-open func updateShortcuts(shortcuts: ShortcutsConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_shortcuts(self.uniffiClonePointer(),
-        FfiConverterTypeShortcutsConfig.lower(shortcuts),$0
-    )
-}
-}
-    
-open func updateTriggerConfig(trigger: TriggerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_update_trigger_config(self.uniffiClonePointer(),
-        FfiConverterTypeTriggerConfig.lower(trigger),$0
-    )
-}
-}
-    
-open func validateRegex(pattern: String)throws  -> Bool {
-    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_method_aethercore_validate_regex(self.uniffiClonePointer(),
-        FfiConverterString.lower(pattern),$0
-    )
-})
-}
-    
-
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeAetherCore: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
-    typealias SwiftType = AetherCore
-
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> AetherCore {
-        return AetherCore(unsafeFromRawPointer: pointer)
-    }
-
-    public static func lower(_ value: AetherCore) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AetherCore {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
-    }
-
-    public static func write(_ value: AetherCore, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
-    }
-}
-
-
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeAetherCore_lift(_ pointer: UnsafeMutableRawPointer) throws -> AetherCore {
-    return try FfiConverterTypeAetherCore.lift(pointer)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeAetherCore_lower(_ value: AetherCore) -> UnsafeMutableRawPointer {
-    return FfiConverterTypeAetherCore.lower(value)
-}
-
-
-
-
-public protocol AetherV2CoreProtocol : AnyObject {
-    
-    func addMcpServer(config: McpServerConfig) throws 
-    
-    func cancel() 
-    
-    func clearFacts() throws  -> UInt64
-    
-    func clearMemories(appBundleId: String?, windowTitle: String?) throws  -> UInt64
-    
-    func clearMemory() throws 
-    
-    func deleteMcpServer(id: String) throws 
-    
-    func deleteMemoriesByTopicId(topicId: String) throws  -> UInt64
-    
-    func deleteMemory(id: String) throws 
-    
-    func deleteProvider(name: String) throws 
-    
-    func deleteSkill(skillId: String) throws 
-    
-    func exportMcpConfigJson()  -> String
-    
-    func getCompressionStats() throws  -> CompressionStats
-    
-    func getDefaultProvider()  -> String?
-    
-    func getEnabledProviders()  -> [String]
-    
-    func getMcpConfig()  -> McpSettingsConfig
-    
-    func getMcpServer(id: String)  -> McpServerConfig?
-    
-    func getMcpServerLogs(id: String, maxLines: UInt32)  -> [String]
-    
-    func getMcpServerStatus(id: String)  -> McpServerStatusInfo
-    
-    func getMemoryAppList() throws  -> [AppMemoryInfo]
-    
-    func getMemoryConfig()  -> MemoryConfig
-    
-    func getMemoryStats() throws  -> MemoryStats
     
     func getSkillsDir() throws  -> String
     
@@ -1542,11 +656,17 @@ public protocol AetherV2CoreProtocol : AnyObject {
     
     func reloadConfig() throws 
     
+    func searchMemories(appBundleId: String?, windowTitle: String?, limit: UInt32) throws  -> [MemoryEntry]
+    
     func searchMemory(query: String, limit: UInt32) throws  -> [MemoryItemV2]
     
     func setDefaultProvider(providerName: String) throws 
     
+    func setLogLevel(level: LogLevel) throws 
+    
     func testProviderConnectionWithConfig(providerName: String, providerConfig: ProviderConfig)  -> TestConnectionResult
+    
+    func testSearchProviderWithConfig(config: SearchProviderTestConfig) throws  -> ProviderTestResult
     
     func triggerCompression() throws  -> CompressionResult
     
@@ -1702,6 +822,23 @@ open func exportMcpConfigJson() -> String {
 })
 }
     
+open func extractText(imageData: [UInt8])throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_extract_text(self.uniffiClonePointer(),
+        FfiConverterSequenceUInt8.lower(imageData),$0
+    )
+})
+}
+    
+open func generateTopicTitle(userInput: String, aiResponse: String)throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_generate_topic_title(self.uniffiClonePointer(),
+        FfiConverterString.lower(userInput),
+        FfiConverterString.lower(aiResponse),$0
+    )
+})
+}
+    
 open func getCompressionStats()throws  -> CompressionStats {
     return try  FfiConverterTypeCompressionStats.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
     uniffi_aethecore_fn_method_aetherv2core_get_compression_stats(self.uniffiClonePointer(),$0
@@ -1719,6 +856,20 @@ open func getDefaultProvider() -> String? {
 open func getEnabledProviders() -> [String] {
     return try!  FfiConverterSequenceString.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aetherv2core_get_enabled_providers(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getLogDirectory()throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_get_log_directory(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getLogLevel() -> LogLevel {
+    return try!  FfiConverterTypeLogLevel.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_get_log_level(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -1772,6 +923,13 @@ open func getMemoryConfig() -> MemoryConfig {
 open func getMemoryStats()throws  -> MemoryStats {
     return try  FfiConverterTypeMemoryStats.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
     uniffi_aethecore_fn_method_aetherv2core_get_memory_stats(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getRootCommandsFromRegistry() -> [CommandNode] {
+    return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_get_root_commands_from_registry(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -1868,6 +1026,16 @@ open func reloadConfig()throws  {try rustCallWithError(FfiConverterTypeAetherV2E
 }
 }
     
+open func searchMemories(appBundleId: String?, windowTitle: String?, limit: UInt32)throws  -> [MemoryEntry] {
+    return try  FfiConverterSequenceTypeMemoryEntry.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_search_memories(self.uniffiClonePointer(),
+        FfiConverterOptionString.lower(appBundleId),
+        FfiConverterOptionString.lower(windowTitle),
+        FfiConverterUInt32.lower(limit),$0
+    )
+})
+}
+    
 open func searchMemory(query: String, limit: UInt32)throws  -> [MemoryItemV2] {
     return try  FfiConverterSequenceTypeMemoryItemV2.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
     uniffi_aethecore_fn_method_aetherv2core_search_memory(self.uniffiClonePointer(),
@@ -1884,11 +1052,26 @@ open func setDefaultProvider(providerName: String)throws  {try rustCallWithError
 }
 }
     
+open func setLogLevel(level: LogLevel)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_set_log_level(self.uniffiClonePointer(),
+        FfiConverterTypeLogLevel.lower(level),$0
+    )
+}
+}
+    
 open func testProviderConnectionWithConfig(providerName: String, providerConfig: ProviderConfig) -> TestConnectionResult {
     return try!  FfiConverterTypeTestConnectionResult.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aetherv2core_test_provider_connection_with_config(self.uniffiClonePointer(),
         FfiConverterString.lower(providerName),
         FfiConverterTypeProviderConfig.lower(providerConfig),$0
+    )
+})
+}
+    
+open func testSearchProviderWithConfig(config: SearchProviderTestConfig)throws  -> ProviderTestResult {
+    return try  FfiConverterTypeProviderTestResult.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_test_search_provider_with_config(self.uniffiClonePointer(),
+        FfiConverterTypeSearchProviderTestConfig.lower(config),$0
     )
 })
 }
@@ -7869,761 +7052,6 @@ extension VisionTask: Equatable, Hashable {}
 
 
 
-public protocol AetherEventHandler : AnyObject {
-    
-    func onStateChanged(state: ProcessingState) 
-    
-    func onError(message: String, suggestion: String?) 
-    
-    func onResponseChunk(text: String) 
-    
-    func onErrorTyped(errorType: ErrorType, message: String) 
-    
-    func onProgress(percent: Float) 
-    
-    func onAiProcessingStarted(providerName: String, providerColor: String) 
-    
-    func onAiResponseReceived(responsePreview: String) 
-    
-    func onProviderFallback(fromProvider: String, toProvider: String) 
-    
-    func onConfigChanged() 
-    
-    func onTypewriterProgress(percent: Float) 
-    
-    func onTypewriterCancelled() 
-    
-    func onClarificationNeeded(request: ClarificationRequest)  -> ClarificationResult
-    
-    func onConfirmationNeeded(confirmation: PendingConfirmationInfo) 
-    
-    func onConfirmationExpired(confirmationId: String) 
-    
-    func onConversationStarted(sessionId: String) 
-    
-    func onConversationTurnCompleted(turn: ConversationTurn) 
-    
-    func onConversationContinuationReady() 
-    
-    func onConversationEnded(sessionId: String, totalTurns: UInt32) 
-    
-    func onToolsChanged(toolCount: UInt32) 
-    
-    func onToolsRefreshNeeded() 
-    
-    func onMcpStartupComplete(report: McpStartupReportFfi) 
-    
-    func onAgentStarted(planId: String, totalSteps: UInt32, description: String) 
-    
-    func onAgentToolStarted(planId: String, stepIndex: UInt32, toolName: String, toolDescription: String) 
-    
-    func onAgentToolCompleted(planId: String, stepIndex: UInt32, toolName: String, success: Bool, resultPreview: String) 
-    
-    func onAgentCompleted(planId: String, success: Bool, totalDurationMs: UInt64, finalResponse: String) 
-    
-}
-
-// Magic number for the Rust proxy to call using the same mechanism as every other method,
-// to free the callback once it's dropped by Rust.
-private let IDX_CALLBACK_FREE: Int32 = 0
-// Callback return codes
-private let UNIFFI_CALLBACK_SUCCESS: Int32 = 0
-private let UNIFFI_CALLBACK_ERROR: Int32 = 1
-private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
-
-// Put the implementation in a struct so we don't pollute the top-level namespace
-fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
-
-    // Create the VTable using a series of closures.
-    // Swift automatically converts these into C callback functions.
-    static var vtable: UniffiVTableCallbackInterfaceAetherEventHandler = UniffiVTableCallbackInterfaceAetherEventHandler(
-        onStateChanged: { (
-            uniffiHandle: UInt64,
-            state: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onStateChanged(
-                     state: try FfiConverterTypeProcessingState.lift(state)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onError: { (
-            uniffiHandle: UInt64,
-            message: RustBuffer,
-            suggestion: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onError(
-                     message: try FfiConverterString.lift(message),
-                     suggestion: try FfiConverterOptionString.lift(suggestion)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onResponseChunk: { (
-            uniffiHandle: UInt64,
-            text: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onResponseChunk(
-                     text: try FfiConverterString.lift(text)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onErrorTyped: { (
-            uniffiHandle: UInt64,
-            errorType: RustBuffer,
-            message: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onErrorTyped(
-                     errorType: try FfiConverterTypeErrorType.lift(errorType),
-                     message: try FfiConverterString.lift(message)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onProgress: { (
-            uniffiHandle: UInt64,
-            percent: Float,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onProgress(
-                     percent: try FfiConverterFloat.lift(percent)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onAiProcessingStarted: { (
-            uniffiHandle: UInt64,
-            providerName: RustBuffer,
-            providerColor: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onAiProcessingStarted(
-                     providerName: try FfiConverterString.lift(providerName),
-                     providerColor: try FfiConverterString.lift(providerColor)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onAiResponseReceived: { (
-            uniffiHandle: UInt64,
-            responsePreview: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onAiResponseReceived(
-                     responsePreview: try FfiConverterString.lift(responsePreview)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onProviderFallback: { (
-            uniffiHandle: UInt64,
-            fromProvider: RustBuffer,
-            toProvider: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onProviderFallback(
-                     fromProvider: try FfiConverterString.lift(fromProvider),
-                     toProvider: try FfiConverterString.lift(toProvider)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onConfigChanged: { (
-            uniffiHandle: UInt64,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onConfigChanged(
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onTypewriterProgress: { (
-            uniffiHandle: UInt64,
-            percent: Float,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onTypewriterProgress(
-                     percent: try FfiConverterFloat.lift(percent)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onTypewriterCancelled: { (
-            uniffiHandle: UInt64,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onTypewriterCancelled(
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onClarificationNeeded: { (
-            uniffiHandle: UInt64,
-            request: RustBuffer,
-            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> ClarificationResult in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onClarificationNeeded(
-                     request: try FfiConverterTypeClarificationRequest.lift(request)
-                )
-            }
-
-            
-            let writeReturn = { uniffiOutReturn.pointee = FfiConverterTypeClarificationResult.lower($0) }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onConfirmationNeeded: { (
-            uniffiHandle: UInt64,
-            confirmation: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onConfirmationNeeded(
-                     confirmation: try FfiConverterTypePendingConfirmationInfo.lift(confirmation)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onConfirmationExpired: { (
-            uniffiHandle: UInt64,
-            confirmationId: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onConfirmationExpired(
-                     confirmationId: try FfiConverterString.lift(confirmationId)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onConversationStarted: { (
-            uniffiHandle: UInt64,
-            sessionId: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onConversationStarted(
-                     sessionId: try FfiConverterString.lift(sessionId)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onConversationTurnCompleted: { (
-            uniffiHandle: UInt64,
-            turn: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onConversationTurnCompleted(
-                     turn: try FfiConverterTypeConversationTurn.lift(turn)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onConversationContinuationReady: { (
-            uniffiHandle: UInt64,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onConversationContinuationReady(
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onConversationEnded: { (
-            uniffiHandle: UInt64,
-            sessionId: RustBuffer,
-            totalTurns: UInt32,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onConversationEnded(
-                     sessionId: try FfiConverterString.lift(sessionId),
-                     totalTurns: try FfiConverterUInt32.lift(totalTurns)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onToolsChanged: { (
-            uniffiHandle: UInt64,
-            toolCount: UInt32,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onToolsChanged(
-                     toolCount: try FfiConverterUInt32.lift(toolCount)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onToolsRefreshNeeded: { (
-            uniffiHandle: UInt64,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onToolsRefreshNeeded(
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onMcpStartupComplete: { (
-            uniffiHandle: UInt64,
-            report: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onMcpStartupComplete(
-                     report: try FfiConverterTypeMcpStartupReportFFI.lift(report)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onAgentStarted: { (
-            uniffiHandle: UInt64,
-            planId: RustBuffer,
-            totalSteps: UInt32,
-            description: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onAgentStarted(
-                     planId: try FfiConverterString.lift(planId),
-                     totalSteps: try FfiConverterUInt32.lift(totalSteps),
-                     description: try FfiConverterString.lift(description)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onAgentToolStarted: { (
-            uniffiHandle: UInt64,
-            planId: RustBuffer,
-            stepIndex: UInt32,
-            toolName: RustBuffer,
-            toolDescription: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onAgentToolStarted(
-                     planId: try FfiConverterString.lift(planId),
-                     stepIndex: try FfiConverterUInt32.lift(stepIndex),
-                     toolName: try FfiConverterString.lift(toolName),
-                     toolDescription: try FfiConverterString.lift(toolDescription)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onAgentToolCompleted: { (
-            uniffiHandle: UInt64,
-            planId: RustBuffer,
-            stepIndex: UInt32,
-            toolName: RustBuffer,
-            success: Int8,
-            resultPreview: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onAgentToolCompleted(
-                     planId: try FfiConverterString.lift(planId),
-                     stepIndex: try FfiConverterUInt32.lift(stepIndex),
-                     toolName: try FfiConverterString.lift(toolName),
-                     success: try FfiConverterBool.lift(success),
-                     resultPreview: try FfiConverterString.lift(resultPreview)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onAgentCompleted: { (
-            uniffiHandle: UInt64,
-            planId: RustBuffer,
-            success: Int8,
-            totalDurationMs: UInt64,
-            finalResponse: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onAgentCompleted(
-                     planId: try FfiConverterString.lift(planId),
-                     success: try FfiConverterBool.lift(success),
-                     totalDurationMs: try FfiConverterUInt64.lift(totalDurationMs),
-                     finalResponse: try FfiConverterString.lift(finalResponse)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        uniffiFree: { (uniffiHandle: UInt64) -> () in
-            let result = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.remove(handle: uniffiHandle)
-            if result == nil {
-                print("Uniffi callback interface AetherEventHandler: handle missing in uniffiFree")
-            }
-        }
-    )
-}
-
-private func uniffiCallbackInitAetherEventHandler() {
-    uniffi_aethecore_fn_init_callback_vtable_aethereventhandler(&UniffiCallbackInterfaceAetherEventHandler.vtable)
-}
-
-// FfiConverter protocol for callback interfaces
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterCallbackInterfaceAetherEventHandler {
-    fileprivate static var handleMap = UniffiHandleMap<AetherEventHandler>()
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-extension FfiConverterCallbackInterfaceAetherEventHandler : FfiConverter {
-    typealias SwiftType = AetherEventHandler
-    typealias FfiType = UInt64
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public static func lift(_ handle: UInt64) throws -> SwiftType {
-        try handleMap.get(handle: handle)
-    }
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
-        let handle: UInt64 = try readInt(&buf)
-        return try lift(handle)
-    }
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public static func lower(_ v: SwiftType) -> UInt64 {
-        return handleMap.insert(obj: v)
-    }
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
-        writeInt(&buf, lower(v))
-    }
-}
-
-
-
-
 public protocol AetherV2EventHandler : AnyObject {
     
     func onThinking() 
@@ -8642,7 +7070,13 @@ public protocol AetherV2EventHandler : AnyObject {
     
 }
 
-
+// Magic number for the Rust proxy to call using the same mechanism as every other method,
+// to free the callback once it's dropped by Rust.
+private let IDX_CALLBACK_FREE: Int32 = 0
+// Callback return codes
+private let UNIFFI_CALLBACK_SUCCESS: Int32 = 0
+private let UNIFFI_CALLBACK_ERROR: Int32 = 1
+private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 
 // Put the implementation in a struct so we don't pollute the top-level namespace
 fileprivate struct UniffiCallbackInterfaceAetherV2EventHandler {
@@ -9228,30 +7662,6 @@ fileprivate struct FfiConverterOptionTypeBehaviorConfig: FfiConverterRustBuffer 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterOptionTypeCapturedContext: FfiConverterRustBuffer {
-    typealias SwiftType = CapturedContext?
-
-    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
-        guard let value = value else {
-            writeInt(&buf, Int8(0))
-            return
-        }
-        writeInt(&buf, Int8(1))
-        FfiConverterTypeCapturedContext.write(value, into: &buf)
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
-        switch try readInt(&buf) as Int8 {
-        case 0: return nil
-        case 1: return try FfiConverterTypeCapturedContext.read(from: &buf)
-        default: throw UniffiInternalError.unexpectedOptionalTag
-        }
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterOptionTypeMcpServerConfig: FfiConverterRustBuffer {
     typealias SwiftType = McpServerConfig?
 
@@ -9292,30 +7702,6 @@ fileprivate struct FfiConverterOptionTypePIIConfig: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypePIIConfig.read(from: &buf)
-        default: throw UniffiInternalError.unexpectedOptionalTag
-        }
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterOptionTypePendingConfirmationInfo: FfiConverterRustBuffer {
-    typealias SwiftType = PendingConfirmationInfo?
-
-    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
-        guard let value = value else {
-            writeInt(&buf, Int8(0))
-            return
-        }
-        writeInt(&buf, Int8(1))
-        FfiConverterTypePendingConfirmationInfo.write(value, into: &buf)
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
-        switch try readInt(&buf) as Int8 {
-        case 0: return nil
-        case 1: return try FfiConverterTypePendingConfirmationInfo.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -9790,56 +8176,6 @@ fileprivate struct FfiConverterSequenceTypeMcpServerErrorFFI: FfiConverterRustBu
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterSequenceTypeMcpServiceInfo: FfiConverterRustBuffer {
-    typealias SwiftType = [McpServiceInfo]
-
-    public static func write(_ value: [McpServiceInfo], into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        for item in value {
-            FfiConverterTypeMcpServiceInfo.write(item, into: &buf)
-        }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [McpServiceInfo] {
-        let len: Int32 = try readInt(&buf)
-        var seq = [McpServiceInfo]()
-        seq.reserveCapacity(Int(len))
-        for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeMcpServiceInfo.read(from: &buf))
-        }
-        return seq
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterSequenceTypeMcpToolInfo: FfiConverterRustBuffer {
-    typealias SwiftType = [McpToolInfo]
-
-    public static func write(_ value: [McpToolInfo], into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        for item in value {
-            FfiConverterTypeMcpToolInfo.write(item, into: &buf)
-        }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [McpToolInfo] {
-        let len: Int32 = try readInt(&buf)
-        var seq = [McpToolInfo]()
-        seq.reserveCapacity(Int(len))
-        for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeMcpToolInfo.read(from: &buf))
-        }
-        return seq
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterSequenceTypeMediaAttachment: FfiConverterRustBuffer {
     typealias SwiftType = [MediaAttachment]
 
@@ -10087,52 +8423,6 @@ fileprivate struct FfiConverterDictionaryStringUInt64: FfiConverterRustBuffer {
         return dict
     }
 }
-private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
-private let UNIFFI_RUST_FUTURE_POLL_MAYBE_READY: Int8 = 1
-
-fileprivate let uniffiContinuationHandleMap = UniffiHandleMap<UnsafeContinuation<Int8, Never>>()
-
-fileprivate func uniffiRustCallAsync<F, T>(
-    rustFutureFunc: () -> UInt64,
-    pollFunc: (UInt64, @escaping UniffiRustFutureContinuationCallback, UInt64) -> (),
-    completeFunc: (UInt64, UnsafeMutablePointer<RustCallStatus>) -> F,
-    freeFunc: (UInt64) -> (),
-    liftFunc: (F) throws -> T,
-    errorHandler: ((RustBuffer) throws -> Swift.Error)?
-) async throws -> T {
-    // Make sure to call uniffiEnsureInitialized() since future creation doesn't have a
-    // RustCallStatus param, so doesn't use makeRustCall()
-    uniffiEnsureInitialized()
-    let rustFuture = rustFutureFunc()
-    defer {
-        freeFunc(rustFuture)
-    }
-    var pollResult: Int8;
-    repeat {
-        pollResult = await withUnsafeContinuation {
-            pollFunc(
-                rustFuture,
-                uniffiFutureContinuationCallback,
-                uniffiContinuationHandleMap.insert(obj: $0)
-            )
-        }
-    } while pollResult != UNIFFI_RUST_FUTURE_POLL_READY
-
-    return try liftFunc(makeRustCall(
-        { completeFunc(rustFuture, $0) },
-        errorHandler: errorHandler
-    ))
-}
-
-// Callback handlers for an async calls.  These are invoked by Rust when the future is ready.  They
-// lift the return value or error and resume the suspended function.
-fileprivate func uniffiFutureContinuationCallback(handle: UInt64, pollResult: Int8) {
-    if let continuation = try? uniffiContinuationHandleMap.remove(handle: handle) {
-        continuation.resume(returning: pollResult)
-    } else {
-        print("uniffiFutureContinuationCallback invalid handle")
-    }
-}
 public func checkEmbeddingModelExists()throws  -> Bool {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_func_check_embedding_model_exists($0
@@ -10224,246 +8514,6 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_func_run_first_time_init() != 14662) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aethercore_add_mcp_server() != 17845) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_cancel_confirmation() != 3832) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_cleanup_expired_confirmations() != 8982) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_clear_facts() != 35773) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_clear_memories() != 37085) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_clear_request_context() != 2809) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_confirm_action() != 20248) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_continue_conversation() != 60415) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_conversation_turn_count() != 12630) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_delete_mcp_server() != 25905) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_delete_memories_by_topic_id() != 24621) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_delete_memory() != 18981) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_delete_provider() != 56010) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_delete_skill() != 7419) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_end_conversation() != 48231) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_export_mcp_config_json() != 17811) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_extract_text() != 2920) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_filter_commands() != 53560) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_generate_topic_title() != 35518) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_command_children() != 60196) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_compression_stats() != 49852) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_default_provider() != 56435) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_enabled_providers() != 10573) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_log_directory() != 37671) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_log_level() != 16546) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_config() != 24168) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_server() != 838) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_server_logs() != 14498) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_server_status() != 46212) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_memory_app_list() != 2639) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_memory_config() != 46228) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_memory_stats() != 10285) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_pending_confirmation() != 15387) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_pending_confirmation_count() != 3222) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_root_commands() != 47120) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_root_commands_from_registry() != 64284) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_skills_dir() != 11635) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_subcommands_from_registry() != 57765) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_get_subtools_from_registry() != 34499) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_has_active_conversation() != 19478) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_import_mcp_config_json() != 36470) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_install_skill() != 48308) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_install_skills_from_zip() != 40422) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_list_builtin_tools() != 62441) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_list_mcp_servers() != 29913) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_list_mcp_services() != 51137) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_list_mcp_tools() != 7193) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_list_preset_tools() != 9252) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_list_root_tools() != 53812) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_list_skills() != 2819) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_list_tools() != 25812) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_list_tools_by_source() != 3320) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_load_config() != 33928) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_process_input() != 803) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_process_vision() != 25227) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_refresh_skills() != 30751) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_search_memories() != 31229) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_search_tools() != 64229) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_set_current_context() != 16529) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_set_default_provider() != 20437) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_set_log_level() != 21569) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_start_conversation() != 5020) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_store_interaction_memory() != 17143) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_store_request_context() != 34566) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_test_provider_connection() != 46196) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_test_provider_connection_with_config() != 26018) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_test_search_provider() != 54585) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_test_search_provider_with_config() != 47098) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_trigger_compression() != 46260) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_update_behavior() != 46183) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_update_general_config() != 11598) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_update_mcp_config() != 6765) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_update_mcp_server() != 41081) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_update_memory_config() != 52192) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_update_provider() != 35408) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_update_routing_rules() != 28990) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_update_search_config() != 59013) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_update_shortcuts() != 5200) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_update_trigger_config() != 14167) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethercore_validate_regex() != 42285) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_aethecore_checksum_method_aetherv2core_add_mcp_server() != 63231) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -10497,6 +8547,12 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aetherv2core_export_mcp_config_json() != 21455) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aetherv2core_extract_text() != 27013) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_generate_topic_title() != 49963) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aetherv2core_get_compression_stats() != 48899) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -10504,6 +8560,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aetherv2core_get_enabled_providers() != 28734) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_get_log_directory() != 42553) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_get_log_level() != 40333) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aetherv2core_get_mcp_config() != 23687) {
@@ -10525,6 +8587,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aetherv2core_get_memory_stats() != 50210) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_get_root_commands_from_registry() != 33343) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aetherv2core_get_skills_dir() != 37578) {
@@ -10566,13 +8631,22 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aetherv2core_reload_config() != 4462) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aetherv2core_search_memories() != 17753) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aetherv2core_search_memory() != 28128) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aetherv2core_set_default_provider() != 31407) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aetherv2core_set_log_level() != 58484) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aetherv2core_test_provider_connection_with_config() != 11452) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_test_search_provider_with_config() != 27172) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aetherv2core_trigger_compression() != 17129) {
@@ -10609,84 +8683,6 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aetherv2core_validate_regex() != 58270) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_constructor_aethercore_new() != 50082) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_state_changed() != 19682) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_error() != 20274) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_response_chunk() != 1231) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_error_typed() != 8995) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_progress() != 44714) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_ai_processing_started() != 38165) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_ai_response_received() != 33940) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_provider_fallback() != 34077) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_config_changed() != 30065) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_typewriter_progress() != 43925) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_typewriter_cancelled() != 28606) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_clarification_needed() != 36496) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_confirmation_needed() != 36613) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_confirmation_expired() != 10341) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_started() != 36209) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_turn_completed() != 13839) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_continuation_ready() != 61816) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_conversation_ended() != 15108) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tools_changed() != 46377) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tools_refresh_needed() != 36583) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_mcp_startup_complete() != 1232) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_agent_started() != 58953) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_agent_tool_started() != 39375) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_agent_tool_completed() != 10804) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_aethereventhandler_on_agent_completed() != 26263) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aetherv2eventhandler_on_thinking() != 52985) {
@@ -10729,7 +8725,6 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
 
-    uniffiCallbackInitAetherEventHandler()
     uniffiCallbackInitAetherV2EventHandler()
     uniffiCallbackInitInitializationProgressHandler()
     return InitializationResult.ok

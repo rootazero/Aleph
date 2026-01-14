@@ -7,61 +7,47 @@
 //!
 //! The core library is built as a headless service (cdylib/staticlib) that exposes
 //! a clean FFI boundary via UniFFI. Native clients (Swift on macOS, C# on Windows,
-//! GTK on Linux) communicate with this core to access hotkey detection, clipboard
-//! management, and AI routing functionality.
+//! GTK on Linux) communicate with this core to access AI processing, tool execution,
+//! and memory management functionality.
 //!
-//! # Core Components
+//! # V2 Interface (Primary)
 //!
-//! - **AetherCore**: Main entry point that orchestrates all subsystems
-//! - **HotkeyListener**: Global hotkey detection (Cmd+~ on macOS)
-//! - **ClipboardManager**: Clipboard read/write operations
-//! - **AetherEventHandler**: Callback trait for Rust → Client communication
+//! The primary interface is `AetherV2Core`, which uses the rig-core framework for
+//! AI provider integration and tool execution.
+//!
+//! - **AetherV2Core**: Main entry point for all AI and tool operations
+//! - **AetherV2EventHandler**: Callback interface for Rust → Client communication
 //! - **ProcessingState**: State machine for UI feedback
 //!
-//! # Usage Example
+//! # Usage Example (V2)
 //!
 //! ```rust,no_run
 //! use aethecore::*;
 //!
-//! // Client implements AetherEventHandler trait
-//! struct MyHandler;
-//! impl AetherEventHandler for MyHandler {
-//!     fn on_state_changed(&self, state: ProcessingState) {
-//!         println!("State: {:?}", state);
-//!     }
-//!     fn on_hotkey_detected(&self, content: String) {
-//!         println!("Hotkey! Clipboard: {}", content);
-//!     }
-//!     fn on_error(&self, message: String) {
-//!         eprintln!("Error: {}", message);
-//!     }
-//! }
+//! // Initialize V2 core with event handler
+//! let handler = MyV2EventHandler::new();
+//! let core = init_v2("/path/to/config.toml", handler).unwrap();
 //!
-//! // Create core with handler (Box required for UniFFI)
-//! let handler = Box::new(MyHandler);
-//! let core = AetherCore::new(handler).unwrap();
+//! // Process user input
+//! let options = ProcessOptionsV2 {
+//!     app_context: Some("Safari".to_string()),
+//!     window_title: None,
+//!     stream: true,
+//! };
+//! core.process("Hello, world!".to_string(), Some(options)).unwrap();
 //!
-//! // Start listening for Cmd+~
-//! core.start_listening().unwrap();
-//!
-//! // ... when done
-//! core.stop_listening().unwrap();
+//! // List available tools
+//! let tools = core.list_tools();
 //! ```
 //!
-//! # Phase 1 Scope
+//! # Features
 //!
-//! This initial implementation provides:
-//! - ✅ Working hotkey detection (Cmd+~ hardcoded)
-//! - ✅ Working clipboard reading (text only)
-//! - ✅ UniFFI interface for Swift/Kotlin/C# bindings
-//! - ✅ Callback-based event system
-//! - ✅ Trait-based architecture for testability
-//!
-//! Future phases will add:
-//! - Phase 2: Keyboard simulation (Cmd+X, Cmd+V)
-//! - Phase 3: Halo overlay integration
-//! - Phase 4: AI provider clients (OpenAI, Claude, Gemini, Ollama)
-//! - Phase 4: Smart routing and configuration
+//! - ✅ Unified AI processing with multiple providers (OpenAI, Claude, Gemini, Ollama)
+//! - ✅ Tool execution (search, MCP, skills)
+//! - ✅ Memory management with vector search
+//! - ✅ Configuration hot-reload
+//! - ✅ Multi-turn conversation support
+//! - ✅ Vision/OCR capabilities
 
 // Allow clippy lints for UniFFI generated code
 #![allow(clippy::empty_line_after_doc_comments)]
@@ -122,12 +108,15 @@ pub use crate::config::{
     SearchConfigInternal, ShortcutsConfig, SkillsConfig, SmartFlowConfig, SmartMatchingConfig,
     SuggestionParsingConfig, TestConnectionResult, TriggerConfig, VideoConfig,
 };
+// Internal types from core module (shared between V1 and V2)
+// Note: AetherCore is deprecated - use AetherV2Core instead
 pub use crate::core::{
     AetherCore, AppMemoryInfo, CapturedContext, CompressionStats, MediaAttachment,
     MemoryEntryFFI as MemoryEntry,
 };
 pub use crate::memory::context::CompressionResult;
 pub use crate::error::{AetherError, AetherException, Result};
+// Note: AetherEventHandler is deprecated - use AetherV2EventHandler instead
 pub use crate::event_handler::{
     AetherEventHandler, ErrorType, McpServerErrorFFI, McpStartupReportFFI, ProcessingState,
 };
@@ -136,8 +125,8 @@ pub use crate::initialization::{
     get_skills_dir, get_skills_dir_string, initialize_builtin_skills, initialize_builtin_skills_ffi,
     is_fresh_install, list_installed_skills, run_first_time_init, InitializationProgressHandler,
 };
-// NOTE: delete_skill, install_skill_from_url, install_skills_from_zip moved to
-// AetherCore methods (skill_ops.rs) to ensure automatic tool registry refresh.
+// NOTE: Skill modification functions are in AetherV2Core to ensure automatic tool registry refresh.
+// Use AetherV2Core.delete_skill(), AetherV2Core.install_skill(), etc.
 pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer};
 pub use crate::memory::database::MemoryStats;
 pub use crate::metrics::StageTimer;

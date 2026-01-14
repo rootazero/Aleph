@@ -11,7 +11,7 @@ import SwiftUI
 struct ProvidersView: View {
     // MARK: - Dependencies
 
-    let core: AetherCore
+    let core: AetherV2Core
     @ObservedObject var saveBarState: SettingsSaveBarState
 
     // MARK: - State

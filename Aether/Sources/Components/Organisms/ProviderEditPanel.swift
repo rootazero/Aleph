@@ -6,7 +6,7 @@ import AppKit
 struct ProviderEditPanel: View {
     // MARK: - Dependencies
 
-    let core: AetherCore
+    let core: AetherV2Core
     @ObservedObject var saveBarState: SettingsSaveBarState
 
     // MARK: - Bindings
@@ -937,9 +937,11 @@ struct ProviderEditPanel: View {
             do {
                 try await saveProviderConfig(persist: true)
 
+                // Reload config outside MainActor to avoid try! crash
+                let config = try core.loadConfig()
+
                 await MainActor.run {
-                    // Reload providers list
-                    let config = try! core.loadConfig()
+                    // Update providers list with reloaded config
                     providers = config.providers
 
                     // Exit add mode if we were adding a new provider
@@ -1043,8 +1045,10 @@ struct ProviderEditPanel: View {
             do {
                 try core.deleteProvider(name: provider.name)
 
+                // Reload config outside MainActor to avoid try! crash
+                let config = try core.loadConfig()
+
                 await MainActor.run {
-                    let config = try! core.loadConfig()
                     providers = config.providers
                     selectedProvider = providers.first?.name
                 }

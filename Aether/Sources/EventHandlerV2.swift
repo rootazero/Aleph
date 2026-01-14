@@ -269,4 +269,59 @@ class EventHandlerV2: AetherV2EventHandler {
         accumulatedText = ""
         currentToolName = nil
     }
+
+    // MARK: - Toast Display
+
+    /// Timer for auto-dismissing toasts
+    private var toastDismissTimer: Timer?
+
+    /// Show a toast notification to the user
+    /// - Parameters:
+    ///   - type: The toast type (info, warning, error)
+    ///   - title: Toast title
+    ///   - message: Toast message
+    ///   - autoDismiss: Whether to auto-dismiss (default: true for info)
+    func showToast(type: ToastType, title: String, message: String, autoDismiss: Bool = true) {
+        print("[EventHandlerV2] Showing toast: \(type) - \(title)")
+
+        // Cancel any existing dismiss timer
+        toastDismissTimer?.invalidate()
+        toastDismissTimer = nil
+
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            // Update Halo state to toast
+            let shouldAutoDismiss = autoDismiss && type == .info
+            slf.haloWindow?.updateState(.toast(
+                type: type,
+                title: title,
+                message: message,
+                autoDismiss: shouldAutoDismiss
+            ))
+
+            // Set dismiss callback
+            slf.haloWindow?.viewModel.callbacks.toastOnDismiss = { [weak slf] in
+                slf?.dismissToast()
+            }
+
+            // Show at screen center
+            slf.haloWindow?.showToastCentered()
+
+            // Set auto-dismiss timer for info toasts
+            if shouldAutoDismiss {
+                slf.toastDismissTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak slf] _ in
+                    slf?.dismissToast()
+                }
+            }
+        }
+    }
+
+    /// Dismiss the current toast
+    private func dismissToast() {
+        toastDismissTimer?.invalidate()
+        toastDismissTimer = nil
+
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            slf.haloWindow?.hide()
+        }
+    }
 }

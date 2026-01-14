@@ -10,7 +10,7 @@ import SwiftUI
 /// Behavior settings view with UnifiedSaveBar pattern (example implementation)
 struct BehaviorSettingsView: View {
     // Dependencies
-    let core: AetherCore?
+    let core: AetherV2Core?
     @ObservedObject var saveBarState: SettingsSaveBarState
 
     // Output settings

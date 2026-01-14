@@ -34,7 +34,7 @@ extension UTType {
 // MARK: - General Settings View
 
 struct GeneralSettingsView: View {
-    let core: AetherCore?
+    let core: AetherV2Core?
     @ObservedObject var saveBarState: SettingsSaveBarState
 
     @State private var soundEnabled = false

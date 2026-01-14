@@ -20,13 +20,9 @@ final class MultiTurnCoordinator {
 
     // MARK: - Dependencies
 
-    private weak var core: AetherCore?
     private weak var coreV2: AetherV2Core?
 
-    /// Whether to use v2 interface for processing
-    var useV2Interface: Bool = true  // Enable v2 for testing
-
-    /// Pending context for v2 async callbacks
+    /// Pending context for V2 async callbacks
     private var pendingV2Topic: Topic?
     private var pendingV2UserInput: String?
     private var pendingV2IsFirstMessage: Bool = false
@@ -65,14 +61,8 @@ final class MultiTurnCoordinator {
 
     // MARK: - Configuration
 
-    /// Configure with dependencies (v1)
-    func configure(core: AetherCore) {
-        self.core = core
-        print("[MultiTurnCoordinator] Configured with v1 core")
-    }
-
-    /// Configure v2 dependencies (rig-core based)
-    func configureV2(coreV2: AetherV2Core?) {
+    /// Configure with V2 dependencies
+    func configure(coreV2: AetherV2Core?) {
         self.coreV2 = coreV2
         if coreV2 != nil {
             print("[MultiTurnCoordinator] V2 interface configured")
@@ -150,8 +140,8 @@ final class MultiTurnCoordinator {
 
     /// Handle user input
     private func handleInput(_ text: String) {
-        guard let topic = currentTopic, core != nil else {
-            print("[MultiTurnCoordinator] No active topic or core")
+        guard let topic = currentTopic, coreV2 != nil else {
+            print("[MultiTurnCoordinator] No active topic or coreV2")
             return
         }
 
@@ -212,66 +202,31 @@ final class MultiTurnCoordinator {
     ///   - isFirstMessage: Whether this is the first message in the topic
     private func processWithAI(text: String, topic: Topic, userDisplayText: String, attachments: [MediaAttachment], isFirstMessage: Bool) {
 
-        // Choose processing interface: v2 (rig-core) or v1 (legacy)
-        if useV2Interface, let coreV2 = coreV2 {
-            // V2 async processing - store context for callback
-            print("[MultiTurnCoordinator] 🚀 Using V2 interface (rig-core)")
-
-            // Store pending context for callbacks
-            pendingV2Topic = topic
-            pendingV2UserInput = userDisplayText
-            pendingV2IsFirstMessage = isFirstMessage
-
-            let options = ProcessOptionsV2(
-                appContext: "com.aether.multi-turn",
-                windowTitle: nil,
-                stream: true
-            )
-
-            do {
-                try coreV2.process(input: text, options: options)
-                print("[MultiTurnCoordinator] V2 process initiated, awaiting callbacks")
-            } catch {
-                print("[MultiTurnCoordinator] V2 AI error: \(error)")
-                clearPendingV2Context()
-                DispatchQueue.main.async { [weak self] in
-                    self?.displayWindow.viewModel.setError(error.localizedDescription)
-                }
-            }
+        // V2 async processing
+        guard let coreV2 = coreV2 else {
+            print("[MultiTurnCoordinator] ⚠️ CoreV2 not available")
             return
         }
 
-        // V1 synchronous processing (legacy path)
-        guard let core = core else { return }
+        print("[MultiTurnCoordinator] 🚀 Using V2 interface (rig-core)")
+
+        // Store pending context for callbacks
+        pendingV2Topic = topic
+        pendingV2UserInput = userDisplayText
+        pendingV2IsFirstMessage = isFirstMessage
+
+        let options = ProcessOptionsV2(
+            appContext: "com.aether.multi-turn",
+            windowTitle: nil,
+            stream: true
+        )
 
         do {
-            // Create context for AI call with attachments and topic ID
-            let context = CapturedContext(
-                appBundleId: "com.aether.multi-turn",
-                windowTitle: nil,
-                attachments: attachments.isEmpty ? nil : attachments,
-                topicId: topic.id  // Associate memory with this topic
-            )
-
-            // Log attachment info
-            if !attachments.isEmpty {
-                print("[MultiTurnCoordinator] Sending \(attachments.count) attachment(s) to AI")
-            }
-
-            // Call AI with full text and attachments
-            let response = try core.processInput(userInput: text, context: context)
-
-            DispatchQueue.main.async { [weak self] in
-                self?.handleAIResponse(
-                    response,
-                    topic: topic,
-                    userInput: userDisplayText,  // Use original text for title
-                    isFirstMessage: isFirstMessage
-                )
-            }
-
+            try coreV2.process(input: text, options: options)
+            print("[MultiTurnCoordinator] V2 process initiated, awaiting callbacks")
         } catch {
-            print("[MultiTurnCoordinator] AI error: \(error)")
+            print("[MultiTurnCoordinator] V2 AI error: \(error)")
+            clearPendingV2Context()
             DispatchQueue.main.async { [weak self] in
                 self?.displayWindow.viewModel.setError(error.localizedDescription)
             }
@@ -284,9 +239,9 @@ final class MultiTurnCoordinator {
         var outputMode = "instant"
         var typingSpeed: Int = 50
 
-        if let core = core {
+        if let coreV2 = coreV2 {
             do {
-                let config = try core.loadConfig()
+                let config = try coreV2.loadConfig()
                 if let behavior = config.behavior {
                     outputMode = behavior.outputMode
                     typingSpeed = Int(behavior.typingSpeed)
@@ -364,10 +319,10 @@ final class MultiTurnCoordinator {
     /// Generate title for topic
     /// Note: The Rust function is now synchronous (uses internal Tokio runtime)
     private func generateTitle(topic: Topic, userInput: String, aiResponse: String) {
-        print("[MultiTurnCoordinator] generateTitle called for topic: \(topic.id), core is \(core != nil ? "available" : "NIL")")
+        print("[MultiTurnCoordinator] generateTitle called for topic: \(topic.id), coreV2 is \(coreV2 != nil ? "available" : "NIL")")
 
-        guard let core = core else {
-            print("[MultiTurnCoordinator] ERROR: core is nil, cannot generate title")
+        guard let coreV2 = coreV2 else {
+            print("[MultiTurnCoordinator] ERROR: coreV2 is nil, cannot generate title")
             return
         }
 
@@ -377,7 +332,7 @@ final class MultiTurnCoordinator {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
                 // Rust function is now synchronous (internally uses Tokio runtime)
-                let title = try core.generateTopicTitle(userInput: userInput, aiResponse: aiResponse)
+                let title = try coreV2.generateTopicTitle(userInput: userInput, aiResponse: aiResponse)
 
                 // Update in store
                 ConversationStore.shared.updateTopicTitle(id: topic.id, title: title)

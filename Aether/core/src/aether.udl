@@ -44,9 +44,9 @@ namespace aether {
   [Throws=AetherException]
   sequence<SkillInfo> list_installed_skills();
 
-  // NOTE: Skill modification functions (delete, install) have been moved to
-  // AetherCore interface to ensure automatic tool registry refresh.
-  // Use AetherCore.delete_skill(), AetherCore.install_skill(), etc.
+  // NOTE: Skill modification functions (delete, install) are in AetherV2Core
+  // to ensure automatic tool registry refresh.
+  // Use AetherV2Core.delete_skill(), AetherV2Core.install_skill(), etc.
 };
 
 // ===== VISION CAPABILITY (rust-native-vision) =====
@@ -183,353 +183,8 @@ enum AetherException {
   "Error"
 };
 
-// Main interface for Aether core
-interface AetherCore {
-  // Constructor - creates new AetherCore with event handler
-  [Throws=AetherException]
-  constructor(AetherEventHandler handler);
-
-  // AI PROCESSING METHODS
-  // Process input with AI using the complete pipeline: Memory → Router → Provider → Storage
-  // This is the main entry point for the new architecture
-  [Throws=AetherException]
-  string process_input(string user_input, CapturedContext context);
-
-  // Store request context for retry capability
-  void store_request_context(string clipboard_content, string provider);
-
-  // Clear stored request context
-  void clear_request_context();
-
-  // MEMORY MANAGEMENT METHODS (Phase 4 - Contextual Memory)
-
-  // Get memory database statistics
-  [Throws=AetherException]
-  MemoryStats get_memory_stats();
-
-  // Search memories by context
-  [Throws=AetherException]
-  sequence<MemoryEntry> search_memories(string app_bundle_id, string? window_title, u32 limit);
-
-  // Get list of apps with memory counts (for UI filtering)
-  [Throws=AetherException]
-  sequence<AppMemoryInfo> get_memory_app_list();
-
-  // Delete specific memory by ID
-  [Throws=AetherException]
-  void delete_memory(string id);
-
-  // Clear memories (with optional filters)
-  [Throws=AetherException]
-  u64 clear_memories(string? app_bundle_id, string? window_title);
-
-  // Clear all compressed facts (Layer 2 data)
-  [Throws=AetherException]
-  u64 clear_facts();
-
-  // Delete all memories associated with a topic ID (for multi-turn conversation deletion)
-  [Throws=AetherException]
-  u64 delete_memories_by_topic_id(string topic_id);
-
-  // Get memory configuration
-  MemoryConfig get_memory_config();
-
-  // Update memory configuration
-  [Throws=AetherException]
-  void update_memory_config(MemoryConfig config);
-
-  // Update general configuration (language preference, etc.)
-  [Throws=AetherException]
-  void update_general_config(GeneralConfig config);
-
-  // Set current context (called from Swift when hotkey pressed)
-  void set_current_context(CapturedContext context);
-
-  // Store interaction memory with current context
-  [Throws=AetherException]
-  string store_interaction_memory(string user_input, string ai_output);
-
-  // MEMORY COMPRESSION METHODS (dual-layer memory architecture)
-
-  // Manually trigger memory compression
-  // Processes uncompressed memories, extracts facts using LLM, stores in memory_facts table
-  [Throws=AetherException]
-  CompressionResult trigger_compression();
-
-  // Get compression statistics
-  // Returns counts for raw memories, facts (total/valid), and breakdown by fact type
-  [Throws=AetherException]
-  CompressionStats get_compression_stats();
-
-  // CONFIG MANAGEMENT METHODS (Phase 6 - Settings UI)
-
-  // Load configuration from file
-  [Throws=AetherException]
-  FullConfig load_config();
-
-  // Update provider configuration
-  [Throws=AetherException]
-  void update_provider(string name, ProviderConfig provider);
-
-  // Delete provider configuration
-  [Throws=AetherException]
-  void delete_provider(string name);
-
-  // Update routing rules
-  [Throws=AetherException]
-  void update_routing_rules(sequence<RoutingRuleConfig> rules);
-
-  // Update shortcuts configuration
-  [Throws=AetherException]
-  void update_shortcuts(ShortcutsConfig shortcuts);
-
-  // Update behavior configuration
-  [Throws=AetherException]
-  void update_behavior(BehaviorConfig behavior);
-
-  // Update trigger configuration (hotkey-system-refactor)
-  [Throws=AetherException]
-  void update_trigger_config(TriggerConfig trigger);
-
-  // Update search configuration
-  [Throws=AetherException]
-  void update_search_config(SearchConfig search);
-
-  // Validate regex pattern
-  [Throws=AetherException]
-  boolean validate_regex(string pattern);
-
-  // Test provider connection
-  TestConnectionResult test_provider_connection(string provider_name);
-
-  // Test provider connection with temporary configuration (without persisting to disk)
-  TestConnectionResult test_provider_connection_with_config(string provider_name, ProviderConfig provider_config);
-
-  // DEFAULT PROVIDER MANAGEMENT (Phase 3.3 - add-default-provider-selection)
-
-  // Get the current default provider (returns None if no default or if disabled)
-  string? get_default_provider();
-
-  // Set the default provider (validates that provider exists and is enabled)
-  [Throws=AetherException]
-  void set_default_provider(string provider_name);
-
-  // Get list of all enabled provider names (sorted alphabetically)
-  sequence<string> get_enabled_providers();
-
-  // LOGGING CONTROL METHODS (Phase 7.3 - Logging System)
-
-  // Get current log level
-  LogLevel get_log_level();
-
-  // Set log level dynamically
-  [Throws=AetherException]
-  void set_log_level(LogLevel level);
-
-  // Get log directory path
-  [Throws=AetherException]
-  string get_log_directory();
-
-  // SEARCH PROVIDER TESTING (integrate-search-registry)
-  // Note: These are synchronous methods that use runtime.block_on() internally
-  // to execute async search operations within Tokio runtime context
-  [Throws=AetherException]
-  ProviderTestResult test_search_provider(string provider_name);
-
-  // Test search provider with ad-hoc config (without requiring saved config)
-  // This allows testing provider credentials before saving to config file
-  [Throws=AetherException]
-  ProviderTestResult test_search_provider_with_config(SearchProviderTestConfig config);
-
-  // COMMAND COMPLETION METHODS (add-command-completion-system)
-  // These methods support the command completion UI for input assistance
-
-  // Get all root-level commands for command completion UI
-  // Returns commands parsed from config.toml routing rules with ^/ prefix
-  sequence<CommandNode> get_root_commands();
-
-  // Get children of a namespace command (e.g., /mcp)
-  // Returns empty for most namespaces (MCP integration reserved for future)
-  sequence<CommandNode> get_command_children(string parent_key);
-
-  // Filter commands by key prefix (case-insensitive)
-  // Used for autocomplete as user types (e.g., "se" matches "search", "settings")
-  sequence<CommandNode> filter_commands(string prefix);
-
-  // TOOL REGISTRY-BASED COMMAND COMPLETION (unify-tool-registry)
-
-  // Get subtools for a namespace command from ToolRegistry
-  // For /mcp returns MCP tools, for /skill returns installed skills
-  sequence<UnifiedToolInfo> get_subtools_from_registry(string parent_key);
-
-  // Get root commands from ToolRegistry (alternative to get_root_commands)
-  sequence<CommandNode> get_root_commands_from_registry();
-
-  // Get subcommands from ToolRegistry as CommandNodes (alternative to get_command_children)
-  sequence<CommandNode> get_subcommands_from_registry(string parent_key);
-
-  // MULTI-TURN CONVERSATION METHODS (add-multi-turn-conversation)
-
-  // Start a new conversation session
-  // Returns the AI's response to the initial input
-  [Throws=AetherException]
-  string start_conversation(string initial_input, CapturedContext context);
-
-  // Continue an existing conversation with follow-up input
-  // Returns the AI's response to the follow-up input
-  // context: Optional context with new attachments for this turn
-  [Throws=AetherException]
-  string continue_conversation(string follow_up_input, CapturedContext? context);
-
-  // End the current conversation session
-  void end_conversation();
-
-  // Check if there's an active conversation session
-  boolean has_active_conversation();
-
-  // Get the current turn count for the active conversation
-  u32 conversation_turn_count();
-
-  // Generate a title for a conversation topic
-  // Uses AI to create a concise title from the first exchange
-  // Note: Synchronous function that internally uses stored Tokio runtime
-  [Throws=AetherException]
-  string generate_topic_title(string user_input, string ai_response);
-
-  // MCP (Model Context Protocol) METHODS (implement-mcp-capability)
-
-  // Get MCP configuration for Settings UI
-  McpSettingsConfig get_mcp_config();
-
-  // Update MCP configuration
-  [Throws=AetherException]
-  void update_mcp_config(McpSettingsConfig config);
-
-  // Get list of MCP services
-  sequence<McpServiceInfo> list_mcp_services();
-
-  // Get list of MCP tools
-  sequence<McpToolInfo> list_mcp_tools();
-
-  // MCP Server Management Methods (redesign-mcp-settings-ui)
-
-  // List all MCP servers (builtin and external)
-  sequence<McpServerConfig> list_mcp_servers();
-
-  // Get a specific MCP server by ID
-  McpServerConfig? get_mcp_server(string id);
-
-  // Get MCP server status
-  McpServerStatusInfo get_mcp_server_status(string id);
-
-  // Add an external MCP server
-  [Throws=AetherException]
-  void add_mcp_server(McpServerConfig config);
-
-  // Update an MCP server configuration
-  [Throws=AetherException]
-  void update_mcp_server(McpServerConfig config);
-
-  // Delete an external MCP server
-  [Throws=AetherException]
-  void delete_mcp_server(string id);
-
-  // Get MCP server logs
-  sequence<string> get_mcp_server_logs(string id, u32 max_lines);
-
-  // Export MCP configuration as claude_desktop_config.json format
-  string export_mcp_config_json();
-
-  // Import MCP configuration from claude_desktop_config.json format
-  [Throws=AetherException]
-  void import_mcp_config_json(string json);
-
-  // SKILL MANAGEMENT METHODS (auto-register-skills)
-
-  // List all installed skills
-  [Throws=AetherException]
-  sequence<SkillInfo> list_skills();
-
-  // Install a skill from a GitHub URL
-  // Automatically refreshes the tool registry after installation
-  [Throws=AetherException]
-  SkillInfo install_skill(string url);
-
-  // Install skills from a local ZIP file
-  // Automatically refreshes the tool registry after installation
-  [Throws=AetherException]
-  sequence<string> install_skills_from_zip(string zip_path);
-
-  // Delete a skill by ID
-  // Automatically refreshes the tool registry after deletion
-  [Throws=AetherException]
-  void delete_skill(string skill_id);
-
-  // Get the skills directory path
-  [Throws=AetherException]
-  string get_skills_dir();
-
-  // Refresh skills in the tool registry
-  // Call this when skills are modified outside of AetherCore
-  void refresh_skills();
-
-  // DISPATCHER LAYER METHODS (implement-dispatcher-layer)
-
-  // List all available tools from unified registry
-  // Returns tools from all sources: Native, MCP, Skills, Custom, Builtin
-  sequence<UnifiedToolInfo> list_tools();
-
-  // List builtin tools only (3 commands: search, video, chat)
-  sequence<UnifiedToolInfo> list_builtin_tools();
-
-  // List preset tools for Settings UI (Flat Namespace Mode)
-  // Returns all non-Custom tools: Builtin + MCP + Skill + Native
-  sequence<UnifiedToolInfo> list_preset_tools();
-
-  // List root-level commands for command completion
-  // Returns all active tools except Native (internal implementations)
-  sequence<UnifiedToolInfo> list_root_tools();
-
-  // List tools filtered by source type
-  sequence<UnifiedToolInfo> list_tools_by_source(ToolSourceType source_type);
-
-  // Search tools by name or description
-  sequence<UnifiedToolInfo> search_tools(string query);
-
-  // ASYNC CONFIRMATION FLOW METHODS (async-confirmation-flow)
-
-  // Confirm or cancel a pending confirmation
-  // Called by Swift when user makes a decision on pending confirmation
-  // Returns true if confirmation was found and processed, false if not found/expired
-  [Throws=AetherException]
-  boolean confirm_action(string confirmation_id, UserConfirmationDecision decision);
-
-  // Cancel a pending confirmation by ID
-  // Returns true if confirmation was found and cancelled
-  boolean cancel_confirmation(string confirmation_id);
-
-  // Get pending confirmation by ID (if still valid)
-  PendingConfirmationInfo? get_pending_confirmation(string confirmation_id);
-
-  // Get count of pending confirmations
-  u32 get_pending_confirmation_count();
-
-  // Cleanup expired confirmations
-  // Returns count of cleaned confirmations
-  u32 cleanup_expired_confirmations();
-
-  // VISION CAPABILITY METHODS (rust-native-vision)
-
-  // Process vision request (OCR, description, or context-aware)
-  // Uses user-configured default AI provider for vision processing
-  [Async, Throws=AetherException]
-  VisionResult process_vision(VisionRequest request);
-
-  // Convenience method: Extract text from image (OCR only)
-  // Returns extracted text directly
-  [Async, Throws=AetherException]
-  string extract_text(sequence<u8> image_data);
-};
+// Note: V1 AetherCore interface has been removed.
+// Use AetherV2Core (rig-core based) for all functionality.
 
 // ===== MCP STARTUP REPORT (Phase 3.3 - mcp-startup-feedback) =====
 
@@ -545,102 +200,8 @@ dictionary McpStartupReportFFI {
   sequence<McpServerErrorFFI> failed_servers;
 };
 
-// Callback interface for events from Rust to client
-callback interface AetherEventHandler {
-  // Called when processing state changes
-  void on_state_changed(ProcessingState state);
-
-  // Called when an error occurs
-  void on_error(string message, string? suggestion);
-
-  // NEW: Called when AI response chunk arrives (for streaming display)
-  void on_response_chunk(string text);
-
-  // NEW: Called when typed error occurs with error type
-  void on_error_typed(ErrorType error_type, string message);
-
-  // NEW: Called when progress update is available
-  void on_progress(f32 percent);
-
-  // AI PROCESSING CALLBACKS (Phase 7 - Task 7.4)
-  // Called when AI processing starts with provider information
-  void on_ai_processing_started(string provider_name, string provider_color);
-
-  // Called when AI response is received with response preview
-  void on_ai_response_received(string response_preview);
-
-  // FALLBACK CALLBACK (Phase 10 - Task 10.2)
-  // Called when primary provider fails and fallback is attempted
-  void on_provider_fallback(string from_provider, string to_provider);
-
-  // CONFIG HOT-RELOAD CALLBACK (Phase 6 - Task 6.1)
-  // Called when config file changes externally
-  void on_config_changed();
-
-  // TYPEWRITER CALLBACKS (Phase 7.2 - Typewriter Output)
-  // Called during typewriter animation with progress percentage (0.0-1.0)
-  void on_typewriter_progress(f32 percent);
-
-  // Called when typewriter animation is cancelled (Escape key or new hotkey)
-  void on_typewriter_cancelled();
-
-  // PHANTOM FLOW CALLBACKS (add-phantom-flow-interaction)
-  // Called when clarification is needed from user
-  // This is a blocking call - implementation must return result
-  // Swift layer should show Halo clarification UI and wait for user response
-  // DEPRECATED: Use on_confirmation_needed for new confirmation flows
-  ClarificationResult on_clarification_needed(ClarificationRequest request);
-
-  // ASYNC CONFIRMATION CALLBACKS (async-confirmation-flow)
-  // Called when tool execution confirmation is needed from user
-  // This is a NON-BLOCKING call - Swift should show UI and call confirm_action() when user decides
-  // This replaces the blocking on_clarification_needed pattern for tool confirmations
-  void on_confirmation_needed(PendingConfirmationInfo confirmation);
-
-  // Called when a pending confirmation expires (timeout)
-  void on_confirmation_expired(string confirmation_id);
-
-  // MULTI-TURN CONVERSATION CALLBACKS (add-multi-turn-conversation)
-
-  // Called when a new conversation session starts
-  void on_conversation_started(string session_id);
-
-  // Called when a conversation turn is completed
-  void on_conversation_turn_completed(ConversationTurn turn);
-
-  // Called when the AI response is ready and continuation input can be shown
-  // The UI should display the Halo input box for user to continue the conversation
-  void on_conversation_continuation_ready();
-
-  // Called when a conversation session ends
-  void on_conversation_ended(string session_id, u32 total_turns);
-
-  // TOOL REGISTRY CALLBACKS (unify-tool-registry)
-  // Called when tool registry is refreshed (tools added/removed/changed)
-  void on_tools_changed(u32 tool_count);
-
-  // Called when tool registry needs to be refreshed (triggered by config hot-reload)
-  // Swift layer should call refresh_skills() or similar to trigger full refresh
-  void on_tools_refresh_needed();
-
-  // MCP STARTUP CALLBACKS (Phase 3.3 - mcp-startup-feedback)
-  // Called when MCP servers finish starting with success/failure information
-  // UI can use this to show notifications or update server status indicators
-  void on_mcp_startup_complete(McpStartupReportFFI report);
-
-  // AGENT LOOP CALLBACKS (enhance-intent-routing-pipeline)
-  // Called when agent loop starts executing a multi-step plan
-  void on_agent_started(string plan_id, u32 total_steps, string description);
-
-  // Called when agent starts executing a tool
-  void on_agent_tool_started(string plan_id, u32 step_index, string tool_name, string tool_description);
-
-  // Called when agent tool execution completes (success or failure)
-  void on_agent_tool_completed(string plan_id, u32 step_index, string tool_name, boolean success, string result_preview);
-
-  // Called when agent loop completes (success or failure)
-  void on_agent_completed(string plan_id, boolean success, u64 total_duration_ms, string final_response);
-};
+// Note: V1 AetherEventHandler callback interface has been removed.
+// Use AetherV2EventHandler for all event handling.
 
 // Callback interface for first-time initialization progress
 callback interface InitializationProgressHandler {
@@ -1215,6 +776,10 @@ interface AetherV2Core {
     [Throws=AetherV2Error]
     void update_search_config(SearchConfig search);
 
+    // Test search provider with ad-hoc config (V1 → V2 Migration)
+    [Throws=AetherV2Error]
+    ProviderTestResult test_search_provider_with_config(SearchProviderTestConfig config);
+
     [Throws=AetherV2Error]
     boolean validate_regex(string pattern);
 
@@ -1305,6 +870,36 @@ interface AetherV2Core {
 
     // TOOL REGISTRY (V1 → V2 Migration)
     sequence<UnifiedToolInfo> list_builtin_tools();
+
+    // MULTI-TURN CONVERSATION (V1 → V2 Migration)
+    // Generate a title for a conversation topic using AI
+    [Throws=AetherV2Error]
+    string generate_topic_title(string user_input, string ai_response);
+
+    // Get root commands from the tool registry for command completion
+    sequence<CommandNode> get_root_commands_from_registry();
+
+    // LOGGING (V1 → V2 Migration)
+    // Get current log level
+    LogLevel get_log_level();
+
+    // Set log level
+    [Throws=AetherV2Error]
+    void set_log_level(LogLevel level);
+
+    // Get log directory path
+    [Throws=AetherV2Error]
+    string get_log_directory();
+
+    // MEMORY SEARCH WITH FILTER (V1 → V2 Migration)
+    // Search memories with optional app/window filter
+    [Throws=AetherV2Error]
+    sequence<MemoryEntry> search_memories(string? app_bundle_id, string? window_title, u32 limit);
+
+    // VISION/OCR (V1 → V2 Migration)
+    // Extract text from image data using OCR
+    [Throws=AetherV2Error]
+    string extract_text(sequence<u8> image_data);
 };
 
 dictionary ProcessOptionsV2 {

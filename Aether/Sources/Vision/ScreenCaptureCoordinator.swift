@@ -400,11 +400,11 @@ final class ScreenCaptureCoordinator: ObservableObject {
         }
     }
 
-    /// Extract text from PNG image data using Rust vision service
+    /// Extract text from PNG image data using Rust vision service (V2)
     private func extractTextFromImage(pngData: Data) async throws -> String {
         debugLog("[OCR] extractTextFromImage START: dataSize=\(pngData.count) bytes")
 
-        // Get AetherCore instance from AppDelegate
+        // Get AetherV2Core instance from AppDelegate
         guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else {
             debugLog("[OCR] ERROR: AppDelegate not found")
             throw NSError(
@@ -414,22 +414,22 @@ final class ScreenCaptureCoordinator: ObservableObject {
             )
         }
 
-        guard let core = appDelegate.core else {
-            debugLog("[OCR] ERROR: AetherCore not initialized")
+        guard let coreV2 = appDelegate.coreV2 else {
+            debugLog("[OCR] ERROR: AetherV2Core not initialized")
             throw NSError(
                 domain: "ScreenCapture",
                 code: -2,
-                userInfo: [NSLocalizedDescriptionKey: "AetherCore not initialized"]
+                userInfo: [NSLocalizedDescriptionKey: "AetherV2Core not initialized"]
             )
         }
 
-        debugLog("[OCR] Calling core.extractText()...")
+        debugLog("[OCR] Calling coreV2.extractText()...")
         let startTime = CFAbsoluteTimeGetCurrent()
 
         do {
-            // Call Rust extract_text method
+            // Call Rust extract_text method (V2 is synchronous)
             let imageBytes = Array(pngData)
-            let result = try await core.extractText(imageData: imageBytes)
+            let result = try coreV2.extractText(imageData: imageBytes)
 
             let elapsed = CFAbsoluteTimeGetCurrent() - startTime
             debugLog("[OCR] SUCCESS: \(result.count) chars in \(String(format: "%.2f", elapsed))s")

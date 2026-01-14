@@ -21,15 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var statusItem: NSStatusItem? { menuBarManager?.statusItem }
     private var settingsMenuItem: NSMenuItem? { menuBarManager?.settingsMenuItem }
 
-    // Rust core instance (internal for access from AetherApp)
-    // Published to trigger UI updates when initialized
-    @Published internal var core: AetherCore?
-
-    // Event handler for Rust callbacks (internal for toast access)
-    internal var eventHandler: EventHandler?
-
-    // V2 interface (rig-core based)
-    // These will eventually replace core and eventHandler after full migration
+    // V2 interface (rig-core based) - unified AI processing interface
     @Published internal var coreV2: AetherV2Core?
     internal var eventHandlerV2: EventHandlerV2?
 
@@ -298,7 +290,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     @objc private func showAbout() {
-        eventHandler?.showToast(
+        eventHandlerV2?.showToast(
             type: .info,
             title: L("alert.about.title"),
             message: L("alert.about.message", "0.1.0 (Phase 2)"),
@@ -315,11 +307,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 return
             }
 
-            // CRITICAL: Check if core is initialized before opening settings
-            // V2 core is preferred; V1 core is still required for Settings UI during migration
-            guard coreV2 != nil || core != nil else {
-                print("[Aether] ERROR: Core not initialized, cannot open settings")
-                eventHandler?.showToast(
+            // CRITICAL: Check if V2 core is initialized before opening settings
+            guard coreV2 != nil else {
+                print("[Aether] ERROR: V2 Core not initialized, cannot open settings")
+                eventHandlerV2?.showToast(
                     type: .warning,
                     title: L("error.core_not_initialized"),
                     message: L("error.core_not_initialized.suggestion"),
@@ -353,7 +344,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
 
         // Create new settings window with RootContentView
-        let settingsView = RootContentView(core: core)
+        // RootContentView gets coreV2 from appDelegate internally
+        let settingsView = RootContentView()
             .environmentObject(self)
 
         let hostingController = NSHostingController(rootView: settingsView)
@@ -440,19 +432,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Rebuild the providers submenu with enabled providers
     private func rebuildProvidersMenu() {
-        // Prefer V2 core, fall back to V1 for backward compatibility
-        let enabledProviders: [String]
-        let defaultProvider: String?
-
-        if let coreV2 = coreV2 {
-            enabledProviders = coreV2.getEnabledProviders().sorted()
-            defaultProvider = coreV2.getDefaultProvider()
-        } else if let core = core {
-            enabledProviders = core.getEnabledProviders().sorted()
-            defaultProvider = core.getDefaultProvider()
-        } else {
+        guard let coreV2 = coreV2 else {
             return
         }
+
+        let enabledProviders = coreV2.getEnabledProviders().sorted()
+        let defaultProvider = coreV2.getDefaultProvider()
 
         // Map providers to (id, displayName) tuples
         let items = enabledProviders.map { ($0, $0) }
@@ -472,16 +457,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         print("[AppDelegate] User selected provider from menu: \(providerName)")
 
+        guard let coreV2 = coreV2 else {
+            print("[AppDelegate] ERROR: V2 Core not initialized")
+            return
+        }
+
         do {
-            // Prefer V2 core, fall back to V1
-            if let coreV2 = coreV2 {
-                try coreV2.setDefaultProvider(providerName: providerName)
-            } else if let core = core {
-                try core.setDefaultProvider(providerName: providerName)
-            } else {
-                print("[AppDelegate] ERROR: Core not initialized")
-                return
-            }
+            try coreV2.setDefaultProvider(providerName: providerName)
 
             print("[AppDelegate] ✅ Default provider set to: \(providerName)")
 
@@ -492,7 +474,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // (Could add a toast notification here in the future)
         } catch {
             print("[AppDelegate] ❌ Error setting default provider: \(error)")
-            eventHandler?.showToast(
+            eventHandlerV2?.showToast(
                 type: .warning,
                 title: "Failed to set default provider",
                 message: "Could not set '\(providerName)' as default provider.\n\nError: \(error.localizedDescription)",
@@ -501,34 +483,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
 
-    // MARK: - Rust Core Initialization
+    // MARK: - Core Initialization
 
-    private var coreInitRetryCount = 0
-    private let maxRetryAttempts = 3
-
+    /// Initialize the Rust core systems (triggers, hotkeys, vision)
+    /// This is called after V2 core is initialized
     private func initializeRustCore() {
-        guard let eventHandler = eventHandler else {
-            print("[Aether] Error: EventHandler not initialized")
-            return
-        }
-
         // Show Halo animation immediately on startup (better UX feedback)
-        // Only show on first attempt to avoid repeated animations during retries
-        if coreInitRetryCount == 0 {
-            haloWindow?.updateState(.processing(streamingText: nil))
-            haloWindow?.showCentered()
-            print("[Aether] Showing Halo startup animation")
-        }
+        haloWindow?.updateState(.processing(streamingText: nil))
+        haloWindow?.showCentered()
+        print("[Aether] Showing Halo startup animation")
 
-        // CRITICAL: Re-verify permissions before initializing Core
+        // CRITICAL: Re-verify permissions before initializing trigger system
         // This prevents crashes if permissions were revoked or not fully applied
         let hasAccessibility = PermissionChecker.hasAccessibilityPermission()
         let hasInputMonitoring = PermissionChecker.hasInputMonitoringPermission()
 
-        print("[Aether] Pre-Core init permission check - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
+        print("[Aether] Pre-trigger init permission check - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
 
         if !hasAccessibility || !hasInputMonitoring {
-            print("[Aether] ERROR: Permissions not fully granted, BLOCKING Core initialization")
+            print("[Aether] ERROR: Permissions not fully granted, BLOCKING trigger system initialization")
             print("[Aether] Missing permissions:")
             if !hasAccessibility {
                 print("[Aether]   - Accessibility: REQUIRED for global hotkey detection")
@@ -544,116 +517,47 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
-        do {
-            // Create AetherCore with event handler
-            // NOTE: Core no longer handles hotkey listening - that's now in Swift layer
-            core = try AetherCore(handler: eventHandler)
-            print("[Aether] AetherCore initialized successfully")
+        // Initialize the trigger-based hotkey system (GlobalHotkeyMonitor)
+        // This uses the two-callback architecture:
+        // - Replace hotkey (default: double-tap left Shift) → handleReplaceTriggered()
+        // - Append hotkey (default: double-tap right Shift) → handleAppendTriggered()
+        print("[Aether] Initializing trigger-based hotkey system...")
+        initializeTriggerSystem()
 
-            // Set core reference in event handler for retry functionality
-            eventHandler.setCore(core!)
+        // Initialize vision hotkey manager for screen capture OCR
+        // Hotkeys: Cmd+Option+O (Region selection capture + OCR)
+        NSLog("[Aether] Initializing VisionHotkeys...")
+        initializeVisionHotkeys()
+        NSLog("[Aether] VisionHotkeys initialized")
 
-            // IMPORTANT: Initialize the trigger-based hotkey system
-            // This uses the two-callback architecture:
-            // - Replace hotkey (default: double-tap left Shift) → handleReplaceTriggered()
-            // - Append hotkey (default: double-tap right Shift) → handleAppendTriggered()
-            print("[Aether] Initializing trigger-based hotkey system...")
-            initializeTriggerSystem()
-
-            // Initialize vision hotkey manager for screen capture OCR
-            // Hotkeys: Cmd+Option+O (Region selection capture + OCR)
-            NSLog("[Aether] Initializing VisionHotkeys...")
-            initializeVisionHotkeys()
-            NSLog("[Aether] VisionHotkeys initialized")
-
-            // Check if monitoring started successfully
-            guard hotkeyMonitor != nil else {
-                print("[Aether] ❌ Failed to initialize trigger system")
-                // Fall back to showing permission gate
-                DispatchQueue.mainAsync(weakRef: self) { slf in
-                    slf.showPermissionGate()
-                }
-                return
+        // Check if monitoring started successfully
+        guard hotkeyMonitor != nil else {
+            print("[Aether] ❌ Failed to initialize trigger system")
+            // Fall back to showing permission gate
+            DispatchQueue.mainAsync(weakRef: self) { slf in
+                slf.showPermissionGate()
             }
-
-            // Reset retry count on success
-            coreInitRetryCount = 0
-
-            // Configure coordinators with core reference
-            if let core = core {
-                // Configure output coordinator with core and halo window
-                outputCoordinator?.configure(core: core, haloWindow: haloWindow)
-                // Configure input coordinator with all dependencies
-                inputCoordinator?.configure(
-                    core: core,
-                    haloWindow: haloWindow,
-                    eventHandler: eventHandler,
-                    outputCoordinator: outputCoordinator
-                )
-            }
-            print("[Aether] All coordinators configured")
-
-            // Configure MultiTurnCoordinator with core
-            MultiTurnCoordinator.shared.configure(core: core!)
-            // Setup Cmd+Opt+/ hotkey to route to MultiTurnCoordinator
-            setupMultiTurnHotkey()
-            print("[Aether] MultiTurnCoordinator configured and hotkey installed")
-
-            // Hide startup Halo animation (initialization succeeded)
-            // Note: "No providers" error will be shown when user presses hotkey, not at startup
-            haloWindow?.hide()
-            print("[Aether] Hiding Halo startup animation (init succeeded)")
-
-            // Update menu bar icon to show active state
-            updateMenuBarIcon(state: .listening)
-
-            // Rebuild providers menu now that core is initialized
-            rebuildProvidersMenu()
-
-        } catch {
-            print("[Aether] ❌ Error initializing core: \(error)")
-
-            // Retry with exponential backoff for transient errors (permissions, library loading)
-            // Note: "No providers" case is handled separately after successful init
-            if coreInitRetryCount < maxRetryAttempts {
-                coreInitRetryCount += 1
-                let retryDelay = Double(coreInitRetryCount) * 2.0 // 2s, 4s, 6s
-
-                print("[Aether] Retrying initialization in \(retryDelay)s (attempt \(coreInitRetryCount)/\(maxRetryAttempts))")
-
-                DispatchQueue.mainAsyncAfter(delay: retryDelay, weakRef: self) { slf in
-                    slf.initializeRustCore()
-                }
-            } else {
-                // Max retries exceeded - show error
-                print("[Aether] Max retry attempts exceeded, giving up")
-
-                let errorMessage = "Failed to initialize Aether core.\n\nError: \(error)\n\nPlease check:\n1. Accessibility permissions are granted\n2. Input Monitoring permissions are granted\n3. libaethecore.dylib is properly bundled"
-
-                // Halo is already showing (from start of initializeRustCore)
-                // After 0.8s animation, show error toast
-                DispatchQueue.mainAsyncAfter(delay: 0.8, weakRef: self) { slf in
-                    // Try toast first, fallback to NSAlert if eventHandler not available
-                    if let handler = slf.eventHandler {
-                        handler.showToast(
-                            type: .error,
-                            title: L("error.aether"),
-                            message: errorMessage,
-                            autoDismiss: false
-                        )
-                    } else {
-                        // Fallback: eventHandler not available during early init failure
-                        showErrorAlert(title: L("error.aether"), message: errorMessage)
-                    }
-                }
-            }
+            return
         }
+
+        print("[Aether] Trigger system initialized successfully")
+
+        // Setup Cmd+Opt+/ hotkey to route to MultiTurnCoordinator
+        setupMultiTurnHotkey()
+        print("[Aether] MultiTurn hotkey installed")
+
+        // Hide startup Halo animation (initialization succeeded)
+        haloWindow?.hide()
+        print("[Aether] Hiding Halo startup animation (init succeeded)")
+
+        // Update menu bar icon to show active state
+        updateMenuBarIcon(state: .listening)
     }
 
     // MARK: - V2 Core Initialization (rig-core based)
 
     /// Initialize AetherV2Core using the rig-core based interface
-    /// This runs alongside v1 during migration and will eventually replace it
+    /// This is the unified AI processing core for all Aether functionality
     private func initializeRustCoreV2() {
         guard let eventHandlerV2 = eventHandlerV2 else {
             print("[Aether] Error: EventHandlerV2 not initialized")
@@ -678,17 +582,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // Set core reference in event handler for cancellation
             eventHandlerV2.setCore(coreV2!)
 
-            // Configure InputCoordinator with v2 dependencies
-            inputCoordinator?.configureV2(
+            // Configure OutputCoordinator with V2 dependencies
+            outputCoordinator?.configure(coreV2: coreV2, haloWindow: haloWindow)
+
+            // Configure InputCoordinator with V2 dependencies
+            inputCoordinator?.configure(
                 coreV2: coreV2,
-                eventHandlerV2: eventHandlerV2
+                haloWindow: haloWindow,
+                eventHandlerV2: eventHandlerV2,
+                outputCoordinator: outputCoordinator
             )
 
             // Set InputCoordinator reference in EventHandlerV2 for callbacks
             eventHandlerV2.setInputCoordinator(inputCoordinator)
 
-            // Configure MultiTurnCoordinator with v2 dependencies
-            MultiTurnCoordinator.shared.configureV2(coreV2: coreV2)
+            // Configure MultiTurnCoordinator with V2 dependencies
+            MultiTurnCoordinator.shared.configure(coreV2: coreV2)
 
             print("[Aether] V2 coordinators configured")
 
@@ -705,7 +614,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         } catch {
             print("[Aether] Error initializing V2 core: \(error)")
-            // V2 failure is non-fatal during migration - v1 continues to work
+            // V2 failure prevents app from functioning - show error to user
+            eventHandlerV2.onError(message: "Failed to initialize core: \(error.localizedDescription)")
         }
     }
 
@@ -954,9 +864,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Create Halo window directly (simplified, no controller wrapper needed)
         haloWindow = HaloWindow()
 
-        // Initialize event handler with halo window
-        eventHandler = EventHandler(haloWindow: haloWindow)
-
         // Initialize V2 event handler (rig-core based)
         eventHandlerV2 = EventHandlerV2(haloWindow: haloWindow)
 
@@ -971,11 +878,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         clipboardMonitor.startMonitoring()
         print("[Aether] Clipboard monitoring started for context tracking")
 
-        // Initialize Rust core (v1 interface)
-        initializeRustCore()
-
-        // Initialize V2 core (rig-core based) - runs alongside v1 during migration
+        // Initialize V2 core (rig-core based) - unified AI processing interface
         initializeRustCoreV2()
+
+        // Initialize trigger system and hotkeys (requires V2 core for config)
+        initializeRustCore()
 
         // Observe config changes to rebuild providers menu
         NotificationCenter.default.addObserver(
@@ -1063,17 +970,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Load multi-turn hotkey configuration from config
     private func loadMultiTurnHotkeyConfig() {
-        do {
-            // Prefer V2 core, fall back to V1
-            let config: FullConfig
-            if let coreV2 = coreV2 {
-                config = try coreV2.loadConfig()
-            } else if let core = core {
-                config = try core.loadConfig()
-            } else {
-                return
-            }
+        guard let coreV2 = coreV2 else {
+            return
+        }
 
+        do {
+            let config = try coreV2.loadConfig()
             if let shortcuts = config.shortcuts {
                 parseAndApplyMultiTurnHotkey(shortcuts.commandPrompt)
             }
@@ -1140,21 +1042,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     // MARK: - Trigger System Configuration
 
-    /// Load trigger configuration from Rust Core
+    /// Load trigger configuration from V2 Rust Core
     /// - Returns: TriggerConfig with mode, cut/copy hotkeys
     private func loadTriggerConfiguration() -> TriggerConfig {
-        do {
-            // Prefer V2 core, fall back to V1
-            let config: FullConfig
-            if let coreV2 = coreV2 {
-                config = try coreV2.loadConfig()
-            } else if let core = core {
-                config = try core.loadConfig()
-            } else {
-                print("[AppDelegate] Core not initialized, using default TriggerConfig")
-                return TriggerConfig.defaultConfig
-            }
+        guard let coreV2 = coreV2 else {
+            print("[AppDelegate] V2 Core not initialized, using default TriggerConfig")
+            return TriggerConfig.defaultConfig
+        }
 
+        do {
+            let config = try coreV2.loadConfig()
             if let trigger = config.trigger {
                 print("[AppDelegate] Loaded TriggerConfig: replace=\(trigger.replaceHotkey), append=\(trigger.appendHotkey)")
                 return trigger
@@ -1221,21 +1118,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func initializeVisionHotkeys() {
         visionHotkeyManager = VisionHotkeyManager()
 
-        // Load hotkey configuration from config
-        // Prefer V2 core, fall back to V1
-        let configCore: Any? = coreV2 ?? core
-        if configCore != nil {
+        // Load hotkey configuration from V2 core
+        if let coreV2 = coreV2 {
             Task {
                 do {
-                    let config: FullConfig
-                    if let coreV2 = coreV2 {
-                        config = try coreV2.loadConfig()
-                    } else if let core = core {
-                        config = try core.loadConfig()
-                    } else {
-                        return
-                    }
-
+                    let config = try coreV2.loadConfig()
                     if let shortcuts = config.shortcuts {
                         await MainActor.run {
                             visionHotkeyManager?.updateHotkey(from: shortcuts)

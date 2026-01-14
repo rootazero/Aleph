@@ -23,19 +23,13 @@ final class InputCoordinator {
 
     // MARK: - Dependencies
 
-    /// Reference to core for processing (v1 interface)
-    private weak var core: AetherCore?
-
-    /// Reference to v2 core for processing (rig-core based)
+    /// Reference to V2 core for processing (rig-core based)
     private weak var coreV2: AetherV2Core?
 
     /// Reference to Halo window for state updates
     private weak var haloWindow: HaloWindow?
 
-    /// Reference to event handler for error callbacks (v1)
-    private weak var eventHandler: EventHandler?
-
-    /// Reference to v2 event handler for callbacks
+    /// Reference to V2 event handler for callbacks
     private weak var eventHandlerV2: EventHandlerV2?
 
     /// Reference to output coordinator for response output
@@ -55,10 +49,7 @@ final class InputCoordinator {
     /// Whether permission gate is active (blocks input)
     var isPermissionGateActive: Bool = false
 
-    /// Whether to use v2 interface for processing
-    var useV2Interface: Bool = true  // Enable v2 for testing
-
-    /// Pending output context for v2 async callbacks
+    /// Pending output context for V2 async callbacks
     private var pendingV2OutputContext: OutputContext?
 
     /// Original clipboard text for v2 restoration on error
@@ -82,38 +73,23 @@ final class InputCoordinator {
     /// Configure dependencies after initialization
     ///
     /// - Parameters:
-    ///   - core: AetherCore instance (v1)
+    ///   - coreV2: AetherV2Core instance
     ///   - haloWindow: HaloWindow for state updates
-    ///   - eventHandler: EventHandler for error callbacks (v1)
+    ///   - eventHandlerV2: EventHandlerV2 for callbacks
     ///   - outputCoordinator: OutputCoordinator for response output
     func configure(
-        core: AetherCore,
+        coreV2: AetherV2Core?,
         haloWindow: HaloWindow?,
-        eventHandler: EventHandler?,
+        eventHandlerV2: EventHandlerV2?,
         outputCoordinator: OutputCoordinator? = nil
     ) {
-        self.core = core
-        self.haloWindow = haloWindow
-        self.eventHandler = eventHandler
-        self.outputCoordinator = outputCoordinator
-    }
-
-    /// Configure v2 dependencies (rig-core based)
-    ///
-    /// - Parameters:
-    ///   - coreV2: AetherV2Core instance
-    ///   - eventHandlerV2: EventHandlerV2 for callbacks
-    func configureV2(
-        coreV2: AetherV2Core?,
-        eventHandlerV2: EventHandlerV2?
-    ) {
         self.coreV2 = coreV2
+        self.haloWindow = haloWindow
         self.eventHandlerV2 = eventHandlerV2
+        self.outputCoordinator = outputCoordinator
 
-        // Auto-enable v2 if both are available
         if coreV2 != nil && eventHandlerV2 != nil {
             print("[InputCoordinator] V2 interface configured and enabled")
-            // Note: useV2Interface can be toggled externally for A/B testing
         }
     }
 
@@ -126,8 +102,8 @@ final class InputCoordinator {
         print("[InputCoordinator] 🔄 Replace triggered")
 
         // Block if permission gate is active or core not initialized
-        guard !isPermissionGateActive, core != nil else {
-            print("[InputCoordinator] ⚠️ Replace blocked - permission gate or core not ready")
+        guard !isPermissionGateActive, coreV2 != nil else {
+            print("[InputCoordinator] ⚠️ Replace blocked - permission gate or coreV2 not ready")
             NSSound.beep()
             return
         }
@@ -150,8 +126,8 @@ final class InputCoordinator {
         print("[InputCoordinator] ➕ Append triggered")
 
         // Block if permission gate is active or core not initialized
-        guard !isPermissionGateActive, core != nil else {
-            print("[InputCoordinator] ⚠️ Append blocked - permission gate or core not ready")
+        guard !isPermissionGateActive, coreV2 != nil else {
+            print("[InputCoordinator] ⚠️ Append blocked - permission gate or coreV2 not ready")
             NSSound.beep()
             return
         }
@@ -175,8 +151,8 @@ final class InputCoordinator {
     private func processWithInputMode(useCutMode: Bool) {
         print("[InputCoordinator] Processing with cut mode: \(useCutMode)")
 
-        guard core != nil else {
-            print("[InputCoordinator] ⚠️ Core not initialized")
+        guard coreV2 != nil else {
+            print("[InputCoordinator] ⚠️ CoreV2 not initialized")
             // Show error in Halo
             DispatchQueue.mainAsync(weakRef: self) { slf in
                 slf.haloWindow?.updateState(.error(
@@ -335,7 +311,7 @@ final class InputCoordinator {
             // Hide Halo and show error toast to user
             DispatchQueue.mainAsync(weakRef: self) { slf in
                 slf.haloWindow?.hide()
-                slf.eventHandler?.showToast(
+                slf.eventHandlerV2?.showToast(
                     type: .warning,
                     title: L("error.file_size"),
                     message: error,
@@ -441,51 +417,32 @@ final class InputCoordinator {
                     conversationSessionId: nil
                 )
 
-                // Choose processing interface: v2 (rig-core) or v1 (legacy)
-                if self.useV2Interface, let coreV2 = self.coreV2 {
-                    // V2 async processing - store context for callback
-                    print("[InputCoordinator] 🚀 Using V2 interface (rig-core)")
-
-                    DispatchQueue.main.async {
-                        self.pendingV2OutputContext = outputContext
-                        self.pendingV2OriginalClipboard = originalClipboardText
-                    }
-
-                    // Create v2 process options
-                    let options = ProcessOptionsV2(
-                        appContext: capturedContext.appBundleId,
-                        windowTitle: capturedContext.windowTitle,
-                        stream: true
-                    )
-
-                    // Call v2 async process - response comes via EventHandlerV2 callbacks
-                    try coreV2.process(input: userInput, options: options)
-                    print("[InputCoordinator] V2 process initiated, awaiting callbacks")
-
-                    // Note: Output will be triggered by handleV2Completion()
-                    // which is called from EventHandlerV2.onComplete()
-
-                } else {
-                    // V1 synchronous processing (legacy path)
-                    guard let core = self.core else {
-                        print("[InputCoordinator] ERROR: Core became nil during processing")
-                        return
-                    }
-
-                    let response = try core.processInput(
-                        userInput: userInput,
-                        context: capturedContext
-                    )
-
-                    print("[InputCoordinator] Received AI response (\(response.count) chars)")
-
-                    // Hide processing indicator
-                    self.hideProcessingIndicator()
-
-                    // Use unified output pipeline via OutputCoordinator
-                    self.outputCoordinator?.previousFrontmostApp = self.previousFrontmostApp
-                    self.outputCoordinator?.performOutput(response: response, context: outputContext)
+                // V2 async processing
+                guard let coreV2 = self.coreV2 else {
+                    print("[InputCoordinator] ERROR: CoreV2 became nil during processing")
+                    return
                 }
+
+                print("[InputCoordinator] 🚀 Using V2 interface (rig-core)")
+
+                DispatchQueue.main.async {
+                    self.pendingV2OutputContext = outputContext
+                    self.pendingV2OriginalClipboard = originalClipboardText
+                }
+
+                // Create V2 process options
+                let options = ProcessOptionsV2(
+                    appContext: capturedContext.appBundleId,
+                    windowTitle: capturedContext.windowTitle,
+                    stream: true
+                )
+
+                // Call V2 async process - response comes via EventHandlerV2 callbacks
+                try coreV2.process(input: userInput, options: options)
+                print("[InputCoordinator] V2 process initiated, awaiting callbacks")
+
+                // Note: Output will be triggered by handleV2Completion()
+                // which is called from EventHandlerV2.onComplete()
             } catch {
                 print("[InputCoordinator] ❌ Error processing input: \(error)")
 
@@ -514,10 +471,11 @@ final class InputCoordinator {
                     let suggestion = nsError.userInfo["suggestion"] as? String
 
                     DispatchQueue.mainAsync(weakRef: self) { slf in
-                        slf.eventHandler?.onError(
-                            message: errorMessage,
-                            suggestion: suggestion ?? L("error.check_connection")
-                        )
+                        // Combine error message and suggestion for V2 onError (single message parameter)
+                        let fullMessage = suggestion != nil
+                            ? "\(errorMessage)\n\(suggestion!)"
+                            : "\(errorMessage)\n\(L("error.check_connection"))"
+                        slf.eventHandlerV2?.onError(message: fullMessage)
                     }
                 }
             }

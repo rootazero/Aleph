@@ -180,13 +180,7 @@ final class DependencyContainer: ObservableObject {
 
     // MARK: - Core Services (initialized after permissions)
 
-    /// Rust core instance (V1 - deprecated, use coreV2)
-    private(set) var core: AetherCore?
-
-    /// Event handler for Rust callbacks (V1 - deprecated, use eventHandlerV2)
-    private(set) var eventHandler: EventHandler?
-
-    /// Rust core instance (V2 - rig-core based)
+    /// Rust core instance (V2 - rig-core based, unified interface)
     private(set) var coreV2: AetherV2Core?
 
     /// Event handler for Rust callbacks (V2)
@@ -269,19 +263,12 @@ final class DependencyContainer: ObservableObject {
         // Get config path
         let configPath = getConfigPath()
 
-        // === V2 Core Initialization (rig-core based) ===
+        // === V2 Core Initialization (rig-core based, unified interface) ===
         print("[DependencyContainer] Initializing V2 core...")
         eventHandlerV2 = EventHandlerV2(haloWindow: nil)
         coreV2 = try initV2(configPath: configPath, handler: eventHandlerV2!)
         eventHandlerV2?.setCore(coreV2!)
         print("[DependencyContainer] V2 core initialized successfully")
-
-        // === V1 Core Initialization (deprecated, kept for Settings UI compatibility) ===
-        print("[DependencyContainer] Initializing V1 core (deprecated)...")
-        eventHandler = EventHandler(haloWindow: nil)
-        core = try AetherCore(handler: eventHandler!)
-        eventHandler?.setCore(core!)
-        print("[DependencyContainer] V1 core initialized successfully")
 
         isCoreInitialized = true
         print("[DependencyContainer] Core services initialized successfully")
@@ -327,11 +314,6 @@ final class DependencyContainer: ObservableObject {
             eventHandlerV2.setHaloWindow(_haloWindow)
         }
 
-        // Connect V1 event handler to Halo window (deprecated)
-        if let eventHandler = eventHandler {
-            eventHandler.setHaloWindow(_haloWindow)
-        }
-
         // TODO: Create other coordinators as they are extracted from AppDelegate
         // _inputCoordinator = InputCoordinator(...)
         // _outputCoordinator = OutputCoordinator(...)
@@ -360,10 +342,6 @@ final class DependencyContainer: ObservableObject {
         coreV2 = nil
         eventHandlerV2 = nil
 
-        // Clear V1 core services (deprecated)
-        core = nil
-        eventHandler = nil
-
         isCoreInitialized = false
         areCoordinatorsInitialized = false
 
@@ -372,26 +350,10 @@ final class DependencyContainer: ObservableObject {
 
     // MARK: - Convenience Accessors
 
-    /// Get V1 core, throwing if not initialized (deprecated, use requireCoreV2)
-    func requireCore() throws -> AetherCore {
-        guard let core = core else {
-            throw DependencyError.coreNotInitialized
-        }
-        return core
-    }
-
-    /// Get V1 event handler, throwing if not initialized (deprecated, use requireEventHandlerV2)
-    func requireEventHandler() throws -> EventHandler {
-        guard let eventHandler = eventHandler else {
-            throw DependencyError.eventHandlerNotInitialized
-        }
-        return eventHandler
-    }
-
     /// Get V2 core, throwing if not initialized
     func requireCoreV2() throws -> AetherV2Core {
         guard let coreV2 = coreV2 else {
-            throw DependencyError.coreV2NotInitialized
+            throw DependencyError.coreNotInitialized
         }
         return coreV2
     }
@@ -399,7 +361,7 @@ final class DependencyContainer: ObservableObject {
     /// Get V2 event handler, throwing if not initialized
     func requireEventHandlerV2() throws -> EventHandlerV2 {
         guard let eventHandlerV2 = eventHandlerV2 else {
-            throw DependencyError.eventHandlerV2NotInitialized
+            throw DependencyError.eventHandlerNotInitialized
         }
         return eventHandlerV2
     }
@@ -413,20 +375,14 @@ final class DependencyContainer: ObservableObject {
 enum DependencyError: LocalizedError {
     case coreNotInitialized
     case eventHandlerNotInitialized
-    case coreV2NotInitialized
-    case eventHandlerV2NotInitialized
     case coordinatorNotInitialized(String)
     case notRegistered(String)
 
     var errorDescription: String? {
         switch self {
         case .coreNotInitialized:
-            return "AetherCore has not been initialized. Call initializeCoreServices() first."
-        case .eventHandlerNotInitialized:
-            return "EventHandler has not been initialized. Call initializeCoreServices() first."
-        case .coreV2NotInitialized:
             return "AetherV2Core has not been initialized. Call initializeCoreServices() first."
-        case .eventHandlerV2NotInitialized:
+        case .eventHandlerNotInitialized:
             return "EventHandlerV2 has not been initialized. Call initializeCoreServices() first."
         case .coordinatorNotInitialized(let name):
             return "\(name) has not been initialized. Call initializeCoordinators() first."

@@ -11,7 +11,7 @@ import SwiftUI
 // MARK: - Memory View
 
 struct MemoryView: View {
-    let core: AetherCore
+    let core: AetherV2Core
     @ObservedObject var saveBarState: SettingsSaveBarState
 
     @State private var memoryConfig: MemoryConfig
@@ -33,7 +33,7 @@ struct MemoryView: View {
     @State private var isCompressing = false
     @State private var lastCompressionResult: CompressionResult?
 
-    init(core: AetherCore, saveBarState: SettingsSaveBarState) {
+    init(core: AetherV2Core, saveBarState: SettingsSaveBarState) {
         self.core = core
         self._saveBarState = ObservedObject(wrappedValue: saveBarState)
         // Load initial config

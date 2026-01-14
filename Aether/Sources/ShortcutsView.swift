@@ -11,7 +11,7 @@ import AppKit
 
 struct ShortcutsView: View {
     // Dependencies
-    let core: AetherCore?
+    let core: AetherV2Core?
     @ObservedObject var saveBarState: SettingsSaveBarState
 
     // Trigger hotkeys (double-tap modifier keys)

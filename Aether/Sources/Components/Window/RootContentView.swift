@@ -19,10 +19,7 @@ import UniformTypeIdentifiers
 struct RootContentView: View {
     // MARK: - Dependencies
 
-    /// V1 core (deprecated, use coreV2)
-    let core: AetherCore?
-
-    /// V2 core (rig-core based) - preferred for config operations
+    /// V2 core (rig-core based) - used for all config operations
     var coreV2: AetherV2Core? {
         appDelegate.coreV2
     }
@@ -48,8 +45,8 @@ struct RootContentView: View {
 
     // MARK: - Initialization
 
-    init(core: AetherCore? = nil) {
-        self.core = core
+    init() {
+        // V2 core is accessed via computed property from appDelegate
     }
 
     // MARK: - Body
@@ -102,8 +99,8 @@ struct RootContentView: View {
                 saveBarState.reset()
             }
         }
-        .onChange(of: appDelegate.core != nil || appDelegate.coreV2 != nil) { _, isInitialized in
-            // Reload providers when core is initialized
+        .onChange(of: appDelegate.coreV2 != nil) { _, isInitialized in
+            // Reload providers when V2 core is initialized
             if isInitialized {
                 loadProviders()
             }
@@ -231,67 +228,66 @@ struct RootContentView: View {
     private var tabContent: some View {
         switch selectedTab {
         case .general:
-            GeneralSettingsView(core: appDelegate.core, saveBarState: saveBarState)
+            GeneralSettingsView(core: coreV2, saveBarState: saveBarState)
 
         case .providers:
-            // V1 core still required for Settings views during migration
-            // TODO: Update ProvidersView to use coreV2 in Phase 4
-            if let core = appDelegate.core {
-                ProvidersView(core: core, saveBarState: saveBarState)
+            // V2 core used for provider management
+            if let coreV2 = coreV2 {
+                ProvidersView(core: coreV2, saveBarState: saveBarState)
                     .id(configReloadTrigger)
             } else {
-                placeholderView("Provider management requires AetherCore initialization")
+                placeholderView("Provider management requires AetherV2Core initialization")
             }
 
         case .routing:
-            // V1 core still required for Settings views during migration
-            if let core = appDelegate.core {
-                RoutingView(core: core, providers: providers, saveBarState: saveBarState)
+            // V2 core used for routing management
+            if let coreV2 = coreV2 {
+                RoutingView(core: coreV2, providers: providers, saveBarState: saveBarState)
                     .id(configReloadTrigger)
             } else {
-                placeholderView("Routing management requires AetherCore initialization")
+                placeholderView("Routing management requires AetherV2Core initialization")
             }
 
         case .shortcuts:
-            ShortcutsView(core: appDelegate.core, saveBarState: saveBarState)
+            ShortcutsView(core: coreV2, saveBarState: saveBarState)
 
         case .behavior:
-            BehaviorSettingsView(core: appDelegate.core, saveBarState: saveBarState)
+            BehaviorSettingsView(core: coreV2, saveBarState: saveBarState)
                 .id(configReloadTrigger)
 
         case .memory:
-            // V1 core still required for Settings views during migration
-            if let core = appDelegate.core {
-                MemoryView(core: core, saveBarState: saveBarState)
+            // V2 core used for memory management
+            if let coreV2 = coreV2 {
+                MemoryView(core: coreV2, saveBarState: saveBarState)
             } else {
-                placeholderView("Memory management requires AetherCore initialization")
+                placeholderView("Memory management requires AetherV2Core initialization")
             }
 
         case .search:
-            // V1 core still required for Settings views during migration
-            if let core = appDelegate.core {
-                SearchSettingsView(core: core, saveBarState: saveBarState)
+            // V2 core used for search settings
+            if let coreV2 = coreV2 {
+                SearchSettingsView(core: coreV2, saveBarState: saveBarState)
                     .id(configReloadTrigger)
             } else {
-                placeholderView("Search settings requires AetherCore initialization")
+                placeholderView("Search settings requires AetherV2Core initialization")
             }
 
         case .mcp:
-            // V1 core still required for Settings views during migration
-            if let core = appDelegate.core {
-                McpSettingsView(core: core, saveBarState: saveBarState)
+            // V2 core used for MCP settings
+            if let coreV2 = coreV2 {
+                McpSettingsView(core: coreV2, saveBarState: saveBarState)
                     .id(configReloadTrigger)
             } else {
-                placeholderView("MCP settings requires AetherCore initialization")
+                placeholderView("MCP settings requires AetherV2Core initialization")
             }
 
         case .skills:
-            // V1 core still required for Settings views during migration
-            if let core = appDelegate.core {
-                SkillsSettingsView(core: core, saveBarState: saveBarState)
+            // V2 core used for skills management
+            if let coreV2 = coreV2 {
+                SkillsSettingsView(core: coreV2, saveBarState: saveBarState)
                     .id(configReloadTrigger)
             } else {
-                placeholderView("Skills management requires AetherCore initialization")
+                placeholderView("Skills management requires AetherV2Core initialization")
             }
         }
     }
@@ -317,23 +313,14 @@ struct RootContentView: View {
 
     /// Load providers from config
     private func loadProviders() {
-        // Prefer V2 core, fall back to V1
-        guard coreV2 != nil || appDelegate.core != nil else {
-            print("[RootContentView] Core not initialized yet, skipping provider load")
+        guard let coreV2 = coreV2 else {
+            print("[RootContentView] V2 Core not initialized yet, skipping provider load")
             return
         }
 
         Task {
             do {
-                let config: FullConfig
-                if let coreV2 = coreV2 {
-                    config = try coreV2.loadConfig()
-                } else if let core = appDelegate.core {
-                    config = try core.loadConfig()
-                } else {
-                    return
-                }
-
+                let config = try coreV2.loadConfig()
                 await MainActor.run {
                     providers = config.providers
                 }
@@ -376,9 +363,9 @@ struct RootContentView: View {
 
         Task {
             do {
-                guard coreV2 != nil || appDelegate.core != nil else {
+                guard let coreV2 = coreV2 else {
                     await MainActor.run {
-                        showAlert(title: "Error", message: "AetherCore not initialized")
+                        showAlert(title: "Error", message: "AetherV2Core not initialized")
                     }
                     return
                 }
@@ -395,12 +382,8 @@ struct RootContentView: View {
                 let configPath = configDir.appendingPathComponent("config.toml")
                 try content.write(to: configPath, atomically: true, encoding: .utf8)
 
-                // Reload config - prefer V2
-                if let coreV2 = coreV2 {
-                    _ = try coreV2.loadConfig()
-                } else if let core = appDelegate.core {
-                    _ = try core.loadConfig()
-                }
+                // Reload config
+                _ = try coreV2.loadConfig()
 
                 await MainActor.run {
                     handleExternalConfigChange()
@@ -478,9 +461,9 @@ struct RootContentView: View {
             guard confirmed else { return }
 
             do {
-                guard coreV2 != nil || appDelegate.core != nil else {
+                guard let coreV2 = coreV2 else {
                     await MainActor.run {
-                        showAlert(title: "Error", message: "AetherCore not initialized")
+                        showAlert(title: "Error", message: "AetherV2Core not initialized")
                     }
                     return
                 }
@@ -494,12 +477,8 @@ struct RootContentView: View {
                 // Delete current config file
                 try? FileManager.default.removeItem(at: configPath)
 
-                // Reload config (will create default) - prefer V2
-                if let coreV2 = coreV2 {
-                    _ = try coreV2.loadConfig()
-                } else if let core = appDelegate.core {
-                    _ = try core.loadConfig()
-                }
+                // Reload config (will create default)
+                _ = try coreV2.loadConfig()
 
                 await MainActor.run {
                     handleExternalConfigChange()

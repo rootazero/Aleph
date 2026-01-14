@@ -176,6 +176,7 @@ impl From<MemoryEntry> for MemoryItemV2 {
 ///
 /// This wrapper allows us to store the path without the actual MemoryStore,
 /// enabling on-demand creation for each operation.
+#[derive(Clone)]
 struct MemoryStorePath {
     path: String,
 }
@@ -585,6 +586,129 @@ impl AetherV2Core {
         config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
         info!("Search configuration updated");
         Ok(())
+    }
+
+    /// Test search provider with ad-hoc configuration (V1 → V2 Migration)
+    ///
+    /// Tests a search provider without requiring saved configuration.
+    /// Used by Settings UI to validate credentials before saving.
+    pub fn test_search_provider_with_config(
+        &self,
+        config: crate::search::SearchProviderTestConfig,
+    ) -> Result<crate::search::ProviderTestResult, AetherV2Error> {
+        use crate::search::providers::*;
+        use crate::search::{ProviderTestResult, SearchOptions, SearchProvider};
+        use std::time::Instant;
+
+        // Helper: Create config error result
+        fn config_error(msg: &str) -> ProviderTestResult {
+            ProviderTestResult {
+                success: false,
+                latency_ms: 0,
+                error_message: msg.to_string(),
+                error_type: "config".to_string(),
+            }
+        }
+
+        // Helper: Extract non-empty string from Option, or return None
+        fn get_non_empty(opt: &Option<String>) -> Option<String> {
+            opt.as_ref().filter(|s| !s.is_empty()).cloned()
+        }
+
+        // Helper macro to reduce boilerplate for provider creation
+        macro_rules! create_provider {
+            ($provider:ident, $name:expr, $key:expr) => {
+                match get_non_empty($key) {
+                    Some(key) => match $provider::new(key) {
+                        Ok(p) => Box::new(p) as Box<dyn SearchProvider>,
+                        Err(e) => {
+                            return Ok(config_error(&format!(
+                                "Failed to create {} provider: {}",
+                                $name, e
+                            )))
+                        }
+                    },
+                    None => return Ok(config_error(&format!("{} requires an API key", $name))),
+                }
+            };
+        }
+
+        // Create temporary provider based on type
+        let provider: Box<dyn SearchProvider> = match config.provider_type.as_str() {
+            "tavily" => create_provider!(TavilyProvider, "Tavily", &config.api_key),
+            "brave" => create_provider!(BraveProvider, "Brave", &config.api_key),
+            "bing" => create_provider!(BingProvider, "Bing", &config.api_key),
+            "exa" => create_provider!(ExaProvider, "Exa", &config.api_key),
+            "searxng" => match get_non_empty(&config.base_url) {
+                Some(base_url) => match SearxngProvider::new(base_url) {
+                    Ok(p) => Box::new(p) as Box<dyn SearchProvider>,
+                    Err(e) => {
+                        return Ok(config_error(&format!(
+                            "Failed to create SearXNG provider: {}",
+                            e
+                        )))
+                    }
+                },
+                None => return Ok(config_error("SearXNG requires a base URL")),
+            },
+            "google" => {
+                let api_key = match get_non_empty(&config.api_key) {
+                    Some(k) => k,
+                    None => return Ok(config_error("Google CSE requires an API key")),
+                };
+                let engine_id = match get_non_empty(&config.engine_id) {
+                    Some(id) => id,
+                    None => return Ok(config_error("Google CSE requires an engine ID")),
+                };
+                match GoogleProvider::new(api_key, engine_id) {
+                    Ok(p) => Box::new(p) as Box<dyn SearchProvider>,
+                    Err(e) => {
+                        return Ok(config_error(&format!(
+                            "Failed to create Google provider: {}",
+                            e
+                        )))
+                    }
+                }
+            }
+            unknown => return Ok(config_error(&format!("Unknown provider type: {}", unknown))),
+        };
+
+        // Execute test search
+        let test_options = SearchOptions {
+            max_results: 1,
+            timeout_seconds: 5,
+            ..Default::default()
+        };
+
+        let start = Instant::now();
+        match self.runtime.block_on(provider.search("test", &test_options)) {
+            Ok(_) => {
+                let latency = start.elapsed().as_millis() as u32;
+                Ok(ProviderTestResult {
+                    success: true,
+                    latency_ms: latency,
+                    error_message: String::new(),
+                    error_type: String::new(),
+                })
+            }
+            Err(e) => {
+                let latency = start.elapsed().as_millis() as u32;
+                let error_str = e.to_string();
+                let error_type = if error_str.contains("auth") || error_str.contains("401") || error_str.contains("403") {
+                    "auth"
+                } else if error_str.contains("network") || error_str.contains("timeout") || error_str.contains("connection") {
+                    "network"
+                } else {
+                    "config"
+                };
+                Ok(ProviderTestResult {
+                    success: false,
+                    latency_ms: latency,
+                    error_message: error_str,
+                    error_type: error_type.to_string(),
+                })
+            }
+        }
     }
 
     /// Validate regex pattern
@@ -1239,6 +1363,218 @@ impl AetherV2Core {
                 has_subtools: false,
             },
         ]
+    }
+
+    // ========================================================================
+    // MULTI-TURN CONVERSATION METHODS (V1 → V2 Migration)
+    // ========================================================================
+
+    /// Generate a title for a conversation topic using AI
+    ///
+    /// Uses the default provider to generate a concise title from the first
+    /// user-AI exchange in a conversation.
+    pub fn generate_topic_title(
+        &self,
+        user_input: String,
+        ai_response: String,
+    ) -> Result<String, AetherV2Error> {
+        use crate::title_generator;
+
+        info!(
+            user_input_len = user_input.len(),
+            ai_response_len = ai_response.len(),
+            "Generating topic title (V2)"
+        );
+
+        // Build the title prompt
+        let prompt = title_generator::build_title_prompt(&user_input, &ai_response);
+
+        // Get full config to find default provider and its config
+        let full_cfg = self.full_config.lock().unwrap();
+        let default_provider_name = full_cfg.general.default_provider.clone();
+
+        // Try to get the provider
+        let provider = match &default_provider_name {
+            Some(name) => {
+                // Find the provider config
+                let provider_config = full_cfg.providers.get(name);
+                match provider_config {
+                    Some(cfg) => {
+                        match crate::providers::create_provider(name, cfg.clone()) {
+                            Ok(p) => Some(p),
+                            Err(e) => {
+                                info!(error = %e, "Failed to create provider for title generation");
+                                None
+                            }
+                        }
+                    }
+                    None => {
+                        info!(provider = %name, "Default provider not found in config");
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+
+        // Release the lock before making the async call
+        drop(full_cfg);
+
+        match provider {
+            Some(p) => {
+                // Execute AI call using the runtime
+                let result: Result<String, crate::error::AetherError> =
+                    self.runtime.block_on(async move { p.process(&prompt, None).await });
+
+                match result {
+                    Ok(title) => {
+                        let cleaned = title_generator::clean_title(&title);
+                        info!(title = %cleaned, "Topic title generated");
+                        Ok(cleaned)
+                    }
+                    Err(e) => {
+                        let default = title_generator::default_title(&user_input);
+                        info!(error = %e, default_title = %default, "AI title failed, using default");
+                        Ok(default)
+                    }
+                }
+            }
+            None => {
+                let default = title_generator::default_title(&user_input);
+                info!(default_title = %default, "No provider available, using default title");
+                Ok(default)
+            }
+        }
+    }
+
+    /// Get root commands from the tool registry for command completion
+    ///
+    /// Returns all root-level commands as CommandNode for UI display.
+    pub fn get_root_commands_from_registry(&self) -> Vec<crate::command::CommandNode> {
+        // Convert builtin tools to CommandNode format
+        self.list_builtin_tools()
+            .iter()
+            .map(|tool| crate::command::CommandNode {
+                key: tool.name.clone(),
+                description: tool.description.clone(),
+                icon: tool.icon.clone().unwrap_or_else(|| "command".to_string()),
+                hint: tool.usage.clone(),
+                node_type: crate::command::CommandType::Action,
+                has_children: tool.has_subtools,
+                source_id: tool.source_id.clone(),
+                source_type: tool.source_type.clone(),
+            })
+            .collect()
+    }
+
+    // ========================================================================
+    // LOGGING METHODS (V1 → V2 Migration)
+    // ========================================================================
+
+    /// Get current log level
+    pub fn get_log_level(&self) -> crate::logging::LogLevel {
+        crate::logging::get_log_level()
+    }
+
+    /// Set log level
+    pub fn set_log_level(&self, level: crate::logging::LogLevel) -> Result<(), AetherV2Error> {
+        crate::logging::set_log_level(level);
+        info!(level = ?level, "Log level set (V2)");
+        Ok(())
+    }
+
+    /// Get log directory path
+    pub fn get_log_directory(&self) -> Result<String, AetherV2Error> {
+        crate::logging::get_log_directory()
+            .map(|p| p.to_string_lossy().to_string())
+            .map_err(|e| AetherV2Error::Config(e.to_string()))
+    }
+
+    // ========================================================================
+    // MEMORY SEARCH WITH FILTER (V1 → V2 Migration)
+    // ========================================================================
+
+    /// Search memories with optional app/window filter
+    ///
+    /// This method provides the same interface as V1's search_memories for
+    /// backward compatibility with Settings UI.
+    ///
+    /// Returns recent memories filtered by app_bundle_id and window_title.
+    pub fn search_memories(
+        &self,
+        app_bundle_id: Option<String>,
+        window_title: Option<String>,
+        limit: u32,
+    ) -> Result<Vec<crate::core::types::MemoryEntryFFI>, AetherV2Error> {
+        use crate::core::types::MemoryEntryFFI;
+        use crate::memory::VectorDatabase;
+
+        // Get memory config from full_config
+        let config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
+        if !config.memory.enabled {
+            return Err(AetherV2Error::Memory("Memory is disabled".to_string()));
+        }
+
+        // Get memory database path
+        let db_path = crate::core::AetherCore::get_memory_db_path()
+            .map_err(|e| AetherV2Error::Memory(format!("Failed to get memory path: {}", e)))?;
+        drop(config); // Release lock before async
+
+        // Use default values for empty filters
+        let app_filter = app_bundle_id.unwrap_or_default();
+        let window_filter = window_title.unwrap_or_default();
+
+        // Open VectorDatabase (sync operation)
+        let db = VectorDatabase::new(db_path)
+            .map_err(|e| AetherV2Error::Memory(format!("Failed to open database: {}", e)))?;
+
+        // Query memories using VectorDatabase (async operation)
+        // Search with empty embedding returns recent memories filtered by context
+        let result = self.runtime.block_on(async {
+            db.search_memories(&app_filter, &window_filter, &[], limit)
+                .await
+                .map_err(|e| AetherV2Error::Memory(e.to_string()))
+        })?;
+
+        // Convert to FFI type
+        Ok(result
+            .into_iter()
+            .map(|m| MemoryEntryFFI {
+                id: m.id,
+                app_bundle_id: m.context.app_bundle_id,
+                window_title: m.context.window_title,
+                user_input: m.user_input,
+                ai_output: m.ai_output,
+                timestamp: m.context.timestamp,
+                similarity_score: m.similarity_score,
+            })
+            .collect())
+    }
+
+    // ========================================================================
+    // VISION/OCR METHODS (V1 → V2 Migration)
+    // ========================================================================
+
+    /// Extract text from image data using OCR
+    ///
+    /// Uses the configured default AI provider to perform OCR on the image.
+    pub fn extract_text(&self, image_data: Vec<u8>) -> Result<String, AetherV2Error> {
+        use crate::vision::VisionService;
+
+        info!(data_size = image_data.len(), "Extracting text from image (V2)");
+
+        // Get config for vision service
+        let config = self.full_config.lock().unwrap_or_else(|e| e.into_inner()).clone();
+
+        // Create vision service and extract text
+        let vision_service = VisionService::with_defaults();
+
+        self.runtime.block_on(async {
+            vision_service
+                .extract_text(image_data, &config)
+                .await
+                .map_err(|e| AetherV2Error::Config(format!("OCR failed: {}", e)))
+        })
     }
 }
 
