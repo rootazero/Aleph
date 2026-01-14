@@ -180,11 +180,17 @@ final class DependencyContainer: ObservableObject {
 
     // MARK: - Core Services (initialized after permissions)
 
-    /// Rust core instance
+    /// Rust core instance (V1 - deprecated, use coreV2)
     private(set) var core: AetherCore?
 
-    /// Event handler for Rust callbacks
+    /// Event handler for Rust callbacks (V1 - deprecated, use eventHandlerV2)
     private(set) var eventHandler: EventHandler?
+
+    /// Rust core instance (V2 - rig-core based)
+    private(set) var coreV2: AetherV2Core?
+
+    /// Event handler for Rust callbacks (V2)
+    private(set) var eventHandlerV2: EventHandlerV2?
 
     // Theme engine removed - using unified visual style
 
@@ -260,17 +266,40 @@ final class DependencyContainer: ObservableObject {
 
         // Theme engine removed - using unified visual style
 
-        // Create event handler (haloWindow set later via setHaloWindow)
+        // Get config path
+        let configPath = getConfigPath()
+
+        // === V2 Core Initialization (rig-core based) ===
+        print("[DependencyContainer] Initializing V2 core...")
+        eventHandlerV2 = EventHandlerV2(haloWindow: nil)
+        coreV2 = try initV2(configPath: configPath, handler: eventHandlerV2!)
+        eventHandlerV2?.setCore(coreV2!)
+        print("[DependencyContainer] V2 core initialized successfully")
+
+        // === V1 Core Initialization (deprecated, kept for Settings UI compatibility) ===
+        print("[DependencyContainer] Initializing V1 core (deprecated)...")
         eventHandler = EventHandler(haloWindow: nil)
-
-        // Create Rust core with event handler
         core = try AetherCore(handler: eventHandler!)
-
-        // Wire up bidirectional references
         eventHandler?.setCore(core!)
+        print("[DependencyContainer] V1 core initialized successfully")
 
         isCoreInitialized = true
         print("[DependencyContainer] Core services initialized successfully")
+    }
+
+    /// Get the path to the configuration file
+    private func getConfigPath() -> String {
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let configDir = homeDir.appendingPathComponent(".config/aether")
+
+        // Create config directory if it doesn't exist
+        try? FileManager.default.createDirectory(
+            at: configDir,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+
+        return configDir.appendingPathComponent("config.toml").path
     }
 
     /// Initialize all coordinators after core services are ready
@@ -293,7 +322,12 @@ final class DependencyContainer: ObservableObject {
         // Create HaloWindow directly (no controller wrapper needed)
         _haloWindow = HaloWindow()
 
-        // Connect event handler to Halo window
+        // Connect V2 event handler to Halo window
+        if let eventHandlerV2 = eventHandlerV2 {
+            eventHandlerV2.setHaloWindow(_haloWindow)
+        }
+
+        // Connect V1 event handler to Halo window (deprecated)
         if let eventHandler = eventHandler {
             eventHandler.setHaloWindow(_haloWindow)
         }
@@ -322,7 +356,11 @@ final class DependencyContainer: ObservableObject {
         _inputCoordinator = nil
         _haloWindow = nil
 
-        // Clear core services
+        // Clear V2 core services
+        coreV2 = nil
+        eventHandlerV2 = nil
+
+        // Clear V1 core services (deprecated)
         core = nil
         eventHandler = nil
 
@@ -334,7 +372,7 @@ final class DependencyContainer: ObservableObject {
 
     // MARK: - Convenience Accessors
 
-    /// Get core, throwing if not initialized
+    /// Get V1 core, throwing if not initialized (deprecated, use requireCoreV2)
     func requireCore() throws -> AetherCore {
         guard let core = core else {
             throw DependencyError.coreNotInitialized
@@ -342,12 +380,28 @@ final class DependencyContainer: ObservableObject {
         return core
     }
 
-    /// Get event handler, throwing if not initialized
+    /// Get V1 event handler, throwing if not initialized (deprecated, use requireEventHandlerV2)
     func requireEventHandler() throws -> EventHandler {
         guard let eventHandler = eventHandler else {
             throw DependencyError.eventHandlerNotInitialized
         }
         return eventHandler
+    }
+
+    /// Get V2 core, throwing if not initialized
+    func requireCoreV2() throws -> AetherV2Core {
+        guard let coreV2 = coreV2 else {
+            throw DependencyError.coreV2NotInitialized
+        }
+        return coreV2
+    }
+
+    /// Get V2 event handler, throwing if not initialized
+    func requireEventHandlerV2() throws -> EventHandlerV2 {
+        guard let eventHandlerV2 = eventHandlerV2 else {
+            throw DependencyError.eventHandlerV2NotInitialized
+        }
+        return eventHandlerV2
     }
 
     // Theme engine removed - using unified visual style
@@ -359,6 +413,8 @@ final class DependencyContainer: ObservableObject {
 enum DependencyError: LocalizedError {
     case coreNotInitialized
     case eventHandlerNotInitialized
+    case coreV2NotInitialized
+    case eventHandlerV2NotInitialized
     case coordinatorNotInitialized(String)
     case notRegistered(String)
 
@@ -368,6 +424,10 @@ enum DependencyError: LocalizedError {
             return "AetherCore has not been initialized. Call initializeCoreServices() first."
         case .eventHandlerNotInitialized:
             return "EventHandler has not been initialized. Call initializeCoreServices() first."
+        case .coreV2NotInitialized:
+            return "AetherV2Core has not been initialized. Call initializeCoreServices() first."
+        case .eventHandlerV2NotInitialized:
+            return "EventHandlerV2 has not been initialized. Call initializeCoreServices() first."
         case .coordinatorNotInitialized(let name):
             return "\(name) has not been initialized. Call initializeCoordinators() first."
         case .notRegistered(let typeName):

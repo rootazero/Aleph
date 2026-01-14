@@ -316,7 +316,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
 
             // CRITICAL: Check if core is initialized before opening settings
-            guard core != nil else {
+            // V2 core is preferred; V1 core is still required for Settings UI during migration
+            guard coreV2 != nil || core != nil else {
                 print("[Aether] ERROR: Core not initialized, cannot open settings")
                 eventHandler?.showToast(
                     type: .warning,
@@ -439,11 +440,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Rebuild the providers submenu with enabled providers
     private func rebuildProvidersMenu() {
-        guard let core = core else { return }
+        // Prefer V2 core, fall back to V1 for backward compatibility
+        let enabledProviders: [String]
+        let defaultProvider: String?
 
-        // Get enabled providers and current default
-        let enabledProviders = core.getEnabledProviders().sorted()
-        let defaultProvider = core.getDefaultProvider()
+        if let coreV2 = coreV2 {
+            enabledProviders = coreV2.getEnabledProviders().sorted()
+            defaultProvider = coreV2.getDefaultProvider()
+        } else if let core = core {
+            enabledProviders = core.getEnabledProviders().sorted()
+            defaultProvider = core.getDefaultProvider()
+        } else {
+            return
+        }
 
         // Map providers to (id, displayName) tuples
         let items = enabledProviders.map { ($0, $0) }
@@ -463,13 +472,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         print("[AppDelegate] User selected provider from menu: \(providerName)")
 
-        guard let core = core else {
-            print("[AppDelegate] ERROR: Core not initialized")
-            return
-        }
-
         do {
-            try core.setDefaultProvider(providerName: providerName)
+            // Prefer V2 core, fall back to V1
+            if let coreV2 = coreV2 {
+                try coreV2.setDefaultProvider(providerName: providerName)
+            } else if let core = core {
+                try core.setDefaultProvider(providerName: providerName)
+            } else {
+                print("[AppDelegate] ERROR: Core not initialized")
+                return
+            }
+
             print("[AppDelegate] ✅ Default provider set to: \(providerName)")
 
             // Rebuild menu to update checkmark
@@ -1050,10 +1063,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Load multi-turn hotkey configuration from config
     private func loadMultiTurnHotkeyConfig() {
-        guard let core = core else { return }
-
         do {
-            let config = try core.loadConfig()
+            // Prefer V2 core, fall back to V1
+            let config: FullConfig
+            if let coreV2 = coreV2 {
+                config = try coreV2.loadConfig()
+            } else if let core = core {
+                config = try core.loadConfig()
+            } else {
+                return
+            }
+
             if let shortcuts = config.shortcuts {
                 parseAndApplyMultiTurnHotkey(shortcuts.commandPrompt)
             }
@@ -1123,13 +1143,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// Load trigger configuration from Rust Core
     /// - Returns: TriggerConfig with mode, cut/copy hotkeys
     private func loadTriggerConfiguration() -> TriggerConfig {
-        guard let core = core else {
-            print("[AppDelegate] Core not initialized, using default TriggerConfig")
-            return TriggerConfig.defaultConfig
-        }
-
         do {
-            let config = try core.loadConfig()
+            // Prefer V2 core, fall back to V1
+            let config: FullConfig
+            if let coreV2 = coreV2 {
+                config = try coreV2.loadConfig()
+            } else if let core = core {
+                config = try core.loadConfig()
+            } else {
+                print("[AppDelegate] Core not initialized, using default TriggerConfig")
+                return TriggerConfig.defaultConfig
+            }
+
             if let trigger = config.trigger {
                 print("[AppDelegate] Loaded TriggerConfig: replace=\(trigger.replaceHotkey), append=\(trigger.appendHotkey)")
                 return trigger
@@ -1197,10 +1222,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         visionHotkeyManager = VisionHotkeyManager()
 
         // Load hotkey configuration from config
-        if let core = core {
+        // Prefer V2 core, fall back to V1
+        let configCore: Any? = coreV2 ?? core
+        if configCore != nil {
             Task {
                 do {
-                    let config = try core.loadConfig()
+                    let config: FullConfig
+                    if let coreV2 = coreV2 {
+                        config = try coreV2.loadConfig()
+                    } else if let core = core {
+                        config = try core.loadConfig()
+                    } else {
+                        return
+                    }
+
                     if let shortcuts = config.shortcuts {
                         await MainActor.run {
                             visionHotkeyManager?.updateHotkey(from: shortcuts)
