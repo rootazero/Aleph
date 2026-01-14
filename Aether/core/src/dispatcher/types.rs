@@ -5,8 +5,67 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::routing::ToolSafetyLevel;
 use crate::tools::{ToolCategory, ToolDefinition};
+
+// =============================================================================
+// Tool Safety Level (moved from routing module)
+// =============================================================================
+
+/// Tool safety level for confirmation and rollback behavior
+///
+/// Determines whether user confirmation is required before execution
+/// and whether the operation can be rolled back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum ToolSafetyLevel {
+    /// Read-only operations that don't modify anything
+    /// No confirmation required, instant execution
+    #[default]
+    ReadOnly,
+
+    /// Operations that can be undone/reversed
+    /// May require confirmation based on config
+    Reversible,
+
+    /// Operations that cannot be undone but have low impact
+    /// (e.g., sending a message, posting a comment)
+    /// Usually requires confirmation
+    IrreversibleLowRisk,
+
+    /// Operations that cannot be undone and have high impact
+    /// (e.g., deleting files, dropping tables)
+    /// Always requires confirmation
+    IrreversibleHighRisk,
+}
+
+impl ToolSafetyLevel {
+    /// Check if this safety level requires user confirmation
+    pub fn requires_confirmation(&self) -> bool {
+        matches!(
+            self,
+            ToolSafetyLevel::IrreversibleLowRisk | ToolSafetyLevel::IrreversibleHighRisk
+        )
+    }
+
+    /// Get a human-readable label for this safety level
+    pub fn label(&self) -> &'static str {
+        match self {
+            ToolSafetyLevel::ReadOnly => "Read Only",
+            ToolSafetyLevel::Reversible => "Reversible",
+            ToolSafetyLevel::IrreversibleLowRisk => "Low Risk",
+            ToolSafetyLevel::IrreversibleHighRisk => "High Risk",
+        }
+    }
+
+    /// Get a badge color hint for UI (SF Symbol color name)
+    pub fn color_hint(&self) -> &'static str {
+        match self {
+            ToolSafetyLevel::ReadOnly => "green",
+            ToolSafetyLevel::Reversible => "blue",
+            ToolSafetyLevel::IrreversibleLowRisk => "yellow",
+            ToolSafetyLevel::IrreversibleHighRisk => "red",
+        }
+    }
+}
 
 // =============================================================================
 // Conflict Resolution System (Flat Namespace)
@@ -546,6 +605,7 @@ impl UnifiedTool {
     /// let mcp_bridge = McpToolBridge::new(tool_def, client, "github".to_string());
     /// let unified = UnifiedTool::from_tool_definition(mcp_bridge.definition(), Some("github"));
     /// ```
+    #[allow(deprecated)] // ToolCategory::Native is deprecated but still needed for compatibility
     pub fn from_tool_definition(def: ToolDefinition, service_name: Option<&str>) -> Self {
         // Determine ToolSource from ToolCategory
         let (source, id) = match def.category {
@@ -620,6 +680,7 @@ impl UnifiedTool {
     /// - Reversible: create, copy, move, rename, update, set
     /// - Irreversible Low Risk: send, notify, post, publish
     /// - Irreversible High Risk: delete, remove, drop, execute, run, shell
+    #[allow(deprecated)] // ToolCategory::Native is deprecated but still needed for compatibility
     pub fn infer_safety_level(name: &str, category: ToolCategory) -> ToolSafetyLevel {
         let name_lower = name.to_lowercase();
 

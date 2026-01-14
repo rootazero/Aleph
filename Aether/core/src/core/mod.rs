@@ -7,7 +7,6 @@
 //! - `mcp_ops`: MCP capability methods
 //! - `skill_ops`: Skill management methods
 //! - `search_ops`: Search capability methods
-//! - `tools`: Dispatcher and tool registry
 //! - `conversation`: Multi-turn conversation management
 //! - `processing`: AI processing pipeline
 
@@ -19,8 +18,6 @@ mod memory;
 mod processing;
 mod search_ops;
 mod skill_ops;
-pub mod tool_executor;
-mod tools;
 pub mod types;
 mod vision_ops;
 
@@ -38,8 +35,6 @@ use types::RequestContext;
 use crate::config::{Config, ConfigWatcher};
 use crate::conversation::ConversationManager;
 use crate::dispatcher::{AsyncConfirmationHandler, ToolRegistry};
-use tool_executor::UnifiedToolExecutor;
-use crate::tools::NativeToolRegistry;
 use crate::error::{AetherError, Result};
 use crate::event_handler::{InternalEventHandler, ProcessingState};
 use crate::mcp::McpClient;
@@ -47,8 +42,6 @@ use crate::memory::cleanup::CleanupService;
 use crate::memory::compression::{CompressionConfig, ConflictConfig, SchedulerConfig};
 use crate::memory::database::VectorDatabase;
 use crate::memory::CompressionService;
-use crate::router::Router;
-use crate::routing::IntentRoutingPipeline;
 use crate::search::SearchRegistry;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
@@ -64,6 +57,10 @@ use tracing::{debug, info, warn};
 /// - Search capabilities
 /// - Configuration management
 /// - Event handling and callbacks to Swift layer
+///
+/// NOTE: Some fields are marked as "never read" by the compiler but are actually
+/// used through Arc cloning in async tasks or via method calls.
+#[allow(dead_code)]
 pub struct AetherCore {
     /// Event handler for callbacks to Swift layer
     pub(crate) event_handler: Arc<dyn InternalEventHandler>,
@@ -87,8 +84,6 @@ pub struct AetherCore {
     /// Background compression task handle
     #[allow(dead_code)]
     pub(crate) compression_task_handle: Option<JoinHandle<()>>,
-    /// Router for AI provider selection (wrapped in RwLock for hot-reload)
-    pub(crate) router: Arc<RwLock<Option<Arc<Router>>>>,
     /// Search registry (wrapped in RwLock for hot-reload)
     pub(crate) search_registry: Arc<RwLock<Option<Arc<SearchRegistry>>>>,
     /// MCP client for tool integration
@@ -100,14 +95,8 @@ pub struct AetherCore {
     pub(crate) conversation_manager: Arc<Mutex<ConversationManager>>,
     /// Unified tool registry (Dispatcher Layer)
     pub(crate) tool_registry: Arc<ToolRegistry>,
-    /// Native tool registry (AgentTool instances for execution)
-    pub(crate) native_tool_registry: Arc<NativeToolRegistry>,
     /// Async confirmation handler
     pub(crate) async_confirmation: Arc<AsyncConfirmationHandler>,
-    /// Intent routing pipeline (enhanced routing system)
-    pub(crate) intent_pipeline: Option<Arc<IntentRoutingPipeline>>,
-    /// Unified tool executor for routing tool calls to correct backend
-    pub(crate) unified_executor: Arc<UnifiedToolExecutor>,
 }
 
 impl AetherCore {
@@ -167,23 +156,6 @@ impl AetherCore {
                 "Current configuration"
             );
         }
-
-        // Initialize router (if providers are configured)
-        let router = {
-            let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
-            let router_opt = if !cfg.providers.is_empty() {
-                match Router::new(&cfg) {
-                    Ok(r) => Some(Arc::new(r)),
-                    Err(e) => {
-                        log::warn!("Failed to initialize router: {}", e);
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-            Arc::new(RwLock::new(router_opt))
-        };
 
         // Initialize SearchRegistry (if search enabled)
         let search_registry = {
@@ -270,27 +242,14 @@ impl AetherCore {
         let config_watcher = Self::init_config_watcher(
             Arc::clone(&event_handler),
             Arc::clone(&config),
-            Arc::clone(&router),
             Arc::clone(&search_registry),
         );
 
         // Initialize unified tool registry (Dispatcher Layer)
         let tool_registry = Arc::new(ToolRegistry::new());
 
-        // Initialize native tool registry (AgentTool instances for execution)
-        let native_tool_registry = Arc::new(NativeToolRegistry::new());
-
         // Initialize async confirmation handler
         let async_confirmation = Arc::new(AsyncConfirmationHandler::new());
-
-        // Initialize unified tool executor for routing tool calls
-        let unified_executor = Arc::new(UnifiedToolExecutor::new(
-            Arc::clone(&native_tool_registry),
-            mcp_client.clone(),
-        ));
-
-        // Initialize intent routing pipeline if enabled
-        let intent_pipeline = Self::init_intent_pipeline(&config, &router);
 
         let core = Self {
             event_handler,
@@ -303,21 +262,16 @@ impl AetherCore {
             cleanup_task_handle,
             compression_service,
             compression_task_handle,
-            router,
             search_registry,
             mcp_client,
             config_watcher,
             conversation_manager: Arc::new(Mutex::new(ConversationManager::new())),
             tool_registry,
-            native_tool_registry,
             async_confirmation,
-            intent_pipeline,
-            unified_executor,
         };
 
-        // Initialize tool registry with builtin tools and configured tools
-        // This populates the registry that the UI will query for commands
-        core.refresh_tool_registry();
+        // TODO: Tool registration now happens via RigAgentManager and McpToolWrapper
+        // The ToolRegistry is only used for UI listing, not execution
 
         Ok(core)
     }
@@ -484,97 +438,10 @@ impl AetherCore {
         Some(Arc::new(client))
     }
 
-    /// Initialize intent routing pipeline if enabled
-    ///
-    /// The pipeline provides enhanced routing with:
-    /// - Intent caching for fast path
-    /// - Confidence calibration
-    /// - Multi-layer routing (L1/L2/L3)
-    /// - Intent aggregation and clarification flow
-    fn init_intent_pipeline(
-        config: &Arc<Mutex<Config>>,
-        _router: &Arc<RwLock<Option<Arc<Router>>>>,
-    ) -> Option<Arc<IntentRoutingPipeline>> {
-        let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
-
-        // Check if pipeline is enabled
-        if !cfg.pipeline.enabled {
-            debug!("Intent routing pipeline disabled in config");
-            return None;
-        }
-
-        // Create semantic matcher for pipeline with routing rules loaded
-        // Uses smart_matching config from Config to configure the matcher
-        use crate::semantic::{MatcherConfig, SemanticMatcher};
-        let matcher_config = MatcherConfig {
-            enabled: cfg.smart_matching.enabled,
-            regex_threshold: cfg.smart_matching.regex_threshold,
-            keyword_threshold: cfg.smart_matching.keyword_threshold as f32,
-            ai_threshold: cfg.smart_matching.ai_threshold,
-            ..MatcherConfig::default()
-        };
-
-        // Load routing rules into SemanticMatcher for L1 regex matching
-        // This is critical for /youtube, /search, /webfetch commands to work
-        let semantic_matcher = match SemanticMatcher::from_rules(&cfg.rules, matcher_config.clone()) {
-            Ok(matcher) => {
-                info!(
-                    rule_count = cfg.rules.len(),
-                    "SemanticMatcher initialized with routing rules"
-                );
-                Arc::new(matcher)
-            }
-            Err(e) => {
-                warn!(
-                    error = %e,
-                    "Failed to load routing rules into SemanticMatcher, using empty matcher"
-                );
-                Arc::new(SemanticMatcher::new(matcher_config))
-            }
-        };
-
-        // Get provider for L3 if enabled
-        let provider = if cfg.pipeline.layers.l3_enabled {
-            if let Some(ref default_name) = cfg.general.default_provider {
-                if let Some(provider_config) = cfg.providers.get(default_name) {
-                    use crate::providers::create_provider;
-                    create_provider(default_name, provider_config.clone()).ok()
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        // Create pipeline
-        let pipeline = if let Some(p) = provider {
-            IntentRoutingPipeline::with_provider(
-                cfg.pipeline.clone(),
-                semantic_matcher,
-                p,
-            )
-        } else {
-            IntentRoutingPipeline::new(cfg.pipeline.clone(), semantic_matcher)
-        };
-
-        info!(
-            enabled = cfg.pipeline.enabled,
-            cache_enabled = cfg.pipeline.cache.enabled,
-            l3_enabled = cfg.pipeline.layers.l3_enabled,
-            "Intent routing pipeline initialized"
-        );
-
-        Some(Arc::new(pipeline))
-    }
-
     /// Initialize config watcher for hot-reload
     fn init_config_watcher(
         handler: Arc<dyn InternalEventHandler>,
         config: Arc<Mutex<Config>>,
-        router: Arc<RwLock<Option<Arc<Router>>>>,
         search_registry: Arc<RwLock<Option<Arc<SearchRegistry>>>>,
     ) -> Option<Arc<ConfigWatcher>> {
         let watcher = Arc::new(ConfigWatcher::new(move |config_result| {
@@ -585,34 +452,6 @@ impl AetherCore {
                     // Update config
                     if let Ok(mut cfg) = config.lock() {
                         *cfg = new_config.clone();
-                    }
-
-                    // Reinitialize router with new config
-                    let new_router = if !new_config.providers.is_empty() {
-                        match Router::new(&new_config) {
-                            Ok(r) => {
-                                log::info!(
-                                    "Router hot-reloaded with {} rules and {} providers",
-                                    new_config.rules.len(),
-                                    new_config.providers.len()
-                                );
-                                Some(Arc::new(r))
-                            }
-                            Err(e) => {
-                                log::warn!(
-                                    "Failed to reinitialize router during hot-reload: {}",
-                                    e
-                                );
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    };
-
-                    // Update router
-                    if let Ok(mut router_guard) = router.write() {
-                        *router_guard = new_router;
                     }
 
                     // Reinitialize SearchRegistry with new config
@@ -713,13 +552,6 @@ impl AetherCore {
     // ========================================================================
     // CORE HELPER METHODS
     // ========================================================================
-
-    /// Get router with poison-safe read lock
-    #[allow(dead_code)]
-    pub(crate) fn get_router(&self) -> Option<Arc<Router>> {
-        let guard = self.router.read().unwrap_or_else(|e| e.into_inner());
-        guard.as_ref().map(Arc::clone)
-    }
 
     /// Get search registry with poison-safe read lock
     #[allow(dead_code)]

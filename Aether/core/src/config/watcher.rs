@@ -12,7 +12,7 @@
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```rust,ignore
 /// use aethecore::config::watcher::ConfigWatcher;
 /// use std::sync::Arc;
 ///
@@ -49,6 +49,10 @@ pub type ConfigChangeCallback = Arc<dyn Fn(Result<Config>) + Send + Sync>;
 /// The watcher runs in a background thread and is Send + Sync safe.
 /// The callback is invoked on the watcher's background thread, so
 /// implementations should dispatch to the appropriate thread if needed.
+///
+/// NOTE: This struct is currently not instantiated but is kept for future use
+/// when config hot-reload is enabled at runtime.
+#[allow(dead_code)]
 pub struct ConfigWatcher {
     /// Path to the config file being watched
     config_path: PathBuf,
@@ -66,7 +70,7 @@ impl ConfigWatcher {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```rust,ignore
     /// let watcher = ConfigWatcher::new(|result| {
     ///     match result {
     ///         Ok(config) => println!("Config reloaded"),
@@ -113,7 +117,7 @@ impl ConfigWatcher {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```rust,ignore
     /// let watcher = ConfigWatcher::new(|_| {});
     /// watcher.start()?;
     /// // Config file is now being watched...
@@ -190,7 +194,7 @@ impl ConfigWatcher {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```rust,ignore
     /// let watcher = ConfigWatcher::new(|_| {});
     /// watcher.start()?;
     /// // ... later ...

@@ -6,6 +6,7 @@ import UserNotifications
 import os.log
 
 // Debug file logger for crash investigation
+#if DEBUG
 private func debugLog(_ message: String) {
     let timestamp = ISO8601DateFormatter().string(from: Date())
     let logMessage = "[\(timestamp)] \(message)\n"
@@ -24,6 +25,11 @@ private func debugLog(_ message: String) {
     }
     NSLog("[ScreenCapture] \(message)")
 }
+#else
+private func debugLog(_ message: String) {
+    // No-op in release builds
+}
+#endif
 
 /// Capture mode for screen capture
 enum ScreenCaptureMode {

@@ -43,8 +43,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // First-time initialization window
     private var initializationWindow: NSWindow?
 
-    // Theme engine removed - using unified visual style
-
     // Global hotkey monitor (Swift layer)
     private var hotkeyMonitor: GlobalHotkeyMonitor?
 

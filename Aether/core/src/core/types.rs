@@ -14,7 +14,9 @@ use crate::memory::database::VectorDatabase;
 use std::sync::{Arc, Mutex};
 
 /// Context for last request (used for retry)
+/// NOTE: Fields are stored for future retry functionality
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(crate) struct RequestContext {
     pub clipboard_content: String,
     pub provider: String,

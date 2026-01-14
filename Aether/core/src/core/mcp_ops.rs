@@ -8,7 +8,6 @@
 //!
 //! Uses scoped refresh for incremental updates to improve performance.
 
-use super::tools::RefreshScope;
 use super::AetherCore;
 use crate::error::{AetherError, Result};
 use tracing::info;
@@ -68,9 +67,7 @@ impl AetherCore {
 
         // Notify event handler
         self.event_handler.on_config_changed();
-
-        // Scoped refresh: native tools config changed
-        self.refresh_tool_registry_scoped(RefreshScope::NativeToolsOnly);
+        self.event_handler.on_tools_refresh_needed();
 
         info!("MCP configuration updated");
         Ok(())
@@ -287,9 +284,7 @@ impl AetherCore {
 
         // Notify event handler
         self.event_handler.on_config_changed();
-
-        // Scoped refresh: start new MCP server and register its tools
-        self.refresh_tool_registry_scoped(RefreshScope::McpServersOnly);
+        self.event_handler.on_tools_refresh_needed();
 
         Ok(())
     }
@@ -335,13 +330,10 @@ impl AetherCore {
             }
         }
 
-        let server_id = config.id.clone();
         cfg.save()?;
         drop(cfg);
         self.event_handler.on_config_changed();
-
-        // Scoped refresh: restart only the specific MCP server
-        self.refresh_tool_registry_scoped(RefreshScope::McpServer(server_id));
+        self.event_handler.on_tools_refresh_needed();
 
         Ok(())
     }
@@ -367,9 +359,7 @@ impl AetherCore {
         cfg.save()?;
         drop(cfg);
         self.event_handler.on_config_changed();
-
-        // Scoped refresh: remove deleted server's tools
-        self.refresh_tool_registry_scoped(RefreshScope::McpServersOnly);
+        self.event_handler.on_tools_refresh_needed();
 
         Ok(())
     }
@@ -479,9 +469,7 @@ impl AetherCore {
         cfg.save()?;
         drop(cfg);
         self.event_handler.on_config_changed();
-
-        // Scoped refresh: start imported MCP servers
-        self.refresh_tool_registry_scoped(RefreshScope::McpServersOnly);
+        self.event_handler.on_tools_refresh_needed();
 
         Ok(())
     }

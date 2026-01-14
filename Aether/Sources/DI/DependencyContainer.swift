@@ -186,8 +186,6 @@ final class DependencyContainer: ObservableObject {
     /// Event handler for Rust callbacks
     private(set) var eventHandler: EventHandler?
 
-    // Theme engine removed - using unified visual style
-
     // MARK: - Managers (lazy-loaded, protocol-based for testability)
 
     /// Clipboard operations manager
@@ -257,8 +255,6 @@ final class DependencyContainer: ObservableObject {
         }
 
         print("[DependencyContainer] Initializing core services...")
-
-        // Theme engine removed - using unified visual style
 
         // Get config path
         let configPath = getConfigPath()
@@ -365,8 +361,6 @@ final class DependencyContainer: ObservableObject {
         }
         return eventHandler
     }
-
-    // Theme engine removed - using unified visual style
 }
 
 // MARK: - Dependency Errors
