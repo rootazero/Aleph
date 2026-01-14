@@ -29,12 +29,12 @@ use std::sync::{Arc, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-/// Error type for UniFFI v2
+/// Error type for FFI boundary
 ///
 /// This error type is designed to be FFI-friendly.
 /// UniFFI Error enums must use simple variants with message support via Display trait.
 #[derive(Debug, thiserror::Error)]
-pub enum AetherV2Error {
+pub enum AetherFfiError {
     #[error("Configuration error: {0}")]
     Config(String),
     #[error("Provider error: {0}")]
@@ -47,9 +47,9 @@ pub enum AetherV2Error {
     Cancelled,
 }
 
-impl From<crate::error::AetherError> for AetherV2Error {
+impl From<crate::error::AetherError> for AetherFfiError {
     fn from(e: crate::error::AetherError) -> Self {
-        AetherV2Error::Config(e.to_string())
+        AetherFfiError::Config(e.to_string())
     }
 }
 
@@ -237,7 +237,7 @@ impl AetherCore {
         &self,
         input: String,
         options: Option<ProcessOptions>,
-    ) -> Result<(), AetherV2Error> {
+    ) -> Result<(), AetherFfiError> {
         let _options = options.unwrap_or_default();
         let handler = Arc::clone(&self.handler);
         // Acquire read lock to get current config (supports config reload)
@@ -347,9 +347,9 @@ impl AetherCore {
     /// Search memory for relevant entries
     ///
     /// Searches the memory store for entries matching the query.
-    pub fn search_memory(&self, query: String, limit: u32) -> Result<Vec<MemoryItem>, AetherV2Error> {
+    pub fn search_memory(&self, query: String, limit: u32) -> Result<Vec<MemoryItem>, AetherFfiError> {
         let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherV2Error::Memory("Memory store not initialized".to_string())
+            AetherFfiError::Memory("Memory store not initialized".to_string())
         })?;
 
         // Create a temporary MemoryStore for the query
@@ -365,14 +365,14 @@ impl AetherCore {
 
         match result {
             Ok(entries) => Ok(entries.into_iter().map(|(e, _)| e.into()).collect()),
-            Err(e) => Err(AetherV2Error::Memory(e.to_string())),
+            Err(e) => Err(AetherFfiError::Memory(e.to_string())),
         }
     }
 
     /// Clear all memory entries
-    pub fn clear_memory(&self) -> Result<(), AetherV2Error> {
+    pub fn clear_memory(&self) -> Result<(), AetherFfiError> {
         let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherV2Error::Memory("Memory store not initialized".to_string())
+            AetherFfiError::Memory("Memory store not initialized".to_string())
         })?;
 
         let db_path = memory_path.path.clone();
@@ -383,7 +383,7 @@ impl AetherCore {
             store.clear().await
         });
 
-        result.map_err(|e| AetherV2Error::Memory(e.to_string()))
+        result.map_err(|e| AetherFfiError::Memory(e.to_string()))
     }
 
     /// Reload configuration from file
@@ -393,20 +393,20 @@ impl AetherCore {
     ///
     /// # Returns
     /// * `Ok(())` - Configuration reloaded successfully
-    /// * `Err(AetherV2Error::Config)` - Failed to load or parse config file
-    pub fn reload_config(&self) -> Result<(), AetherV2Error> {
+    /// * `Err(AetherFfiError::Config)` - Failed to load or parse config file
+    pub fn reload_config(&self) -> Result<(), AetherFfiError> {
         info!(path = %self.config_path, "Reloading config");
 
         // Load config from stored path (same logic as init_core)
         let full_config = if self.config_path.is_empty() {
             // Use default path (~/.config/aether/config.toml)
-            Config::load().map_err(|e| AetherV2Error::Config(e.to_string()))?
+            Config::load().map_err(|e| AetherFfiError::Config(e.to_string()))?
         } else {
             let path = Path::new(&self.config_path);
             if path.exists() {
-                Config::load_from_file(path).map_err(|e| AetherV2Error::Config(e.to_string()))?
+                Config::load_from_file(path).map_err(|e| AetherFfiError::Config(e.to_string()))?
             } else {
-                return Err(AetherV2Error::Config(format!("Config file not found: {}", self.config_path)));
+                return Err(AetherFfiError::Config(format!("Config file not found: {}", self.config_path)));
             }
         };
 
@@ -477,7 +477,7 @@ impl AetherCore {
     }
 
     /// Load configuration and return it in UniFFI-compatible format
-    pub fn load_config(&self) -> Result<FullConfig, AetherV2Error> {
+    pub fn load_config(&self) -> Result<FullConfig, AetherFfiError> {
         let config = self.lock_config();
         Ok(config.clone().into())
     }
@@ -487,18 +487,18 @@ impl AetherCore {
         &self,
         name: String,
         provider: ProviderConfig,
-    ) -> Result<(), AetherV2Error> {
+    ) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
         config.providers.insert(name, provider);
-        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
         Ok(())
     }
 
     /// Delete provider configuration
-    pub fn delete_provider(&self, name: String) -> Result<(), AetherV2Error> {
+    pub fn delete_provider(&self, name: String) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
         config.providers.remove(&name);
-        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
         Ok(())
     }
 
@@ -510,7 +510,7 @@ impl AetherCore {
     pub fn update_routing_rules(
         &self,
         rules: Vec<RoutingRuleConfig>,
-    ) -> Result<(), AetherV2Error> {
+    ) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
 
         // Preserve builtin rules from current config
@@ -533,56 +533,56 @@ impl AetherCore {
         );
 
         config.rules = merged_rules;
-        config.validate().map_err(|e| AetherV2Error::Config(e.to_string()))?;
-        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        config.validate().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
 
         info!("Routing rules updated");
         Ok(())
     }
 
     /// Update shortcuts configuration
-    pub fn update_shortcuts(&self, shortcuts: crate::config::ShortcutsConfig) -> Result<(), AetherV2Error> {
+    pub fn update_shortcuts(&self, shortcuts: crate::config::ShortcutsConfig) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
         config.shortcuts = Some(shortcuts);
-        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!("Shortcuts configuration updated");
         Ok(())
     }
 
     /// Update behavior configuration
-    pub fn update_behavior(&self, behavior: crate::config::BehaviorConfig) -> Result<(), AetherV2Error> {
+    pub fn update_behavior(&self, behavior: crate::config::BehaviorConfig) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
         config.behavior = Some(behavior);
-        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!("Behavior configuration updated");
         Ok(())
     }
 
     /// Update trigger configuration
-    pub fn update_trigger_config(&self, trigger: crate::config::TriggerConfig) -> Result<(), AetherV2Error> {
+    pub fn update_trigger_config(&self, trigger: crate::config::TriggerConfig) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
         config.trigger = Some(trigger);
-        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!("Trigger configuration updated");
         Ok(())
     }
 
     /// Update general configuration (language preference, etc.)
-    pub fn update_general_config(&self, new_config: GeneralConfig) -> Result<(), AetherV2Error> {
+    pub fn update_general_config(&self, new_config: GeneralConfig) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
         config.general = new_config;
-        config.save().map_err(|e| AetherV2Error::Config(format!("Failed to save general config: {}", e)))?;
+        config.save().map_err(|e| AetherFfiError::Config(format!("Failed to save general config: {}", e)))?;
         Ok(())
     }
 
     /// Update search configuration
-    pub fn update_search_config(&self, search: crate::config::SearchConfig) -> Result<(), AetherV2Error> {
+    pub fn update_search_config(&self, search: crate::config::SearchConfig) -> Result<(), AetherFfiError> {
         // Convert UniFFI SearchConfig to internal SearchConfigInternal
         let search_internal: crate::config::SearchConfigInternal = search.into();
 
         let mut config = self.lock_config();
         config.search = Some(search_internal);
-        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!("Search configuration updated");
         Ok(())
     }
@@ -594,7 +594,7 @@ impl AetherCore {
     pub fn test_search_provider_with_config(
         &self,
         config: crate::search::SearchProviderTestConfig,
-    ) -> Result<crate::search::ProviderTestResult, AetherV2Error> {
+    ) -> Result<crate::search::ProviderTestResult, AetherFfiError> {
         use crate::search::providers::*;
         use crate::search::{ProviderTestResult, SearchOptions, SearchProvider};
         use std::time::Instant;
@@ -711,10 +711,10 @@ impl AetherCore {
     }
 
     /// Validate regex pattern
-    pub fn validate_regex(&self, pattern: String) -> Result<bool, AetherV2Error> {
+    pub fn validate_regex(&self, pattern: String) -> Result<bool, AetherFfiError> {
         match regex::Regex::new(&pattern) {
             Ok(_) => Ok(true),
-            Err(e) => Err(AetherV2Error::Config(format!("Invalid regex: {}", e))),
+            Err(e) => Err(AetherFfiError::Config(format!("Invalid regex: {}", e))),
         }
     }
 
@@ -768,11 +768,11 @@ impl AetherCore {
     }
 
     /// Set the default provider (validates that provider exists and is enabled)
-    pub fn set_default_provider(&self, provider_name: String) -> Result<(), AetherV2Error> {
+    pub fn set_default_provider(&self, provider_name: String) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
         config.set_default_provider(&provider_name)
-            .map_err(|e| AetherV2Error::Config(e.to_string()))?;
-        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!(provider = %provider_name, "Default provider updated");
         Ok(())
     }
@@ -804,7 +804,7 @@ impl AetherCore {
     }
 
     /// Update MCP configuration
-    pub fn update_mcp_config(&self, new_config: crate::mcp::McpSettingsConfig) -> Result<(), AetherV2Error> {
+    pub fn update_mcp_config(&self, new_config: crate::mcp::McpSettingsConfig) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
 
         config.mcp.enabled = new_config.enabled;
@@ -817,7 +817,7 @@ impl AetherCore {
         config.tools.allowed_commands = new_config.allowed_commands;
         config.tools.shell_timeout_seconds = new_config.shell_timeout_seconds;
 
-        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!("MCP configuration updated");
         Ok(())
     }
@@ -892,18 +892,18 @@ impl AetherCore {
     }
 
     /// Add an external MCP server
-    pub fn add_mcp_server(&self, config: crate::mcp::McpServerConfig) -> Result<(), AetherV2Error> {
+    pub fn add_mcp_server(&self, config: crate::mcp::McpServerConfig) -> Result<(), AetherFfiError> {
         if config.server_type == crate::mcp::McpServerType::Builtin {
-            return Err(AetherV2Error::Config("Cannot add builtin servers".to_string()));
+            return Err(AetherFfiError::Config("Cannot add builtin servers".to_string()));
         }
 
         let command = config
             .command
             .as_ref()
-            .ok_or_else(|| AetherV2Error::Config("External server requires a command".to_string()))?;
+            .ok_or_else(|| AetherFfiError::Config("External server requires a command".to_string()))?;
 
         if config.id.is_empty() {
-            return Err(AetherV2Error::Config("Server ID cannot be empty".to_string()));
+            return Err(AetherFfiError::Config("Server ID cannot be empty".to_string()));
         }
 
         let external_config = crate::config::McpExternalServerConfig {
@@ -923,23 +923,23 @@ impl AetherCore {
         let mut cfg = self.lock_config();
 
         if cfg.mcp.external_servers.iter().any(|s| s.name == config.id) {
-            return Err(AetherV2Error::Config(format!(
+            return Err(AetherFfiError::Config(format!(
                 "Server '{}' already exists",
                 config.id
             )));
         }
 
         cfg.mcp.external_servers.push(external_config);
-        cfg.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        cfg.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
 
         info!(server_id = %config.id, "MCP server added");
         Ok(())
     }
 
     /// Update an external MCP server configuration
-    pub fn update_mcp_server(&self, config: crate::mcp::McpServerConfig) -> Result<(), AetherV2Error> {
+    pub fn update_mcp_server(&self, config: crate::mcp::McpServerConfig) -> Result<(), AetherFfiError> {
         if config.server_type == crate::mcp::McpServerType::Builtin {
-            return Err(AetherV2Error::Config(
+            return Err(AetherFfiError::Config(
                 "Builtin servers cannot be updated via this method".to_string(),
             ));
         }
@@ -947,7 +947,7 @@ impl AetherCore {
         let command = config
             .command
             .as_ref()
-            .ok_or_else(|| AetherV2Error::Config("External server requires a command".to_string()))?;
+            .ok_or_else(|| AetherFfiError::Config("External server requires a command".to_string()))?;
 
         let mut cfg = self.lock_config();
 
@@ -965,33 +965,33 @@ impl AetherCore {
                 s.cwd = config.working_directory;
             }
             None => {
-                return Err(AetherV2Error::Config(format!(
+                return Err(AetherFfiError::Config(format!(
                     "External server '{}' not found",
                     config.id
                 )));
             }
         }
 
-        cfg.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        cfg.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!(server_id = %config.id, "MCP server updated");
         Ok(())
     }
 
     /// Delete an external MCP server
-    pub fn delete_mcp_server(&self, id: String) -> Result<(), AetherV2Error> {
+    pub fn delete_mcp_server(&self, id: String) -> Result<(), AetherFfiError> {
         let mut cfg = self.lock_config();
 
         let initial_len = cfg.mcp.external_servers.len();
         cfg.mcp.external_servers.retain(|s| s.name != id);
 
         if cfg.mcp.external_servers.len() == initial_len {
-            return Err(AetherV2Error::Config(format!(
+            return Err(AetherFfiError::Config(format!(
                 "External server '{}' not found",
                 id
             )));
         }
 
-        cfg.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        cfg.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!(server_id = %id, "MCP server deleted");
         Ok(())
     }
@@ -1028,15 +1028,15 @@ impl AetherCore {
     }
 
     /// Import MCP configuration from claude_desktop_config.json format
-    pub fn import_mcp_config_json(&self, json: String) -> Result<(), AetherV2Error> {
+    pub fn import_mcp_config_json(&self, json: String) -> Result<(), AetherFfiError> {
         let parsed: serde_json::Value = serde_json::from_str(&json)
-            .map_err(|e| AetherV2Error::Config(format!("Invalid JSON: {}", e)))?;
+            .map_err(|e| AetherFfiError::Config(format!("Invalid JSON: {}", e)))?;
 
         let servers = parsed
             .get("mcpServers")
-            .ok_or_else(|| AetherV2Error::Config("Missing 'mcpServers' field".to_string()))?
+            .ok_or_else(|| AetherFfiError::Config("Missing 'mcpServers' field".to_string()))?
             .as_object()
-            .ok_or_else(|| AetherV2Error::Config("'mcpServers' must be an object".to_string()))?;
+            .ok_or_else(|| AetherFfiError::Config("'mcpServers' must be an object".to_string()))?;
 
         let mut cfg = self.lock_config();
 
@@ -1045,7 +1045,7 @@ impl AetherCore {
                 .get("command")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    AetherV2Error::Config(format!("Server '{}' missing 'command'", name))
+                    AetherFfiError::Config(format!("Server '{}' missing 'command'", name))
                 })?;
 
             let args: Vec<String> = server_config
@@ -1093,7 +1093,7 @@ impl AetherCore {
             }
         }
 
-        cfg.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        cfg.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!("MCP configuration imported");
         Ok(())
     }
@@ -1109,60 +1109,60 @@ impl AetherCore {
     }
 
     /// Update memory configuration
-    pub fn update_memory_config(&self, new_config: crate::config::MemoryConfig) -> Result<(), AetherV2Error> {
+    pub fn update_memory_config(&self, new_config: crate::config::MemoryConfig) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
         config.memory = new_config;
-        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!("Memory configuration updated");
         Ok(())
     }
 
     /// Delete specific memory by ID
-    pub fn delete_memory(&self, id: String) -> Result<(), AetherV2Error> {
+    pub fn delete_memory(&self, id: String) -> Result<(), AetherFfiError> {
         let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherV2Error::Memory("Memory store not initialized".to_string())
+            AetherFfiError::Memory("Memory store not initialized".to_string())
         })?;
 
         use crate::memory::database::VectorDatabase;
         use std::path::PathBuf;
         let db_path = PathBuf::from(&memory_path.path);
         let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
         self.runtime.block_on(db.delete_memory(&id))
-            .map_err(|e| AetherV2Error::Memory(e.to_string()))
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))
     }
 
     /// Get memory database statistics
-    pub fn get_memory_stats(&self) -> Result<crate::memory::database::MemoryStats, AetherV2Error> {
+    pub fn get_memory_stats(&self) -> Result<crate::memory::database::MemoryStats, AetherFfiError> {
         let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherV2Error::Memory("Memory store not initialized".to_string())
+            AetherFfiError::Memory("Memory store not initialized".to_string())
         })?;
 
         use crate::memory::database::VectorDatabase;
         use std::path::PathBuf;
         let db_path = PathBuf::from(&memory_path.path);
         let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
         self.runtime.block_on(db.get_stats())
-            .map_err(|e| AetherV2Error::Memory(e.to_string()))
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))
     }
 
     /// Get list of unique app bundle IDs from memories
-    pub fn get_memory_app_list(&self) -> Result<Vec<crate::core::types::AppMemoryInfo>, AetherV2Error> {
+    pub fn get_memory_app_list(&self) -> Result<Vec<crate::core::types::AppMemoryInfo>, AetherFfiError> {
         let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherV2Error::Memory("Memory store not initialized".to_string())
+            AetherFfiError::Memory("Memory store not initialized".to_string())
         })?;
 
         use crate::memory::database::VectorDatabase;
         use std::path::PathBuf;
         let db_path = PathBuf::from(&memory_path.path);
         let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
         let apps = self.runtime.block_on(db.get_app_list())
-            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
         Ok(apps
             .into_iter()
@@ -1178,69 +1178,69 @@ impl AetherCore {
         &self,
         app_bundle_id: Option<String>,
         window_title: Option<String>,
-    ) -> Result<u64, AetherV2Error> {
+    ) -> Result<u64, AetherFfiError> {
         let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherV2Error::Memory("Memory store not initialized".to_string())
+            AetherFfiError::Memory("Memory store not initialized".to_string())
         })?;
 
         use crate::memory::database::VectorDatabase;
         use std::path::PathBuf;
         let db_path = PathBuf::from(&memory_path.path);
         let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
         self.runtime.block_on(db.clear_memories(app_bundle_id.as_deref(), window_title.as_deref()))
-            .map_err(|e| AetherV2Error::Memory(e.to_string()))
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))
     }
 
     /// Clear all compressed facts (Layer 2 data)
-    pub fn clear_facts(&self) -> Result<u64, AetherV2Error> {
+    pub fn clear_facts(&self) -> Result<u64, AetherFfiError> {
         let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherV2Error::Memory("Memory store not initialized".to_string())
+            AetherFfiError::Memory("Memory store not initialized".to_string())
         })?;
 
         use crate::memory::database::VectorDatabase;
         use std::path::PathBuf;
         let db_path = PathBuf::from(&memory_path.path);
         let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
         self.runtime.block_on(db.clear_facts())
-            .map_err(|e| AetherV2Error::Memory(e.to_string()))
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))
     }
 
     /// Delete all memories associated with a specific topic ID
-    pub fn delete_memories_by_topic_id(&self, topic_id: String) -> Result<u64, AetherV2Error> {
+    pub fn delete_memories_by_topic_id(&self, topic_id: String) -> Result<u64, AetherFfiError> {
         let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherV2Error::Memory("Memory store not initialized".to_string())
+            AetherFfiError::Memory("Memory store not initialized".to_string())
         })?;
 
         use crate::memory::database::VectorDatabase;
         use std::path::PathBuf;
         let db_path = PathBuf::from(&memory_path.path);
         let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
         self.runtime.block_on(db.delete_by_topic_id(&topic_id))
-            .map_err(|e| AetherV2Error::Memory(e.to_string()))
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))
     }
 
     /// Get compression statistics
-    pub fn get_compression_stats(&self) -> Result<crate::core::types::CompressionStats, AetherV2Error> {
+    pub fn get_compression_stats(&self) -> Result<crate::core::types::CompressionStats, AetherFfiError> {
         let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherV2Error::Memory("Memory store not initialized".to_string())
+            AetherFfiError::Memory("Memory store not initialized".to_string())
         })?;
 
         use crate::memory::database::VectorDatabase;
         use std::path::PathBuf;
         let db_path = PathBuf::from(&memory_path.path);
         let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
         let stats = self.runtime.block_on(db.get_stats())
-            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
         let fact_stats = self.runtime.block_on(db.get_fact_stats())
-            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
         Ok(crate::core::types::CompressionStats {
             total_raw_memories: stats.total_memories,
@@ -1254,7 +1254,7 @@ impl AetherCore {
     ///
     /// Note: In V2, compression is simplified. This is a placeholder
     /// that returns a default result.
-    pub fn trigger_compression(&self) -> Result<crate::memory::context::CompressionResult, AetherV2Error> {
+    pub fn trigger_compression(&self) -> Result<crate::memory::context::CompressionResult, AetherFfiError> {
         // V2 compression is not yet fully implemented
         // Return a default result indicating no compression occurred
         Ok(crate::memory::context::CompressionResult {
@@ -1270,42 +1270,42 @@ impl AetherCore {
     // ========================================================================
 
     /// List all installed skills
-    pub fn list_skills(&self) -> Result<Vec<crate::skills::SkillInfo>, AetherV2Error> {
+    pub fn list_skills(&self) -> Result<Vec<crate::skills::SkillInfo>, AetherFfiError> {
         crate::initialization::list_installed_skills()
-            .map_err(|e| AetherV2Error::Config(e.to_string()))
+            .map_err(|e| AetherFfiError::Config(e.to_string()))
     }
 
     /// Install a skill from a GitHub URL
-    pub fn install_skill(&self, url: String) -> Result<crate::skills::SkillInfo, AetherV2Error> {
+    pub fn install_skill(&self, url: String) -> Result<crate::skills::SkillInfo, AetherFfiError> {
         let skill_info = crate::initialization::install_skill_from_url(url)
-            .map_err(|e| AetherV2Error::Config(e.to_string()))?;
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
 
         info!(skill_id = %skill_info.id, "Skill installed");
         Ok(skill_info)
     }
 
     /// Install skills from a local ZIP file
-    pub fn install_skills_from_zip(&self, zip_path: String) -> Result<Vec<String>, AetherV2Error> {
+    pub fn install_skills_from_zip(&self, zip_path: String) -> Result<Vec<String>, AetherFfiError> {
         let skill_ids = crate::initialization::install_skills_from_zip(zip_path)
-            .map_err(|e| AetherV2Error::Config(e.to_string()))?;
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
 
         info!(count = skill_ids.len(), "Skills installed from ZIP");
         Ok(skill_ids)
     }
 
     /// Delete a skill by ID
-    pub fn delete_skill(&self, skill_id: String) -> Result<(), AetherV2Error> {
+    pub fn delete_skill(&self, skill_id: String) -> Result<(), AetherFfiError> {
         crate::initialization::delete_skill(skill_id.clone())
-            .map_err(|e| AetherV2Error::Config(e.to_string()))?;
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
 
         info!(skill_id = %skill_id, "Skill deleted");
         Ok(())
     }
 
     /// Get the skills directory path
-    pub fn get_skills_dir(&self) -> Result<String, AetherV2Error> {
+    pub fn get_skills_dir(&self) -> Result<String, AetherFfiError> {
         crate::initialization::get_skills_dir_string()
-            .map_err(|e| AetherV2Error::Config(e.to_string()))
+            .map_err(|e| AetherFfiError::Config(e.to_string()))
     }
 
     /// Refresh skills (placeholder for V2)
@@ -1376,7 +1376,7 @@ impl AetherCore {
         &self,
         user_input: String,
         ai_response: String,
-    ) -> Result<String, AetherV2Error> {
+    ) -> Result<String, AetherFfiError> {
         use crate::title_generator;
 
         info!(
@@ -1476,17 +1476,17 @@ impl AetherCore {
     }
 
     /// Set log level
-    pub fn set_log_level(&self, level: crate::logging::LogLevel) -> Result<(), AetherV2Error> {
+    pub fn set_log_level(&self, level: crate::logging::LogLevel) -> Result<(), AetherFfiError> {
         crate::logging::set_log_level(level);
         info!(level = ?level, "Log level set (V2)");
         Ok(())
     }
 
     /// Get log directory path
-    pub fn get_log_directory(&self) -> Result<String, AetherV2Error> {
+    pub fn get_log_directory(&self) -> Result<String, AetherFfiError> {
         crate::logging::get_log_directory()
             .map(|p| p.to_string_lossy().to_string())
-            .map_err(|e| AetherV2Error::Config(e.to_string()))
+            .map_err(|e| AetherFfiError::Config(e.to_string()))
     }
 
     // ========================================================================
@@ -1504,19 +1504,19 @@ impl AetherCore {
         app_bundle_id: Option<String>,
         window_title: Option<String>,
         limit: u32,
-    ) -> Result<Vec<crate::core::types::MemoryEntryFFI>, AetherV2Error> {
+    ) -> Result<Vec<crate::core::types::MemoryEntryFFI>, AetherFfiError> {
         use crate::core::types::MemoryEntryFFI;
         use crate::memory::VectorDatabase;
 
         // Get memory config from full_config
         let config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
         if !config.memory.enabled {
-            return Err(AetherV2Error::Memory("Memory is disabled".to_string()));
+            return Err(AetherFfiError::Memory("Memory is disabled".to_string()));
         }
 
         // Get memory database path
         let db_path = crate::core::AetherCore::get_memory_db_path()
-            .map_err(|e| AetherV2Error::Memory(format!("Failed to get memory path: {}", e)))?;
+            .map_err(|e| AetherFfiError::Memory(format!("Failed to get memory path: {}", e)))?;
         drop(config); // Release lock before async
 
         // Use default values for empty filters
@@ -1525,14 +1525,14 @@ impl AetherCore {
 
         // Open VectorDatabase (sync operation)
         let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherV2Error::Memory(format!("Failed to open database: {}", e)))?;
+            .map_err(|e| AetherFfiError::Memory(format!("Failed to open database: {}", e)))?;
 
         // Query memories using VectorDatabase (async operation)
         // Search with empty embedding returns recent memories filtered by context
         let result = self.runtime.block_on(async {
             db.search_memories(&app_filter, &window_filter, &[], limit)
                 .await
-                .map_err(|e| AetherV2Error::Memory(e.to_string()))
+                .map_err(|e| AetherFfiError::Memory(e.to_string()))
         })?;
 
         // Convert to FFI type
@@ -1557,7 +1557,7 @@ impl AetherCore {
     /// Extract text from image data using OCR
     ///
     /// Uses the configured default AI provider to perform OCR on the image.
-    pub fn extract_text(&self, image_data: Vec<u8>) -> Result<String, AetherV2Error> {
+    pub fn extract_text(&self, image_data: Vec<u8>) -> Result<String, AetherFfiError> {
         use crate::vision::VisionService;
 
         info!(data_size = image_data.len(), "Extracting text from image (V2)");
@@ -1572,7 +1572,7 @@ impl AetherCore {
             vision_service
                 .extract_text(image_data, &config)
                 .await
-                .map_err(|e| AetherV2Error::Config(format!("OCR failed: {}", e)))
+                .map_err(|e| AetherFfiError::Config(format!("OCR failed: {}", e)))
         })
     }
 }
@@ -1597,11 +1597,11 @@ impl AetherCore {
 /// - If `config_path` is empty: Load from default path (~/.config/aether/config.toml)
 /// - If `config_path` is provided and file exists: Load from that path
 /// - If `config_path` is provided but file doesn't exist: Use defaults with info log
-/// - If config file exists but has parse errors: Return `AetherV2Error::Config`
+/// - If config file exists but has parse errors: Return `AetherFfiError::Config`
 pub fn init_core(
     config_path: String,
     handler: Box<dyn AetherEventHandler>,
-) -> Result<Arc<AetherCore>, AetherV2Error> {
+) -> Result<Arc<AetherCore>, AetherFfiError> {
     info!(config_path = %config_path, "Initializing AetherCore");
 
     // Convert Box to Arc for internal use
@@ -1626,11 +1626,11 @@ pub fn init_core(
     // Load config from file
     let full_config = if config_path.is_empty() {
         // Use default path (~/.config/aether/config.toml)
-        Config::load().map_err(|e| AetherV2Error::Config(e.to_string()))?
+        Config::load().map_err(|e| AetherFfiError::Config(e.to_string()))?
     } else {
         let path = Path::new(&config_path);
         if path.exists() {
-            Config::load_from_file(path).map_err(|e| AetherV2Error::Config(e.to_string()))?
+            Config::load_from_file(path).map_err(|e| AetherFfiError::Config(e.to_string()))?
         } else {
             info!(path = %config_path, "Config file not found, using defaults");
             Config::default()
@@ -1786,19 +1786,19 @@ mod tests {
 
     #[test]
     fn test_aether_v2_error_display() {
-        let err = AetherV2Error::Config("test error".to_string());
+        let err = AetherFfiError::Config("test error".to_string());
         assert_eq!(format!("{}", err), "Configuration error: test error");
 
-        let err = AetherV2Error::Provider("provider failed".to_string());
+        let err = AetherFfiError::Provider("provider failed".to_string());
         assert_eq!(format!("{}", err), "Provider error: provider failed");
 
-        let err = AetherV2Error::Tool("tool error".to_string());
+        let err = AetherFfiError::Tool("tool error".to_string());
         assert_eq!(format!("{}", err), "Tool error: tool error");
 
-        let err = AetherV2Error::Memory("memory error".to_string());
+        let err = AetherFfiError::Memory("memory error".to_string());
         assert_eq!(format!("{}", err), "Memory error: memory error");
 
-        let err = AetherV2Error::Cancelled;
+        let err = AetherFfiError::Cancelled;
         assert_eq!(format!("{}", err), "Operation cancelled");
     }
 
@@ -2023,10 +2023,10 @@ missing closing bracket
 
         // Should return a Config error
         assert!(result.is_err(), "init_core should fail with invalid config file");
-        if let Err(AetherV2Error::Config(message)) = result {
+        if let Err(AetherFfiError::Config(message)) = result {
             assert!(!message.is_empty(), "Error message should not be empty");
         } else {
-            panic!("Expected AetherV2Error::Config variant");
+            panic!("Expected AetherFfiError::Config variant");
         }
     }
 
@@ -2055,10 +2055,10 @@ missing closing bracket
         let result = core.reload_config();
         assert!(result.is_err(), "reload_config should fail when config file doesn't exist");
 
-        if let Err(AetherV2Error::Config(message)) = result {
+        if let Err(AetherFfiError::Config(message)) = result {
             assert!(message.contains("not found"), "Error message should indicate file not found");
         } else {
-            panic!("Expected AetherV2Error::Config variant");
+            panic!("Expected AetherFfiError::Config variant");
         }
     }
 

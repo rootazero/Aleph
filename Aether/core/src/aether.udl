@@ -5,7 +5,7 @@
 
 namespace aether {
   // Core interface initialization (rig-core based)
-  [Throws=AetherV2Error]
+  [Throws=AetherFfiError]
   AetherCore init_core(string config_path, AetherEventHandler handler);
 
   // First-run initialization functions
@@ -711,7 +711,7 @@ dictionary PendingConfirmationInfo {
 // This provides a cleaner API compared to v1 and will eventually replace it.
 
 [Error]
-enum AetherV2Error {
+enum AetherFfiError {
     "Config",
     "Provider",
     "Tool",
@@ -731,7 +731,7 @@ callback interface AetherEventHandler {
 
 interface AetherCore {
     // AI PROCESSING
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void process(string input, ProcessOptions? options);
 
     void cancel();
@@ -739,55 +739,55 @@ interface AetherCore {
 
     sequence<ToolInfoFFI> list_tools();
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     sequence<MemoryItem> search_memory(string query, u32 limit);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void clear_memory();
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void reload_config();
 
     // CONFIG MANAGEMENT (Config Management)
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     FullConfig load_config();
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void update_provider(string name, ProviderConfig provider);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void delete_provider(string name);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void update_routing_rules(sequence<RoutingRuleConfig> rules);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void update_shortcuts(ShortcutsConfig shortcuts);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void update_behavior(BehaviorConfig behavior);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void update_trigger_config(TriggerConfig trigger);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void update_general_config(GeneralConfig config);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void update_search_config(SearchConfig search);
 
     // Test search provider with ad-hoc config (Config Management)
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     ProviderTestResult test_search_provider_with_config(SearchProviderTestConfig config);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     boolean validate_regex(string pattern);
 
     TestConnectionResult test_provider_connection_with_config(string provider_name, ProviderConfig provider_config);
 
     string? get_default_provider();
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void set_default_provider(string provider_name);
 
     sequence<string> get_enabled_providers();
@@ -795,7 +795,7 @@ interface AetherCore {
     // MCP MANAGEMENT (Config Management)
     McpSettingsConfig get_mcp_config();
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void update_mcp_config(McpSettingsConfig config);
 
     sequence<McpServerConfig> list_mcp_servers();
@@ -804,66 +804,66 @@ interface AetherCore {
 
     McpServerStatusInfo get_mcp_server_status(string id);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void add_mcp_server(McpServerConfig config);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void update_mcp_server(McpServerConfig config);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void delete_mcp_server(string id);
 
     sequence<string> get_mcp_server_logs(string id, u32 max_lines);
 
     string export_mcp_config_json();
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void import_mcp_config_json(string json);
 
     // MEMORY MANAGEMENT (Config Management)
     MemoryConfig get_memory_config();
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void update_memory_config(MemoryConfig config);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void delete_memory(string id);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     MemoryStats get_memory_stats();
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     sequence<AppMemoryInfo> get_memory_app_list();
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     u64 clear_memories(string? app_bundle_id, string? window_title);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     u64 clear_facts();
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     u64 delete_memories_by_topic_id(string topic_id);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     CompressionStats get_compression_stats();
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     CompressionResult trigger_compression();
 
     // SKILLS MANAGEMENT (Config Management)
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     sequence<SkillInfo> list_skills();
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     SkillInfo install_skill(string url);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     sequence<string> install_skills_from_zip(string zip_path);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void delete_skill(string skill_id);
 
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     string get_skills_dir();
 
     void refresh_skills();
@@ -873,7 +873,7 @@ interface AetherCore {
 
     // MULTI-TURN CONVERSATION (Config Management)
     // Generate a title for a conversation topic using AI
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     string generate_topic_title(string user_input, string ai_response);
 
     // Get root commands from the tool registry for command completion
@@ -884,21 +884,21 @@ interface AetherCore {
     LogLevel get_log_level();
 
     // Set log level
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     void set_log_level(LogLevel level);
 
     // Get log directory path
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     string get_log_directory();
 
     // MEMORY SEARCH WITH FILTER (Config Management)
     // Search memories with optional app/window filter
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     sequence<MemoryEntry> search_memories(string? app_bundle_id, string? window_title, u32 limit);
 
     // VISION/OCR (Config Management)
     // Extract text from image data using OCR
-    [Throws=AetherV2Error]
+    [Throws=AetherFfiError]
     string extract_text(sequence<u8> image_data);
 };
 

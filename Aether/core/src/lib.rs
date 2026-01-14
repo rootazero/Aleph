@@ -183,7 +183,7 @@ pub use crate::vision::{
 
 // Core interface exports (rig-core based architecture)
 pub use crate::uniffi_core::{
-    init_core, AetherCore, AetherEventHandler, AetherV2Error, MemoryItem, ProcessOptions,
+    init_core, AetherCore, AetherEventHandler, AetherFfiError, MemoryItem, ProcessOptions,
     ToolInfoFFI,
 };
 
