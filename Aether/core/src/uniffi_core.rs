@@ -1666,7 +1666,7 @@ impl AetherCore {
         }
 
         // Get memory database path
-        let db_path = crate::core::AetherCore::get_memory_db_path()
+        let db_path = crate::utils::paths::get_memory_db_path()
             .map_err(|e| AetherFfiError::Memory(format!("Failed to get memory path: {}", e)))?;
         drop(config); // Release lock before async
 
