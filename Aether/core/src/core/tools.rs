@@ -159,7 +159,7 @@ impl AetherCore {
         native_registry: Arc<crate::tools::NativeToolRegistry>,
         config: crate::Config,
         mcp_client: Option<Arc<crate::mcp::McpClient>>,
-        event_handler: Arc<dyn crate::AetherEventHandler>,
+        event_handler: Arc<dyn crate::event_handler::InternalEventHandler>,
         intent_pipeline: Option<Arc<crate::routing::IntentRoutingPipeline>>,
         unified_executor: Arc<super::tool_executor::UnifiedToolExecutor>,
     ) {
@@ -399,7 +399,7 @@ impl AetherCore {
     async fn finalize_scoped_refresh(
         registry: &Arc<crate::dispatcher::ToolRegistry>,
         intent_pipeline: &Option<Arc<crate::routing::IntentRoutingPipeline>>,
-        event_handler: &Arc<dyn crate::AetherEventHandler>,
+        event_handler: &Arc<dyn crate::event_handler::InternalEventHandler>,
         unified_executor: &Arc<super::tool_executor::UnifiedToolExecutor>,
     ) {
         let tool_count = registry.active_count().await;
@@ -453,7 +453,7 @@ impl AetherCore {
         native_registry: Arc<crate::tools::NativeToolRegistry>,
         config: crate::Config,
         mcp_client: Option<Arc<crate::mcp::McpClient>>,
-        event_handler: Arc<dyn crate::AetherEventHandler>,
+        event_handler: Arc<dyn crate::event_handler::InternalEventHandler>,
         intent_pipeline: Option<Arc<crate::routing::IntentRoutingPipeline>>,
         unified_executor: Arc<super::tool_executor::UnifiedToolExecutor>,
     ) {

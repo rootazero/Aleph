@@ -16,7 +16,7 @@ struct RuleEditorState: Identifiable {
 }
 
 struct RoutingView: View {
-    let core: AetherV2Core
+    let core: AetherCore
     let providers: [ProviderConfigEntry]
     @ObservedObject var saveBarState: SettingsSaveBarState
 

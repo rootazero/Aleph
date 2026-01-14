@@ -20,12 +20,12 @@ final class MultiTurnCoordinator {
 
     // MARK: - Dependencies
 
-    private weak var coreV2: AetherV2Core?
+    private weak var core: AetherCore?
 
-    /// Pending context for V2 async callbacks
-    private var pendingV2Topic: Topic?
-    private var pendingV2UserInput: String?
-    private var pendingV2IsFirstMessage: Bool = false
+    /// Pending context for async callbacks
+    private var pendingTopic: Topic?
+    private var pendingUserInput: String?
+    private var pendingIsFirstMessage: Bool = false
 
     // MARK: - Windows
 
@@ -61,11 +61,11 @@ final class MultiTurnCoordinator {
 
     // MARK: - Configuration
 
-    /// Configure with V2 dependencies
-    func configure(coreV2: AetherV2Core?) {
-        self.coreV2 = coreV2
-        if coreV2 != nil {
-            print("[MultiTurnCoordinator] V2 interface configured")
+    /// Configure with dependencies
+    func configure(core: AetherCore?) {
+        self.core = core
+        if core != nil {
+            print("[MultiTurnCoordinator] interface configured")
         }
     }
 
@@ -140,8 +140,8 @@ final class MultiTurnCoordinator {
 
     /// Handle user input
     private func handleInput(_ text: String) {
-        guard let topic = currentTopic, coreV2 != nil else {
-            print("[MultiTurnCoordinator] No active topic or coreV2")
+        guard let topic = currentTopic, core != nil else {
+            print("[MultiTurnCoordinator] No active topic or core")
             return
         }
 
@@ -202,31 +202,31 @@ final class MultiTurnCoordinator {
     ///   - isFirstMessage: Whether this is the first message in the topic
     private func processWithAI(text: String, topic: Topic, userDisplayText: String, attachments: [MediaAttachment], isFirstMessage: Bool) {
 
-        // V2 async processing
-        guard let coreV2 = coreV2 else {
-            print("[MultiTurnCoordinator] ⚠️ CoreV2 not available")
+        // async processing
+        guard let core = core else {
+            print("[MultiTurnCoordinator] ⚠️ Core not available")
             return
         }
 
-        print("[MultiTurnCoordinator] 🚀 Using V2 interface (rig-core)")
+        print("[MultiTurnCoordinator] 🚀 Using interface (rig-core)")
 
         // Store pending context for callbacks
-        pendingV2Topic = topic
-        pendingV2UserInput = userDisplayText
-        pendingV2IsFirstMessage = isFirstMessage
+        pendingTopic = topic
+        pendingUserInput = userDisplayText
+        pendingIsFirstMessage = isFirstMessage
 
-        let options = ProcessOptionsV2(
+        let options = ProcessOptions(
             appContext: "com.aether.multi-turn",
             windowTitle: nil,
             stream: true
         )
 
         do {
-            try coreV2.process(input: text, options: options)
-            print("[MultiTurnCoordinator] V2 process initiated, awaiting callbacks")
+            try core.process(input: text, options: options)
+            print("[MultiTurnCoordinator] process initiated, awaiting callbacks")
         } catch {
-            print("[MultiTurnCoordinator] V2 AI error: \(error)")
-            clearPendingV2Context()
+            print("[MultiTurnCoordinator] AI error: \(error)")
+            clearPendingContext()
             DispatchQueue.main.async { [weak self] in
                 self?.displayWindow.viewModel.setError(error.localizedDescription)
             }
@@ -239,9 +239,9 @@ final class MultiTurnCoordinator {
         var outputMode = "instant"
         var typingSpeed: Int = 50
 
-        if let coreV2 = coreV2 {
+        if let core = core {
             do {
-                let config = try coreV2.loadConfig()
+                let config = try core.loadConfig()
                 if let behavior = config.behavior {
                     outputMode = behavior.outputMode
                     typingSpeed = Int(behavior.typingSpeed)
@@ -319,10 +319,10 @@ final class MultiTurnCoordinator {
     /// Generate title for topic
     /// Note: The Rust function is now synchronous (uses internal Tokio runtime)
     private func generateTitle(topic: Topic, userInput: String, aiResponse: String) {
-        print("[MultiTurnCoordinator] generateTitle called for topic: \(topic.id), coreV2 is \(coreV2 != nil ? "available" : "NIL")")
+        print("[MultiTurnCoordinator] generateTitle called for topic: \(topic.id), core is \(core != nil ? "available" : "NIL")")
 
-        guard let coreV2 = coreV2 else {
-            print("[MultiTurnCoordinator] ERROR: coreV2 is nil, cannot generate title")
+        guard let core = core else {
+            print("[MultiTurnCoordinator] ERROR: core is nil, cannot generate title")
             return
         }
 
@@ -332,7 +332,7 @@ final class MultiTurnCoordinator {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
                 // Rust function is now synchronous (internally uses Tokio runtime)
-                let title = try coreV2.generateTopicTitle(userInput: userInput, aiResponse: aiResponse)
+                let title = try core.generateTopicTitle(userInput: userInput, aiResponse: aiResponse)
 
                 // Update in store
                 ConversationStore.shared.updateTopicTitle(id: topic.id, title: title)
@@ -358,21 +358,21 @@ final class MultiTurnCoordinator {
         isActive
     }
 
-    // MARK: - V2 Callback Handlers
+    // MARK: - Callback Handlers
 
-    /// Handle V2 processing completion
-    /// Called by EventHandlerV2.onComplete() when async processing finishes
-    func handleV2Completion(response: String) {
-        print("[MultiTurnCoordinator] V2 completion received (\(response.count) chars)")
+    /// Handle processing completion
+    /// Called by EventHandler.onComplete() when async processing finishes
+    func handleCompletion(response: String) {
+        print("[MultiTurnCoordinator] completion received (\(response.count) chars)")
 
-        guard let topic = pendingV2Topic,
-              let userInput = pendingV2UserInput else {
-            print("[MultiTurnCoordinator] Warning: No pending V2 context")
+        guard let topic = pendingTopic,
+              let userInput = pendingUserInput else {
+            print("[MultiTurnCoordinator] Warning: No pending context")
             return
         }
 
-        let isFirstMessage = pendingV2IsFirstMessage
-        clearPendingV2Context()
+        let isFirstMessage = pendingIsFirstMessage
+        clearPendingContext()
 
         // Route to existing response handler
         DispatchQueue.main.async { [weak self] in
@@ -380,27 +380,27 @@ final class MultiTurnCoordinator {
         }
     }
 
-    /// Handle V2 processing error
-    /// Called by EventHandlerV2.onError() when async processing fails
-    func handleV2Error(message: String) {
-        print("[MultiTurnCoordinator] V2 error received: \(message)")
+    /// Handle processing error
+    /// Called by EventHandler.onError() when async processing fails
+    func handleError(message: String) {
+        print("[MultiTurnCoordinator] error received: \(message)")
 
-        clearPendingV2Context()
+        clearPendingContext()
 
         DispatchQueue.main.async { [weak self] in
             self?.displayWindow.viewModel.setError(message)
         }
     }
 
-    /// Check if V2 processing is pending
-    var isV2ProcessingPending: Bool {
-        pendingV2Topic != nil
+    /// Check if processing is pending
+    var isProcessingPending: Bool {
+        pendingTopic != nil
     }
 
-    /// Clear pending V2 context
-    private func clearPendingV2Context() {
-        pendingV2Topic = nil
-        pendingV2UserInput = nil
-        pendingV2IsFirstMessage = false
+    /// Clear pending context
+    private func clearPendingContext() {
+        pendingTopic = nil
+        pendingUserInput = nil
+        pendingIsFirstMessage = false
     }
 }

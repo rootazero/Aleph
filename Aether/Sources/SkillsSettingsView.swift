@@ -13,7 +13,7 @@ import UniformTypeIdentifiers
 
 struct SkillsSettingsView: View {
     // Dependencies
-    let core: AetherV2Core
+    let core: AetherCore
     @ObservedObject var saveBarState: SettingsSaveBarState
 
     // State

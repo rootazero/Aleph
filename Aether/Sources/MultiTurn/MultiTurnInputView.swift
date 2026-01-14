@@ -43,8 +43,8 @@ final class MultiTurnInputViewModel: ObservableObject {
 
     // MARK: - Core Reference
 
-    private var coreV2: AetherV2Core? {
-        (NSApplication.shared.delegate as? AppDelegate)?.coreV2
+    private var core: AetherCore? {
+        (NSApplication.shared.delegate as? AppDelegate)?.core
     }
 
     // MARK: - Actions
@@ -163,9 +163,9 @@ final class MultiTurnInputViewModel: ObservableObject {
 
     func deleteTopic(_ topic: Topic) {
         // 1. Delete associated memories from Rust core first
-        if let coreV2 = coreV2 {
+        if let core = core {
             do {
-                let deletedMemories = try coreV2.deleteMemoriesByTopicId(topicId: topic.id)
+                let deletedMemories = try core.deleteMemoriesByTopicId(topicId: topic.id)
                 print("[MultiTurnInputViewModel] Deleted \(deletedMemories) memories for topic: \(topic.id)")
             } catch {
                 print("[MultiTurnInputViewModel] Failed to delete memories: \(error)")
@@ -195,13 +195,13 @@ final class MultiTurnInputViewModel: ObservableObject {
     // MARK: - Command Loading
 
     private func loadCommands(prefix: String) {
-        guard let coreV2 = coreV2 else {
-            print("[MultiTurnInputViewModel] V2 Core not available")
+        guard let core = core else {
+            print("[MultiTurnInputViewModel] Core not available")
             commands = []
             return
         }
 
-        let allCommands = coreV2.getRootCommandsFromRegistry()
+        let allCommands = core.getRootCommandsFromRegistry()
         if prefix.isEmpty {
             commands = allCommands
         } else {

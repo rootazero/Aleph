@@ -41,7 +41,7 @@ use crate::dispatcher::{AsyncConfirmationHandler, ToolRegistry};
 use tool_executor::UnifiedToolExecutor;
 use crate::tools::NativeToolRegistry;
 use crate::error::{AetherError, Result};
-use crate::event_handler::{AetherEventHandler, ProcessingState};
+use crate::event_handler::{InternalEventHandler, ProcessingState};
 use crate::mcp::McpClient;
 use crate::memory::cleanup::CleanupService;
 use crate::memory::compression::{CompressionConfig, ConflictConfig, SchedulerConfig};
@@ -66,7 +66,7 @@ use tracing::{debug, info, warn};
 /// - Event handling and callbacks to Swift layer
 pub struct AetherCore {
     /// Event handler for callbacks to Swift layer
-    pub(crate) event_handler: Arc<dyn AetherEventHandler>,
+    pub(crate) event_handler: Arc<dyn InternalEventHandler>,
     /// Tokio runtime for async operations
     pub(crate) runtime: Arc<tokio::runtime::Runtime>,
     /// Last request context for retry functionality
@@ -130,12 +130,12 @@ impl AetherCore {
     /// - Keyboard simulation: KeyboardSimulator.swift
     ///
     /// Rust core focuses on AI processing, memory, and config.
-    pub fn new(event_handler: Box<dyn AetherEventHandler>) -> Result<Self> {
+    pub fn new(event_handler: Box<dyn InternalEventHandler>) -> Result<Self> {
         // CRITICAL: Initialize logging system FIRST before any log statements
         // This ensures all log messages are captured to file from the start
         crate::init_logging();
 
-        let event_handler: Arc<dyn AetherEventHandler> = Arc::from(event_handler);
+        let event_handler: Arc<dyn InternalEventHandler> = Arc::from(event_handler);
 
         // Initialize tokio runtime with optimized configuration for macOS
         // Use fewer threads to reduce priority inversion risk with UI thread
@@ -572,7 +572,7 @@ impl AetherCore {
 
     /// Initialize config watcher for hot-reload
     fn init_config_watcher(
-        handler: Arc<dyn AetherEventHandler>,
+        handler: Arc<dyn InternalEventHandler>,
         config: Arc<Mutex<Config>>,
         router: Arc<RwLock<Option<Arc<Router>>>>,
         search_registry: Arc<RwLock<Option<Arc<SearchRegistry>>>>,

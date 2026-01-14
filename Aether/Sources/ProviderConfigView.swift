@@ -13,7 +13,7 @@ struct ProviderConfigView: View {
     @Binding var providers: [ProviderConfigEntry]
 
     // Core reference for saving config
-    let core: AetherV2Core
+    let core: AetherCore
 
     // Edit mode: nil for new provider, provider name for editing
     let editingProvider: String?
@@ -52,14 +52,14 @@ struct ProviderConfigView: View {
     ]
 
     // Initialize for new provider
-    init(providers: Binding<[ProviderConfigEntry]>, core: AetherV2Core) {
+    init(providers: Binding<[ProviderConfigEntry]>, core: AetherCore) {
         self._providers = providers
         self.core = core
         self.editingProvider = nil
     }
 
     // Initialize for editing existing provider
-    init(providers: Binding<[ProviderConfigEntry]>, core: AetherV2Core, editing providerName: String) {
+    init(providers: Binding<[ProviderConfigEntry]>, core: AetherCore, editing providerName: String) {
         self._providers = providers
         self.core = core
         self.editingProvider = providerName

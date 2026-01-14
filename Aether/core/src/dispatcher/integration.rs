@@ -70,7 +70,7 @@ use crate::dispatcher::{
     RoutingLayer, ToolConfirmation, UnifiedTool, UserConfirmationDecision,
 };
 use crate::error::Result;
-use crate::event_handler::AetherEventHandler;
+use crate::event_handler::InternalEventHandler;
 use crate::providers::AiProvider;
 use crate::routing::{
     RoutingConfig, RoutingContext, RoutingLayerType, RoutingMatch, RoutingResult, UnifiedRouter,
@@ -661,7 +661,7 @@ impl DispatcherIntegration {
         &self,
         input: &str,
         tools: &[UnifiedTool],
-        event_handler: &dyn AetherEventHandler,
+        event_handler: &dyn InternalEventHandler,
         conversation: Option<&ConversationContext>,
     ) -> Result<DispatcherResult> {
         if !self.config.enabled {
@@ -703,7 +703,7 @@ impl DispatcherIntegration {
         &self,
         response: L3RoutingResponse,
         tools: &[UnifiedTool],
-        event_handler: &dyn AetherEventHandler,
+        event_handler: &dyn InternalEventHandler,
     ) -> Result<DispatcherResult> {
         // Check if we have a match
         if !response.has_match() {
@@ -756,7 +756,7 @@ impl DispatcherIntegration {
         &self,
         tool: UnifiedTool,
         response: L3RoutingResponse,
-        event_handler: &dyn AetherEventHandler,
+        event_handler: &dyn InternalEventHandler,
     ) -> Result<DispatcherResult> {
         info!(
             tool = %tool.name,
@@ -840,7 +840,7 @@ impl DispatcherIntegration {
         &self,
         input: &str,
         tools: &[UnifiedTool],
-        event_handler: &dyn AetherEventHandler,
+        event_handler: &dyn InternalEventHandler,
         conversation: Option<&ConversationContext>,
     ) -> Result<DispatcherResult> {
         // Use unified router if available
@@ -870,7 +870,7 @@ impl DispatcherIntegration {
     fn convert_routing_result(
         &self,
         result: RoutingResult,
-        event_handler: &dyn AetherEventHandler,
+        event_handler: &dyn InternalEventHandler,
     ) -> Result<DispatcherResult> {
         match result {
             RoutingResult::Matched(routing_match) => {
@@ -891,7 +891,7 @@ impl DispatcherIntegration {
     fn process_routing_match(
         &self,
         routing_match: RoutingMatch,
-        event_handler: &dyn AetherEventHandler,
+        event_handler: &dyn InternalEventHandler,
     ) -> Result<DispatcherResult> {
         let RoutingMatch {
             tool,
@@ -946,7 +946,7 @@ impl DispatcherIntegration {
         confidence: f32,
         parameters: Option<serde_json::Value>,
         reason: Option<String>,
-        event_handler: &dyn AetherEventHandler,
+        event_handler: &dyn InternalEventHandler,
     ) -> Result<DispatcherResult> {
         info!(
             tool = %tool.name,
@@ -1020,7 +1020,7 @@ impl DispatcherIntegration {
         &self,
         tool: UnifiedTool,
         response: L3RoutingResponse,
-        event_handler: &dyn AetherEventHandler,
+        event_handler: &dyn InternalEventHandler,
     ) -> Result<DispatcherResult> {
         info!(
             tool = %tool.name,
@@ -1075,7 +1075,7 @@ impl DispatcherIntegration {
         parameters: Option<serde_json::Value>,
         reason: Option<String>,
         routing_layer: RoutingLayer,
-        event_handler: &dyn AetherEventHandler,
+        event_handler: &dyn InternalEventHandler,
     ) -> Result<DispatcherResult> {
         info!(
             tool = %tool.name,
@@ -1200,7 +1200,7 @@ impl DispatcherIntegration {
     /// Returns the number of expired confirmations that were cleaned up
     pub fn cleanup_expired_confirmations(
         &self,
-        event_handler: &dyn AetherEventHandler,
+        event_handler: &dyn InternalEventHandler,
     ) -> usize {
         // Cleanup expired and get their IDs
         let expired_ids = self.async_confirmation.cleanup_expired();

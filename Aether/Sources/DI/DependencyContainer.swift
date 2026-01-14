@@ -180,11 +180,11 @@ final class DependencyContainer: ObservableObject {
 
     // MARK: - Core Services (initialized after permissions)
 
-    /// Rust core instance (V2 - rig-core based, unified interface)
-    private(set) var coreV2: AetherV2Core?
+    /// Rust core instance (- rig-core based, unified interface)
+    private(set) var core: AetherCore?
 
-    /// Event handler for Rust callbacks (V2)
-    private(set) var eventHandlerV2: EventHandlerV2?
+    /// Event handler for Rust callbacks
+    private(set) var eventHandler: EventHandler?
 
     // Theme engine removed - using unified visual style
 
@@ -263,12 +263,12 @@ final class DependencyContainer: ObservableObject {
         // Get config path
         let configPath = getConfigPath()
 
-        // === V2 Core Initialization (rig-core based, unified interface) ===
-        print("[DependencyContainer] Initializing V2 core...")
-        eventHandlerV2 = EventHandlerV2(haloWindow: nil)
-        coreV2 = try initV2(configPath: configPath, handler: eventHandlerV2!)
-        eventHandlerV2?.setCore(coreV2!)
-        print("[DependencyContainer] V2 core initialized successfully")
+        // === Core Initialization (rig-core based, unified interface) ===
+        print("[DependencyContainer] Initializing core...")
+        eventHandler = EventHandler(haloWindow: nil)
+        core = try initCore(configPath: configPath, handler: eventHandler!)
+        eventHandler?.setCore(core!)
+        print("[DependencyContainer] core initialized successfully")
 
         isCoreInitialized = true
         print("[DependencyContainer] Core services initialized successfully")
@@ -309,9 +309,9 @@ final class DependencyContainer: ObservableObject {
         // Create HaloWindow directly (no controller wrapper needed)
         _haloWindow = HaloWindow()
 
-        // Connect V2 event handler to Halo window
-        if let eventHandlerV2 = eventHandlerV2 {
-            eventHandlerV2.setHaloWindow(_haloWindow)
+        // Connect event handler to Halo window
+        if let eventHandler = eventHandler {
+            eventHandler.setHaloWindow(_haloWindow)
         }
 
         // TODO: Create other coordinators as they are extracted from AppDelegate
@@ -338,9 +338,9 @@ final class DependencyContainer: ObservableObject {
         _inputCoordinator = nil
         _haloWindow = nil
 
-        // Clear V2 core services
-        coreV2 = nil
-        eventHandlerV2 = nil
+        // Clear core services
+        core = nil
+        eventHandler = nil
 
         isCoreInitialized = false
         areCoordinatorsInitialized = false
@@ -350,20 +350,20 @@ final class DependencyContainer: ObservableObject {
 
     // MARK: - Convenience Accessors
 
-    /// Get V2 core, throwing if not initialized
-    func requireCoreV2() throws -> AetherV2Core {
-        guard let coreV2 = coreV2 else {
+    /// Get core, throwing if not initialized
+    func requireCore() throws -> AetherCore {
+        guard let core = core else {
             throw DependencyError.coreNotInitialized
         }
-        return coreV2
+        return core
     }
 
-    /// Get V2 event handler, throwing if not initialized
-    func requireEventHandlerV2() throws -> EventHandlerV2 {
-        guard let eventHandlerV2 = eventHandlerV2 else {
+    /// Get event handler, throwing if not initialized
+    func requireEventHandler() throws -> EventHandler {
+        guard let eventHandler = eventHandler else {
             throw DependencyError.eventHandlerNotInitialized
         }
-        return eventHandlerV2
+        return eventHandler
     }
 
     // Theme engine removed - using unified visual style
@@ -381,9 +381,9 @@ enum DependencyError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .coreNotInitialized:
-            return "AetherV2Core has not been initialized. Call initializeCoreServices() first."
+            return "AetherCore has not been initialized. Call initializeCoreServices() first."
         case .eventHandlerNotInitialized:
-            return "EventHandlerV2 has not been initialized. Call initializeCoreServices() first."
+            return "EventHandler has not been initialized. Call initializeCoreServices() first."
         case .coordinatorNotInitialized(let name):
             return "\(name) has not been initialized. Call initializeCoordinators() first."
         case .notRegistered(let typeName):

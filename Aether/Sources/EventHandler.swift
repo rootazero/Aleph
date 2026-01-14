@@ -1,16 +1,16 @@
 //
-//  EventHandlerV2.swift
+//  EventHandler.swift
 //  Aether
 //
-//  Implements AetherV2EventHandler protocol to receive callbacks from Rust core (v2 interface).
-//  This handler works with the rig-core based AetherV2Core.
+//  Implements AetherEventHandler protocol to receive callbacks from Rust core.
+//  This handler works with the rig-core based AetherCore.
 //
 
 import Foundation
 import AppKit
 import SwiftUI
 
-/// V2 Event Handler implementing the simplified rig-core callback protocol
+/// Event Handler implementing the simplified rig-core callback protocol
 ///
 /// This handler provides callbacks for:
 /// - AI thinking/processing states
@@ -18,15 +18,15 @@ import SwiftUI
 /// - Streaming response chunks
 /// - Completion and error states
 /// - Memory storage confirmation
-class EventHandlerV2: AetherV2EventHandler {
+class EventHandler: AetherEventHandler {
 
     // MARK: - Dependencies
 
     // Weak reference to Halo window to avoid retain cycle
     private weak var haloWindow: HaloWindow?
 
-    // Weak reference to AetherV2Core for cancellation functionality
-    private weak var coreV2: AetherV2Core?
+    // Weak reference to AetherCore for cancellation functionality
+    private weak var core: AetherCore?
 
     // Weak reference to InputCoordinator for output handling
     private weak var inputCoordinator: InputCoordinator?
@@ -55,9 +55,9 @@ class EventHandlerV2: AetherV2EventHandler {
         self.haloWindow = haloWindow
     }
 
-    // Set AetherV2Core reference after initialization
-    func setCore(_ core: AetherV2Core) {
-        self.coreV2 = core
+    // Set AetherCore reference after initialization
+    func setCore(_ core: AetherCore) {
+        self.core = core
     }
 
     // Set HaloWindow reference (for DependencyContainer use)
@@ -70,16 +70,16 @@ class EventHandlerV2: AetherV2EventHandler {
         self.inputCoordinator = coordinator
     }
 
-    // MARK: - AetherV2EventHandler Protocol
+    // MARK: - AetherEventHandler Protocol
 
     /// Called when AI is processing/thinking
     func onThinking() {
-        print("[EventHandlerV2] AI thinking...")
+        print("[EventHandler] AI thinking...")
 
         DispatchQueue.mainAsync(weakRef: self) { slf in
             // Skip halo in multi-turn mode
             guard !slf.isInMultiTurnMode else {
-                print("[EventHandlerV2] Skipping thinking state (multi-turn mode)")
+                print("[EventHandler] Skipping thinking state (multi-turn mode)")
                 return
             }
 
@@ -91,13 +91,13 @@ class EventHandlerV2: AetherV2EventHandler {
     /// Called when a tool execution starts
     /// - Parameter toolName: Name of the tool being executed
     func onToolStart(toolName: String) {
-        print("[EventHandlerV2] Tool started: \(toolName)")
+        print("[EventHandler] Tool started: \(toolName)")
         currentToolName = toolName
 
         DispatchQueue.mainAsync(weakRef: self) { slf in
             // Skip halo in multi-turn mode
             guard !slf.isInMultiTurnMode else {
-                print("[EventHandlerV2] Skipping tool start state (multi-turn mode)")
+                print("[EventHandler] Skipping tool start state (multi-turn mode)")
                 return
             }
 
@@ -112,13 +112,13 @@ class EventHandlerV2: AetherV2EventHandler {
     ///   - toolName: Name of the tool that completed
     ///   - result: Result from the tool (may be truncated for display)
     func onToolResult(toolName: String, result: String) {
-        print("[EventHandlerV2] Tool result: \(toolName) - \(result.prefix(100))...")
+        print("[EventHandler] Tool result: \(toolName) - \(result.prefix(100))...")
         currentToolName = nil
 
         DispatchQueue.mainAsync(weakRef: self) { slf in
             // Skip halo in multi-turn mode
             guard !slf.isInMultiTurnMode else {
-                print("[EventHandlerV2] Skipping tool result state (multi-turn mode)")
+                print("[EventHandler] Skipping tool result state (multi-turn mode)")
                 return
             }
 
@@ -132,7 +132,7 @@ class EventHandlerV2: AetherV2EventHandler {
     func onStreamChunk(text: String) {
         // Only log first call and on significant changes to avoid log spam
         if accumulatedText.isEmpty || text.count - accumulatedText.count > 50 {
-            print("[EventHandlerV2] Stream chunk: \(text.prefix(50))... (total: \(text.count) chars)")
+            print("[EventHandler] Stream chunk: \(text.prefix(50))... (total: \(text.count) chars)")
         }
 
         accumulatedText = text
@@ -148,28 +148,28 @@ class EventHandlerV2: AetherV2EventHandler {
     /// Called when processing completes successfully
     /// - Parameter response: The final response text
     func onComplete(response: String) {
-        print("[EventHandlerV2] Processing complete: \(response.prefix(100))...")
+        print("[EventHandler] Processing complete: \(response.prefix(100))...")
 
         // Reset state
         accumulatedText = ""
         currentToolName = nil
 
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            // Notify InputCoordinator if V2 processing is pending
-            if slf.inputCoordinator?.isV2ProcessingPending == true {
-                slf.inputCoordinator?.handleV2Completion(response: response)
+            // Notify InputCoordinator if processing is pending
+            if slf.inputCoordinator?.isProcessingPending == true {
+                slf.inputCoordinator?.handleCompletion(response: response)
                 return
             }
 
-            // Notify MultiTurnCoordinator if V2 processing is pending
-            if MultiTurnCoordinator.shared.isV2ProcessingPending {
-                MultiTurnCoordinator.shared.handleV2Completion(response: response)
+            // Notify MultiTurnCoordinator if processing is pending
+            if MultiTurnCoordinator.shared.isProcessingPending {
+                MultiTurnCoordinator.shared.handleCompletion(response: response)
                 return
             }
 
             // Skip halo in multi-turn mode - conversation UI handles it
             guard !slf.isInMultiTurnMode else {
-                print("[EventHandlerV2] Skipping completion state (multi-turn mode)")
+                print("[EventHandler] Skipping completion state (multi-turn mode)")
                 return
             }
 
@@ -186,24 +186,24 @@ class EventHandlerV2: AetherV2EventHandler {
     /// Called when an error occurs during processing
     /// - Parameter message: Error message describing what went wrong
     func onError(message: String) {
-        print("[EventHandlerV2] Error: \(message)")
+        print("[EventHandler] Error: \(message)")
 
         // Reset state
         accumulatedText = ""
         currentToolName = nil
 
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            // Notify InputCoordinator if V2 processing is pending
-            if slf.inputCoordinator?.isV2ProcessingPending == true {
-                slf.inputCoordinator?.handleV2Error(message: message)
+            // Notify InputCoordinator if processing is pending
+            if slf.inputCoordinator?.isProcessingPending == true {
+                slf.inputCoordinator?.handleError(message: message)
                 // Still show error notification
                 slf.showErrorNotification(message: message)
                 return
             }
 
-            // Notify MultiTurnCoordinator if V2 processing is pending
-            if MultiTurnCoordinator.shared.isV2ProcessingPending {
-                MultiTurnCoordinator.shared.handleV2Error(message: message)
+            // Notify MultiTurnCoordinator if processing is pending
+            if MultiTurnCoordinator.shared.isProcessingPending {
+                MultiTurnCoordinator.shared.handleError(message: message)
                 // Multi-turn mode shows error in conversation UI, no halo notification
                 return
             }
@@ -215,7 +215,7 @@ class EventHandlerV2: AetherV2EventHandler {
 
     /// Called when memory is stored successfully
     func onMemoryStored() {
-        print("[EventHandlerV2] Memory stored")
+        print("[EventHandler] Memory stored")
 
         // Subtle feedback - could show toast or just log
         DispatchQueue.mainAsync(weakRef: self) { slf in
@@ -229,7 +229,7 @@ class EventHandlerV2: AetherV2EventHandler {
     private func showErrorNotification(message: String) {
         // Skip halo in multi-turn mode - just show notification
         guard !isInMultiTurnMode else {
-            print("[EventHandlerV2] Showing error notification (multi-turn mode)")
+            print("[EventHandler] Showing error notification (multi-turn mode)")
             // Could show system notification here
             return
         }
@@ -255,7 +255,7 @@ class EventHandlerV2: AetherV2EventHandler {
 
     /// Cancel the current operation
     func cancel() {
-        coreV2?.cancel()
+        core?.cancel()
         accumulatedText = ""
         currentToolName = nil
 
@@ -282,7 +282,7 @@ class EventHandlerV2: AetherV2EventHandler {
     ///   - message: Toast message
     ///   - autoDismiss: Whether to auto-dismiss (default: true for info)
     func showToast(type: ToastType, title: String, message: String, autoDismiss: Bool = true) {
-        print("[EventHandlerV2] Showing toast: \(type) - \(title)")
+        print("[EventHandler] Showing toast: \(type) - \(title)")
 
         // Cancel any existing dismiss timer
         toastDismissTimer?.invalidate()

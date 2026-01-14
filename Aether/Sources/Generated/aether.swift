@@ -576,7 +576,7 @@ fileprivate struct FfiConverterString: FfiConverter {
 
 
 
-public protocol AetherV2CoreProtocol : AnyObject {
+public protocol AetherCoreProtocol : AnyObject {
     
     func addMcpServer(config: McpServerConfig) throws 
     
@@ -646,11 +646,11 @@ public protocol AetherV2CoreProtocol : AnyObject {
     
     func listSkills() throws  -> [SkillInfo]
     
-    func listTools()  -> [ToolInfoV2]
+    func listTools()  -> [ToolInfoFfi]
     
     func loadConfig() throws  -> FullConfig
     
-    func process(input: String, options: ProcessOptionsV2?) throws 
+    func process(input: String, options: ProcessOptions?) throws 
     
     func refreshSkills() 
     
@@ -658,7 +658,7 @@ public protocol AetherV2CoreProtocol : AnyObject {
     
     func searchMemories(appBundleId: String?, windowTitle: String?, limit: UInt32) throws  -> [MemoryEntry]
     
-    func searchMemory(query: String, limit: UInt32) throws  -> [MemoryItemV2]
+    func searchMemory(query: String, limit: UInt32) throws  -> [MemoryItem]
     
     func setDefaultProvider(providerName: String) throws 
     
@@ -694,8 +694,8 @@ public protocol AetherV2CoreProtocol : AnyObject {
     
 }
 
-open class AetherV2Core:
-    AetherV2CoreProtocol {
+open class AetherCore:
+    AetherCoreProtocol {
     fileprivate let pointer: UnsafeMutableRawPointer!
 
     /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
@@ -729,7 +729,7 @@ open class AetherV2Core:
     @_documentation(visibility: private)
 #endif
     public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_aethecore_fn_clone_aetherv2core(self.pointer, $0) }
+        return try! rustCall { uniffi_aethecore_fn_clone_aethercore(self.pointer, $0) }
     }
     // No primary constructor declared for this class.
 
@@ -738,35 +738,35 @@ open class AetherV2Core:
             return
         }
 
-        try! rustCall { uniffi_aethecore_fn_free_aetherv2core(pointer, $0) }
+        try! rustCall { uniffi_aethecore_fn_free_aethercore(pointer, $0) }
     }
 
     
 
     
 open func addMcpServer(config: McpServerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_add_mcp_server(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_add_mcp_server(self.uniffiClonePointer(),
         FfiConverterTypeMcpServerConfig.lower(config),$0
     )
 }
 }
     
 open func cancel() {try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_cancel(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_cancel(self.uniffiClonePointer(),$0
     )
 }
 }
     
 open func clearFacts()throws  -> UInt64 {
     return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_clear_facts(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_clear_facts(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func clearMemories(appBundleId: String?, windowTitle: String?)throws  -> UInt64 {
     return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_clear_memories(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_clear_memories(self.uniffiClonePointer(),
         FfiConverterOptionString.lower(appBundleId),
         FfiConverterOptionString.lower(windowTitle),$0
     )
@@ -774,13 +774,13 @@ open func clearMemories(appBundleId: String?, windowTitle: String?)throws  -> UI
 }
     
 open func clearMemory()throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_clear_memory(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_clear_memory(self.uniffiClonePointer(),$0
     )
 }
 }
     
 open func deleteMcpServer(id: String)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_delete_mcp_server(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_delete_mcp_server(self.uniffiClonePointer(),
         FfiConverterString.lower(id),$0
     )
 }
@@ -788,28 +788,28 @@ open func deleteMcpServer(id: String)throws  {try rustCallWithError(FfiConverter
     
 open func deleteMemoriesByTopicId(topicId: String)throws  -> UInt64 {
     return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_delete_memories_by_topic_id(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_delete_memories_by_topic_id(self.uniffiClonePointer(),
         FfiConverterString.lower(topicId),$0
     )
 })
 }
     
 open func deleteMemory(id: String)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_delete_memory(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_delete_memory(self.uniffiClonePointer(),
         FfiConverterString.lower(id),$0
     )
 }
 }
     
 open func deleteProvider(name: String)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_delete_provider(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_delete_provider(self.uniffiClonePointer(),
         FfiConverterString.lower(name),$0
     )
 }
 }
     
 open func deleteSkill(skillId: String)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_delete_skill(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_delete_skill(self.uniffiClonePointer(),
         FfiConverterString.lower(skillId),$0
     )
 }
@@ -817,14 +817,14 @@ open func deleteSkill(skillId: String)throws  {try rustCallWithError(FfiConverte
     
 open func exportMcpConfigJson() -> String {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_export_mcp_config_json(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_export_mcp_config_json(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func extractText(imageData: [UInt8])throws  -> String {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_extract_text(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_extract_text(self.uniffiClonePointer(),
         FfiConverterSequenceUInt8.lower(imageData),$0
     )
 })
@@ -832,7 +832,7 @@ open func extractText(imageData: [UInt8])throws  -> String {
     
 open func generateTopicTitle(userInput: String, aiResponse: String)throws  -> String {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_generate_topic_title(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_generate_topic_title(self.uniffiClonePointer(),
         FfiConverterString.lower(userInput),
         FfiConverterString.lower(aiResponse),$0
     )
@@ -841,49 +841,49 @@ open func generateTopicTitle(userInput: String, aiResponse: String)throws  -> St
     
 open func getCompressionStats()throws  -> CompressionStats {
     return try  FfiConverterTypeCompressionStats.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_get_compression_stats(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_compression_stats(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func getDefaultProvider() -> String? {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_get_default_provider(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_default_provider(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func getEnabledProviders() -> [String] {
     return try!  FfiConverterSequenceString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_get_enabled_providers(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_enabled_providers(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func getLogDirectory()throws  -> String {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_get_log_directory(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_log_directory(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func getLogLevel() -> LogLevel {
     return try!  FfiConverterTypeLogLevel.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_get_log_level(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_log_level(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func getMcpConfig() -> McpSettingsConfig {
     return try!  FfiConverterTypeMcpSettingsConfig.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_get_mcp_config(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_mcp_config(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func getMcpServer(id: String) -> McpServerConfig? {
     return try!  FfiConverterOptionTypeMcpServerConfig.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_get_mcp_server(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_get_mcp_server(self.uniffiClonePointer(),
         FfiConverterString.lower(id),$0
     )
 })
@@ -891,7 +891,7 @@ open func getMcpServer(id: String) -> McpServerConfig? {
     
 open func getMcpServerLogs(id: String, maxLines: UInt32) -> [String] {
     return try!  FfiConverterSequenceString.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_get_mcp_server_logs(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_get_mcp_server_logs(self.uniffiClonePointer(),
         FfiConverterString.lower(id),
         FfiConverterUInt32.lower(maxLines),$0
     )
@@ -900,7 +900,7 @@ open func getMcpServerLogs(id: String, maxLines: UInt32) -> [String] {
     
 open func getMcpServerStatus(id: String) -> McpServerStatusInfo {
     return try!  FfiConverterTypeMcpServerStatusInfo.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_get_mcp_server_status(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_get_mcp_server_status(self.uniffiClonePointer(),
         FfiConverterString.lower(id),$0
     )
 })
@@ -908,41 +908,41 @@ open func getMcpServerStatus(id: String) -> McpServerStatusInfo {
     
 open func getMemoryAppList()throws  -> [AppMemoryInfo] {
     return try  FfiConverterSequenceTypeAppMemoryInfo.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_get_memory_app_list(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_memory_app_list(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func getMemoryConfig() -> MemoryConfig {
     return try!  FfiConverterTypeMemoryConfig.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_get_memory_config(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_memory_config(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func getMemoryStats()throws  -> MemoryStats {
     return try  FfiConverterTypeMemoryStats.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_get_memory_stats(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_memory_stats(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func getRootCommandsFromRegistry() -> [CommandNode] {
     return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_get_root_commands_from_registry(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_root_commands_from_registry(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func getSkillsDir()throws  -> String {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_get_skills_dir(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_get_skills_dir(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func importMcpConfigJson(json: String)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_import_mcp_config_json(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_import_mcp_config_json(self.uniffiClonePointer(),
         FfiConverterString.lower(json),$0
     )
 }
@@ -950,7 +950,7 @@ open func importMcpConfigJson(json: String)throws  {try rustCallWithError(FfiCon
     
 open func installSkill(url: String)throws  -> SkillInfo {
     return try  FfiConverterTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_install_skill(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_install_skill(self.uniffiClonePointer(),
         FfiConverterString.lower(url),$0
     )
 })
@@ -958,7 +958,7 @@ open func installSkill(url: String)throws  -> SkillInfo {
     
 open func installSkillsFromZip(zipPath: String)throws  -> [String] {
     return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_install_skills_from_zip(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_install_skills_from_zip(self.uniffiClonePointer(),
         FfiConverterString.lower(zipPath),$0
     )
 })
@@ -966,69 +966,69 @@ open func installSkillsFromZip(zipPath: String)throws  -> [String] {
     
 open func isCancelled() -> Bool {
     return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_is_cancelled(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_is_cancelled(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func listBuiltinTools() -> [UnifiedToolInfo] {
     return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_list_builtin_tools(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_list_builtin_tools(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func listMcpServers() -> [McpServerConfig] {
     return try!  FfiConverterSequenceTypeMcpServerConfig.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_list_mcp_servers(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_list_mcp_servers(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func listSkills()throws  -> [SkillInfo] {
     return try  FfiConverterSequenceTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_list_skills(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_list_skills(self.uniffiClonePointer(),$0
     )
 })
 }
     
-open func listTools() -> [ToolInfoV2] {
-    return try!  FfiConverterSequenceTypeToolInfoV2.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_list_tools(self.uniffiClonePointer(),$0
+open func listTools() -> [ToolInfoFfi] {
+    return try!  FfiConverterSequenceTypeToolInfoFFI.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_list_tools(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func loadConfig()throws  -> FullConfig {
     return try  FfiConverterTypeFullConfig.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_load_config(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_load_config(self.uniffiClonePointer(),$0
     )
 })
 }
     
-open func process(input: String, options: ProcessOptionsV2?)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_process(self.uniffiClonePointer(),
+open func process(input: String, options: ProcessOptions?)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aethercore_process(self.uniffiClonePointer(),
         FfiConverterString.lower(input),
-        FfiConverterOptionTypeProcessOptionsV2.lower(options),$0
+        FfiConverterOptionTypeProcessOptions.lower(options),$0
     )
 }
 }
     
 open func refreshSkills() {try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_refresh_skills(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_refresh_skills(self.uniffiClonePointer(),$0
     )
 }
 }
     
 open func reloadConfig()throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_reload_config(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_reload_config(self.uniffiClonePointer(),$0
     )
 }
 }
     
 open func searchMemories(appBundleId: String?, windowTitle: String?, limit: UInt32)throws  -> [MemoryEntry] {
     return try  FfiConverterSequenceTypeMemoryEntry.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_search_memories(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_search_memories(self.uniffiClonePointer(),
         FfiConverterOptionString.lower(appBundleId),
         FfiConverterOptionString.lower(windowTitle),
         FfiConverterUInt32.lower(limit),$0
@@ -1036,9 +1036,9 @@ open func searchMemories(appBundleId: String?, windowTitle: String?, limit: UInt
 })
 }
     
-open func searchMemory(query: String, limit: UInt32)throws  -> [MemoryItemV2] {
-    return try  FfiConverterSequenceTypeMemoryItemV2.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_search_memory(self.uniffiClonePointer(),
+open func searchMemory(query: String, limit: UInt32)throws  -> [MemoryItem] {
+    return try  FfiConverterSequenceTypeMemoryItem.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aethercore_search_memory(self.uniffiClonePointer(),
         FfiConverterString.lower(query),
         FfiConverterUInt32.lower(limit),$0
     )
@@ -1046,14 +1046,14 @@ open func searchMemory(query: String, limit: UInt32)throws  -> [MemoryItemV2] {
 }
     
 open func setDefaultProvider(providerName: String)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_set_default_provider(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_set_default_provider(self.uniffiClonePointer(),
         FfiConverterString.lower(providerName),$0
     )
 }
 }
     
 open func setLogLevel(level: LogLevel)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_set_log_level(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_set_log_level(self.uniffiClonePointer(),
         FfiConverterTypeLogLevel.lower(level),$0
     )
 }
@@ -1061,7 +1061,7 @@ open func setLogLevel(level: LogLevel)throws  {try rustCallWithError(FfiConverte
     
 open func testProviderConnectionWithConfig(providerName: String, providerConfig: ProviderConfig) -> TestConnectionResult {
     return try!  FfiConverterTypeTestConnectionResult.lift(try! rustCall() {
-    uniffi_aethecore_fn_method_aetherv2core_test_provider_connection_with_config(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_test_provider_connection_with_config(self.uniffiClonePointer(),
         FfiConverterString.lower(providerName),
         FfiConverterTypeProviderConfig.lower(providerConfig),$0
     )
@@ -1070,7 +1070,7 @@ open func testProviderConnectionWithConfig(providerName: String, providerConfig:
     
 open func testSearchProviderWithConfig(config: SearchProviderTestConfig)throws  -> ProviderTestResult {
     return try  FfiConverterTypeProviderTestResult.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_test_search_provider_with_config(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_test_search_provider_with_config(self.uniffiClonePointer(),
         FfiConverterTypeSearchProviderTestConfig.lower(config),$0
     )
 })
@@ -1078,48 +1078,48 @@ open func testSearchProviderWithConfig(config: SearchProviderTestConfig)throws  
     
 open func triggerCompression()throws  -> CompressionResult {
     return try  FfiConverterTypeCompressionResult.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_trigger_compression(self.uniffiClonePointer(),$0
+    uniffi_aethecore_fn_method_aethercore_trigger_compression(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func updateBehavior(behavior: BehaviorConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_update_behavior(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_update_behavior(self.uniffiClonePointer(),
         FfiConverterTypeBehaviorConfig.lower(behavior),$0
     )
 }
 }
     
 open func updateGeneralConfig(config: GeneralConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_update_general_config(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_update_general_config(self.uniffiClonePointer(),
         FfiConverterTypeGeneralConfig.lower(config),$0
     )
 }
 }
     
 open func updateMcpConfig(config: McpSettingsConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_update_mcp_config(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_update_mcp_config(self.uniffiClonePointer(),
         FfiConverterTypeMcpSettingsConfig.lower(config),$0
     )
 }
 }
     
 open func updateMcpServer(config: McpServerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_update_mcp_server(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_update_mcp_server(self.uniffiClonePointer(),
         FfiConverterTypeMcpServerConfig.lower(config),$0
     )
 }
 }
     
 open func updateMemoryConfig(config: MemoryConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_update_memory_config(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_update_memory_config(self.uniffiClonePointer(),
         FfiConverterTypeMemoryConfig.lower(config),$0
     )
 }
 }
     
 open func updateProvider(name: String, provider: ProviderConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_update_provider(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_update_provider(self.uniffiClonePointer(),
         FfiConverterString.lower(name),
         FfiConverterTypeProviderConfig.lower(provider),$0
     )
@@ -1127,28 +1127,28 @@ open func updateProvider(name: String, provider: ProviderConfig)throws  {try rus
 }
     
 open func updateRoutingRules(rules: [RoutingRuleConfig])throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_update_routing_rules(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_update_routing_rules(self.uniffiClonePointer(),
         FfiConverterSequenceTypeRoutingRuleConfig.lower(rules),$0
     )
 }
 }
     
 open func updateSearchConfig(search: SearchConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_update_search_config(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_update_search_config(self.uniffiClonePointer(),
         FfiConverterTypeSearchConfig.lower(search),$0
     )
 }
 }
     
 open func updateShortcuts(shortcuts: ShortcutsConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_update_shortcuts(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_update_shortcuts(self.uniffiClonePointer(),
         FfiConverterTypeShortcutsConfig.lower(shortcuts),$0
     )
 }
 }
     
 open func updateTriggerConfig(trigger: TriggerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_update_trigger_config(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_update_trigger_config(self.uniffiClonePointer(),
         FfiConverterTypeTriggerConfig.lower(trigger),$0
     )
 }
@@ -1156,7 +1156,7 @@ open func updateTriggerConfig(trigger: TriggerConfig)throws  {try rustCallWithEr
     
 open func validateRegex(pattern: String)throws  -> Bool {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_method_aetherv2core_validate_regex(self.uniffiClonePointer(),
+    uniffi_aethecore_fn_method_aethercore_validate_regex(self.uniffiClonePointer(),
         FfiConverterString.lower(pattern),$0
     )
 })
@@ -1168,20 +1168,20 @@ open func validateRegex(pattern: String)throws  -> Bool {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public struct FfiConverterTypeAetherV2Core: FfiConverter {
+public struct FfiConverterTypeAetherCore: FfiConverter {
 
     typealias FfiType = UnsafeMutableRawPointer
-    typealias SwiftType = AetherV2Core
+    typealias SwiftType = AetherCore
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> AetherV2Core {
-        return AetherV2Core(unsafeFromRawPointer: pointer)
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> AetherCore {
+        return AetherCore(unsafeFromRawPointer: pointer)
     }
 
-    public static func lower(_ value: AetherV2Core) -> UnsafeMutableRawPointer {
+    public static func lower(_ value: AetherCore) -> UnsafeMutableRawPointer {
         return value.uniffiClonePointer()
     }
 
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AetherV2Core {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AetherCore {
         let v: UInt64 = try readInt(&buf)
         // The Rust code won't compile if a pointer won't fit in a UInt64.
         // We have to go via `UInt` because that's the thing that's the size of a pointer.
@@ -1192,7 +1192,7 @@ public struct FfiConverterTypeAetherV2Core: FfiConverter {
         return try lift(ptr!)
     }
 
-    public static func write(_ value: AetherV2Core, into buf: inout [UInt8]) {
+    public static func write(_ value: AetherCore, into buf: inout [UInt8]) {
         // This fiddling is because `Int` is the thing that's the same size as a pointer.
         // The Rust code won't compile if a pointer won't fit in a `UInt64`.
         writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
@@ -1205,15 +1205,15 @@ public struct FfiConverterTypeAetherV2Core: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeAetherV2Core_lift(_ pointer: UnsafeMutableRawPointer) throws -> AetherV2Core {
-    return try FfiConverterTypeAetherV2Core.lift(pointer)
+public func FfiConverterTypeAetherCore_lift(_ pointer: UnsafeMutableRawPointer) throws -> AetherCore {
+    return try FfiConverterTypeAetherCore.lift(pointer)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeAetherV2Core_lower(_ value: AetherV2Core) -> UnsafeMutableRawPointer {
-    return FfiConverterTypeAetherV2Core.lower(value)
+public func FfiConverterTypeAetherCore_lower(_ value: AetherCore) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeAetherCore.lower(value)
 }
 
 
@@ -3741,7 +3741,7 @@ public func FfiConverterTypeMemoryEntry_lower(_ value: MemoryEntry) -> RustBuffe
 }
 
 
-public struct MemoryItemV2 {
+public struct MemoryItem {
     public var id: String
     public var userInput: String
     public var assistantResponse: String
@@ -3761,8 +3761,8 @@ public struct MemoryItemV2 {
 
 
 
-extension MemoryItemV2: Equatable, Hashable {
-    public static func ==(lhs: MemoryItemV2, rhs: MemoryItemV2) -> Bool {
+extension MemoryItem: Equatable, Hashable {
+    public static func ==(lhs: MemoryItem, rhs: MemoryItem) -> Bool {
         if lhs.id != rhs.id {
             return false
         }
@@ -3794,10 +3794,10 @@ extension MemoryItemV2: Equatable, Hashable {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public struct FfiConverterTypeMemoryItemV2: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MemoryItemV2 {
+public struct FfiConverterTypeMemoryItem: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MemoryItem {
         return
-            try MemoryItemV2(
+            try MemoryItem(
                 id: FfiConverterString.read(from: &buf), 
                 userInput: FfiConverterString.read(from: &buf), 
                 assistantResponse: FfiConverterString.read(from: &buf), 
@@ -3806,7 +3806,7 @@ public struct FfiConverterTypeMemoryItemV2: FfiConverterRustBuffer {
         )
     }
 
-    public static func write(_ value: MemoryItemV2, into buf: inout [UInt8]) {
+    public static func write(_ value: MemoryItem, into buf: inout [UInt8]) {
         FfiConverterString.write(value.id, into: &buf)
         FfiConverterString.write(value.userInput, into: &buf)
         FfiConverterString.write(value.assistantResponse, into: &buf)
@@ -3819,15 +3819,15 @@ public struct FfiConverterTypeMemoryItemV2: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeMemoryItemV2_lift(_ buf: RustBuffer) throws -> MemoryItemV2 {
-    return try FfiConverterTypeMemoryItemV2.lift(buf)
+public func FfiConverterTypeMemoryItem_lift(_ buf: RustBuffer) throws -> MemoryItem {
+    return try FfiConverterTypeMemoryItem.lift(buf)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeMemoryItemV2_lower(_ value: MemoryItemV2) -> RustBuffer {
-    return FfiConverterTypeMemoryItemV2.lower(value)
+public func FfiConverterTypeMemoryItem_lower(_ value: MemoryItem) -> RustBuffer {
+    return FfiConverterTypeMemoryItem.lower(value)
 }
 
 
@@ -4133,7 +4133,7 @@ public func FfiConverterTypePendingConfirmationInfo_lower(_ value: PendingConfir
 }
 
 
-public struct ProcessOptionsV2 {
+public struct ProcessOptions {
     public var appContext: String?
     public var windowTitle: String?
     public var stream: Bool
@@ -4149,8 +4149,8 @@ public struct ProcessOptionsV2 {
 
 
 
-extension ProcessOptionsV2: Equatable, Hashable {
-    public static func ==(lhs: ProcessOptionsV2, rhs: ProcessOptionsV2) -> Bool {
+extension ProcessOptions: Equatable, Hashable {
+    public static func ==(lhs: ProcessOptions, rhs: ProcessOptions) -> Bool {
         if lhs.appContext != rhs.appContext {
             return false
         }
@@ -4174,17 +4174,17 @@ extension ProcessOptionsV2: Equatable, Hashable {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public struct FfiConverterTypeProcessOptionsV2: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProcessOptionsV2 {
+public struct FfiConverterTypeProcessOptions: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProcessOptions {
         return
-            try ProcessOptionsV2(
+            try ProcessOptions(
                 appContext: FfiConverterOptionString.read(from: &buf), 
                 windowTitle: FfiConverterOptionString.read(from: &buf), 
                 stream: FfiConverterBool.read(from: &buf)
         )
     }
 
-    public static func write(_ value: ProcessOptionsV2, into buf: inout [UInt8]) {
+    public static func write(_ value: ProcessOptions, into buf: inout [UInt8]) {
         FfiConverterOptionString.write(value.appContext, into: &buf)
         FfiConverterOptionString.write(value.windowTitle, into: &buf)
         FfiConverterBool.write(value.stream, into: &buf)
@@ -4195,15 +4195,15 @@ public struct FfiConverterTypeProcessOptionsV2: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeProcessOptionsV2_lift(_ buf: RustBuffer) throws -> ProcessOptionsV2 {
-    return try FfiConverterTypeProcessOptionsV2.lift(buf)
+public func FfiConverterTypeProcessOptions_lift(_ buf: RustBuffer) throws -> ProcessOptions {
+    return try FfiConverterTypeProcessOptions.lift(buf)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeProcessOptionsV2_lower(_ value: ProcessOptionsV2) -> RustBuffer {
-    return FfiConverterTypeProcessOptionsV2.lower(value)
+public func FfiConverterTypeProcessOptions_lower(_ value: ProcessOptions) -> RustBuffer {
+    return FfiConverterTypeProcessOptions.lower(value)
 }
 
 
@@ -5481,7 +5481,7 @@ public func FfiConverterTypeTestConnectionResult_lower(_ value: TestConnectionRe
 }
 
 
-public struct ToolInfoV2 {
+public struct ToolInfoFfi {
     public var name: String
     public var description: String
     public var source: String
@@ -5497,8 +5497,8 @@ public struct ToolInfoV2 {
 
 
 
-extension ToolInfoV2: Equatable, Hashable {
-    public static func ==(lhs: ToolInfoV2, rhs: ToolInfoV2) -> Bool {
+extension ToolInfoFfi: Equatable, Hashable {
+    public static func ==(lhs: ToolInfoFfi, rhs: ToolInfoFfi) -> Bool {
         if lhs.name != rhs.name {
             return false
         }
@@ -5522,17 +5522,17 @@ extension ToolInfoV2: Equatable, Hashable {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public struct FfiConverterTypeToolInfoV2: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ToolInfoV2 {
+public struct FfiConverterTypeToolInfoFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ToolInfoFfi {
         return
-            try ToolInfoV2(
+            try ToolInfoFfi(
                 name: FfiConverterString.read(from: &buf), 
                 description: FfiConverterString.read(from: &buf), 
                 source: FfiConverterString.read(from: &buf)
         )
     }
 
-    public static func write(_ value: ToolInfoV2, into buf: inout [UInt8]) {
+    public static func write(_ value: ToolInfoFfi, into buf: inout [UInt8]) {
         FfiConverterString.write(value.name, into: &buf)
         FfiConverterString.write(value.description, into: &buf)
         FfiConverterString.write(value.source, into: &buf)
@@ -5543,15 +5543,15 @@ public struct FfiConverterTypeToolInfoV2: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeToolInfoV2_lift(_ buf: RustBuffer) throws -> ToolInfoV2 {
-    return try FfiConverterTypeToolInfoV2.lift(buf)
+public func FfiConverterTypeToolInfoFFI_lift(_ buf: RustBuffer) throws -> ToolInfoFfi {
+    return try FfiConverterTypeToolInfoFFI.lift(buf)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeToolInfoV2_lower(_ value: ToolInfoV2) -> RustBuffer {
-    return FfiConverterTypeToolInfoV2.lower(value)
+public func FfiConverterTypeToolInfoFFI_lower(_ value: ToolInfoFfi) -> RustBuffer {
+    return FfiConverterTypeToolInfoFFI.lower(value)
 }
 
 
@@ -7052,7 +7052,7 @@ extension VisionTask: Equatable, Hashable {}
 
 
 
-public protocol AetherV2EventHandler : AnyObject {
+public protocol AetherEventHandler : AnyObject {
     
     func onThinking() 
     
@@ -7079,11 +7079,11 @@ private let UNIFFI_CALLBACK_ERROR: Int32 = 1
 private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 
 // Put the implementation in a struct so we don't pollute the top-level namespace
-fileprivate struct UniffiCallbackInterfaceAetherV2EventHandler {
+fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    static var vtable: UniffiVTableCallbackInterfaceAetherV2EventHandler = UniffiVTableCallbackInterfaceAetherV2EventHandler(
+    static var vtable: UniffiVTableCallbackInterfaceAetherEventHandler = UniffiVTableCallbackInterfaceAetherEventHandler(
         onThinking: { (
             uniffiHandle: UInt64,
             uniffiOutReturn: UnsafeMutableRawPointer,
@@ -7091,7 +7091,7 @@ fileprivate struct UniffiCallbackInterfaceAetherV2EventHandler {
         ) in
             let makeCall = {
                 () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherV2EventHandler.handleMap.get(handle: uniffiHandle) else {
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onThinking(
@@ -7114,7 +7114,7 @@ fileprivate struct UniffiCallbackInterfaceAetherV2EventHandler {
         ) in
             let makeCall = {
                 () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherV2EventHandler.handleMap.get(handle: uniffiHandle) else {
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onToolStart(
@@ -7139,7 +7139,7 @@ fileprivate struct UniffiCallbackInterfaceAetherV2EventHandler {
         ) in
             let makeCall = {
                 () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherV2EventHandler.handleMap.get(handle: uniffiHandle) else {
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onToolResult(
@@ -7164,7 +7164,7 @@ fileprivate struct UniffiCallbackInterfaceAetherV2EventHandler {
         ) in
             let makeCall = {
                 () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherV2EventHandler.handleMap.get(handle: uniffiHandle) else {
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onStreamChunk(
@@ -7188,7 +7188,7 @@ fileprivate struct UniffiCallbackInterfaceAetherV2EventHandler {
         ) in
             let makeCall = {
                 () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherV2EventHandler.handleMap.get(handle: uniffiHandle) else {
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onComplete(
@@ -7212,7 +7212,7 @@ fileprivate struct UniffiCallbackInterfaceAetherV2EventHandler {
         ) in
             let makeCall = {
                 () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherV2EventHandler.handleMap.get(handle: uniffiHandle) else {
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onError(
@@ -7235,7 +7235,7 @@ fileprivate struct UniffiCallbackInterfaceAetherV2EventHandler {
         ) in
             let makeCall = {
                 () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherV2EventHandler.handleMap.get(handle: uniffiHandle) else {
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onMemoryStored(
@@ -7251,31 +7251,31 @@ fileprivate struct UniffiCallbackInterfaceAetherV2EventHandler {
             )
         },
         uniffiFree: { (uniffiHandle: UInt64) -> () in
-            let result = try? FfiConverterCallbackInterfaceAetherV2EventHandler.handleMap.remove(handle: uniffiHandle)
+            let result = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.remove(handle: uniffiHandle)
             if result == nil {
-                print("Uniffi callback interface AetherV2EventHandler: handle missing in uniffiFree")
+                print("Uniffi callback interface AetherEventHandler: handle missing in uniffiFree")
             }
         }
     )
 }
 
-private func uniffiCallbackInitAetherV2EventHandler() {
-    uniffi_aethecore_fn_init_callback_vtable_aetherv2eventhandler(&UniffiCallbackInterfaceAetherV2EventHandler.vtable)
+private func uniffiCallbackInitAetherEventHandler() {
+    uniffi_aethecore_fn_init_callback_vtable_aethereventhandler(&UniffiCallbackInterfaceAetherEventHandler.vtable)
 }
 
 // FfiConverter protocol for callback interfaces
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterCallbackInterfaceAetherV2EventHandler {
-    fileprivate static var handleMap = UniffiHandleMap<AetherV2EventHandler>()
+fileprivate struct FfiConverterCallbackInterfaceAetherEventHandler {
+    fileprivate static var handleMap = UniffiHandleMap<AetherEventHandler>()
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-extension FfiConverterCallbackInterfaceAetherV2EventHandler : FfiConverter {
-    typealias SwiftType = AetherV2EventHandler
+extension FfiConverterCallbackInterfaceAetherEventHandler : FfiConverter {
+    typealias SwiftType = AetherEventHandler
     typealias FfiType = UInt64
 
 #if swift(>=5.8)
@@ -7710,8 +7710,8 @@ fileprivate struct FfiConverterOptionTypePIIConfig: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterOptionTypeProcessOptionsV2: FfiConverterRustBuffer {
-    typealias SwiftType = ProcessOptionsV2?
+fileprivate struct FfiConverterOptionTypeProcessOptions: FfiConverterRustBuffer {
+    typealias SwiftType = ProcessOptions?
 
     public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         guard let value = value else {
@@ -7719,13 +7719,13 @@ fileprivate struct FfiConverterOptionTypeProcessOptionsV2: FfiConverterRustBuffe
             return
         }
         writeInt(&buf, Int8(1))
-        FfiConverterTypeProcessOptionsV2.write(value, into: &buf)
+        FfiConverterTypeProcessOptions.write(value, into: &buf)
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
-        case 1: return try FfiConverterTypeProcessOptionsV2.read(from: &buf)
+        case 1: return try FfiConverterTypeProcessOptions.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -8226,23 +8226,23 @@ fileprivate struct FfiConverterSequenceTypeMemoryEntry: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterSequenceTypeMemoryItemV2: FfiConverterRustBuffer {
-    typealias SwiftType = [MemoryItemV2]
+fileprivate struct FfiConverterSequenceTypeMemoryItem: FfiConverterRustBuffer {
+    typealias SwiftType = [MemoryItem]
 
-    public static func write(_ value: [MemoryItemV2], into buf: inout [UInt8]) {
+    public static func write(_ value: [MemoryItem], into buf: inout [UInt8]) {
         let len = Int32(value.count)
         writeInt(&buf, len)
         for item in value {
-            FfiConverterTypeMemoryItemV2.write(item, into: &buf)
+            FfiConverterTypeMemoryItem.write(item, into: &buf)
         }
     }
 
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [MemoryItemV2] {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [MemoryItem] {
         let len: Int32 = try readInt(&buf)
-        var seq = [MemoryItemV2]()
+        var seq = [MemoryItem]()
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeMemoryItemV2.read(from: &buf))
+            seq.append(try FfiConverterTypeMemoryItem.read(from: &buf))
         }
         return seq
     }
@@ -8351,23 +8351,23 @@ fileprivate struct FfiConverterSequenceTypeSkillInfo: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterSequenceTypeToolInfoV2: FfiConverterRustBuffer {
-    typealias SwiftType = [ToolInfoV2]
+fileprivate struct FfiConverterSequenceTypeToolInfoFFI: FfiConverterRustBuffer {
+    typealias SwiftType = [ToolInfoFfi]
 
-    public static func write(_ value: [ToolInfoV2], into buf: inout [UInt8]) {
+    public static func write(_ value: [ToolInfoFfi], into buf: inout [UInt8]) {
         let len = Int32(value.count)
         writeInt(&buf, len)
         for item in value {
-            FfiConverterTypeToolInfoV2.write(item, into: &buf)
+            FfiConverterTypeToolInfoFFI.write(item, into: &buf)
         }
     }
 
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ToolInfoV2] {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ToolInfoFfi] {
         let len: Int32 = try readInt(&buf)
-        var seq = [ToolInfoV2]()
+        var seq = [ToolInfoFfi]()
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeToolInfoV2.read(from: &buf))
+            seq.append(try FfiConverterTypeToolInfoFFI.read(from: &buf))
         }
         return seq
     }
@@ -8442,11 +8442,11 @@ public func getSkillsDirString()throws  -> String {
     )
 })
 }
-public func initV2(configPath: String, handler: AetherV2EventHandler)throws  -> AetherV2Core {
-    return try  FfiConverterTypeAetherV2Core.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
-    uniffi_aethecore_fn_func_init_v2(
+public func initCore(configPath: String, handler: AetherEventHandler)throws  -> AetherCore {
+    return try  FfiConverterTypeAetherCore.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_func_init_core(
         FfiConverterString.lower(configPath),
-        FfiConverterCallbackInterfaceAetherV2EventHandler.lower(handler),$0
+        FfiConverterCallbackInterfaceAetherEventHandler.lower(handler),$0
     )
 })
 }
@@ -8499,7 +8499,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_func_get_skills_dir_string() != 54210) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_func_init_v2() != 34658) {
+    if (uniffi_aethecore_checksum_func_init_core() != 9536) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_func_initialize_builtin_skills_ffi() != 33816) {
@@ -8514,196 +8514,196 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_func_run_first_time_init() != 14662) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_add_mcp_server() != 63231) {
+    if (uniffi_aethecore_checksum_method_aethercore_add_mcp_server() != 49504) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_cancel() != 53624) {
+    if (uniffi_aethecore_checksum_method_aethercore_cancel() != 44564) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_clear_facts() != 4001) {
+    if (uniffi_aethecore_checksum_method_aethercore_clear_facts() != 30910) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_clear_memories() != 65081) {
+    if (uniffi_aethecore_checksum_method_aethercore_clear_memories() != 2705) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_clear_memory() != 64906) {
+    if (uniffi_aethecore_checksum_method_aethercore_clear_memory() != 30106) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_delete_mcp_server() != 27847) {
+    if (uniffi_aethecore_checksum_method_aethercore_delete_mcp_server() != 20180) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_delete_memories_by_topic_id() != 27008) {
+    if (uniffi_aethecore_checksum_method_aethercore_delete_memories_by_topic_id() != 26516) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_delete_memory() != 53380) {
+    if (uniffi_aethecore_checksum_method_aethercore_delete_memory() != 41904) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_delete_provider() != 30497) {
+    if (uniffi_aethecore_checksum_method_aethercore_delete_provider() != 25908) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_delete_skill() != 15994) {
+    if (uniffi_aethecore_checksum_method_aethercore_delete_skill() != 37440) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_export_mcp_config_json() != 21455) {
+    if (uniffi_aethecore_checksum_method_aethercore_export_mcp_config_json() != 17811) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_extract_text() != 27013) {
+    if (uniffi_aethecore_checksum_method_aethercore_extract_text() != 40511) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_generate_topic_title() != 49963) {
+    if (uniffi_aethecore_checksum_method_aethercore_generate_topic_title() != 48242) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_get_compression_stats() != 48899) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_compression_stats() != 60561) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_get_default_provider() != 63518) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_default_provider() != 56435) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_get_enabled_providers() != 28734) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_enabled_providers() != 10573) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_get_log_directory() != 42553) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_log_directory() != 33645) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_get_log_level() != 40333) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_log_level() != 16546) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_get_mcp_config() != 23687) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_config() != 24168) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_get_mcp_server() != 45650) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_server() != 838) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_get_mcp_server_logs() != 57017) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_server_logs() != 14498) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_get_mcp_server_status() != 16429) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_mcp_server_status() != 46212) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_get_memory_app_list() != 40064) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_memory_app_list() != 37260) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_get_memory_config() != 17327) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_memory_config() != 46228) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_get_memory_stats() != 50210) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_memory_stats() != 19379) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_get_root_commands_from_registry() != 33343) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_root_commands_from_registry() != 64284) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_get_skills_dir() != 37578) {
+    if (uniffi_aethecore_checksum_method_aethercore_get_skills_dir() != 26015) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_import_mcp_config_json() != 60730) {
+    if (uniffi_aethecore_checksum_method_aethercore_import_mcp_config_json() != 9218) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_install_skill() != 40846) {
+    if (uniffi_aethecore_checksum_method_aethercore_install_skill() != 18124) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_install_skills_from_zip() != 10361) {
+    if (uniffi_aethecore_checksum_method_aethercore_install_skills_from_zip() != 40465) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_is_cancelled() != 11389) {
+    if (uniffi_aethecore_checksum_method_aethercore_is_cancelled() != 61008) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_list_builtin_tools() != 31378) {
+    if (uniffi_aethecore_checksum_method_aethercore_list_builtin_tools() != 62441) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_list_mcp_servers() != 64331) {
+    if (uniffi_aethecore_checksum_method_aethercore_list_mcp_servers() != 29913) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_list_skills() != 3385) {
+    if (uniffi_aethecore_checksum_method_aethercore_list_skills() != 59310) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_list_tools() != 37444) {
+    if (uniffi_aethecore_checksum_method_aethercore_list_tools() != 57354) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_load_config() != 54855) {
+    if (uniffi_aethecore_checksum_method_aethercore_load_config() != 63295) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_process() != 24152) {
+    if (uniffi_aethecore_checksum_method_aethercore_process() != 48883) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_refresh_skills() != 28495) {
+    if (uniffi_aethecore_checksum_method_aethercore_refresh_skills() != 30751) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_reload_config() != 4462) {
+    if (uniffi_aethecore_checksum_method_aethercore_reload_config() != 35407) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_search_memories() != 17753) {
+    if (uniffi_aethecore_checksum_method_aethercore_search_memories() != 19278) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_search_memory() != 28128) {
+    if (uniffi_aethecore_checksum_method_aethercore_search_memory() != 48121) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_set_default_provider() != 31407) {
+    if (uniffi_aethecore_checksum_method_aethercore_set_default_provider() != 24757) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_set_log_level() != 58484) {
+    if (uniffi_aethecore_checksum_method_aethercore_set_log_level() != 13384) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_test_provider_connection_with_config() != 11452) {
+    if (uniffi_aethecore_checksum_method_aethercore_test_provider_connection_with_config() != 26018) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_test_search_provider_with_config() != 27172) {
+    if (uniffi_aethecore_checksum_method_aethercore_test_search_provider_with_config() != 21948) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_trigger_compression() != 17129) {
+    if (uniffi_aethecore_checksum_method_aethercore_trigger_compression() != 41580) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_update_behavior() != 39842) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_behavior() != 47391) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_update_general_config() != 1587) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_general_config() != 46027) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_update_mcp_config() != 45122) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_mcp_config() != 20740) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_update_mcp_server() != 62898) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_mcp_server() != 50753) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_update_memory_config() != 48912) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_memory_config() != 50417) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_update_provider() != 10121) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_provider() != 42655) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_update_routing_rules() != 30820) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_routing_rules() != 52979) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_update_search_config() != 11904) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_search_config() != 54038) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_update_shortcuts() != 29588) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_shortcuts() != 30835) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_update_trigger_config() != 61067) {
+    if (uniffi_aethecore_checksum_method_aethercore_update_trigger_config() != 41034) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2core_validate_regex() != 58270) {
+    if (uniffi_aethecore_checksum_method_aethercore_validate_regex() != 24212) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2eventhandler_on_thinking() != 52985) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_thinking() != 10784) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2eventhandler_on_tool_start() != 58383) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tool_start() != 6212) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2eventhandler_on_tool_result() != 42979) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tool_result() != 1784) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2eventhandler_on_stream_chunk() != 30521) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_stream_chunk() != 36815) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2eventhandler_on_complete() != 6429) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_complete() != 44205) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2eventhandler_on_error() != 14735) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_error() != 24904) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_aetherv2eventhandler_on_memory_stored() != 25520) {
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_memory_stored() != 30752) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_init_started() != 45699) {
@@ -8725,7 +8725,7 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
 
-    uniffiCallbackInitAetherV2EventHandler()
+    uniffiCallbackInitAetherEventHandler()
     uniffiCallbackInitInitializationProgressHandler()
     return InitializationResult.ok
 }()

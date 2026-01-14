@@ -58,8 +58,8 @@ final class OutputCoordinator {
 
     // MARK: - Dependencies
 
-    /// Reference to V2 core for config loading
-    private weak var coreV2: AetherV2Core?
+    /// Reference to core for config loading
+    private weak var core: AetherCore?
 
     /// Reference to Halo window for state updates
     private weak var haloWindow: HaloWindow?
@@ -99,10 +99,10 @@ final class OutputCoordinator {
     /// Configure dependencies after initialization
     ///
     /// - Parameters:
-    ///   - coreV2: AetherV2Core instance
+    ///   - core: AetherCore instance
     ///   - haloWindow: HaloWindow for state updates
-    func configure(coreV2: AetherV2Core?, haloWindow: HaloWindow?) {
-        self.coreV2 = coreV2
+    func configure(core: AetherCore?, haloWindow: HaloWindow?) {
+        self.core = core
         self.haloWindow = haloWindow
     }
 
@@ -136,8 +136,8 @@ final class OutputCoordinator {
     ///   - response: The AI response text to output
     ///   - context: Output context containing mode and session configuration
     func performOutput(response: String, context: OutputContext) {
-        guard let coreV2 = coreV2 else {
-            print("[OutputCoordinator] ⚠️ CoreV2 not available for output")
+        guard let core = core else {
+            print("[OutputCoordinator] ⚠️ Core not available for output")
             return
         }
 
@@ -155,7 +155,7 @@ final class OutputCoordinator {
         var outputMode = "instant"
         var typingSpeed: Int = 50
         do {
-            let config = try coreV2.loadConfig()
+            let config = try core.loadConfig()
             if let behavior = config.behavior {
                 outputMode = behavior.outputMode
                 typingSpeed = Int(behavior.typingSpeed)

@@ -22,7 +22,7 @@ import SwiftUI
 ///   - autoDismiss: Whether to auto-dismiss (default: true for info)
 func showInfoToast(title: String, message: String, autoDismiss: Bool = true) {
     if let appDelegate = NSApp.delegate as? AppDelegate,
-       let eventHandler = appDelegate.eventHandlerV2 {
+       let eventHandler = appDelegate.eventHandler {
         eventHandler.showToast(type: .info, title: title, message: message, autoDismiss: autoDismiss)
     } else {
         // Fallback to NSAlert
@@ -40,7 +40,7 @@ func showInfoToast(title: String, message: String, autoDismiss: Bool = true) {
 ///   - autoDismiss: Whether to auto-dismiss (default: false for warnings)
 func showWarningToast(title: String, message: String, autoDismiss: Bool = false) {
     if let appDelegate = NSApp.delegate as? AppDelegate,
-       let eventHandler = appDelegate.eventHandlerV2 {
+       let eventHandler = appDelegate.eventHandler {
         eventHandler.showToast(type: .warning, title: title, message: message, autoDismiss: autoDismiss)
     } else {
         // Fallback to NSAlert
@@ -58,7 +58,7 @@ func showWarningToast(title: String, message: String, autoDismiss: Bool = false)
 ///   - autoDismiss: Whether to auto-dismiss (default: false for errors)
 func showErrorToast(title: String, message: String, autoDismiss: Bool = false) {
     if let appDelegate = NSApp.delegate as? AppDelegate,
-       let eventHandler = appDelegate.eventHandlerV2 {
+       let eventHandler = appDelegate.eventHandler {
         eventHandler.showToast(type: .error, title: title, message: message, autoDismiss: autoDismiss)
     } else {
         // Fallback to NSAlert

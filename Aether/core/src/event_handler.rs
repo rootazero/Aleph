@@ -101,7 +101,7 @@ impl McpStartupReportFFI {
 ///
 /// Clients (Swift, Kotlin, etc.) implement this trait to receive
 /// callbacks when hotkeys are detected, states change, or errors occur.
-pub trait AetherEventHandler: Send + Sync {
+pub trait InternalEventHandler: Send + Sync {
     /// Called when the processing state changes
     fn on_state_changed(&self, state: ProcessingState);
 
@@ -533,7 +533,7 @@ impl MockEventHandler {
 }
 
 #[cfg(test)]
-impl AetherEventHandler for MockEventHandler {
+impl InternalEventHandler for MockEventHandler {
     fn on_state_changed(&self, state: ProcessingState) {
         self.state_changes
             .lock()

@@ -34,7 +34,7 @@
 //! ```
 
 use crate::error::{AetherError, Result};
-use crate::event_handler::AetherEventHandler;
+use crate::event_handler::InternalEventHandler;
 use crate::tools::NativeToolRegistry;
 use serde_json::Value;
 use std::sync::Arc;
@@ -109,7 +109,7 @@ pub struct PlanExecutor {
     registry: Arc<NativeToolRegistry>,
 
     /// Event handler for progress callbacks
-    event_handler: Arc<dyn AetherEventHandler>,
+    event_handler: Arc<dyn InternalEventHandler>,
 
     /// Executor configuration
     config: PlanExecutorConfig,
@@ -119,7 +119,7 @@ impl PlanExecutor {
     /// Create a new PlanExecutor
     pub fn new(
         registry: Arc<NativeToolRegistry>,
-        event_handler: Arc<dyn AetherEventHandler>,
+        event_handler: Arc<dyn InternalEventHandler>,
     ) -> Self {
         Self {
             registry,
@@ -564,7 +564,7 @@ mod tests {
     // Mock event handler for testing
     struct MockEventHandler;
 
-    impl AetherEventHandler for MockEventHandler {
+    impl InternalEventHandler for MockEventHandler {
         fn on_state_changed(&self, _: crate::ProcessingState) {}
         fn on_error(&self, _: String, _: Option<String>) {}
         fn on_response_chunk(&self, _: String) {}
@@ -615,7 +615,7 @@ mod tests {
     #[test]
     fn test_resolve_params_simple_prev() {
         let registry = Arc::new(NativeToolRegistry::new());
-        let handler: Arc<dyn AetherEventHandler> = Arc::new(MockEventHandler);
+        let handler: Arc<dyn InternalEventHandler> = Arc::new(MockEventHandler);
         let executor = PlanExecutor::new(registry, handler);
 
         // Context with previous output
@@ -631,7 +631,7 @@ mod tests {
     #[test]
     fn test_resolve_params_embedded_prev() {
         let registry = Arc::new(NativeToolRegistry::new());
-        let handler: Arc<dyn AetherEventHandler> = Arc::new(MockEventHandler);
+        let handler: Arc<dyn InternalEventHandler> = Arc::new(MockEventHandler);
         let executor = PlanExecutor::new(registry, handler);
 
         // Context with string output
@@ -647,7 +647,7 @@ mod tests {
     #[test]
     fn test_resolve_params_nested() {
         let registry = Arc::new(NativeToolRegistry::new());
-        let handler: Arc<dyn AetherEventHandler> = Arc::new(MockEventHandler);
+        let handler: Arc<dyn InternalEventHandler> = Arc::new(MockEventHandler);
         let executor = PlanExecutor::new(registry, handler);
 
         let ctx = create_test_context(Some(json!({"data": "test"})));
@@ -670,7 +670,7 @@ mod tests {
     #[test]
     fn test_resolve_params_first_step_error() {
         let registry = Arc::new(NativeToolRegistry::new());
-        let handler: Arc<dyn AetherEventHandler> = Arc::new(MockEventHandler);
+        let handler: Arc<dyn InternalEventHandler> = Arc::new(MockEventHandler);
         let executor = PlanExecutor::new(registry, handler);
 
         // Empty context (first step)
@@ -686,7 +686,7 @@ mod tests {
     #[test]
     fn test_resolve_params_no_prev() {
         let registry = Arc::new(NativeToolRegistry::new());
-        let handler: Arc<dyn AetherEventHandler> = Arc::new(MockEventHandler);
+        let handler: Arc<dyn InternalEventHandler> = Arc::new(MockEventHandler);
         let executor = PlanExecutor::new(registry, handler);
 
         let ctx = create_test_context(Some(json!("test")));

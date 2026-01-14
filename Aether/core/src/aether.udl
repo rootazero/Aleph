@@ -4,9 +4,9 @@
 // UniFFI will automatically generate type-safe bindings from this definition.
 
 namespace aether {
-  // V2 interface initialization (rig-core based)
+  // Core interface initialization (rig-core based)
   [Throws=AetherV2Error]
-  AetherV2Core init_v2(string config_path, AetherV2EventHandler handler);
+  AetherCore init_core(string config_path, AetherEventHandler handler);
 
   // First-run initialization functions
 
@@ -44,9 +44,9 @@ namespace aether {
   [Throws=AetherException]
   sequence<SkillInfo> list_installed_skills();
 
-  // NOTE: Skill modification functions (delete, install) are in AetherV2Core
+  // NOTE: Skill modification functions (delete, install) are in AetherCore
   // to ensure automatic tool registry refresh.
-  // Use AetherV2Core.delete_skill(), AetherV2Core.install_skill(), etc.
+  // Use AetherCore.delete_skill(), AetherCore.install_skill(), etc.
 };
 
 // ===== VISION CAPABILITY (rust-native-vision) =====
@@ -184,7 +184,7 @@ enum AetherException {
 };
 
 // Note: V1 AetherCore interface has been removed.
-// Use AetherV2Core (rig-core based) for all functionality.
+// Use AetherCore (rig-core based) for all functionality.
 
 // ===== MCP STARTUP REPORT (Phase 3.3 - mcp-startup-feedback) =====
 
@@ -201,7 +201,7 @@ dictionary McpStartupReportFFI {
 };
 
 // Note: V1 AetherEventHandler callback interface has been removed.
-// Use AetherV2EventHandler for all event handling.
+// Use AetherEventHandler for all event handling.
 
 // Callback interface for first-time initialization progress
 callback interface InitializationProgressHandler {
@@ -706,7 +706,7 @@ dictionary PendingConfirmationInfo {
   u64 timeout_ms;               // Timeout in milliseconds
 };
 
-// ===== V2 INTERFACE (rig-core based) =====
+// ===== CORE INTERFACE (rig-core based) =====
 // New simplified interface using rig-core for AI provider integration.
 // This provides a cleaner API compared to v1 and will eventually replace it.
 
@@ -719,7 +719,7 @@ enum AetherV2Error {
     "Cancelled",
 };
 
-callback interface AetherV2EventHandler {
+callback interface AetherEventHandler {
     void on_thinking();
     void on_tool_start(string tool_name);
     void on_tool_result(string tool_name, string result);
@@ -729,18 +729,18 @@ callback interface AetherV2EventHandler {
     void on_memory_stored();
 };
 
-interface AetherV2Core {
+interface AetherCore {
     // AI PROCESSING
     [Throws=AetherV2Error]
-    void process(string input, ProcessOptionsV2? options);
+    void process(string input, ProcessOptions? options);
 
     void cancel();
     boolean is_cancelled();
 
-    sequence<ToolInfoV2> list_tools();
+    sequence<ToolInfoFFI> list_tools();
 
     [Throws=AetherV2Error]
-    sequence<MemoryItemV2> search_memory(string query, u32 limit);
+    sequence<MemoryItem> search_memory(string query, u32 limit);
 
     [Throws=AetherV2Error]
     void clear_memory();
@@ -748,7 +748,7 @@ interface AetherV2Core {
     [Throws=AetherV2Error]
     void reload_config();
 
-    // CONFIG MANAGEMENT (V1 → V2 Migration)
+    // CONFIG MANAGEMENT (Config Management)
     [Throws=AetherV2Error]
     FullConfig load_config();
 
@@ -776,7 +776,7 @@ interface AetherV2Core {
     [Throws=AetherV2Error]
     void update_search_config(SearchConfig search);
 
-    // Test search provider with ad-hoc config (V1 → V2 Migration)
+    // Test search provider with ad-hoc config (Config Management)
     [Throws=AetherV2Error]
     ProviderTestResult test_search_provider_with_config(SearchProviderTestConfig config);
 
@@ -792,7 +792,7 @@ interface AetherV2Core {
 
     sequence<string> get_enabled_providers();
 
-    // MCP MANAGEMENT (V1 → V2 Migration)
+    // MCP MANAGEMENT (Config Management)
     McpSettingsConfig get_mcp_config();
 
     [Throws=AetherV2Error]
@@ -820,7 +820,7 @@ interface AetherV2Core {
     [Throws=AetherV2Error]
     void import_mcp_config_json(string json);
 
-    // MEMORY MANAGEMENT (V1 → V2 Migration)
+    // MEMORY MANAGEMENT (Config Management)
     MemoryConfig get_memory_config();
 
     [Throws=AetherV2Error]
@@ -850,7 +850,7 @@ interface AetherV2Core {
     [Throws=AetherV2Error]
     CompressionResult trigger_compression();
 
-    // SKILLS MANAGEMENT (V1 → V2 Migration)
+    // SKILLS MANAGEMENT (Config Management)
     [Throws=AetherV2Error]
     sequence<SkillInfo> list_skills();
 
@@ -868,10 +868,10 @@ interface AetherV2Core {
 
     void refresh_skills();
 
-    // TOOL REGISTRY (V1 → V2 Migration)
+    // TOOL REGISTRY (Config Management)
     sequence<UnifiedToolInfo> list_builtin_tools();
 
-    // MULTI-TURN CONVERSATION (V1 → V2 Migration)
+    // MULTI-TURN CONVERSATION (Config Management)
     // Generate a title for a conversation topic using AI
     [Throws=AetherV2Error]
     string generate_topic_title(string user_input, string ai_response);
@@ -879,7 +879,7 @@ interface AetherV2Core {
     // Get root commands from the tool registry for command completion
     sequence<CommandNode> get_root_commands_from_registry();
 
-    // LOGGING (V1 → V2 Migration)
+    // LOGGING (Config Management)
     // Get current log level
     LogLevel get_log_level();
 
@@ -891,30 +891,30 @@ interface AetherV2Core {
     [Throws=AetherV2Error]
     string get_log_directory();
 
-    // MEMORY SEARCH WITH FILTER (V1 → V2 Migration)
+    // MEMORY SEARCH WITH FILTER (Config Management)
     // Search memories with optional app/window filter
     [Throws=AetherV2Error]
     sequence<MemoryEntry> search_memories(string? app_bundle_id, string? window_title, u32 limit);
 
-    // VISION/OCR (V1 → V2 Migration)
+    // VISION/OCR (Config Management)
     // Extract text from image data using OCR
     [Throws=AetherV2Error]
     string extract_text(sequence<u8> image_data);
 };
 
-dictionary ProcessOptionsV2 {
+dictionary ProcessOptions {
     string? app_context;
     string? window_title;
     boolean stream;
 };
 
-dictionary ToolInfoV2 {
+dictionary ToolInfoFFI {
     string name;
     string description;
     string source;
 };
 
-dictionary MemoryItemV2 {
+dictionary MemoryItem {
     string id;
     string user_input;
     string assistant_response;

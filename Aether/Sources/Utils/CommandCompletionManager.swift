@@ -54,8 +54,8 @@ final class CommandCompletionManager: ObservableObject {
 
     // MARK: - Private Properties
 
-    /// Reference to V2 Rust Core
-    private weak var coreV2: AetherV2Core?
+    /// Reference to Rust Core
+    private weak var core: AetherCore?
 
     /// All commands (cached from ToolRegistry)
     private var allCommands: [CommandNode] = []
@@ -72,9 +72,9 @@ final class CommandCompletionManager: ObservableObject {
         setupNotifications()
     }
 
-    /// Configure with AetherV2Core reference
-    func configure(coreV2: AetherV2Core?) {
-        self.coreV2 = coreV2
+    /// Configure with AetherCore reference
+    func configure(core: AetherCore?) {
+        self.core = core
         refreshCommands()
     }
 
@@ -151,8 +151,8 @@ final class CommandCompletionManager: ObservableObject {
 
     /// Refresh commands from ToolRegistry (single source of truth)
     func refreshCommands() {
-        guard let coreV2 = coreV2 else {
-            NSLog("[CommandCompletionManager] refreshCommands: coreV2 is nil!")
+        guard let core = core else {
+            NSLog("[CommandCompletionManager] refreshCommands: core is nil!")
             allCommands = []
             displayedCommands = []
             return
@@ -160,7 +160,7 @@ final class CommandCompletionManager: ObservableObject {
 
         // Use registry-based method (single source of truth)
         // In flat namespace mode, all commands are at root level
-        allCommands = coreV2.getRootCommandsFromRegistry()
+        allCommands = core.getRootCommandsFromRegistry()
         NSLog("[CommandCompletionManager] refreshCommands: loaded %d commands from registry (flat namespace)", allCommands.count)
         #if DEBUG
         for cmd in allCommands {

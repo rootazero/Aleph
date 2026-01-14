@@ -21,9 +21,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var statusItem: NSStatusItem? { menuBarManager?.statusItem }
     private var settingsMenuItem: NSMenuItem? { menuBarManager?.settingsMenuItem }
 
-    // V2 interface (rig-core based) - unified AI processing interface
-    @Published internal var coreV2: AetherV2Core?
-    internal var eventHandlerV2: EventHandlerV2?
+    // interface (rig-core based) - unified AI processing interface
+    @Published internal var core: AetherCore?
+    internal var eventHandler: EventHandler?
 
     // Halo overlay window
     private var haloWindow: HaloWindow?
@@ -290,7 +290,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     @objc private func showAbout() {
-        eventHandlerV2?.showToast(
+        eventHandler?.showToast(
             type: .info,
             title: L("alert.about.title"),
             message: L("alert.about.message", "0.1.0 (Phase 2)"),
@@ -307,10 +307,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 return
             }
 
-            // CRITICAL: Check if V2 core is initialized before opening settings
-            guard coreV2 != nil else {
-                print("[Aether] ERROR: V2 Core not initialized, cannot open settings")
-                eventHandlerV2?.showToast(
+            // CRITICAL: Check if core is initialized before opening settings
+            guard core != nil else {
+                print("[Aether] ERROR: Core not initialized, cannot open settings")
+                eventHandler?.showToast(
                     type: .warning,
                     title: L("error.core_not_initialized"),
                     message: L("error.core_not_initialized.suggestion"),
@@ -344,7 +344,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
 
         // Create new settings window with RootContentView
-        // RootContentView gets coreV2 from appDelegate internally
+        // RootContentView gets core from appDelegate internally
         let settingsView = RootContentView()
             .environmentObject(self)
 
@@ -432,12 +432,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Rebuild the providers submenu with enabled providers
     private func rebuildProvidersMenu() {
-        guard let coreV2 = coreV2 else {
+        guard let core = core else {
             return
         }
 
-        let enabledProviders = coreV2.getEnabledProviders().sorted()
-        let defaultProvider = coreV2.getDefaultProvider()
+        let enabledProviders = core.getEnabledProviders().sorted()
+        let defaultProvider = core.getDefaultProvider()
 
         // Map providers to (id, displayName) tuples
         let items = enabledProviders.map { ($0, $0) }
@@ -457,13 +457,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         print("[AppDelegate] User selected provider from menu: \(providerName)")
 
-        guard let coreV2 = coreV2 else {
-            print("[AppDelegate] ERROR: V2 Core not initialized")
+        guard let core = core else {
+            print("[AppDelegate] ERROR: Core not initialized")
             return
         }
 
         do {
-            try coreV2.setDefaultProvider(providerName: providerName)
+            try core.setDefaultProvider(providerName: providerName)
 
             print("[AppDelegate] ✅ Default provider set to: \(providerName)")
 
@@ -474,7 +474,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             // (Could add a toast notification here in the future)
         } catch {
             print("[AppDelegate] ❌ Error setting default provider: \(error)")
-            eventHandlerV2?.showToast(
+            eventHandler?.showToast(
                 type: .warning,
                 title: "Failed to set default provider",
                 message: "Could not set '\(providerName)' as default provider.\n\nError: \(error.localizedDescription)",
@@ -486,7 +486,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // MARK: - Core Initialization
 
     /// Initialize the Rust core systems (triggers, hotkeys, vision)
-    /// This is called after V2 core is initialized
+    /// This is called after core is initialized
     private func initializeRustCore() {
         // Show Halo animation immediately on startup (better UX feedback)
         haloWindow?.updateState(.processing(streamingText: nil))
@@ -554,13 +554,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         updateMenuBarIcon(state: .listening)
     }
 
-    // MARK: - V2 Core Initialization (rig-core based)
+    // MARK: - Core Initialization (rig-core based)
 
-    /// Initialize AetherV2Core using the rig-core based interface
+    /// Initialize AetherCore using the rig-core based interface
     /// This is the unified AI processing core for all Aether functionality
-    private func initializeRustCoreV2() {
-        guard let eventHandlerV2 = eventHandlerV2 else {
-            print("[Aether] Error: EventHandlerV2 not initialized")
+    private func initializeCore() {
+        guard let eventHandler = eventHandler else {
+            print("[Aether] Error: EventHandler not initialized")
             return
         }
 
@@ -570,40 +570,40 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Check if config file exists
         if !FileManager.default.fileExists(atPath: configPath) {
             print("[Aether] Warning: Config file not found at \(configPath)")
-            print("[Aether] V2 initialization skipped - create config file first")
+            print("[Aether] initialization skipped - create config file first")
             return
         }
 
         do {
-            // Initialize V2 core using initV2()
-            coreV2 = try initV2(configPath: configPath, handler: eventHandlerV2)
-            print("[Aether] AetherV2Core initialized successfully")
+            // Initialize core using initCore()
+            core = try initCore(configPath: configPath, handler: eventHandler)
+            print("[Aether] AetherCore initialized successfully")
 
             // Set core reference in event handler for cancellation
-            eventHandlerV2.setCore(coreV2!)
+            eventHandler.setCore(core!)
 
-            // Configure OutputCoordinator with V2 dependencies
-            outputCoordinator?.configure(coreV2: coreV2, haloWindow: haloWindow)
+            // Configure OutputCoordinator with dependencies
+            outputCoordinator?.configure(core: core, haloWindow: haloWindow)
 
-            // Configure InputCoordinator with V2 dependencies
+            // Configure InputCoordinator with dependencies
             inputCoordinator?.configure(
-                coreV2: coreV2,
+                core: core,
                 haloWindow: haloWindow,
-                eventHandlerV2: eventHandlerV2,
+                eventHandler: eventHandler,
                 outputCoordinator: outputCoordinator
             )
 
-            // Set InputCoordinator reference in EventHandlerV2 for callbacks
-            eventHandlerV2.setInputCoordinator(inputCoordinator)
+            // Set InputCoordinator reference in EventHandler for callbacks
+            eventHandler.setInputCoordinator(inputCoordinator)
 
-            // Configure MultiTurnCoordinator with V2 dependencies
-            MultiTurnCoordinator.shared.configure(coreV2: coreV2)
+            // Configure MultiTurnCoordinator with dependencies
+            MultiTurnCoordinator.shared.configure(core: core)
 
-            print("[Aether] V2 coordinators configured")
+            print("[Aether] coordinators configured")
 
             // Log available tools
-            if let tools = coreV2?.listTools() {
-                print("[Aether] V2 has \(tools.count) tools available:")
+            if let tools = core?.listTools() {
+                print("[Aether] has \(tools.count) tools available:")
                 for tool in tools.prefix(5) {
                     print("[Aether]   - \(tool.name): \(tool.description)")
                 }
@@ -613,107 +613,107 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
 
         } catch {
-            print("[Aether] Error initializing V2 core: \(error)")
-            // V2 failure prevents app from functioning - show error to user
-            eventHandlerV2.onError(message: "Failed to initialize core: \(error.localizedDescription)")
+            print("[Aether] Error initializing core: \(error)")
+            // failure prevents app from functioning - show error to user
+            eventHandler.onError(message: "Failed to initialize core: \(error.localizedDescription)")
         }
     }
 
-    /// Process input using V2 interface (rig-core based)
-    /// This is an async operation - results come via EventHandlerV2 callbacks
+    /// Process input using interface (rig-core based)
+    /// This is an async operation - results come via EventHandler callbacks
     ///
     /// - Parameters:
     ///   - input: User input text to process
     ///   - appContext: Optional app context (e.g., "Safari" or "Xcode")
     ///   - windowTitle: Optional window title for context
     ///   - stream: Whether to stream response chunks (default: true)
-    func processWithV2(input: String, appContext: String? = nil, windowTitle: String? = nil, stream: Bool = true) {
-        guard let coreV2 = coreV2 else {
-            print("[Aether] Error: V2 core not initialized")
-            eventHandlerV2?.onError(message: "V2 core not initialized")
+    func process(input: String, appContext: String? = nil, windowTitle: String? = nil, stream: Bool = true) {
+        guard let core = core else {
+            print("[Aether] Error: core not initialized")
+            eventHandler?.onError(message: "core not initialized")
             return
         }
 
-        print("[Aether] Processing with V2 interface: \(input.prefix(50))...")
+        print("[Aether] Processing with interface: \(input.prefix(50))...")
 
         do {
-            let options = ProcessOptionsV2(
+            let options = ProcessOptions(
                 appContext: appContext,
                 windowTitle: windowTitle,
                 stream: stream
             )
-            try coreV2.process(input: input, options: options)
+            try core.process(input: input, options: options)
         } catch {
-            print("[Aether] V2 processing error: \(error)")
-            eventHandlerV2?.onError(message: error.localizedDescription)
+            print("[Aether] processing error: \(error)")
+            eventHandler?.onError(message: error.localizedDescription)
         }
     }
 
-    /// Cancel current V2 processing operation
-    func cancelV2Processing() {
-        coreV2?.cancel()
-        print("[Aether] V2 processing cancelled")
+    /// Cancel current processing operation
+    func cancelProcessing() {
+        core?.cancel()
+        print("[Aether] processing cancelled")
     }
 
-    /// Check if V2 core is available and initialized
-    var isV2Available: Bool {
-        coreV2 != nil
+    /// Check if core is available and initialized
+    var isCoreAvailable: Bool {
+        core != nil
     }
 
-    /// List available tools from V2 core
-    func listV2Tools() -> [ToolInfoV2] {
-        return coreV2?.listTools() ?? []
+    /// List available tools from core
+    func listTools() -> [ToolInfoFfi] {
+        return core?.listTools() ?? []
     }
 
-    /// Search memory using V2 interface
+    /// Search memory using interface
     /// - Parameters:
     ///   - query: Search query
     ///   - limit: Maximum number of results
     /// - Returns: Array of memory items matching the query
-    func searchV2Memory(query: String, limit: UInt32 = 10) -> [MemoryItemV2] {
-        guard let coreV2 = coreV2 else {
-            print("[Aether] Error: V2 core not initialized for memory search")
+    func searchMemory(query: String, limit: UInt32 = 10) -> [MemoryItem] {
+        guard let core = core else {
+            print("[Aether] Error: core not initialized for memory search")
             return []
         }
 
         do {
-            return try coreV2.searchMemory(query: query, limit: limit)
+            return try core.searchMemory(query: query, limit: limit)
         } catch {
-            print("[Aether] V2 memory search error: \(error)")
+            print("[Aether] memory search error: \(error)")
             return []
         }
     }
 
-    /// Clear all V2 memory
-    func clearV2Memory() -> Bool {
-        guard let coreV2 = coreV2 else {
-            print("[Aether] Error: V2 core not initialized for memory clear")
+    /// Clear all memory
+    func clearMemory() -> Bool {
+        guard let core = core else {
+            print("[Aether] Error: core not initialized for memory clear")
             return false
         }
 
         do {
-            try coreV2.clearMemory()
-            print("[Aether] V2 memory cleared")
+            try core.clearMemory()
+            print("[Aether] memory cleared")
             return true
         } catch {
-            print("[Aether] V2 memory clear error: \(error)")
+            print("[Aether] memory clear error: \(error)")
             return false
         }
     }
 
-    /// Reload V2 configuration
-    func reloadV2Config() -> Bool {
-        guard let coreV2 = coreV2 else {
-            print("[Aether] Error: V2 core not initialized for config reload")
+    /// Reload configuration
+    func reloadConfig() -> Bool {
+        guard let core = core else {
+            print("[Aether] Error: core not initialized for config reload")
             return false
         }
 
         do {
-            try coreV2.reloadConfig()
-            print("[Aether] V2 config reloaded")
+            try core.reloadConfig()
+            print("[Aether] config reloaded")
             return true
         } catch {
-            print("[Aether] V2 config reload error: \(error)")
+            print("[Aether] config reload error: \(error)")
             return false
         }
     }
@@ -864,8 +864,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Create Halo window directly (simplified, no controller wrapper needed)
         haloWindow = HaloWindow()
 
-        // Initialize V2 event handler (rig-core based)
-        eventHandlerV2 = EventHandlerV2(haloWindow: haloWindow)
+        // Initialize event handler (rig-core based)
+        eventHandler = EventHandler(haloWindow: haloWindow)
 
         // Initialize output coordinator (will configure with core after Rust core init)
         outputCoordinator = OutputCoordinator()
@@ -878,10 +878,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         clipboardMonitor.startMonitoring()
         print("[Aether] Clipboard monitoring started for context tracking")
 
-        // Initialize V2 core (rig-core based) - unified AI processing interface
-        initializeRustCoreV2()
+        // Initialize core (rig-core based) - unified AI processing interface
+        initializeCore()
 
-        // Initialize trigger system and hotkeys (requires V2 core for config)
+        // Initialize trigger system and hotkeys (requires core for config)
         initializeRustCore()
 
         // Observe config changes to rebuild providers menu
@@ -970,12 +970,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Load multi-turn hotkey configuration from config
     private func loadMultiTurnHotkeyConfig() {
-        guard let coreV2 = coreV2 else {
+        guard let core = core else {
             return
         }
 
         do {
-            let config = try coreV2.loadConfig()
+            let config = try core.loadConfig()
             if let shortcuts = config.shortcuts {
                 parseAndApplyMultiTurnHotkey(shortcuts.commandPrompt)
             }
@@ -1042,16 +1042,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     // MARK: - Trigger System Configuration
 
-    /// Load trigger configuration from V2 Rust Core
+    /// Load trigger configuration from Rust Core
     /// - Returns: TriggerConfig with mode, cut/copy hotkeys
     private func loadTriggerConfiguration() -> TriggerConfig {
-        guard let coreV2 = coreV2 else {
-            print("[AppDelegate] V2 Core not initialized, using default TriggerConfig")
+        guard let core = core else {
+            print("[AppDelegate] Core not initialized, using default TriggerConfig")
             return TriggerConfig.defaultConfig
         }
 
         do {
-            let config = try coreV2.loadConfig()
+            let config = try core.loadConfig()
             if let trigger = config.trigger {
                 print("[AppDelegate] Loaded TriggerConfig: replace=\(trigger.replaceHotkey), append=\(trigger.appendHotkey)")
                 return trigger
@@ -1118,11 +1118,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func initializeVisionHotkeys() {
         visionHotkeyManager = VisionHotkeyManager()
 
-        // Load hotkey configuration from V2 core
-        if let coreV2 = coreV2 {
+        // Load hotkey configuration from core
+        if let core = core {
             Task {
                 do {
-                    let config = try coreV2.loadConfig()
+                    let config = try core.loadConfig()
                     if let shortcuts = config.shortcuts {
                         await MainActor.run {
                             visionHotkeyManager?.updateHotkey(from: shortcuts)

@@ -86,7 +86,7 @@ pub mod mcp; // NEW: MCP (Model Context Protocol) capability
 pub mod agent; // NEW: Agent loop for tool calling
 pub mod store; // NEW: Rig-based vector store for memory
 pub mod rig_tools; // NEW: Rig-compatible tool wrapper
-pub mod uniffi_v2; // NEW: UniFFI v2 bindings for rig-based architecture
+pub mod uniffi_core; // UniFFI core bindings for rig-based architecture
 pub mod dispatcher; // NEW: Intelligent tool routing (Dispatcher Layer)
 pub mod routing; // NEW: Unified multi-layer routing framework
 mod title_generator; // Title generation for conversation topics
@@ -108,25 +108,24 @@ pub use crate::config::{
     SearchConfigInternal, ShortcutsConfig, SkillsConfig, SmartFlowConfig, SmartMatchingConfig,
     SuggestionParsingConfig, TestConnectionResult, TriggerConfig, VideoConfig,
 };
-// Internal types from core module (shared between V1 and V2)
-// Note: AetherCore is deprecated - use AetherV2Core instead
+// Internal types from core module
 pub use crate::core::{
-    AetherCore, AppMemoryInfo, CapturedContext, CompressionStats, MediaAttachment,
+    AppMemoryInfo, CapturedContext, CompressionStats, MediaAttachment,
     MemoryEntryFFI as MemoryEntry,
 };
 pub use crate::memory::context::CompressionResult;
 pub use crate::error::{AetherError, AetherException, Result};
-// Note: AetherEventHandler is deprecated - use AetherV2EventHandler instead
+// Event handler types (legacy V1 trait removed, use AetherEventHandler from uniffi_core)
 pub use crate::event_handler::{
-    AetherEventHandler, ErrorType, McpServerErrorFFI, McpStartupReportFFI, ProcessingState,
+    ErrorType, McpServerErrorFFI, McpStartupReportFFI, ProcessingState,
 };
 pub use crate::initialization::{
     check_embedding_model_exists, download_embedding_model_standalone,
     get_skills_dir, get_skills_dir_string, initialize_builtin_skills, initialize_builtin_skills_ffi,
     is_fresh_install, list_installed_skills, run_first_time_init, InitializationProgressHandler,
 };
-// NOTE: Skill modification functions are in AetherV2Core to ensure automatic tool registry refresh.
-// Use AetherV2Core.delete_skill(), AetherV2Core.install_skill(), etc.
+// NOTE: Skill modification functions are in AetherCore to ensure automatic tool registry refresh.
+// Use AetherCore.delete_skill(), AetherCore.install_skill(), etc.
 pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer};
 pub use crate::memory::database::MemoryStats;
 pub use crate::metrics::StageTimer;
@@ -182,10 +181,10 @@ pub use crate::vision::{
     CaptureMode, VisionConfig, VisionRequest, VisionResult, VisionService, VisionTask,
 };
 
-// V2 interface exports (rig-core based architecture)
-pub use crate::uniffi_v2::{
-    init_v2, AetherV2Core, AetherV2Error, AetherV2EventHandler, MemoryItemV2, ProcessOptionsV2,
-    ToolInfoV2,
+// Core interface exports (rig-core based architecture)
+pub use crate::uniffi_core::{
+    init_core, AetherCore, AetherEventHandler, AetherV2Error, MemoryItem, ProcessOptions,
+    ToolInfoFFI,
 };
 
 // Test-only exports

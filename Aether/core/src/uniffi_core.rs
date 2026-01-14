@@ -1,12 +1,11 @@
-//! UniFFI v2 bindings for simplified rig-based architecture
+//! UniFFI core bindings for simplified rig-based architecture
 //!
 //! This module provides a streamlined interface for the rig-based agent system.
-//! It is designed to be exposed via UniFFI in the future when the v2 architecture
-//! is fully integrated.
+//! It is the primary interface for native clients (Swift, Kotlin, etc.)
 //!
 //! # Architecture
 //!
-//! The v2 architecture simplifies the existing Aether core by:
+//! The architecture simplifies the Aether core by:
 //! - Using RigAgentManager for all AI processing
 //! - Providing a simpler event callback interface
 //! - Supporting both sync and async operations
@@ -14,10 +13,10 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::uniffi_v2::{AetherV2Core, init_v2};
+//! use aethecore::uniffi_core::{AetherCore, init_core};
 //!
 //! let handler = Box::new(MyHandler::new());
-//! let core = init_v2("~/.config/aether/config.toml", handler)?;
+//! let core = init_core("~/.config/aether/config.toml", handler)?;
 //!
 //! core.process("Hello, world!".to_string(), None)?;
 //! ```
@@ -54,11 +53,11 @@ impl From<crate::error::AetherError> for AetherV2Error {
     }
 }
 
-/// Event handler callback interface for v2
+/// Event handler callback interface
 ///
 /// Clients implement this trait to receive callbacks during AI processing.
 /// All methods take `&self` for thread-safe callback invocation.
-pub trait AetherV2EventHandler: Send + Sync {
+pub trait AetherEventHandler: Send + Sync {
     /// Called when AI starts processing (thinking)
     fn on_thinking(&self);
 
@@ -81,9 +80,9 @@ pub trait AetherV2EventHandler: Send + Sync {
     fn on_memory_stored(&self);
 }
 
-/// Processing options for v2
+/// Processing options
 #[derive(Debug, Clone)]
-pub struct ProcessOptionsV2 {
+pub struct ProcessOptions {
     /// Application context (bundle ID)
     pub app_context: Option<String>,
     /// Window title of the active application
@@ -92,7 +91,7 @@ pub struct ProcessOptionsV2 {
     pub stream: bool,
 }
 
-impl Default for ProcessOptionsV2 {
+impl Default for ProcessOptions {
     fn default() -> Self {
         Self {
             app_context: None,
@@ -102,7 +101,7 @@ impl Default for ProcessOptionsV2 {
     }
 }
 
-impl ProcessOptionsV2 {
+impl ProcessOptions {
     /// Create new processing options with default values
     pub fn new() -> Self {
         Self::default()
@@ -129,7 +128,7 @@ impl ProcessOptionsV2 {
 
 /// Tool information for UI display
 #[derive(Debug, Clone)]
-pub struct ToolInfoV2 {
+pub struct ToolInfoFFI {
     /// Tool name/identifier
     pub name: String,
     /// Human-readable description
@@ -138,7 +137,7 @@ pub struct ToolInfoV2 {
     pub source: String,
 }
 
-impl ToolInfoV2 {
+impl ToolInfoFFI {
     /// Create a new tool info
     pub fn new(name: String, description: String, source: String) -> Self {
         Self { name, description, source }
@@ -147,7 +146,7 @@ impl ToolInfoV2 {
 
 /// Memory item for UI display
 #[derive(Debug, Clone)]
-pub struct MemoryItemV2 {
+pub struct MemoryItem {
     /// Unique identifier
     pub id: String,
     /// User's input text
@@ -160,7 +159,7 @@ pub struct MemoryItemV2 {
     pub app_context: Option<String>,
 }
 
-impl From<MemoryEntry> for MemoryItemV2 {
+impl From<MemoryEntry> for MemoryItem {
     fn from(entry: MemoryEntry) -> Self {
         Self {
             id: entry.id,
@@ -207,7 +206,7 @@ impl AgentConfigHolder {
 ///
 /// Note: RigAgentManager is created on-demand because it may contain
 /// non-Send types. The config is stored separately.
-pub struct AetherV2Core {
+pub struct AetherCore {
     /// Configuration holder with interior mutability for reload support
     config_holder: Arc<RwLock<AgentConfigHolder>>,
     /// Full configuration with interior mutability for Settings UI operations
@@ -215,7 +214,7 @@ pub struct AetherV2Core {
     /// Config file path for reload capability (empty string means default path)
     config_path: String,
     memory_path: Option<MemoryStorePath>,
-    handler: Arc<dyn AetherV2EventHandler>,
+    handler: Arc<dyn AetherEventHandler>,
     /// Tokio runtime handle for async operations
     runtime: tokio::runtime::Handle,
     /// Owned runtime to keep it alive (when we create our own)
@@ -226,7 +225,7 @@ pub struct AetherV2Core {
     current_op_token: Arc<RwLock<CancellationToken>>,
 }
 
-impl AetherV2Core {
+impl AetherCore {
     /// Process user input asynchronously
     ///
     /// This method processes the input on a background thread and calls
@@ -237,7 +236,7 @@ impl AetherV2Core {
     pub fn process(
         &self,
         input: String,
-        options: Option<ProcessOptionsV2>,
+        options: Option<ProcessOptions>,
     ) -> Result<(), AetherV2Error> {
         let _options = options.unwrap_or_default();
         let handler = Arc::clone(&self.handler);
@@ -330,14 +329,14 @@ impl AetherV2Core {
     /// List available tools
     ///
     /// Returns a list of all tools available in the current configuration.
-    pub fn list_tools(&self) -> Vec<ToolInfoV2> {
+    pub fn list_tools(&self) -> Vec<ToolInfoFFI> {
         vec![
-            ToolInfoV2 {
+            ToolInfoFFI {
                 name: "search".to_string(),
                 description: "Search the internet".to_string(),
                 source: "builtin".to_string(),
             },
-            ToolInfoV2 {
+            ToolInfoFFI {
                 name: "web_fetch".to_string(),
                 description: "Fetch web page content".to_string(),
                 source: "builtin".to_string(),
@@ -348,7 +347,7 @@ impl AetherV2Core {
     /// Search memory for relevant entries
     ///
     /// Searches the memory store for entries matching the query.
-    pub fn search_memory(&self, query: String, limit: u32) -> Result<Vec<MemoryItemV2>, AetherV2Error> {
+    pub fn search_memory(&self, query: String, limit: u32) -> Result<Vec<MemoryItem>, AetherV2Error> {
         let memory_path = self.memory_path.as_ref().ok_or_else(|| {
             AetherV2Error::Memory("Memory store not initialized".to_string())
         })?;
@@ -398,7 +397,7 @@ impl AetherV2Core {
     pub fn reload_config(&self) -> Result<(), AetherV2Error> {
         info!(path = %self.config_path, "Reloading config");
 
-        // Load config from stored path (same logic as init_v2)
+        // Load config from stored path (same logic as init_core)
         let full_config = if self.config_path.is_empty() {
             // Use default path (~/.config/aether/config.toml)
             Config::load().map_err(|e| AetherV2Error::Config(e.to_string()))?
@@ -411,7 +410,7 @@ impl AetherV2Core {
             }
         };
 
-        // Extract provider settings (same logic as init_v2)
+        // Extract provider settings (same logic as init_core)
         let (provider, model, api_key, base_url, system_prompt, temperature, max_tokens) = {
             let default_provider = full_config.get_default_provider();
             if let Some(ref name) = default_provider {
@@ -1578,9 +1577,9 @@ impl AetherV2Core {
     }
 }
 
-/// Initialize AetherV2Core
+/// Initialize AetherCore
 ///
-/// Creates a new AetherV2Core instance with the given configuration path
+/// Creates a new AetherCore instance with the given configuration path
 /// and event handler.
 ///
 /// # Arguments
@@ -1590,7 +1589,7 @@ impl AetherV2Core {
 ///
 /// # Returns
 ///
-/// Returns an Arc-wrapped AetherV2Core on success, or an error if
+/// Returns an Arc-wrapped AetherCore on success, or an error if
 /// initialization fails.
 ///
 /// # Config Loading Behavior
@@ -1599,14 +1598,14 @@ impl AetherV2Core {
 /// - If `config_path` is provided and file exists: Load from that path
 /// - If `config_path` is provided but file doesn't exist: Use defaults with info log
 /// - If config file exists but has parse errors: Return `AetherV2Error::Config`
-pub fn init_v2(
+pub fn init_core(
     config_path: String,
-    handler: Box<dyn AetherV2EventHandler>,
-) -> Result<Arc<AetherV2Core>, AetherV2Error> {
-    info!(config_path = %config_path, "Initializing AetherV2Core");
+    handler: Box<dyn AetherEventHandler>,
+) -> Result<Arc<AetherCore>, AetherV2Error> {
+    info!(config_path = %config_path, "Initializing AetherCore");
 
     // Convert Box to Arc for internal use
-    let handler: Arc<dyn AetherV2EventHandler> = Arc::from(handler);
+    let handler: Arc<dyn AetherEventHandler> = Arc::from(handler);
 
     // Get or create runtime
     // IMPORTANT: If we create our own runtime, we MUST store it to keep it alive
@@ -1703,7 +1702,7 @@ pub fn init_v2(
     // Each operation will get a fresh token via reset_cancel_token()
     let current_op_token = Arc::new(RwLock::new(CancellationToken::new()));
 
-    Ok(Arc::new(AetherV2Core {
+    Ok(Arc::new(AetherCore {
         config_holder,
         full_config: Arc::new(Mutex::new(full_config)),
         config_path,  // Store config path for reload capability
@@ -1732,7 +1731,7 @@ mod tests {
         }
     }
 
-    impl AetherV2EventHandler for TestHandler {
+    impl AetherEventHandler for TestHandler {
         fn on_thinking(&self) {}
         fn on_tool_start(&self, _: String) {}
         fn on_tool_result(&self, _: String, _: String) {}
@@ -1746,7 +1745,7 @@ mod tests {
 
     #[test]
     fn test_tool_info_creation() {
-        let info = ToolInfoV2 {
+        let info = ToolInfoFFI {
             name: "test".to_string(),
             description: "Test tool".to_string(),
             source: "builtin".to_string(),
@@ -1756,14 +1755,14 @@ mod tests {
 
     #[test]
     fn test_process_options_default() {
-        let options = ProcessOptionsV2::default();
+        let options = ProcessOptions::default();
         assert!(options.stream);
         assert!(options.app_context.is_none());
     }
 
     #[test]
     fn test_process_options_builder() {
-        let options = ProcessOptionsV2::new()
+        let options = ProcessOptions::new()
             .with_app_context("com.example.app".to_string())
             .with_window_title("Test Window".to_string())
             .with_stream(false);
@@ -1775,7 +1774,7 @@ mod tests {
 
     #[test]
     fn test_tool_info_new() {
-        let info = ToolInfoV2::new(
+        let info = ToolInfoFFI::new(
             "test_tool".to_string(),
             "A test tool".to_string(),
             "native".to_string(),
@@ -1820,7 +1819,7 @@ mod tests {
         }
     }
 
-    impl AetherV2EventHandler for CancellationTestHandler {
+    impl AetherEventHandler for CancellationTestHandler {
         fn on_thinking(&self) {
             self.thinking_called.store(true, Ordering::SeqCst);
         }
@@ -1862,9 +1861,9 @@ mod tests {
     }
 
     #[test]
-    fn test_init_v2_creates_cancel_token() {
+    fn test_init_core_creates_cancel_token() {
         let handler = Box::new(CancellationTestHandler::new());
-        let core = init_v2("/test/config.toml".to_string(), handler).unwrap();
+        let core = init_core("/test/config.toml".to_string(), handler).unwrap();
 
         // Initially not cancelled
         assert!(!core.is_cancelled());
@@ -1879,13 +1878,13 @@ mod tests {
         // Test that each process() gets a fresh token, allowing new operations after cancellation
         // This verifies the fix for Issue 2: missing reset mechanism
 
-        // Use Arc for the inner handler to allow checking state after init_v2
+        // Use Arc for the inner handler to allow checking state after init_core
         let inner_handler = Arc::new(CancellationTestHandler::new());
         let inner_handler_clone = Arc::clone(&inner_handler);
 
-        // Create a wrapper that implements AetherV2EventHandler and delegates to Arc
+        // Create a wrapper that implements AetherEventHandler and delegates to Arc
         struct ArcHandler(Arc<CancellationTestHandler>);
-        impl AetherV2EventHandler for ArcHandler {
+        impl AetherEventHandler for ArcHandler {
             fn on_thinking(&self) { self.0.on_thinking(); }
             fn on_tool_start(&self, name: String) { self.0.on_tool_start(name); }
             fn on_tool_result(&self, name: String, result: String) { self.0.on_tool_result(name, result); }
@@ -1896,7 +1895,7 @@ mod tests {
         }
 
         let handler = Box::new(ArcHandler(inner_handler_clone));
-        let core = init_v2("/test/config.toml".to_string(), handler).unwrap();
+        let core = init_core("/test/config.toml".to_string(), handler).unwrap();
 
         // Cancel the current operation
         core.cancel();
@@ -1922,7 +1921,7 @@ mod tests {
     fn test_cancel_method_logs_info() {
         // Test that cancel() logs the cancellation request
         let handler = Box::new(CancellationTestHandler::new());
-        let core = init_v2("/test/config.toml".to_string(), handler).unwrap();
+        let core = init_core("/test/config.toml".to_string(), handler).unwrap();
 
         // This should not panic and should log
         core.cancel();
@@ -1936,28 +1935,28 @@ mod tests {
     // ========================================
 
     #[test]
-    fn test_init_v2_with_nonexistent_config_uses_defaults() {
+    fn test_init_core_with_nonexistent_config_uses_defaults() {
         // When config file doesn't exist, should use defaults
         let handler = Box::new(CancellationTestHandler::new());
-        let core = init_v2("/nonexistent/path/config.toml".to_string(), handler).unwrap();
+        let core = init_core("/nonexistent/path/config.toml".to_string(), handler).unwrap();
 
         // Should initialize successfully with defaults
         assert!(!core.is_cancelled());
     }
 
     #[test]
-    fn test_init_v2_with_empty_path_uses_default_path() {
+    fn test_init_core_with_empty_path_uses_default_path() {
         // When config_path is empty, should try default path
         // This will use Config::load() which handles default path
         let handler = Box::new(CancellationTestHandler::new());
 
         // This should succeed (uses default config if file doesn't exist)
-        let result = init_v2(String::new(), handler);
+        let result = init_core(String::new(), handler);
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_init_v2_config_loading_from_temp_file() {
+    fn test_init_core_config_loading_from_temp_file() {
         use std::io::Write;
 
         // Create a temp config file with valid TOML
@@ -1988,17 +1987,17 @@ enabled = false
 
         // Initialize with the temp config file
         let handler = Box::new(CancellationTestHandler::new());
-        let result = init_v2(config_path.to_string_lossy().to_string(), handler);
+        let result = init_core(config_path.to_string_lossy().to_string(), handler);
 
         // Clean up the temp file
         let _ = std::fs::remove_file(&config_path);
 
         // Verify initialization succeeded
-        assert!(result.is_ok(), "init_v2 should succeed with valid config file");
+        assert!(result.is_ok(), "init_core should succeed with valid config file");
     }
 
     #[test]
-    fn test_init_v2_with_invalid_config_returns_error() {
+    fn test_init_core_with_invalid_config_returns_error() {
         use std::io::Write;
 
         // Create a temp config file with invalid TOML
@@ -2017,13 +2016,13 @@ missing closing bracket
 
         // Initialize with the invalid config file
         let handler = Box::new(CancellationTestHandler::new());
-        let result = init_v2(config_path.to_string_lossy().to_string(), handler);
+        let result = init_core(config_path.to_string_lossy().to_string(), handler);
 
         // Clean up the temp file
         let _ = std::fs::remove_file(&config_path);
 
         // Should return a Config error
-        assert!(result.is_err(), "init_v2 should fail with invalid config file");
+        assert!(result.is_err(), "init_core should fail with invalid config file");
         if let Err(AetherV2Error::Config(message)) = result {
             assert!(!message.is_empty(), "Error message should not be empty");
         } else {
@@ -2049,7 +2048,7 @@ missing closing bracket
     fn test_reload_config_with_nonexistent_file_returns_error() {
         // Initialize with a non-existent config path
         let handler = Box::new(CancellationTestHandler::new());
-        let core = init_v2("/nonexistent/path/config.toml".to_string(), handler).unwrap();
+        let core = init_core("/nonexistent/path/config.toml".to_string(), handler).unwrap();
 
         // After init (which falls back to defaults), try to reload
         // This should fail because the file doesn't exist
@@ -2093,7 +2092,7 @@ enabled = false
 
         // Initialize with the temp config file
         let handler = Box::new(CancellationTestHandler::new());
-        let core = init_v2(config_path.to_string_lossy().to_string(), handler).unwrap();
+        let core = init_core(config_path.to_string_lossy().to_string(), handler).unwrap();
 
         // Reload config - should succeed
         let result = core.reload_config();
@@ -2134,7 +2133,7 @@ enabled = false
 
         // Initialize
         let handler = Box::new(CancellationTestHandler::new());
-        let core = init_v2(config_path.to_string_lossy().to_string(), handler).unwrap();
+        let core = init_core(config_path.to_string_lossy().to_string(), handler).unwrap();
 
         // Verify initial model
         {
@@ -2182,7 +2181,7 @@ enabled = false
     fn test_reload_config_with_empty_path_uses_default() {
         // Initialize with empty path (uses default config path)
         let handler = Box::new(CancellationTestHandler::new());
-        let core = init_v2(String::new(), handler).unwrap();
+        let core = init_core(String::new(), handler).unwrap();
 
         // Reload should not panic (may fail if default config doesn't exist, which is OK)
         // The important thing is that it doesn't crash and handles the empty path case
@@ -2220,7 +2219,7 @@ enabled = false
 
         // Initialize
         let handler = Box::new(CancellationTestHandler::new());
-        let core = init_v2(config_path.to_string_lossy().to_string(), handler).unwrap();
+        let core = init_core(config_path.to_string_lossy().to_string(), handler).unwrap();
 
         // Verify initial model
         {
@@ -2257,12 +2256,12 @@ this is not valid toml [broken
         // Test with specific path
         let test_path = "/test/path/config.toml";
         let handler1 = Box::new(CancellationTestHandler::new());
-        let core = init_v2(test_path.to_string(), handler1).unwrap();
+        let core = init_core(test_path.to_string(), handler1).unwrap();
         assert_eq!(core.config_path, test_path, "Config path should be stored");
 
         // Test with empty path
         let handler2 = Box::new(CancellationTestHandler::new());
-        let core2 = init_v2(String::new(), handler2).unwrap();
+        let core2 = init_core(String::new(), handler2).unwrap();
         assert!(core2.config_path.is_empty(), "Empty config path should remain empty");
     }
 }

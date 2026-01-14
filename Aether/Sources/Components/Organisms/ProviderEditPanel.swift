@@ -6,7 +6,7 @@ import AppKit
 struct ProviderEditPanel: View {
     // MARK: - Dependencies
 
-    let core: AetherV2Core
+    let core: AetherCore
     @ObservedObject var saveBarState: SettingsSaveBarState
 
     // MARK: - Bindings

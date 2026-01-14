@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 import Compression
 
 struct LogViewerView: View {
-    let core: AetherV2Core
+    let core: AetherCore
     @State private var logContent: String = ""
     @State private var searchText: String = ""
     @State private var isLoading: Bool = true
@@ -465,7 +465,7 @@ struct LogViewerView: View {
 
 struct LogViewerView_Previews: PreviewProvider {
     static var previews: some View {
-        if let core = try? initV2(configPath: "", handler: PreviewV2EventHandler()) {
+        if let core = try? initCore(configPath: "", handler: PreviewEventHandler()) {
             LogViewerView(core: core)
         } else {
             Text("Preview unavailable")
@@ -473,8 +473,8 @@ struct LogViewerView_Previews: PreviewProvider {
     }
 }
 
-/// V2 Event handler for SwiftUI Preview
-class PreviewV2EventHandler: AetherV2EventHandler {
+/// Event handler for SwiftUI Preview
+class PreviewEventHandler: AetherEventHandler {
     func onThinking() {}
     func onToolStart(toolName: String) {}
     func onToolResult(toolName: String, result: String) {}

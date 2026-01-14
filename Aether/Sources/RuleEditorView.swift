@@ -41,7 +41,7 @@ struct RuleEditorView: View {
     @Binding var rules: [RoutingRuleConfig]
 
     // Core reference for validation and saving
-    let core: AetherV2Core
+    let core: AetherCore
     let providers: [ProviderConfigEntry]
 
     // Edit mode: nil for new rule, index for editing
@@ -83,7 +83,7 @@ struct RuleEditorView: View {
     private let editingRule: RoutingRuleConfig?
 
     // Initialize for new rule with optional initial type
-    init(rules: Binding<[RoutingRuleConfig]>, core: AetherV2Core, providers: [ProviderConfigEntry], initialType: RuleType? = nil) {
+    init(rules: Binding<[RoutingRuleConfig]>, core: AetherCore, providers: [ProviderConfigEntry], initialType: RuleType? = nil) {
         self._rules = rules
         self.core = core
         self.providers = providers
@@ -93,7 +93,7 @@ struct RuleEditorView: View {
     }
 
     // Initialize for editing existing rule (with rule object for stability)
-    init(rules: Binding<[RoutingRuleConfig]>, core: AetherV2Core, providers: [ProviderConfigEntry], editingRule: RoutingRuleConfig, editingIndex: Int) {
+    init(rules: Binding<[RoutingRuleConfig]>, core: AetherCore, providers: [ProviderConfigEntry], editingRule: RoutingRuleConfig, editingIndex: Int) {
         self._rules = rules
         self.core = core
         self.providers = providers
