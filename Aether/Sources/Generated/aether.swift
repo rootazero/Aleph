@@ -1474,19 +1474,103 @@ public func FfiConverterTypeAetherCore_lower(_ value: AetherCore) -> UnsafeMutab
 
 public protocol AetherV2CoreProtocol : AnyObject {
     
+    func addMcpServer(config: McpServerConfig) throws 
+    
     func cancel() 
+    
+    func clearFacts() throws  -> UInt64
+    
+    func clearMemories(appBundleId: String?, windowTitle: String?) throws  -> UInt64
     
     func clearMemory() throws 
     
+    func deleteMcpServer(id: String) throws 
+    
+    func deleteMemoriesByTopicId(topicId: String) throws  -> UInt64
+    
+    func deleteMemory(id: String) throws 
+    
+    func deleteProvider(name: String) throws 
+    
+    func deleteSkill(skillId: String) throws 
+    
+    func exportMcpConfigJson()  -> String
+    
+    func getCompressionStats() throws  -> CompressionStats
+    
+    func getDefaultProvider()  -> String?
+    
+    func getEnabledProviders()  -> [String]
+    
+    func getMcpConfig()  -> McpSettingsConfig
+    
+    func getMcpServer(id: String)  -> McpServerConfig?
+    
+    func getMcpServerLogs(id: String, maxLines: UInt32)  -> [String]
+    
+    func getMcpServerStatus(id: String)  -> McpServerStatusInfo
+    
+    func getMemoryAppList() throws  -> [AppMemoryInfo]
+    
+    func getMemoryConfig()  -> MemoryConfig
+    
+    func getMemoryStats() throws  -> MemoryStats
+    
+    func getSkillsDir() throws  -> String
+    
+    func importMcpConfigJson(json: String) throws 
+    
+    func installSkill(url: String) throws  -> SkillInfo
+    
+    func installSkillsFromZip(zipPath: String) throws  -> [String]
+    
     func isCancelled()  -> Bool
+    
+    func listBuiltinTools()  -> [UnifiedToolInfo]
+    
+    func listMcpServers()  -> [McpServerConfig]
+    
+    func listSkills() throws  -> [SkillInfo]
     
     func listTools()  -> [ToolInfoV2]
     
+    func loadConfig() throws  -> FullConfig
+    
     func process(input: String, options: ProcessOptionsV2?) throws 
+    
+    func refreshSkills() 
     
     func reloadConfig() throws 
     
     func searchMemory(query: String, limit: UInt32) throws  -> [MemoryItemV2]
+    
+    func setDefaultProvider(providerName: String) throws 
+    
+    func testProviderConnectionWithConfig(providerName: String, providerConfig: ProviderConfig)  -> TestConnectionResult
+    
+    func triggerCompression() throws  -> CompressionResult
+    
+    func updateBehavior(behavior: BehaviorConfig) throws 
+    
+    func updateGeneralConfig(config: GeneralConfig) throws 
+    
+    func updateMcpConfig(config: McpSettingsConfig) throws 
+    
+    func updateMcpServer(config: McpServerConfig) throws 
+    
+    func updateMemoryConfig(config: MemoryConfig) throws 
+    
+    func updateProvider(name: String, provider: ProviderConfig) throws 
+    
+    func updateRoutingRules(rules: [RoutingRuleConfig]) throws 
+    
+    func updateSearchConfig(search: SearchConfig) throws 
+    
+    func updateShortcuts(shortcuts: ShortcutsConfig) throws 
+    
+    func updateTriggerConfig(trigger: TriggerConfig) throws 
+    
+    func validateRegex(pattern: String) throws  -> Bool
     
 }
 
@@ -1540,10 +1624,33 @@ open class AetherV2Core:
     
 
     
+open func addMcpServer(config: McpServerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_add_mcp_server(self.uniffiClonePointer(),
+        FfiConverterTypeMcpServerConfig.lower(config),$0
+    )
+}
+}
+    
 open func cancel() {try! rustCall() {
     uniffi_aethecore_fn_method_aetherv2core_cancel(self.uniffiClonePointer(),$0
     )
 }
+}
+    
+open func clearFacts()throws  -> UInt64 {
+    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_clear_facts(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func clearMemories(appBundleId: String?, windowTitle: String?)throws  -> UInt64 {
+    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_clear_memories(self.uniffiClonePointer(),
+        FfiConverterOptionString.lower(appBundleId),
+        FfiConverterOptionString.lower(windowTitle),$0
+    )
+})
 }
     
 open func clearMemory()throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
@@ -1552,9 +1659,177 @@ open func clearMemory()throws  {try rustCallWithError(FfiConverterTypeAetherV2Er
 }
 }
     
+open func deleteMcpServer(id: String)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_delete_mcp_server(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),$0
+    )
+}
+}
+    
+open func deleteMemoriesByTopicId(topicId: String)throws  -> UInt64 {
+    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_delete_memories_by_topic_id(self.uniffiClonePointer(),
+        FfiConverterString.lower(topicId),$0
+    )
+})
+}
+    
+open func deleteMemory(id: String)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_delete_memory(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),$0
+    )
+}
+}
+    
+open func deleteProvider(name: String)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_delete_provider(self.uniffiClonePointer(),
+        FfiConverterString.lower(name),$0
+    )
+}
+}
+    
+open func deleteSkill(skillId: String)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_delete_skill(self.uniffiClonePointer(),
+        FfiConverterString.lower(skillId),$0
+    )
+}
+}
+    
+open func exportMcpConfigJson() -> String {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_export_mcp_config_json(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getCompressionStats()throws  -> CompressionStats {
+    return try  FfiConverterTypeCompressionStats.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_get_compression_stats(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getDefaultProvider() -> String? {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_get_default_provider(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getEnabledProviders() -> [String] {
+    return try!  FfiConverterSequenceString.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_get_enabled_providers(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getMcpConfig() -> McpSettingsConfig {
+    return try!  FfiConverterTypeMcpSettingsConfig.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_get_mcp_config(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getMcpServer(id: String) -> McpServerConfig? {
+    return try!  FfiConverterOptionTypeMcpServerConfig.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_get_mcp_server(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),$0
+    )
+})
+}
+    
+open func getMcpServerLogs(id: String, maxLines: UInt32) -> [String] {
+    return try!  FfiConverterSequenceString.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_get_mcp_server_logs(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),
+        FfiConverterUInt32.lower(maxLines),$0
+    )
+})
+}
+    
+open func getMcpServerStatus(id: String) -> McpServerStatusInfo {
+    return try!  FfiConverterTypeMcpServerStatusInfo.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_get_mcp_server_status(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),$0
+    )
+})
+}
+    
+open func getMemoryAppList()throws  -> [AppMemoryInfo] {
+    return try  FfiConverterSequenceTypeAppMemoryInfo.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_get_memory_app_list(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getMemoryConfig() -> MemoryConfig {
+    return try!  FfiConverterTypeMemoryConfig.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_get_memory_config(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getMemoryStats()throws  -> MemoryStats {
+    return try  FfiConverterTypeMemoryStats.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_get_memory_stats(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getSkillsDir()throws  -> String {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_get_skills_dir(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func importMcpConfigJson(json: String)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_import_mcp_config_json(self.uniffiClonePointer(),
+        FfiConverterString.lower(json),$0
+    )
+}
+}
+    
+open func installSkill(url: String)throws  -> SkillInfo {
+    return try  FfiConverterTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_install_skill(self.uniffiClonePointer(),
+        FfiConverterString.lower(url),$0
+    )
+})
+}
+    
+open func installSkillsFromZip(zipPath: String)throws  -> [String] {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_install_skills_from_zip(self.uniffiClonePointer(),
+        FfiConverterString.lower(zipPath),$0
+    )
+})
+}
+    
 open func isCancelled() -> Bool {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aetherv2core_is_cancelled(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func listBuiltinTools() -> [UnifiedToolInfo] {
+    return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_list_builtin_tools(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func listMcpServers() -> [McpServerConfig] {
+    return try!  FfiConverterSequenceTypeMcpServerConfig.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_list_mcp_servers(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func listSkills()throws  -> [SkillInfo] {
+    return try  FfiConverterSequenceTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_list_skills(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -1566,10 +1841,23 @@ open func listTools() -> [ToolInfoV2] {
 })
 }
     
+open func loadConfig()throws  -> FullConfig {
+    return try  FfiConverterTypeFullConfig.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_load_config(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func process(input: String, options: ProcessOptionsV2?)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
     uniffi_aethecore_fn_method_aetherv2core_process(self.uniffiClonePointer(),
         FfiConverterString.lower(input),
         FfiConverterOptionTypeProcessOptionsV2.lower(options),$0
+    )
+}
+}
+    
+open func refreshSkills() {try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_refresh_skills(self.uniffiClonePointer(),$0
     )
 }
 }
@@ -1585,6 +1873,108 @@ open func searchMemory(query: String, limit: UInt32)throws  -> [MemoryItemV2] {
     uniffi_aethecore_fn_method_aetherv2core_search_memory(self.uniffiClonePointer(),
         FfiConverterString.lower(query),
         FfiConverterUInt32.lower(limit),$0
+    )
+})
+}
+    
+open func setDefaultProvider(providerName: String)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_set_default_provider(self.uniffiClonePointer(),
+        FfiConverterString.lower(providerName),$0
+    )
+}
+}
+    
+open func testProviderConnectionWithConfig(providerName: String, providerConfig: ProviderConfig) -> TestConnectionResult {
+    return try!  FfiConverterTypeTestConnectionResult.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aetherv2core_test_provider_connection_with_config(self.uniffiClonePointer(),
+        FfiConverterString.lower(providerName),
+        FfiConverterTypeProviderConfig.lower(providerConfig),$0
+    )
+})
+}
+    
+open func triggerCompression()throws  -> CompressionResult {
+    return try  FfiConverterTypeCompressionResult.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_trigger_compression(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func updateBehavior(behavior: BehaviorConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_update_behavior(self.uniffiClonePointer(),
+        FfiConverterTypeBehaviorConfig.lower(behavior),$0
+    )
+}
+}
+    
+open func updateGeneralConfig(config: GeneralConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_update_general_config(self.uniffiClonePointer(),
+        FfiConverterTypeGeneralConfig.lower(config),$0
+    )
+}
+}
+    
+open func updateMcpConfig(config: McpSettingsConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_update_mcp_config(self.uniffiClonePointer(),
+        FfiConverterTypeMcpSettingsConfig.lower(config),$0
+    )
+}
+}
+    
+open func updateMcpServer(config: McpServerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_update_mcp_server(self.uniffiClonePointer(),
+        FfiConverterTypeMcpServerConfig.lower(config),$0
+    )
+}
+}
+    
+open func updateMemoryConfig(config: MemoryConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_update_memory_config(self.uniffiClonePointer(),
+        FfiConverterTypeMemoryConfig.lower(config),$0
+    )
+}
+}
+    
+open func updateProvider(name: String, provider: ProviderConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_update_provider(self.uniffiClonePointer(),
+        FfiConverterString.lower(name),
+        FfiConverterTypeProviderConfig.lower(provider),$0
+    )
+}
+}
+    
+open func updateRoutingRules(rules: [RoutingRuleConfig])throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_update_routing_rules(self.uniffiClonePointer(),
+        FfiConverterSequenceTypeRoutingRuleConfig.lower(rules),$0
+    )
+}
+}
+    
+open func updateSearchConfig(search: SearchConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_update_search_config(self.uniffiClonePointer(),
+        FfiConverterTypeSearchConfig.lower(search),$0
+    )
+}
+}
+    
+open func updateShortcuts(shortcuts: ShortcutsConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_update_shortcuts(self.uniffiClonePointer(),
+        FfiConverterTypeShortcutsConfig.lower(shortcuts),$0
+    )
+}
+}
+    
+open func updateTriggerConfig(trigger: TriggerConfig)throws  {try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_update_trigger_config(self.uniffiClonePointer(),
+        FfiConverterTypeTriggerConfig.lower(trigger),$0
+    )
+}
+}
+    
+open func validateRegex(pattern: String)throws  -> Bool {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherV2Error.lift) {
+    uniffi_aethecore_fn_method_aetherv2core_validate_regex(self.uniffiClonePointer(),
+        FfiConverterString.lower(pattern),$0
     )
 })
 }
@@ -10074,25 +10464,151 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_validate_regex() != 42285) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aetherv2core_add_mcp_server() != 63231) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aetherv2core_cancel() != 53624) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_clear_facts() != 4001) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_clear_memories() != 65081) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aetherv2core_clear_memory() != 64906) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aetherv2core_delete_mcp_server() != 27847) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_delete_memories_by_topic_id() != 27008) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_delete_memory() != 53380) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_delete_provider() != 30497) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_delete_skill() != 15994) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_export_mcp_config_json() != 21455) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_get_compression_stats() != 48899) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_get_default_provider() != 63518) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_get_enabled_providers() != 28734) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_get_mcp_config() != 23687) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_get_mcp_server() != 45650) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_get_mcp_server_logs() != 57017) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_get_mcp_server_status() != 16429) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_get_memory_app_list() != 40064) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_get_memory_config() != 17327) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_get_memory_stats() != 50210) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_get_skills_dir() != 37578) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_import_mcp_config_json() != 60730) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_install_skill() != 40846) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_install_skills_from_zip() != 10361) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aetherv2core_is_cancelled() != 11389) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_list_builtin_tools() != 31378) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_list_mcp_servers() != 64331) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_list_skills() != 3385) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aetherv2core_list_tools() != 37444) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aetherv2core_load_config() != 54855) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aetherv2core_process() != 24152) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_refresh_skills() != 28495) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aetherv2core_reload_config() != 4462) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aetherv2core_search_memory() != 28128) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_set_default_provider() != 31407) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_test_provider_connection_with_config() != 11452) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_trigger_compression() != 17129) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_update_behavior() != 39842) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_update_general_config() != 1587) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_update_mcp_config() != 45122) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_update_mcp_server() != 62898) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_update_memory_config() != 48912) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_update_provider() != 10121) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_update_routing_rules() != 30820) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_update_search_config() != 11904) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_update_shortcuts() != 29588) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_update_trigger_config() != 61067) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aetherv2core_validate_regex() != 58270) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_constructor_aethercore_new() != 50082) {

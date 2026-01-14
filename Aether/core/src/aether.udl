@@ -1169,6 +1169,7 @@ callback interface AetherV2EventHandler {
 };
 
 interface AetherV2Core {
+    // AI PROCESSING
     [Throws=AetherV2Error]
     void process(string input, ProcessOptionsV2? options);
 
@@ -1185,6 +1186,125 @@ interface AetherV2Core {
 
     [Throws=AetherV2Error]
     void reload_config();
+
+    // CONFIG MANAGEMENT (V1 → V2 Migration)
+    [Throws=AetherV2Error]
+    FullConfig load_config();
+
+    [Throws=AetherV2Error]
+    void update_provider(string name, ProviderConfig provider);
+
+    [Throws=AetherV2Error]
+    void delete_provider(string name);
+
+    [Throws=AetherV2Error]
+    void update_routing_rules(sequence<RoutingRuleConfig> rules);
+
+    [Throws=AetherV2Error]
+    void update_shortcuts(ShortcutsConfig shortcuts);
+
+    [Throws=AetherV2Error]
+    void update_behavior(BehaviorConfig behavior);
+
+    [Throws=AetherV2Error]
+    void update_trigger_config(TriggerConfig trigger);
+
+    [Throws=AetherV2Error]
+    void update_general_config(GeneralConfig config);
+
+    [Throws=AetherV2Error]
+    void update_search_config(SearchConfig search);
+
+    [Throws=AetherV2Error]
+    boolean validate_regex(string pattern);
+
+    TestConnectionResult test_provider_connection_with_config(string provider_name, ProviderConfig provider_config);
+
+    string? get_default_provider();
+
+    [Throws=AetherV2Error]
+    void set_default_provider(string provider_name);
+
+    sequence<string> get_enabled_providers();
+
+    // MCP MANAGEMENT (V1 → V2 Migration)
+    McpSettingsConfig get_mcp_config();
+
+    [Throws=AetherV2Error]
+    void update_mcp_config(McpSettingsConfig config);
+
+    sequence<McpServerConfig> list_mcp_servers();
+
+    McpServerConfig? get_mcp_server(string id);
+
+    McpServerStatusInfo get_mcp_server_status(string id);
+
+    [Throws=AetherV2Error]
+    void add_mcp_server(McpServerConfig config);
+
+    [Throws=AetherV2Error]
+    void update_mcp_server(McpServerConfig config);
+
+    [Throws=AetherV2Error]
+    void delete_mcp_server(string id);
+
+    sequence<string> get_mcp_server_logs(string id, u32 max_lines);
+
+    string export_mcp_config_json();
+
+    [Throws=AetherV2Error]
+    void import_mcp_config_json(string json);
+
+    // MEMORY MANAGEMENT (V1 → V2 Migration)
+    MemoryConfig get_memory_config();
+
+    [Throws=AetherV2Error]
+    void update_memory_config(MemoryConfig config);
+
+    [Throws=AetherV2Error]
+    void delete_memory(string id);
+
+    [Throws=AetherV2Error]
+    MemoryStats get_memory_stats();
+
+    [Throws=AetherV2Error]
+    sequence<AppMemoryInfo> get_memory_app_list();
+
+    [Throws=AetherV2Error]
+    u64 clear_memories(string? app_bundle_id, string? window_title);
+
+    [Throws=AetherV2Error]
+    u64 clear_facts();
+
+    [Throws=AetherV2Error]
+    u64 delete_memories_by_topic_id(string topic_id);
+
+    [Throws=AetherV2Error]
+    CompressionStats get_compression_stats();
+
+    [Throws=AetherV2Error]
+    CompressionResult trigger_compression();
+
+    // SKILLS MANAGEMENT (V1 → V2 Migration)
+    [Throws=AetherV2Error]
+    sequence<SkillInfo> list_skills();
+
+    [Throws=AetherV2Error]
+    SkillInfo install_skill(string url);
+
+    [Throws=AetherV2Error]
+    sequence<string> install_skills_from_zip(string zip_path);
+
+    [Throws=AetherV2Error]
+    void delete_skill(string skill_id);
+
+    [Throws=AetherV2Error]
+    string get_skills_dir();
+
+    void refresh_skills();
+
+    // TOOL REGISTRY (V1 → V2 Migration)
+    sequence<UnifiedToolInfo> list_builtin_tools();
 };
 
 dictionary ProcessOptionsV2 {

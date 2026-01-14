@@ -23,12 +23,12 @@
 //! ```
 
 use crate::agent::{RigAgentConfig, RigAgentManager};
-use crate::config::Config;
+use crate::config::{Config, FullConfig, ProviderConfig, RoutingRuleConfig, GeneralConfig, TestConnectionResult};
 use crate::store::sqlite::MemoryEntry;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Error type for UniFFI v2
 ///
@@ -209,6 +209,8 @@ impl AgentConfigHolder {
 pub struct AetherV2Core {
     /// Configuration holder with interior mutability for reload support
     config_holder: Arc<RwLock<AgentConfigHolder>>,
+    /// Full configuration with interior mutability for Settings UI operations
+    full_config: Arc<Mutex<Config>>,
     /// Config file path for reload capability (empty string means default path)
     config_path: String,
     memory_path: Option<MemoryStorePath>,
@@ -455,7 +457,788 @@ impl AetherV2Core {
         // Update config holder (acquire write lock)
         *self.config_holder.write().unwrap() = AgentConfigHolder::new(new_config);
 
+        // Also update full_config
+        *self.full_config.lock().unwrap() = full_config;
+
         Ok(())
+    }
+
+    // ========================================================================
+    // CONFIG MANAGEMENT METHODS (V1 → V2 Migration)
+    // ========================================================================
+
+    /// Acquires the full config mutex lock with poison recovery.
+    #[inline(always)]
+    fn lock_config(&self) -> std::sync::MutexGuard<'_, Config> {
+        self.full_config.lock().unwrap_or_else(|e| {
+            warn!("Mutex poisoned in full_config, recovering");
+            e.into_inner()
+        })
+    }
+
+    /// Load configuration and return it in UniFFI-compatible format
+    pub fn load_config(&self) -> Result<FullConfig, AetherV2Error> {
+        let config = self.lock_config();
+        Ok(config.clone().into())
+    }
+
+    /// Update provider configuration
+    pub fn update_provider(
+        &self,
+        name: String,
+        provider: ProviderConfig,
+    ) -> Result<(), AetherV2Error> {
+        let mut config = self.lock_config();
+        config.providers.insert(name, provider);
+        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Delete provider configuration
+    pub fn delete_provider(&self, name: String) -> Result<(), AetherV2Error> {
+        let mut config = self.lock_config();
+        config.providers.remove(&name);
+        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Update routing rules
+    ///
+    /// This method updates the routing rules in config.
+    /// **IMPORTANT**: Preserves builtin rules (is_builtin = true) and only
+    /// updates user-defined rules.
+    pub fn update_routing_rules(
+        &self,
+        rules: Vec<RoutingRuleConfig>,
+    ) -> Result<(), AetherV2Error> {
+        let mut config = self.lock_config();
+
+        // Preserve builtin rules from current config
+        let builtin_rules: Vec<_> = config
+            .rules
+            .iter()
+            .filter(|r| r.is_builtin)
+            .cloned()
+            .collect();
+
+        // Merge: builtin rules first (for priority), then user rules
+        let mut merged_rules = builtin_rules;
+        merged_rules.extend(rules);
+
+        info!(
+            builtin = merged_rules.iter().filter(|r| r.is_builtin).count(),
+            user = merged_rules.iter().filter(|r| !r.is_builtin).count(),
+            total = merged_rules.len(),
+            "Updating routing rules"
+        );
+
+        config.rules = merged_rules;
+        config.validate().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+
+        info!("Routing rules updated");
+        Ok(())
+    }
+
+    /// Update shortcuts configuration
+    pub fn update_shortcuts(&self, shortcuts: crate::config::ShortcutsConfig) -> Result<(), AetherV2Error> {
+        let mut config = self.lock_config();
+        config.shortcuts = Some(shortcuts);
+        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        info!("Shortcuts configuration updated");
+        Ok(())
+    }
+
+    /// Update behavior configuration
+    pub fn update_behavior(&self, behavior: crate::config::BehaviorConfig) -> Result<(), AetherV2Error> {
+        let mut config = self.lock_config();
+        config.behavior = Some(behavior);
+        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        info!("Behavior configuration updated");
+        Ok(())
+    }
+
+    /// Update trigger configuration
+    pub fn update_trigger_config(&self, trigger: crate::config::TriggerConfig) -> Result<(), AetherV2Error> {
+        let mut config = self.lock_config();
+        config.trigger = Some(trigger);
+        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        info!("Trigger configuration updated");
+        Ok(())
+    }
+
+    /// Update general configuration (language preference, etc.)
+    pub fn update_general_config(&self, new_config: GeneralConfig) -> Result<(), AetherV2Error> {
+        let mut config = self.lock_config();
+        config.general = new_config;
+        config.save().map_err(|e| AetherV2Error::Config(format!("Failed to save general config: {}", e)))?;
+        Ok(())
+    }
+
+    /// Update search configuration
+    pub fn update_search_config(&self, search: crate::config::SearchConfig) -> Result<(), AetherV2Error> {
+        // Convert UniFFI SearchConfig to internal SearchConfigInternal
+        let search_internal: crate::config::SearchConfigInternal = search.into();
+
+        let mut config = self.lock_config();
+        config.search = Some(search_internal);
+        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        info!("Search configuration updated");
+        Ok(())
+    }
+
+    /// Validate regex pattern
+    pub fn validate_regex(&self, pattern: String) -> Result<bool, AetherV2Error> {
+        match regex::Regex::new(&pattern) {
+            Ok(_) => Ok(true),
+            Err(e) => Err(AetherV2Error::Config(format!("Invalid regex: {}", e))),
+        }
+    }
+
+    /// Test provider connection with temporary configuration
+    ///
+    /// This method tests a provider without persisting the configuration to disk.
+    /// Useful for "Test Connection" feature in UI before saving the provider.
+    pub fn test_provider_connection_with_config(
+        &self,
+        provider_name: String,
+        provider_config: ProviderConfig,
+    ) -> TestConnectionResult {
+        use crate::providers::create_provider;
+
+        // Create provider instance
+        let provider = match create_provider(&provider_name, provider_config) {
+            Ok(p) => p,
+            Err(e) => {
+                return TestConnectionResult {
+                    success: false,
+                    message: format!("Failed to create provider: {}", e.user_friendly_message()),
+                };
+            }
+        };
+
+        // Send test request
+        let test_prompt = "Say 'OK' if you can read this.";
+        let result = self.runtime.block_on(async {
+            provider.process(test_prompt, None).await.map_err(|e| format!("{}", e))
+        });
+
+        match result {
+            Ok(response) => TestConnectionResult {
+                success: true,
+                message: format!(
+                    "✓ Connection successful! Provider responded: {}",
+                    response.chars().take(50).collect::<String>()
+                ),
+            },
+            Err(err_msg) => TestConnectionResult {
+                success: false,
+                message: err_msg,
+            },
+        }
+    }
+
+    /// Get the current default provider (if exists and enabled)
+    pub fn get_default_provider(&self) -> Option<String> {
+        let config = self.lock_config();
+        config.get_default_provider()
+    }
+
+    /// Set the default provider (validates that provider exists and is enabled)
+    pub fn set_default_provider(&self, provider_name: String) -> Result<(), AetherV2Error> {
+        let mut config = self.lock_config();
+        config.set_default_provider(&provider_name)
+            .map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        info!(provider = %provider_name, "Default provider updated");
+        Ok(())
+    }
+
+    /// Get list of all enabled provider names (sorted alphabetically)
+    pub fn get_enabled_providers(&self) -> Vec<String> {
+        let config = self.lock_config();
+        config.get_enabled_providers()
+    }
+
+    // ========================================================================
+    // MCP MANAGEMENT METHODS (V1 → V2 Migration)
+    // ========================================================================
+
+    /// Get MCP configuration for Settings UI
+    pub fn get_mcp_config(&self) -> crate::mcp::McpSettingsConfig {
+        let config = self.lock_config();
+        crate::mcp::McpSettingsConfig {
+            enabled: config.mcp.enabled,
+            fs_enabled: config.tools.fs_enabled,
+            git_enabled: config.tools.git_enabled,
+            shell_enabled: config.tools.shell_enabled,
+            system_info_enabled: config.tools.system_info_enabled,
+            allowed_roots: config.tools.allowed_roots.clone(),
+            allowed_repos: config.tools.allowed_repos.clone(),
+            allowed_commands: config.tools.allowed_commands.clone(),
+            shell_timeout_seconds: config.tools.shell_timeout_seconds,
+        }
+    }
+
+    /// Update MCP configuration
+    pub fn update_mcp_config(&self, new_config: crate::mcp::McpSettingsConfig) -> Result<(), AetherV2Error> {
+        let mut config = self.lock_config();
+
+        config.mcp.enabled = new_config.enabled;
+        config.tools.fs_enabled = new_config.fs_enabled;
+        config.tools.git_enabled = new_config.git_enabled;
+        config.tools.shell_enabled = new_config.shell_enabled;
+        config.tools.system_info_enabled = new_config.system_info_enabled;
+        config.tools.allowed_roots = new_config.allowed_roots;
+        config.tools.allowed_repos = new_config.allowed_repos;
+        config.tools.allowed_commands = new_config.allowed_commands;
+        config.tools.shell_timeout_seconds = new_config.shell_timeout_seconds;
+
+        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        info!("MCP configuration updated");
+        Ok(())
+    }
+
+    /// List all external MCP servers
+    pub fn list_mcp_servers(&self) -> Vec<crate::mcp::McpServerConfig> {
+        let config = self.lock_config();
+        let mut servers = Vec::new();
+
+        for ext in &config.mcp.external_servers {
+            servers.push(crate::mcp::McpServerConfig {
+                id: ext.name.clone(),
+                name: ext.name.clone(),
+                server_type: crate::mcp::McpServerType::External,
+                enabled: true,
+                command: Some(ext.command.clone()),
+                args: ext.args.clone(),
+                env: ext
+                    .env
+                    .iter()
+                    .map(|(k, v)| crate::mcp::McpEnvVar {
+                        key: k.clone(),
+                        value: v.clone(),
+                    })
+                    .collect(),
+                working_directory: ext.cwd.clone(),
+                trigger_command: Some(format!("/mcp/{}", ext.name)),
+                permissions: crate::mcp::McpServerPermissions {
+                    requires_confirmation: true,
+                    allowed_paths: Vec::new(),
+                    allowed_commands: Vec::new(),
+                },
+                icon: "puzzlepiece.extension".to_string(),
+                color: "#FF9500".to_string(),
+            });
+        }
+
+        servers
+    }
+
+    /// Get a specific MCP server by ID
+    pub fn get_mcp_server(&self, id: String) -> Option<crate::mcp::McpServerConfig> {
+        self.list_mcp_servers().into_iter().find(|s| s.id == id)
+    }
+
+    /// Get MCP server status
+    pub fn get_mcp_server_status(&self, id: String) -> crate::mcp::McpServerStatusInfo {
+        let server = self.get_mcp_server(id.clone());
+
+        match server {
+            Some(s) => {
+                if s.enabled {
+                    crate::mcp::McpServerStatusInfo {
+                        status: crate::mcp::McpServerStatus::Running,
+                        message: Some("Server is active".to_string()),
+                        last_error: None,
+                    }
+                } else {
+                    crate::mcp::McpServerStatusInfo {
+                        status: crate::mcp::McpServerStatus::Stopped,
+                        message: Some("Server is disabled".to_string()),
+                        last_error: None,
+                    }
+                }
+            }
+            None => crate::mcp::McpServerStatusInfo {
+                status: crate::mcp::McpServerStatus::Error,
+                message: None,
+                last_error: Some(format!("Server '{}' not found", id)),
+            },
+        }
+    }
+
+    /// Add an external MCP server
+    pub fn add_mcp_server(&self, config: crate::mcp::McpServerConfig) -> Result<(), AetherV2Error> {
+        if config.server_type == crate::mcp::McpServerType::Builtin {
+            return Err(AetherV2Error::Config("Cannot add builtin servers".to_string()));
+        }
+
+        let command = config
+            .command
+            .as_ref()
+            .ok_or_else(|| AetherV2Error::Config("External server requires a command".to_string()))?;
+
+        if config.id.is_empty() {
+            return Err(AetherV2Error::Config("Server ID cannot be empty".to_string()));
+        }
+
+        let external_config = crate::config::McpExternalServerConfig {
+            name: config.id.clone(),
+            command: command.clone(),
+            args: config.args.clone(),
+            env: config
+                .env
+                .into_iter()
+                .map(|e| (e.key, e.value))
+                .collect(),
+            cwd: config.working_directory,
+            requires_runtime: None,
+            timeout_seconds: 30,
+        };
+
+        let mut cfg = self.lock_config();
+
+        if cfg.mcp.external_servers.iter().any(|s| s.name == config.id) {
+            return Err(AetherV2Error::Config(format!(
+                "Server '{}' already exists",
+                config.id
+            )));
+        }
+
+        cfg.mcp.external_servers.push(external_config);
+        cfg.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+
+        info!(server_id = %config.id, "MCP server added");
+        Ok(())
+    }
+
+    /// Update an external MCP server configuration
+    pub fn update_mcp_server(&self, config: crate::mcp::McpServerConfig) -> Result<(), AetherV2Error> {
+        if config.server_type == crate::mcp::McpServerType::Builtin {
+            return Err(AetherV2Error::Config(
+                "Builtin servers cannot be updated via this method".to_string(),
+            ));
+        }
+
+        let command = config
+            .command
+            .as_ref()
+            .ok_or_else(|| AetherV2Error::Config("External server requires a command".to_string()))?;
+
+        let mut cfg = self.lock_config();
+
+        let server = cfg
+            .mcp
+            .external_servers
+            .iter_mut()
+            .find(|s| s.name == config.id);
+
+        match server {
+            Some(s) => {
+                s.command = command.clone();
+                s.args = config.args;
+                s.env = config.env.into_iter().map(|e| (e.key, e.value)).collect();
+                s.cwd = config.working_directory;
+            }
+            None => {
+                return Err(AetherV2Error::Config(format!(
+                    "External server '{}' not found",
+                    config.id
+                )));
+            }
+        }
+
+        cfg.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        info!(server_id = %config.id, "MCP server updated");
+        Ok(())
+    }
+
+    /// Delete an external MCP server
+    pub fn delete_mcp_server(&self, id: String) -> Result<(), AetherV2Error> {
+        let mut cfg = self.lock_config();
+
+        let initial_len = cfg.mcp.external_servers.len();
+        cfg.mcp.external_servers.retain(|s| s.name != id);
+
+        if cfg.mcp.external_servers.len() == initial_len {
+            return Err(AetherV2Error::Config(format!(
+                "External server '{}' not found",
+                id
+            )));
+        }
+
+        cfg.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        info!(server_id = %id, "MCP server deleted");
+        Ok(())
+    }
+
+    /// Get MCP server logs
+    pub fn get_mcp_server_logs(&self, _id: String, _max_lines: u32) -> Vec<String> {
+        // TODO: Implement log collection from server process
+        Vec::new()
+    }
+
+    /// Export MCP configuration as claude_desktop_config.json format
+    pub fn export_mcp_config_json(&self) -> String {
+        let config = self.lock_config();
+        let mut servers = serde_json::Map::new();
+
+        for ext in &config.mcp.external_servers {
+            let mut server_obj = serde_json::Map::new();
+            server_obj.insert("command".to_string(), serde_json::json!(ext.command));
+            server_obj.insert("args".to_string(), serde_json::json!(ext.args));
+
+            if !ext.env.is_empty() {
+                server_obj.insert("env".to_string(), serde_json::json!(ext.env));
+            }
+
+            if let Some(cwd) = &ext.cwd {
+                server_obj.insert("cwd".to_string(), serde_json::json!(cwd));
+            }
+
+            servers.insert(ext.name.clone(), serde_json::Value::Object(server_obj));
+        }
+
+        let export = serde_json::json!({ "mcpServers": servers });
+        serde_json::to_string_pretty(&export).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Import MCP configuration from claude_desktop_config.json format
+    pub fn import_mcp_config_json(&self, json: String) -> Result<(), AetherV2Error> {
+        let parsed: serde_json::Value = serde_json::from_str(&json)
+            .map_err(|e| AetherV2Error::Config(format!("Invalid JSON: {}", e)))?;
+
+        let servers = parsed
+            .get("mcpServers")
+            .ok_or_else(|| AetherV2Error::Config("Missing 'mcpServers' field".to_string()))?
+            .as_object()
+            .ok_or_else(|| AetherV2Error::Config("'mcpServers' must be an object".to_string()))?;
+
+        let mut cfg = self.lock_config();
+
+        for (name, server_config) in servers {
+            let command = server_config
+                .get("command")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    AetherV2Error::Config(format!("Server '{}' missing 'command'", name))
+                })?;
+
+            let args: Vec<String> = server_config
+                .get("args")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let env: std::collections::HashMap<String, String> = server_config
+                .get("env")
+                .and_then(|v| v.as_object())
+                .map(|obj| {
+                    obj.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let cwd = server_config
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+
+            if let Some(existing) = cfg.mcp.external_servers.iter_mut().find(|s| s.name == *name) {
+                existing.command = command.to_string();
+                existing.args = args;
+                existing.env = env;
+                existing.cwd = cwd;
+            } else {
+                cfg.mcp
+                    .external_servers
+                    .push(crate::config::McpExternalServerConfig {
+                        name: name.clone(),
+                        command: command.to_string(),
+                        args,
+                        env,
+                        cwd,
+                        requires_runtime: None,
+                        timeout_seconds: 30,
+                    });
+            }
+        }
+
+        cfg.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        info!("MCP configuration imported");
+        Ok(())
+    }
+
+    // ========================================================================
+    // MEMORY MANAGEMENT METHODS (V1 → V2 Migration)
+    // ========================================================================
+
+    /// Get memory configuration
+    pub fn get_memory_config(&self) -> crate::config::MemoryConfig {
+        let config = self.lock_config();
+        config.memory.clone()
+    }
+
+    /// Update memory configuration
+    pub fn update_memory_config(&self, new_config: crate::config::MemoryConfig) -> Result<(), AetherV2Error> {
+        let mut config = self.lock_config();
+        config.memory = new_config;
+        config.save().map_err(|e| AetherV2Error::Config(e.to_string()))?;
+        info!("Memory configuration updated");
+        Ok(())
+    }
+
+    /// Delete specific memory by ID
+    pub fn delete_memory(&self, id: String) -> Result<(), AetherV2Error> {
+        let memory_path = self.memory_path.as_ref().ok_or_else(|| {
+            AetherV2Error::Memory("Memory store not initialized".to_string())
+        })?;
+
+        use crate::memory::database::VectorDatabase;
+        use std::path::PathBuf;
+        let db_path = PathBuf::from(&memory_path.path);
+        let db = VectorDatabase::new(db_path)
+            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+
+        self.runtime.block_on(db.delete_memory(&id))
+            .map_err(|e| AetherV2Error::Memory(e.to_string()))
+    }
+
+    /// Get memory database statistics
+    pub fn get_memory_stats(&self) -> Result<crate::memory::database::MemoryStats, AetherV2Error> {
+        let memory_path = self.memory_path.as_ref().ok_or_else(|| {
+            AetherV2Error::Memory("Memory store not initialized".to_string())
+        })?;
+
+        use crate::memory::database::VectorDatabase;
+        use std::path::PathBuf;
+        let db_path = PathBuf::from(&memory_path.path);
+        let db = VectorDatabase::new(db_path)
+            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+
+        self.runtime.block_on(db.get_stats())
+            .map_err(|e| AetherV2Error::Memory(e.to_string()))
+    }
+
+    /// Get list of unique app bundle IDs from memories
+    pub fn get_memory_app_list(&self) -> Result<Vec<crate::core::types::AppMemoryInfo>, AetherV2Error> {
+        let memory_path = self.memory_path.as_ref().ok_or_else(|| {
+            AetherV2Error::Memory("Memory store not initialized".to_string())
+        })?;
+
+        use crate::memory::database::VectorDatabase;
+        use std::path::PathBuf;
+        let db_path = PathBuf::from(&memory_path.path);
+        let db = VectorDatabase::new(db_path)
+            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+
+        let apps = self.runtime.block_on(db.get_app_list())
+            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+
+        Ok(apps
+            .into_iter()
+            .map(|(app_bundle_id, memory_count)| crate::core::types::AppMemoryInfo {
+                app_bundle_id,
+                memory_count,
+            })
+            .collect())
+    }
+
+    /// Clear memories (with optional filters)
+    pub fn clear_memories(
+        &self,
+        app_bundle_id: Option<String>,
+        window_title: Option<String>,
+    ) -> Result<u64, AetherV2Error> {
+        let memory_path = self.memory_path.as_ref().ok_or_else(|| {
+            AetherV2Error::Memory("Memory store not initialized".to_string())
+        })?;
+
+        use crate::memory::database::VectorDatabase;
+        use std::path::PathBuf;
+        let db_path = PathBuf::from(&memory_path.path);
+        let db = VectorDatabase::new(db_path)
+            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+
+        self.runtime.block_on(db.clear_memories(app_bundle_id.as_deref(), window_title.as_deref()))
+            .map_err(|e| AetherV2Error::Memory(e.to_string()))
+    }
+
+    /// Clear all compressed facts (Layer 2 data)
+    pub fn clear_facts(&self) -> Result<u64, AetherV2Error> {
+        let memory_path = self.memory_path.as_ref().ok_or_else(|| {
+            AetherV2Error::Memory("Memory store not initialized".to_string())
+        })?;
+
+        use crate::memory::database::VectorDatabase;
+        use std::path::PathBuf;
+        let db_path = PathBuf::from(&memory_path.path);
+        let db = VectorDatabase::new(db_path)
+            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+
+        self.runtime.block_on(db.clear_facts())
+            .map_err(|e| AetherV2Error::Memory(e.to_string()))
+    }
+
+    /// Delete all memories associated with a specific topic ID
+    pub fn delete_memories_by_topic_id(&self, topic_id: String) -> Result<u64, AetherV2Error> {
+        let memory_path = self.memory_path.as_ref().ok_or_else(|| {
+            AetherV2Error::Memory("Memory store not initialized".to_string())
+        })?;
+
+        use crate::memory::database::VectorDatabase;
+        use std::path::PathBuf;
+        let db_path = PathBuf::from(&memory_path.path);
+        let db = VectorDatabase::new(db_path)
+            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+
+        self.runtime.block_on(db.delete_by_topic_id(&topic_id))
+            .map_err(|e| AetherV2Error::Memory(e.to_string()))
+    }
+
+    /// Get compression statistics
+    pub fn get_compression_stats(&self) -> Result<crate::core::types::CompressionStats, AetherV2Error> {
+        let memory_path = self.memory_path.as_ref().ok_or_else(|| {
+            AetherV2Error::Memory("Memory store not initialized".to_string())
+        })?;
+
+        use crate::memory::database::VectorDatabase;
+        use std::path::PathBuf;
+        let db_path = PathBuf::from(&memory_path.path);
+        let db = VectorDatabase::new(db_path)
+            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+
+        let stats = self.runtime.block_on(db.get_stats())
+            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+        let fact_stats = self.runtime.block_on(db.get_fact_stats())
+            .map_err(|e| AetherV2Error::Memory(e.to_string()))?;
+
+        Ok(crate::core::types::CompressionStats {
+            total_raw_memories: stats.total_memories,
+            total_facts: fact_stats.total_facts,
+            valid_facts: fact_stats.valid_facts,
+            facts_by_type: fact_stats.facts_by_type,
+        })
+    }
+
+    /// Manually trigger memory compression
+    ///
+    /// Note: In V2, compression is simplified. This is a placeholder
+    /// that returns a default result.
+    pub fn trigger_compression(&self) -> Result<crate::memory::context::CompressionResult, AetherV2Error> {
+        // V2 compression is not yet fully implemented
+        // Return a default result indicating no compression occurred
+        Ok(crate::memory::context::CompressionResult {
+            memories_processed: 0,
+            facts_extracted: 0,
+            facts_invalidated: 0,
+            duration_ms: 0,
+        })
+    }
+
+    // ========================================================================
+    // SKILLS MANAGEMENT METHODS (V1 → V2 Migration)
+    // ========================================================================
+
+    /// List all installed skills
+    pub fn list_skills(&self) -> Result<Vec<crate::skills::SkillInfo>, AetherV2Error> {
+        crate::initialization::list_installed_skills()
+            .map_err(|e| AetherV2Error::Config(e.to_string()))
+    }
+
+    /// Install a skill from a GitHub URL
+    pub fn install_skill(&self, url: String) -> Result<crate::skills::SkillInfo, AetherV2Error> {
+        let skill_info = crate::initialization::install_skill_from_url(url)
+            .map_err(|e| AetherV2Error::Config(e.to_string()))?;
+
+        info!(skill_id = %skill_info.id, "Skill installed");
+        Ok(skill_info)
+    }
+
+    /// Install skills from a local ZIP file
+    pub fn install_skills_from_zip(&self, zip_path: String) -> Result<Vec<String>, AetherV2Error> {
+        let skill_ids = crate::initialization::install_skills_from_zip(zip_path)
+            .map_err(|e| AetherV2Error::Config(e.to_string()))?;
+
+        info!(count = skill_ids.len(), "Skills installed from ZIP");
+        Ok(skill_ids)
+    }
+
+    /// Delete a skill by ID
+    pub fn delete_skill(&self, skill_id: String) -> Result<(), AetherV2Error> {
+        crate::initialization::delete_skill(skill_id.clone())
+            .map_err(|e| AetherV2Error::Config(e.to_string()))?;
+
+        info!(skill_id = %skill_id, "Skill deleted");
+        Ok(())
+    }
+
+    /// Get the skills directory path
+    pub fn get_skills_dir(&self) -> Result<String, AetherV2Error> {
+        crate::initialization::get_skills_dir_string()
+            .map_err(|e| AetherV2Error::Config(e.to_string()))
+    }
+
+    /// Refresh skills (placeholder for V2)
+    ///
+    /// In V2, this is a no-op since tool registry is managed differently.
+    pub fn refresh_skills(&self) {
+        info!("Skills refresh requested (V2)");
+    }
+
+    // ========================================================================
+    // TOOL REGISTRY METHODS (V1 → V2 Migration)
+    // ========================================================================
+
+    /// List builtin tools only
+    pub fn list_builtin_tools(&self) -> Vec<crate::dispatcher::UnifiedToolInfo> {
+        // Return static builtin tools
+        vec![
+            crate::dispatcher::UnifiedToolInfo {
+                id: "builtin:search".to_string(),
+                name: "search".to_string(),
+                display_name: "Search".to_string(),
+                description: "Search the internet".to_string(),
+                source_type: crate::dispatcher::ToolSourceType::Builtin,
+                source_id: None,
+                parameters_schema: None,
+                is_active: true,
+                requires_confirmation: false,
+                safety_level: "Read Only".to_string(),
+                service_name: None,
+                icon: Some("magnifyingglass".to_string()),
+                usage: Some("/search <query>".to_string()),
+                localization_key: Some("tool.search".to_string()),
+                is_builtin: true,
+                sort_order: 10,
+                has_subtools: false,
+            },
+            crate::dispatcher::UnifiedToolInfo {
+                id: "builtin:webfetch".to_string(),
+                name: "webfetch".to_string(),
+                display_name: "Web Fetch".to_string(),
+                description: "Fetch web page content".to_string(),
+                source_type: crate::dispatcher::ToolSourceType::Builtin,
+                source_id: None,
+                parameters_schema: None,
+                is_active: true,
+                requires_confirmation: false,
+                safety_level: "Read Only".to_string(),
+                service_name: None,
+                icon: Some("globe".to_string()),
+                usage: Some("/webfetch <url>".to_string()),
+                localization_key: Some("tool.webfetch".to_string()),
+                is_builtin: true,
+                sort_order: 20,
+                has_subtools: false,
+            },
+        ]
     }
 }
 
@@ -586,6 +1369,7 @@ pub fn init_v2(
 
     Ok(Arc::new(AetherV2Core {
         config_holder,
+        full_config: Arc::new(Mutex::new(full_config)),
         config_path,  // Store config path for reload capability
         memory_path,
         handler,
