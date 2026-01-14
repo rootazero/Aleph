@@ -158,9 +158,9 @@ impl GeminiProvider {
         }
 
         // Build HTTP client with timeout and TLS
+        // Use native TLS to trust system CA certificates (required for HTTPS interception like Kaspersky)
         let client = Client::builder()
             .timeout(Duration::from_secs(config.timeout_seconds))
-            .use_rustls_tls()
             .build()
             .map_err(|e| {
                 AetherError::invalid_config(format!("Failed to build HTTP client: {}", e))
