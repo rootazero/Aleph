@@ -577,6 +577,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             core = try initCore(configPath: configPath, handler: eventHandler)
             print("[Aether] AetherCore initialized successfully")
 
+            // Initialize providers menu with enabled providers
+            rebuildProvidersMenu()
+
             // Set core reference in event handler for cancellation
             eventHandler.setCore(core!)
 
