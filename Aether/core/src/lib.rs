@@ -19,22 +19,17 @@
 //! - **AetherV2EventHandler**: Callback interface for Rust → Client communication
 //! - **ProcessingState**: State machine for UI feedback
 //!
-//! # Usage Example (V2)
+//! # Usage Example
 //!
-//! ```rust,no_run
-//! use aethecore::*;
+//! ```rust,ignore
+//! use aethecore::UniffiAetherCore;
 //!
-//! // Initialize V2 core with event handler
-//! let handler = MyV2EventHandler::new();
-//! let core = init_v2("/path/to/config.toml", handler).unwrap();
+//! // Initialize core with event handler
+//! let handler = MyEventHandler::new();
+//! let core = UniffiAetherCore::new("/path/to/config.toml", handler).unwrap();
 //!
-//! // Process user input
-//! let options = ProcessOptionsV2 {
-//!     app_context: Some("Safari".to_string()),
-//!     window_title: None,
-//!     stream: true,
-//! };
-//! core.process("Hello, world!".to_string(), Some(options)).unwrap();
+//! // Process user input (uses RigAgentManager internally)
+//! let result = core.process("Hello, world!".to_string(), None);
 //!
 //! // List available tools
 //! let tools = core.list_tools();
@@ -73,11 +68,8 @@ pub mod memory;
 pub mod metrics;
 pub mod payload; // Structured context protocol with capability support
 pub mod providers;
-pub mod router;
 pub mod search; // NEW: Search capability with multiple provider support
 pub mod skills; // NEW: Claude Agent Skills support
-pub mod semantic; // NEW: Unified semantic detection system
-pub mod coordination; // NEW: Conversation-aware routing coordination layer
 pub mod suggestion; // NEW: AI response suggestion parsing
 pub mod utils; // NEW: Capability executor for enriching payloads
 pub mod video; // NEW: Video transcript extraction (YouTube)
@@ -88,9 +80,8 @@ pub mod store; // NEW: Rig-based vector store for memory
 pub mod rig_tools; // NEW: Rig-compatible tool wrapper
 pub mod uniffi_core; // UniFFI core bindings for rig-based architecture
 pub mod dispatcher; // NEW: Intelligent tool routing (Dispatcher Layer)
-pub mod routing; // NEW: Unified multi-layer routing framework
 mod title_generator; // Title generation for conversation topics
-pub mod tools; // NEW: Native function calling tools (AgentTool trait)
+pub mod tools; // Tool type definitions (ToolCategory, ToolDefinition, ToolResult)
 pub mod vision; // NEW: Vision capability (screen OCR, image understanding)
 
 // Integration tests module
@@ -130,7 +121,6 @@ pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer
 pub use crate::memory::database::MemoryStats;
 pub use crate::metrics::StageTimer;
 pub use crate::providers::AiProvider;
-pub use crate::router::{Router, RoutingRule};
 pub use crate::search::{ProviderTestResult, SearchProviderTestConfig};
 pub use crate::clarification::{
     ClarificationOption, ClarificationRequest, ClarificationResult, ClarificationResultType,
@@ -138,7 +128,6 @@ pub use crate::clarification::{
 };
 pub use crate::conversation::{ConversationManager, ConversationSession, ConversationTurn};
 pub use crate::intent::{AiIntentDetector, AiIntentResult};
-pub use crate::coordination::{ConversationAwareRouter, RoutingContext, RoutingResult};
 pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
 pub use crate::skills::{Skill, SkillInfo, SkillsInstaller, SkillsRegistry};
 pub use crate::mcp::{
@@ -148,34 +137,11 @@ pub use crate::mcp::{
 pub use crate::dispatcher::{
     AsyncConfirmationConfig, AsyncConfirmationHandler, ConfirmationAction, ConfirmationConfig,
     ConfirmationDecision, ConfirmationState, DispatcherAction, DispatcherConfig,
-    DispatcherIntegration, DispatcherResult, L3RoutingOptions, L3RoutingResponse, L3RoutingResult,
-    L3Router, PendingConfirmation, PendingConfirmationInfo, PendingConfirmationStore,
-    PromptBuilder, PromptFormat, RoutingLayer, ToolConfirmation, ToolFilter, ToolRegistry,
-    ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo, UserConfirmationDecision,
+    DispatcherIntegration, DispatcherResult, PendingConfirmation, PendingConfirmationInfo,
+    PendingConfirmationStore, ToolConfirmation, ToolRegistry, ToolSafetyLevel, ToolSource,
+    ToolSourceType, UnifiedTool, UnifiedToolInfo, UserConfirmationDecision,
 };
-pub use crate::routing::{
-    RoutingConfig, RoutingContext as UnifiedRoutingContext, RoutingLayerType, RoutingMatch,
-    RoutingResult as UnifiedRoutingResult, UnifiedRouter,
-};
-pub use crate::tools::{
-    // Core types
-    AgentTool, NativeToolRegistry, ToolCategory, ToolDefinition, ToolResult,
-    // Filesystem tools
-    create_filesystem_tools, FileDeleteTool, FileListTool, FileReadTool, FileSearchTool,
-    FileWriteTool, FilesystemConfig, FilesystemContext,
-    // Git tools
-    create_git_tools, GitBranchTool, GitConfig, GitContext, GitDiffTool, GitLogTool, GitStatusTool,
-    // Shell tools
-    create_shell_tools, ShellConfig, ShellContext, ShellExecuteTool,
-    // System tools
-    create_system_tools, SystemContext, SystemInfoTool,
-    // Clipboard tools
-    create_clipboard_tools, ClipboardContent, ClipboardContext, ClipboardReadTool,
-    // Screen tools
-    create_screen_tools, ScreenCaptureTool, ScreenConfig, ScreenContext,
-    // Search tools
-    create_search_tools, SearchConfig as SearchToolConfig, SearchContext, WebSearchTool,
-};
+pub use crate::tools::{ToolCategory, ToolDefinition, ToolResult};
 pub use crate::utils::pii;
 pub use crate::vision::{
     CaptureMode, VisionConfig, VisionRequest, VisionResult, VisionService, VisionTask,

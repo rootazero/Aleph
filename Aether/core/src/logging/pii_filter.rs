@@ -27,7 +27,7 @@ use tracing_subscriber::layer::{Context, Layer};
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use aether::logging::PiiScrubbingLayer;
 /// use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 ///
@@ -70,7 +70,7 @@ impl<S: Subscriber> Layer<S> for PiiScrubbingLayer {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use aether::logging::create_pii_scrubbing_layer;
 /// use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 ///

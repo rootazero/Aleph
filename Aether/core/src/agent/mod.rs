@@ -1,7 +1,7 @@
-//! Agent Module for Tool Calling Loop
+//! Agent Module for rig-core AI Agent
 //!
-//! This module provides the `AgentLoop` which implements a custom agent loop
-//! for executing tool calls with LLM function calling support.
+//! This module provides the `RigAgentManager` which implements AI agent functionality
+//! using the rig-core library with tool calling support.
 //!
 //! # Architecture
 //!
@@ -9,57 +9,36 @@
 //! User Input
 //!      ↓
 //! ┌─────────────────────────────────────────────────────┐
-//! │                    AgentLoop                         │
+//! │                  RigAgentManager                     │
 //! │                                                      │
-//! │  ┌─────────────────┐    ┌─────────────────────────┐ │
-//! │  │ ConversationHist│    │ Message List:           │ │
-//! │  │ - system        │ →  │ [system, user, assist,  │ │
-//! │  │ - messages[]    │    │  tool_call, tool_result]│ │
-//! │  └─────────────────┘    └───────────┬─────────────┘ │
-//! │                                     ↓               │
 //! │  ┌─────────────────────────────────────────────────┐│
-//! │  │ AI Provider.chat_with_tools()                   ││
-//! │  │ - Returns content + optional tool_calls         ││
-//! │  └────────────────────────┬────────────────────────┘│
-//! │                           ↓                         │
-//! │  ┌─────────────────────────────────────────────────┐│
-//! │  │ If tool_calls: Execute → Append result → Loop   ││
-//! │  │ If no tool_calls: Return final response         ││
+//! │  │ rig-core Agent with ToolServer                  ││
+//! │  │ - SearchTool, WebFetchTool, YouTubeTool         ││
+//! │  │ - McpToolWrapper (hot-reload MCP tools)         ││
 //! │  └─────────────────────────────────────────────────┘│
 //! └─────────────────────────────────────────────────────┘
 //!      ↓
-//! AgentResult { response, history, tool_calls_made }
+//! AgentResponse { content, tool_calls, ... }
 //! ```
 //!
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::agent::{AgentLoop, AgentConfig};
-//! use aethecore::tools::NativeToolRegistry;
+//! use aethecore::agent::{RigAgentManager, RigAgentConfig};
 //!
-//! let agent = AgentLoop::new(provider, registry)
-//!     .with_max_turns(10)
-//!     .with_system_prompt("You are a helpful assistant.");
+//! let config = RigAgentConfig::default();
+//! let manager = RigAgentManager::new(config)?;
 //!
-//! let result = agent.run("Search for AI news and summarize").await?;
-//!
-//! println!("Response: {}", result.response);
-//! println!("Tool calls made: {}", result.tool_calls_made);
+//! let response = manager.process("Search for AI news").await?;
+//! println!("Response: {}", response.content);
 //! ```
 
-mod adapter;
 pub mod config;
 mod conversation;
-mod executor;
 pub mod manager;
 mod types;
 
-pub use adapter::{
-    create_tool_adapter, AnthropicToolAdapter, AnthropicToolConfig, OpenAiToolAdapter,
-    OpenAiToolConfig,
-};
 pub use config::RigAgentConfig;
 pub use conversation::{ChatMessage, ConversationHistory, MessageRole};
-pub use executor::{AgentLoop, ChatResponse, ToolCallingProvider};
 pub use manager::{AgentResponse, RigAgentManager};
 pub use types::{AgentConfig, AgentResult, ToolCallInfo, ToolCallResult};

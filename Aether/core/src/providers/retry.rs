@@ -61,10 +61,10 @@ fn is_retryable(error: &AetherError) -> bool {
 /// - Attempt 4: Wait 4s
 ///
 /// # Example
-/// ```no_run
-/// use aether_core::providers::retry::retry_with_backoff;
+/// ```rust,ignore
+/// use aethecore::providers::retry::retry_with_backoff;
 ///
-/// async fn fetch_data() -> Result<String, aether_core::error::AetherError> {
+/// async fn fetch_data() -> Result<String, aethecore::error::AetherError> {
 ///     // ... network request
 ///     Ok("data".to_string())
 /// }

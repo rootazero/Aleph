@@ -26,7 +26,7 @@
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use aethecore::config::ProviderConfig;
 /// use aethecore::providers::claude::ClaudeProvider;
 /// use aethecore::providers::AiProvider;

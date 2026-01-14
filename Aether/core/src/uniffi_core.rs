@@ -24,6 +24,7 @@
 use crate::agent::{RigAgentConfig, RigAgentManager};
 use crate::config::{Config, FullConfig, ProviderConfig, RoutingRuleConfig, GeneralConfig, TestConnectionResult};
 use crate::store::sqlite::MemoryEntry;
+use rig::tool::server::ToolServerHandle;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -204,8 +205,12 @@ impl AgentConfigHolder {
 /// It manages the configuration and provides methods for processing,
 /// tool management, and memory operations.
 ///
-/// Note: RigAgentManager is created on-demand because it may contain
-/// non-Send types. The config is stored separately.
+/// # Hot-Reload Support
+///
+/// Tools are managed through a shared `ToolServerHandle`, enabling:
+/// - Runtime addition of MCP tools when servers connect
+/// - Runtime removal of tools when servers disconnect
+/// - All tools persist across `process()` calls
 pub struct AetherCore {
     /// Configuration holder with interior mutability for reload support
     config_holder: Arc<RwLock<AgentConfigHolder>>,
@@ -223,6 +228,11 @@ pub struct AetherCore {
     /// Current operation's cancellation token
     /// Each new operation gets a fresh token, allowing cancellation state to be reset
     current_op_token: Arc<RwLock<CancellationToken>>,
+    /// Shared ToolServerHandle for hot-reload support
+    /// This handle is shared across all RigAgentManager instances
+    tool_server_handle: ToolServerHandle,
+    /// Names of registered tools (for tracking and display)
+    registered_tools: Arc<RwLock<Vec<String>>>,
 }
 
 impl AetherCore {
@@ -233,6 +243,11 @@ impl AetherCore {
     ///
     /// The operation can be cancelled by calling `cancel()`. When cancelled,
     /// the handler's `on_error` callback will be invoked with "Operation cancelled".
+    ///
+    /// # Hot-Reload Support
+    ///
+    /// Uses a shared `ToolServerHandle` so that dynamically added/removed tools
+    /// are available across all `process()` calls without restarting.
     pub fn process(
         &self,
         input: String,
@@ -243,6 +258,9 @@ impl AetherCore {
         // Acquire read lock to get current config (supports config reload)
         let config = self.config_holder.read().unwrap().config().clone();
         let runtime = self.runtime.clone();
+        // Clone shared tool server handle for use in the new thread
+        let tool_server_handle = self.tool_server_handle.clone();
+        let registered_tools = Arc::clone(&self.registered_tools);
 
         // Create a fresh token for this operation
         // This resets cancellation state, allowing new operations after previous cancellations
@@ -258,10 +276,8 @@ impl AetherCore {
 
             handler.on_thinking();
 
-            // Create a fresh manager in the new thread with tools enabled
-            let manager = RigAgentManager::new(config)
-                .with_search_tool()
-                .with_web_fetch_tool();
+            // Create manager with shared ToolServerHandle (all tools persist across calls)
+            let manager = RigAgentManager::with_shared_handle(config, tool_server_handle, registered_tools);
 
             let result = runtime.block_on(async {
                 tokio::select! {
@@ -328,20 +344,143 @@ impl AetherCore {
 
     /// List available tools
     ///
-    /// Returns a list of all tools available in the current configuration.
+    /// Returns a list of all tools registered in the ToolServer.
+    /// This includes built-in tools and any dynamically added MCP tools.
     pub fn list_tools(&self) -> Vec<ToolInfoFFI> {
-        vec![
+        let tools = self.registered_tools.read().unwrap();
+        tools.iter().map(|name| {
+            let (description, source) = match name.as_str() {
+                "search" => ("Search the internet".to_string(), "builtin".to_string()),
+                "web_fetch" => ("Fetch web page content".to_string(), "builtin".to_string()),
+                "youtube" => ("Extract YouTube video transcripts".to_string(), "builtin".to_string()),
+                name if name.contains(':') => {
+                    // MCP tool format: "server:tool_name"
+                    let server = name.split(':').next().unwrap_or("mcp");
+                    (format!("MCP tool from {}", server), format!("mcp:{}", server))
+                }
+                _ => ("Dynamic tool".to_string(), "dynamic".to_string()),
+            };
             ToolInfoFFI {
-                name: "search".to_string(),
-                description: "Search the internet".to_string(),
-                source: "builtin".to_string(),
-            },
-            ToolInfoFFI {
-                name: "web_fetch".to_string(),
-                description: "Fetch web page content".to_string(),
-                source: "builtin".to_string(),
-            },
-        ]
+                name: name.clone(),
+                description,
+                source,
+            }
+        }).collect()
+    }
+
+    // ========================================================================
+    // HOT-RELOAD: Dynamic Tool Management
+    // ========================================================================
+
+    /// Add an MCP tool dynamically (hot-reload)
+    ///
+    /// This method allows adding MCP tools at runtime when a new MCP server
+    /// connects. The tool will be immediately available for all subsequent
+    /// `process()` calls.
+    ///
+    /// # Arguments
+    /// * `tool_name` - Name of the tool (should include server prefix, e.g., "server:tool")
+    /// * `description` - Human-readable description
+    /// * `parameters_schema` - JSON Schema string for tool parameters
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// core.add_mcp_tool(
+    ///     "filesystem:read_file",
+    ///     "Read contents of a file",
+    ///     r#"{"type":"object","properties":{"path":{"type":"string"}}}"#
+    /// );
+    /// ```
+    pub fn add_mcp_tool(
+        &self,
+        tool_name: String,
+        description: String,
+        parameters_schema: String,
+    ) -> Result<(), AetherFfiError> {
+        use crate::mcp::McpTool;
+        use crate::rig_tools::McpToolWrapper;
+
+        info!(tool_name = %tool_name, "Adding MCP tool dynamically");
+
+        // Parse the JSON schema
+        let schema: serde_json::Value = serde_json::from_str(&parameters_schema)
+            .map_err(|e| AetherFfiError::Tool(format!("Invalid parameters schema: {}", e)))?;
+
+        // Create McpTool definition
+        let mcp_tool = McpTool {
+            name: tool_name.clone(),
+            description,
+            input_schema: schema,
+            requires_confirmation: false,
+        };
+
+        // Extract server name from tool name (format: "server:tool")
+        let server_name = tool_name
+            .split(':')
+            .next()
+            .unwrap_or("unknown")
+            .to_string();
+
+        // Note: We need an MCP client to execute the tool. For now, we create a placeholder.
+        // In a full implementation, this should receive the actual McpClient.
+        let placeholder_client = Arc::new(crate::mcp::McpClient::new());
+        let wrapper = McpToolWrapper::new(mcp_tool, placeholder_client, server_name);
+
+        // Add to tool server (async operation)
+        let handle = self.tool_server_handle.clone();
+        let registered_tools = Arc::clone(&self.registered_tools);
+        let tool_name_clone = tool_name.clone();
+
+        self.runtime.block_on(async move {
+            handle.add_tool(wrapper).await
+                .map_err(|e| AetherFfiError::Tool(format!("Failed to add tool: {}", e)))?;
+
+            // Track the tool
+            let mut tools = registered_tools.write().unwrap();
+            if !tools.contains(&tool_name_clone) {
+                tools.push(tool_name_clone.clone());
+            }
+
+            info!(tool_name = %tool_name_clone, "MCP tool added successfully");
+            Ok(())
+        })
+    }
+
+    /// Remove a tool dynamically (hot-reload)
+    ///
+    /// Removes a previously added tool from the ToolServer.
+    /// The tool will no longer be available for subsequent `process()` calls.
+    ///
+    /// # Arguments
+    /// * `tool_name` - Name of the tool to remove
+    pub fn remove_tool(&self, tool_name: String) -> Result<(), AetherFfiError> {
+        info!(tool_name = %tool_name, "Removing tool dynamically");
+
+        let handle = self.tool_server_handle.clone();
+        let registered_tools = Arc::clone(&self.registered_tools);
+        let tool_name_clone = tool_name.clone();
+
+        self.runtime.block_on(async move {
+            handle.remove_tool(&tool_name_clone).await
+                .map_err(|e| AetherFfiError::Tool(format!("Failed to remove tool: {}", e)))?;
+
+            // Update tracking
+            let mut tools = registered_tools.write().unwrap();
+            tools.retain(|t| t != &tool_name_clone);
+
+            info!(tool_name = %tool_name_clone, "Tool removed successfully");
+            Ok(())
+        })
+    }
+
+    /// Check if a tool is registered
+    pub fn has_tool(&self, tool_name: String) -> bool {
+        self.registered_tools.read().unwrap().contains(&tool_name)
+    }
+
+    /// Get the number of registered tools
+    pub fn tool_count(&self) -> u32 {
+        self.registered_tools.read().unwrap().len() as u32
     }
 
     /// Search memory for relevant entries
@@ -1702,6 +1841,18 @@ pub fn init_core(
     // Each operation will get a fresh token via reset_cancel_token()
     let current_op_token = Arc::new(RwLock::new(CancellationToken::new()));
 
+    // Create shared ToolServerHandle with built-in tools for hot-reload support
+    // NOTE: ToolServer::run() requires a tokio runtime context (uses tokio::spawn)
+    // We use runtime.enter() to set the current runtime context before creating the handle
+    let (tool_server_handle, registered_tools) = {
+        let _guard = runtime.enter();  // Enter runtime context for tokio::spawn
+        RigAgentManager::create_shared_handle()
+    };
+    info!(
+        tools = ?registered_tools.read().unwrap(),
+        "Created shared ToolServerHandle with built-in tools"
+    );
+
     Ok(Arc::new(AetherCore {
         config_holder,
         full_config: Arc::new(Mutex::new(full_config)),
@@ -1711,6 +1862,8 @@ pub fn init_core(
         runtime,
         _owned_runtime: owned_runtime,  // Keep runtime alive if we created it
         current_op_token,
+        tool_server_handle,
+        registered_tools,
     }))
 }
 

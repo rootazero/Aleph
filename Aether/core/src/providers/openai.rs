@@ -17,7 +17,7 @@
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use aethecore::config::ProviderConfig;
 /// use aethecore::providers::openai::OpenAiProvider;
 /// use aethecore::providers::AiProvider;

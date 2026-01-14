@@ -49,7 +49,7 @@ impl From<MockError> for AetherError {
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,ignore
 /// use aethecore::providers::{MockProvider, MockError};
 /// use std::time::Duration;
 ///

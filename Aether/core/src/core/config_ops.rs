@@ -8,12 +8,9 @@
 //!
 //! Uses scoped refresh for incremental updates to improve performance.
 
-use super::tools::RefreshScope;
 use super::AetherCore;
 use crate::config::{GeneralConfig, TestConnectionResult};
 use crate::error::{AetherError, Result};
-use crate::router::Router;
-use std::sync::Arc;
 use tracing::info;
 
 impl AetherCore {
@@ -115,84 +112,28 @@ impl AetherCore {
 
     /// Update routing rules
     ///
-    /// This method updates the routing rules in config AND reinitializes the router
-    /// to ensure the new rules take effect immediately.
-    ///
-    /// **IMPORTANT**: This method preserves builtin rules (is_builtin = true) and only
-    /// updates user-defined rules. Builtin rules are prepended to maintain their priority.
+    /// This method updates the routing rules in config.
+    /// Rules are used for custom command registration in the tool registry.
     pub fn update_routing_rules(
         &self,
         rules: Vec<crate::config::RoutingRuleConfig>,
     ) -> Result<()> {
         let mut config = self.lock_config();
 
-        // Preserve builtin rules from current config
-        let builtin_rules: Vec<_> = config
-            .rules
-            .iter()
-            .filter(|r| r.is_builtin)
-            .cloned()
-            .collect();
-
-        // Merge: builtin rules first (for priority), then user rules
-        let mut merged_rules = builtin_rules;
-        merged_rules.extend(rules);
-
         log::info!(
-            "Updating routing rules: {} builtin + {} user = {} total",
-            merged_rules.iter().filter(|r| r.is_builtin).count(),
-            merged_rules.iter().filter(|r| !r.is_builtin).count(),
-            merged_rules.len()
+            "Updating routing rules: {} rules total",
+            rules.len()
         );
 
-        config.rules = merged_rules;
+        config.rules = rules;
         config.validate()?;
         config.save()?;
-        drop(config); // Release lock before reloading router
+        drop(config);
 
-        // Reinitialize router with updated config
-        self.reload_router()?;
+        // Notify UI that tools need refresh after routing rules change
+        self.event_handler.on_tools_refresh_needed();
 
-        // Scoped refresh: only update custom commands from routing rules
-        self.refresh_tool_registry_scoped(RefreshScope::CustomCommandsOnly);
-
-        log::info!("Routing rules updated and router reinitialized");
-        Ok(())
-    }
-
-    /// Reload the router from current configuration
-    ///
-    /// This method reinitializes the router using the current config.
-    /// Called after config changes to ensure routing rules take effect immediately.
-    pub fn reload_router(&self) -> Result<()> {
-        let config = self.lock_config();
-
-        let new_router = if !config.providers.is_empty() {
-            match Router::new(&config) {
-                Ok(r) => {
-                    log::info!(
-                        "Router reloaded with {} rules and {} providers",
-                        config.rules.len(),
-                        config.providers.len()
-                    );
-                    Some(Arc::new(r))
-                }
-                Err(e) => {
-                    log::warn!("Failed to reinitialize router: {}", e);
-                    return Err(e);
-                }
-            }
-        } else {
-            log::warn!("No providers configured, router will be empty");
-            None
-        };
-
-        drop(config); // Release config lock before acquiring router lock
-
-        // Update router with write lock
-        let mut router_guard = self.router.write().unwrap_or_else(|e| e.into_inner());
-        *router_guard = new_router;
-
+        log::info!("Routing rules updated");
         Ok(())
     }
 

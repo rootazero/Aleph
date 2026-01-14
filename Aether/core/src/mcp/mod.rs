@@ -4,9 +4,8 @@
 //!
 //! # Architecture
 //!
-//! - **Native Tools**: Implemented via `AgentTool` trait in `tools` module
-//!   - fs, git, shell, system, clipboard, screen tools
-//!   - Registered in `NativeToolRegistry` for execution
+//! - **MCP Tools**: Wrapped via `McpToolWrapper` in `rig_tools` module
+//!   for integration with rig-core
 //!
 //! - **External MCP Servers**: Managed by `McpClient`
 //!   - Connected via stdio transport
@@ -16,30 +15,15 @@
 //! ┌─────────────────────────────────────────────────────────────────┐
 //! │                         Tool Sources                            │
 //! ├─────────────────────────────────────────────────────────────────┤
-//! │  Native Tools (AgentTool)    │  External MCP Servers            │
-//! │  (see crate::tools module)   │  (see this mcp module)           │
-//! │  ├── FileReadTool            │  ├── StdioTransport              │
-//! │  ├── GitStatusTool           │  │   └── JSON-RPC over stdio     │
-//! │  ├── ShellExecuteTool        │  └── Runtime Detection           │
-//! │  └── ...                     │      (node, python, bun)         │
+//! │  Rig-Core Tools            │  External MCP Servers              │
+//! │  (see crate::rig_tools)    │  (see this mcp module)             │
+//! │  ├── SearchTool            │  ├── StdioTransport                │
+//! │  ├── WebFetchTool          │  │   └── JSON-RPC over stdio       │
+//! │  ├── YouTubeTool           │  └── Runtime Detection             │
+//! │  └── McpToolWrapper        │      (node, python, bun)           │
 //! └─────────────────────────────────────────────────────────────────┘
 //! ```
-//!
-//! # MCP Tool Bridge
-//!
-//! The `bridge` module provides `McpToolBridge` which implements the `AgentTool`
-//! trait for MCP tools. This allows seamless integration with the native function
-//! calling infrastructure.
-//!
-//! ```rust,ignore
-//! use aether_core::mcp::{McpClient, McpToolBridge};
-//! use std::sync::Arc;
-//!
-//! let client = Arc::new(McpClient::new());
-//! let bridges = McpToolBridge::from_client(client).await;
-//! ```
 
-pub mod bridge;
 mod client;
 pub mod external;
 pub mod jsonrpc;
@@ -55,6 +39,3 @@ pub use types::{
     McpServerStatusInfo, McpServerType, McpServiceInfo, McpSettingsConfig, McpTool, McpToolCall,
     McpToolInfo, McpToolResult,
 };
-
-// MCP Tool Bridge - implements AgentTool for external MCP tools
-pub use bridge::{create_bridges, McpToolBridge};

@@ -1,11 +1,10 @@
-//! Dispatcher Layer - Intelligent Tool Routing
+//! Dispatcher Layer - Tool Registry and Confirmation
 //!
-//! This module implements the Dispatcher Layer (Aether Cortex) that provides:
+//! This module implements the Dispatcher Layer that provides:
 //!
 //! - **Unified Tool Registry**: Aggregates all tool sources (Native, MCP, Skills, Custom)
-//! - **Multi-Layer Routing**: L1 (regex) → L2 (semantic) → L3 (AI) cascading
-//! - **Confidence Scoring**: Returns match confidence for confirmation triggering
-//! - **Dynamic Prompt Generation**: Injects tool metadata into L3 router prompts
+//! - **Confirmation System**: User confirmation for tool execution
+//! - **Async Confirmation**: Background confirmation handling
 //!
 //! # Architecture
 //!
@@ -20,30 +19,17 @@
 //! │  └───────┬───────┘  │
 //! │          ↓          │
 //! │  ┌───────────────┐  │
-//! │  │ PromptBuilder │  │  ← Dynamic L3 prompt generation
-//! │  └───────┬───────┘  │
-//! │          ↓          │
-//! │  ┌───────────────┐  │
-//! │  │ MultiLayer    │  │
-//! │  │ Router        │  │  ← L1 → L2 → L3 cascade
-//! │  └───────┬───────┘  │
-//! │          ↓          │
-//! │  ┌───────────────┐  │
-//! │  │ ActionResult  │  │  ← tool, params, confidence
-//! │  └───────┬───────┘  │
-//! │          ↓          │
-//! │  ┌───────────────┐  │
-//! │  │ Confirmation  │  │  ← If confidence < threshold
+//! │  │ Confirmation  │  │  ← User confirmation if needed
 //! │  └───────────────┘  │
 //! └──────────┼──────────┘
 //!            ↓
-//!    Execution Layer
+//!    rig-core Agent
 //! ```
 //!
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::{ToolRegistry, UnifiedTool, ToolSource, PromptBuilder};
+//! use aethecore::dispatcher::{ToolRegistry, UnifiedTool, ToolSource};
 //!
 //! // Create registry
 //! let registry = ToolRegistry::new();
@@ -56,16 +42,11 @@
 //! for tool in tools {
 //!     println!("{}: {} [{:?}]", tool.name, tool.description, tool.source);
 //! }
-//!
-//! // Build L3 routing prompt
-//! let prompt = PromptBuilder::build_l3_routing_prompt(&tools, None);
 //! ```
 
 mod async_confirmation;
 mod confirmation;
 mod integration;
-mod l3_router;
-mod prompt_builder;
 mod registry;
 mod types;
 
@@ -81,12 +62,10 @@ pub use integration::{
     ConfidenceAction, ConfidenceThresholds, DispatcherAction, DispatcherConfig,
     DispatcherIntegration, DispatcherResult,
 };
-pub use l3_router::{L3Router, L3RoutingOptions, L3RoutingResult};
-pub use prompt_builder::{L3RoutingResponse, PromptBuilder, PromptFormat, ToolFilter};
 pub use registry::ToolRegistry;
 pub use types::{
-    ConflictInfo, ConflictResolution, RoutingLayer, ToolPriority, ToolSource, ToolSourceType,
-    UnifiedTool, UnifiedToolInfo,
+    ConflictInfo, ConflictResolution, RoutingLayer, ToolPriority, ToolSafetyLevel, ToolSource,
+    ToolSourceType, UnifiedTool, UnifiedToolInfo,
 };
 
 #[cfg(test)]

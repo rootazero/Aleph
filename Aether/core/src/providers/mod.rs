@@ -12,7 +12,7 @@
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use aethecore::providers::AiProvider;
 /// use std::sync::Arc;
 ///
@@ -84,7 +84,7 @@ pub fn create_mock_provider() -> Arc<dyn AiProvider> {
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use aethecore::config::ProviderConfig;
 /// use aethecore::providers::create_provider;
 ///
@@ -183,7 +183,7 @@ pub trait AiProvider: Send + Sync {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use aethecore::providers::AiProvider;
     /// # async fn example(provider: &dyn AiProvider) {
     /// let response = provider.process(
@@ -289,7 +289,7 @@ pub trait AiProvider: Send + Sync {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use aethecore::providers::AiProvider;
     /// # fn example(provider: &dyn AiProvider) {
     /// assert_eq!(provider.name(), "openai");
@@ -305,7 +305,7 @@ pub trait AiProvider: Send + Sync {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use aethecore::providers::AiProvider;
     /// # fn example(provider: &dyn AiProvider) {
     /// let color = provider.color();

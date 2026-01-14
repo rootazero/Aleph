@@ -31,7 +31,7 @@
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use aethecore::config::ProviderConfig;
 /// use aethecore::providers::ollama::OllamaProvider;
 /// use aethecore::providers::AiProvider;

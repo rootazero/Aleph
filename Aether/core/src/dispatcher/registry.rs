@@ -6,7 +6,6 @@
 use crate::config::RoutingRuleConfig;
 use crate::mcp::types::McpToolInfo;
 use crate::skills::SkillInfo;
-use crate::tools::AgentTool;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -142,48 +141,14 @@ impl ToolRegistry {
         );
     }
 
-    /// Register native AgentTools (Flat Namespace Mode)
+    /// Register native AgentTools (DEPRECATED)
     ///
-    /// Registers native `AgentTool` implementations as unified tools.
-    /// These are Rust-native tools that implement the `AgentTool` trait
-    /// from the `tools` module (e.g., FileReadTool, GitStatusTool).
-    ///
-    /// # Arguments
-    ///
-    /// * `tools` - List of AgentTool implementations
-    /// * `service_name` - Service group name for all tools (e.g., "filesystem", "git")
-    ///
-    /// # Priority
-    ///
-    /// Native tools have high priority (after Builtin), so they will win
-    /// conflicts against MCP, Skill, and Custom tools.
-    ///
-    /// Priority: Builtin > Native > Custom > MCP > Skill
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let filesystem_tools = create_filesystem_tools(config);
-    /// registry.register_agent_tools(&filesystem_tools, "filesystem").await;
-    /// ```
-    pub async fn register_agent_tools(
-        &self,
-        tools: &[Arc<dyn AgentTool>],
-        service_name: &str,
-    ) {
-        for tool in tools {
-            let def = tool.definition();
-            let unified = UnifiedTool::from_tool_definition(def, Some(service_name));
-
-            // Register with automatic conflict resolution
-            self.register_with_conflict_resolution(unified).await;
-        }
-
-        debug!(
-            "Registered {} native AgentTools from service '{}'",
-            tools.len(),
-            service_name
-        );
+    /// This method is deprecated. Native tools are now handled by rig-core's
+    /// Tool trait and McpToolWrapper. Use register_mcp_tools() instead.
+    #[deprecated(note = "Use rig-core tools and register_mcp_tools instead")]
+    pub async fn register_agent_tools<T>(&self, _tools: &[Arc<T>], _service_name: &str) {
+        // No-op - legacy method kept for API compatibility
+        debug!("register_agent_tools called (deprecated, no-op)");
     }
 
     /// Register skills from SkillInfo list (Flat Namespace Mode)
@@ -626,49 +591,41 @@ impl ToolRegistry {
     ///
     /// # Arguments
     ///
-    /// * `native_tools` - Map of service_name to list of AgentTool implementations
     /// * `mcp_tools` - External MCP server tools (server_name, tools)
     /// * `skills` - Installed Claude Agent skills
     /// * `rules` - User-defined routing rules
     ///
     /// # Registration Order
     ///
-    /// 1. Builtin commands (/search, /youtube, /webfetch)
-    /// 2. Native AgentTools (filesystem, git, shell, etc.)
-    /// 3. External MCP tools
-    /// 4. Skills
-    /// 5. Custom commands from config
-    pub async fn refresh_with_agent_tools(
+    /// 1. Builtin commands (if any)
+    /// 2. External MCP tools
+    /// 3. Skills
+    /// 4. Custom commands from config
+    pub async fn refresh_all(
         &self,
-        native_tools: &[(&str, Vec<Arc<dyn AgentTool>>)], // (service_name, tools)
         mcp_tools: &[(String, Vec<McpToolInfo>)],
         skills: &[SkillInfo],
         rules: &[RoutingRuleConfig],
     ) {
         self.clear().await;
 
-        // 1. Builtin commands first
+        // 1. Builtin commands first (currently no-op in AI-first mode)
         self.register_builtin_tools().await;
 
-        // 2. Native AgentTools
-        for (service_name, tools) in native_tools {
-            self.register_agent_tools(tools, service_name).await;
-        }
-
-        // 3. External MCP tools
+        // 2. External MCP tools
         for (server_name, tools) in mcp_tools {
             self.register_mcp_tools(tools, server_name, false).await;
         }
 
-        // 4. Skills
+        // 3. Skills
         self.register_skills(skills).await;
 
-        // 5. Custom commands from user config
+        // 4. Custom commands from user config
         self.register_custom_commands(rules).await;
 
         let count = self.tools.read().await.len();
         info!(
-            "Tool registry refreshed with AgentTools: {} total tools",
+            "Tool registry refreshed: {} total tools",
             count
         );
     }
@@ -1582,83 +1539,4 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod integration_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_agent_tools_registration() {
-        use std::path::PathBuf;
-        use crate::tools::{
-            create_filesystem_tools, create_git_tools, FilesystemConfig, GitConfig,
-        };
-
-        // Create registry
-        let registry = ToolRegistry::new();
-
-        // Create native AgentTools
-        let fs_config = FilesystemConfig::new(vec![PathBuf::from("/tmp")]);
-        let filesystem_tools = create_filesystem_tools(fs_config);
-
-        let git_config = GitConfig::new(vec![PathBuf::from("/tmp")]);
-        let git_tools = create_git_tools(git_config);
-
-        // Register builtin tools first
-        registry.register_builtin_tools().await;
-
-        // Register native AgentTools
-        registry
-            .register_agent_tools(&filesystem_tools, "filesystem")
-            .await;
-        registry.register_agent_tools(&git_tools, "git").await;
-
-        // Check registry
-        let all_tools = registry.list_all().await;
-        println!("\nAgentTools test - Registry has {} total tools:", all_tools.len());
-        for tool in &all_tools {
-            println!("  [{:?}] {} - {}", tool.source, tool.name, tool.id);
-        }
-
-        // Should have filesystem and git tools
-        let native_tools: Vec<_> = all_tools
-            .iter()
-            .filter(|t| matches!(t.source, ToolSource::Native))
-            .collect();
-        println!(
-            "\nNative tools ({}):",
-            native_tools.len()
-        );
-        for tool in &native_tools {
-            println!("  - {} (service: {:?})", tool.name, tool.service_name);
-        }
-
-        // Assertions
-        assert!(
-            native_tools.len() >= 5,
-            "Should have at least 5 native tools (fs + git)"
-        );
-
-        // Check that file_read is registered as Native
-        let file_read = all_tools.iter().find(|t| t.name == "file_read");
-        assert!(file_read.is_some(), "Should have file_read tool");
-        let file_read = file_read.unwrap();
-        assert!(
-            matches!(file_read.source, ToolSource::Native),
-            "file_read should have Native source"
-        );
-        assert_eq!(
-            file_read.service_name,
-            Some("filesystem".to_string()),
-            "file_read should have filesystem service"
-        );
-
-        // Check that git_status is registered as Native
-        let git_status = all_tools.iter().find(|t| t.name == "git_status");
-        assert!(git_status.is_some(), "Should have git_status tool");
-        let git_status = git_status.unwrap();
-        assert!(
-            matches!(git_status.source, ToolSource::Native),
-            "git_status should have Native source"
-        );
-    }
-}
+// integration_tests module removed - AgentTool system deprecated

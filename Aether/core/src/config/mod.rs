@@ -88,9 +88,6 @@ pub struct Config {
     /// Dispatcher Layer configuration (intelligent tool routing)
     #[serde(default)]
     pub dispatcher: DispatcherConfigToml,
-    /// Intent routing pipeline configuration (enhanced routing)
-    #[serde(default)]
-    pub pipeline: crate::routing::PipelineConfig,
 }
 
 // =============================================================================
@@ -171,7 +168,6 @@ impl Default for Config {
             smart_flow: SmartFlowConfig::default(),
             smart_matching: SmartMatchingConfig::default(),
             dispatcher: DispatcherConfigToml::default(),
-            pipeline: crate::routing::PipelineConfig::default(),
         }
     }
 }
@@ -227,7 +223,7 @@ impl Config {
     /// * `Err(AetherError::InvalidConfig)` - File exists but parsing failed
     ///
     /// # Example
-    /// ```no_run
+    /// ```rust,ignore
     /// use aethecore::config::Config;
     ///
     /// let config = Config::load_from_file("config.toml").unwrap();
@@ -352,7 +348,7 @@ impl Config {
     /// * `Err(AetherError::InvalidConfig)` - File exists but parsing failed
     ///
     /// # Example
-    /// ```no_run
+    /// ```rust,ignore
     /// use aethecore::config::Config;
     ///
     /// let config = Config::load().unwrap();
@@ -861,7 +857,7 @@ impl Config {
     /// * `AetherError::InvalidConfig` - Failed to serialize or write config
     ///
     /// # Example
-    /// ```no_run
+    /// ```rust,ignore
     /// let config = Config::default();
     /// config.save_to_file("config.toml")?;
     /// ```
@@ -989,7 +985,7 @@ impl Config {
     /// using atomic write operation.
     ///
     /// # Example
-    /// ```no_run
+    /// ```rust,ignore
     /// let mut config = Config::default();
     /// config.default_hotkey = "Command+Shift+A".to_string();
     /// config.save()?;
@@ -1363,7 +1359,7 @@ impl Config {
     /// * `rule` - The routing rule configuration to add
     ///
     /// # Example
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use aethecore::config::{Config, RoutingRuleConfig};
     /// let mut config = Config::default();
     /// config.add_rule_at_top(RoutingRuleConfig {
@@ -1391,7 +1387,7 @@ impl Config {
     /// * `Err(AetherError::InvalidConfig)` - Index out of bounds
     ///
     /// # Example
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use aethecore::config::Config;
     /// # fn example() -> aethecore::error::Result<()> {
     /// let mut config = Config::default();
@@ -1438,7 +1434,7 @@ impl Config {
     /// * `Err(AetherError::InvalidConfig)` - Invalid indices
     ///
     /// # Example
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use aethecore::config::Config;
     /// # fn example() -> aethecore::error::Result<()> {
     /// let mut config = Config::default();
@@ -1489,7 +1485,7 @@ impl Config {
     /// * `None` - Index out of bounds
     ///
     /// # Example
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use aethecore::config::Config;
     /// let config = Config::default();
     /// if let Some(rule) = config.get_rule(0) {

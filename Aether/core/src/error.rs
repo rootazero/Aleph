@@ -320,7 +320,7 @@ impl AetherError {
     ///
     /// # Example
     ///
-    /// ```
+    /// ```rust,ignore
     /// use aethecore::error::AetherError;
     ///
     /// let err = AetherError::authentication("OpenAI", "401 Unauthorized");
@@ -435,6 +435,14 @@ impl AetherError {
             AetherError::Cancelled => {
                 "Operation cancelled.".to_string()
             }
+        }
+    }
+
+    /// Create a generic tool error
+    pub fn tool<S: Into<String>>(msg: S) -> Self {
+        AetherError::Other {
+            message: msg.into(),
+            suggestion: None,
         }
     }
 

@@ -46,7 +46,7 @@
 use crate::clarification::{
     ClarificationOption, ClarificationRequest, ClarificationResult, ClarificationResultType,
 };
-use crate::dispatcher::{L3RoutingResponse, RoutingLayer, UnifiedTool};
+use crate::dispatcher::{RoutingLayer, UnifiedTool};
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -171,15 +171,6 @@ impl ToolConfirmation {
     /// `true` if confirmation should be shown
     pub fn should_confirm(&self, confidence: f32) -> bool {
         self.config.enabled && confidence < self.config.threshold
-    }
-
-    /// Check if confirmation is needed for a routing result
-    pub fn should_confirm_routing(&self, response: &L3RoutingResponse) -> bool {
-        if !self.config.enabled {
-            return false;
-        }
-
-        response.has_match() && response.confidence < self.config.threshold
     }
 
     /// Check if confirmation should be skipped for this tool
@@ -526,35 +517,6 @@ mod tests {
         // Disabled - never confirm
         assert!(!confirmation.should_confirm(0.0));
         assert!(!confirmation.should_confirm(0.5));
-    }
-
-    #[test]
-    fn test_should_confirm_routing() {
-        let confirmation = ToolConfirmation::with_defaults();
-
-        let low_confidence = L3RoutingResponse {
-            tool: Some("search".to_string()),
-            confidence: 0.5,
-            parameters: json!({}),
-            reason: "Test".to_string(),
-        };
-        assert!(confirmation.should_confirm_routing(&low_confidence));
-
-        let high_confidence = L3RoutingResponse {
-            tool: Some("search".to_string()),
-            confidence: 0.9,
-            parameters: json!({}),
-            reason: "Test".to_string(),
-        };
-        assert!(!confirmation.should_confirm_routing(&high_confidence));
-
-        let no_match = L3RoutingResponse {
-            tool: None,
-            confidence: 0.0,
-            parameters: json!({}),
-            reason: "No match".to_string(),
-        };
-        assert!(!confirmation.should_confirm_routing(&no_match));
     }
 
     #[test]
