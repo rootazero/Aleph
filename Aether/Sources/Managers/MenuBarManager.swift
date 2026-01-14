@@ -193,6 +193,14 @@ final class MenuBarManager {
         guard let submenu = defaultProviderMenuItem?.submenu else { return }
         submenu.removeAllItems()
 
+        // Update main menu item title to show current selection
+        if let selection = currentSelection,
+           let selectedProvider = providers.first(where: { $0.id == selection }) {
+            defaultProviderMenuItem?.title = "\(L("menu.default_provider")): \(selectedProvider.displayName)"
+        } else {
+            defaultProviderMenuItem?.title = L("menu.default_provider")
+        }
+
         if providers.isEmpty {
             let placeholder = NSMenuItem(title: L("menu.no_providers"), action: nil, keyEquivalent: "")
             placeholder.isEnabled = false
