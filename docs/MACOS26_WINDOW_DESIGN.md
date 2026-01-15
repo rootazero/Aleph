@@ -28,7 +28,7 @@ macOS 26 引入了 Liquid Glass 设计语言，Aether 通过 `.glassEffect()` AP
 func body(content: Content) -> some View {
     if #available(macOS 26, *) {
         content
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .environment(\.controlActiveState, .active)  // 保持一致外观
     } else {
         // Fallback: NSVisualEffectView
@@ -59,11 +59,11 @@ func body(content: Content) -> some View {
 
 | 组件 | API | 用途 |
 |------|-----|------|
-| `GlassModifier` | `.glassEffect(.regular)` | 通用玻璃背景 |
-| `GlassProminentButtonModifier` | `.glassEffect(.regular.interactive())` | 主要按钮 |
-| `GlassButtonModifier` | `.glassEffect(.regular)` | 次要按钮 |
+| `GlassModifier` | `.glassEffect(.clear)` | 通用玻璃背景（轻量边框） |
+| `GlassProminentButtonModifier` | `.glassEffect(.clear.interactive())` | 主要按钮 |
+| `GlassButtonModifier` | `.glassEffect(.clear)` | 次要按钮 |
 | `AdaptiveGlassContainer` | `GlassEffectContainer` | 玻璃元素分组/融合 |
-| `GlassMessageBubbleModifier` | `.glassEffect(.regular)` | 消息气泡 |
+| `GlassMessageBubbleModifier` | `.glassEffect(.clear)` | 消息气泡 |
 
 ### Usage
 
