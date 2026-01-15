@@ -70,10 +70,6 @@ struct GlassProminentButtonModifier: ViewModifier {
                 Circle()
                     .fill(isEnabled ? Color.primary.opacity(0.2) : Color.primary.opacity(0.1))
             )
-            .overlay(
-                Circle()
-                    .stroke(Color.primary.opacity(0.3), lineWidth: 1)
-            )
             .contentShape(Circle())
             .background(WindowDragBlocker())
     }
