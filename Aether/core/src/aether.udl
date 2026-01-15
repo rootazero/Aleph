@@ -900,6 +900,7 @@ dictionary ProcessOptions {
     string? app_context;
     string? window_title;
     boolean stream;
+    sequence<MediaAttachment>? attachments;
 };
 
 dictionary ToolInfoFFI {

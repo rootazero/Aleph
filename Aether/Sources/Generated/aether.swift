@@ -4089,13 +4089,15 @@ public struct ProcessOptions {
     public var appContext: String?
     public var windowTitle: String?
     public var stream: Bool
+    public var attachments: [MediaAttachment]?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(appContext: String?, windowTitle: String?, stream: Bool) {
+    public init(appContext: String?, windowTitle: String?, stream: Bool, attachments: [MediaAttachment]?) {
         self.appContext = appContext
         self.windowTitle = windowTitle
         self.stream = stream
+        self.attachments = attachments
     }
 }
 
@@ -4112,6 +4114,9 @@ extension ProcessOptions: Equatable, Hashable {
         if lhs.stream != rhs.stream {
             return false
         }
+        if lhs.attachments != rhs.attachments {
+            return false
+        }
         return true
     }
 
@@ -4119,6 +4124,7 @@ extension ProcessOptions: Equatable, Hashable {
         hasher.combine(appContext)
         hasher.combine(windowTitle)
         hasher.combine(stream)
+        hasher.combine(attachments)
     }
 }
 
@@ -4132,7 +4138,8 @@ public struct FfiConverterTypeProcessOptions: FfiConverterRustBuffer {
             try ProcessOptions(
                 appContext: FfiConverterOptionString.read(from: &buf), 
                 windowTitle: FfiConverterOptionString.read(from: &buf), 
-                stream: FfiConverterBool.read(from: &buf)
+                stream: FfiConverterBool.read(from: &buf), 
+                attachments: FfiConverterOptionSequenceTypeMediaAttachment.read(from: &buf)
         )
     }
 
@@ -4140,6 +4147,7 @@ public struct FfiConverterTypeProcessOptions: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.appContext, into: &buf)
         FfiConverterOptionString.write(value.windowTitle, into: &buf)
         FfiConverterBool.write(value.stream, into: &buf)
+        FfiConverterOptionSequenceTypeMediaAttachment.write(value.attachments, into: &buf)
     }
 }
 

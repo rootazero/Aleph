@@ -11,14 +11,17 @@
 //! - Tools can be removed when user disconnects servers or uninstalls skills
 
 use super::config::RigAgentConfig;
+use crate::core::MediaAttachment;
 use crate::error::{AetherError, Result};
 use crate::rig_tools::{SearchTool, WebFetchTool, YouTubeTool};
 use crate::store::MemoryStore;
 use rig::client::CompletionClient;
-use rig::completion::Prompt;
+use rig::completion::message::{DocumentSourceKind, Image, ImageMediaType, Text, UserContent};
+use rig::completion::{Message, Prompt};
 use rig::providers::{anthropic, openai};
 use rig::tool::server::{ToolServer, ToolServerHandle};
 use rig::tool::{ToolDyn, ToolSet};
+use rig::OneOrMany;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, info};
 
@@ -303,6 +306,124 @@ impl RigAgentManager {
 
         info!(response_len = response.len(), "Response received");
         Ok(AgentResponse::simple(response))
+    }
+
+    /// Process an input with attachments and return a response
+    ///
+    /// Supports multimodal content (images) via rig-core's native Message API.
+    /// Falls back to text-only process() if no attachments are provided.
+    pub async fn process_with_attachments(
+        &self,
+        input: &str,
+        attachments: Option<&[MediaAttachment]>,
+    ) -> Result<AgentResponse> {
+        // If no attachments, delegate to existing process()
+        if attachments.map_or(true, |a| a.is_empty()) {
+            return self.process(input).await;
+        }
+
+        let attachments = attachments.unwrap();
+        info!(
+            input_len = input.len(),
+            attachment_count = attachments.len(),
+            "Processing multimodal input"
+        );
+        debug!(
+            provider = %self.config.provider,
+            model = %self.config.model,
+            "Using config with tool server for multimodal"
+        );
+
+        // Build multimodal message
+        let message = self.build_multimodal_message(input, attachments);
+
+        // Use agent.prompt(message) - Message implements Into<Message>
+        let response = match self.config.provider.as_str() {
+            "openai" | "gpt" => {
+                let client = self.create_openai_client()?;
+                let agent = client
+                    .agent(&self.config.model)
+                    .preamble(&self.config.system_prompt)
+                    .temperature(self.config.temperature as f64)
+                    .max_tokens(self.config.max_tokens as u64)
+                    .tool_server_handle(self.tool_server_handle.clone())
+                    .build();
+                agent
+                    .prompt(message)
+                    .await
+                    .map_err(|e| AetherError::provider(format!("OpenAI error: {}", e)))?
+            }
+            "anthropic" | "claude" => {
+                let client = self.create_anthropic_client()?;
+                let agent = client
+                    .agent(&self.config.model)
+                    .preamble(&self.config.system_prompt)
+                    .temperature(self.config.temperature as f64)
+                    .max_tokens(self.config.max_tokens as u64)
+                    .tool_server_handle(self.tool_server_handle.clone())
+                    .build();
+                agent
+                    .prompt(message)
+                    .await
+                    .map_err(|e| AetherError::provider(format!("Anthropic error: {}", e)))?
+            }
+            _ => {
+                // For unknown providers, use OpenAI-compatible client with custom base_url
+                let client = self.create_custom_client()?;
+                let agent = client
+                    .agent(&self.config.model)
+                    .preamble(&self.config.system_prompt)
+                    .temperature(self.config.temperature as f64)
+                    .max_tokens(self.config.max_tokens as u64)
+                    .tool_server_handle(self.tool_server_handle.clone())
+                    .build();
+                agent
+                    .prompt(message)
+                    .await
+                    .map_err(|e| AetherError::provider(format!("Provider error: {}", e)))?
+            }
+        };
+
+        info!(response_len = response.len(), "Multimodal response received");
+        Ok(AgentResponse::simple(response))
+    }
+
+    /// Build a multimodal Message from text input and attachments
+    fn build_multimodal_message(&self, input: &str, attachments: &[MediaAttachment]) -> Message {
+        let mut content_items: Vec<UserContent> = Vec::new();
+
+        // Add text content first (even if empty, to have at least one item)
+        content_items.push(UserContent::Text(Text {
+            text: if input.is_empty() {
+                "Describe this image in detail.".to_string()
+            } else {
+                input.to_string()
+            },
+        }));
+
+        // Add image attachments
+        for attachment in attachments {
+            if attachment.media_type == "image" {
+                let media_type = match attachment.mime_type.as_str() {
+                    "image/png" => Some(ImageMediaType::PNG),
+                    "image/jpeg" => Some(ImageMediaType::JPEG),
+                    "image/gif" => Some(ImageMediaType::GIF),
+                    "image/webp" => Some(ImageMediaType::WEBP),
+                    _ => None,
+                };
+                content_items.push(UserContent::Image(Image {
+                    data: DocumentSourceKind::base64(&attachment.data),
+                    media_type,
+                    detail: None,
+                    additional_params: None,
+                }));
+            }
+        }
+
+        // Build Message with OneOrMany (guaranteed non-empty due to text above)
+        Message::User {
+            content: OneOrMany::many(content_items).expect("content_items is guaranteed non-empty"),
+        }
     }
 
     /// Create OpenAI client

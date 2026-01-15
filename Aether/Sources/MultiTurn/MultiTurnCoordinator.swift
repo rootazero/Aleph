@@ -218,7 +218,8 @@ final class MultiTurnCoordinator {
         let options = ProcessOptions(
             appContext: "com.aether.multi-turn",
             windowTitle: nil,
-            stream: true
+            stream: true,
+            attachments: nil  // Multi-turn mode doesn't support attachments yet
         )
 
         do {

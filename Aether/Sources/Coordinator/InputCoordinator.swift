@@ -430,11 +430,12 @@ final class InputCoordinator {
                     self.pendingOriginalClipboard = originalClipboardText
                 }
 
-                // Create process options
+                // Create process options with attachments for multimodal support
                 let options = ProcessOptions(
                     appContext: capturedContext.appBundleId,
                     windowTitle: capturedContext.windowTitle,
-                    stream: true
+                    stream: true,
+                    attachments: capturedContext.attachments
                 )
 
                 // Call async process - response comes via EventHandler callbacks

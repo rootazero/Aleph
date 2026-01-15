@@ -90,6 +90,8 @@ pub struct ProcessOptions {
     pub window_title: Option<String>,
     /// Enable streaming mode
     pub stream: bool,
+    /// Media attachments for multimodal content (images, etc.)
+    pub attachments: Option<Vec<crate::core::MediaAttachment>>,
 }
 
 impl Default for ProcessOptions {
@@ -98,6 +100,7 @@ impl Default for ProcessOptions {
             app_context: None,
             window_title: None,
             stream: true,  // Streaming enabled by default
+            attachments: None,
         }
     }
 }
@@ -246,7 +249,9 @@ impl AetherCore {
         input: String,
         options: Option<ProcessOptions>,
     ) -> Result<(), AetherFfiError> {
-        let _options = options.unwrap_or_default();
+        let options = options.unwrap_or_default();
+        // Extract attachments for multimodal support
+        let attachments = options.attachments.clone();
         let handler = Arc::clone(&self.handler);
         // Acquire read lock to get current config (supports config reload)
         let config = self.config_holder.read().unwrap().config().clone();
@@ -281,8 +286,8 @@ impl AetherCore {
                         Err(crate::error::AetherError::cancelled())
                     }
 
-                    // Process the request
-                    result = manager.process(&input) => {
+                    // Process the request with multimodal support
+                    result = manager.process_with_attachments(&input, attachments.as_deref()) => {
                         result
                     }
                 }

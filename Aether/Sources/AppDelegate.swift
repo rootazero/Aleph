@@ -641,7 +641,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             let options = ProcessOptions(
                 appContext: appContext,
                 windowTitle: windowTitle,
-                stream: stream
+                stream: stream,
+                attachments: nil  // No attachments for direct process calls
             )
             try core.process(input: input, options: options)
         } catch {
