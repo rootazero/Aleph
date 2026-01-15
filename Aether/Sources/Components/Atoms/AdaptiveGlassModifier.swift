@@ -4,8 +4,7 @@
 //
 //  Adaptive glass effect modifiers for Liquid Glass on macOS 26+.
 //  Uses native .glassEffect() API on macOS 26+, falls back to NSVisualEffectView on earlier versions.
-//  Applies .environment(\.controlActiveState, .active) to maintain consistent appearance
-//  regardless of window focus state.
+//  Follows Apple's standard Liquid Glass implementation guidelines.
 //
 
 import SwiftUI
@@ -14,7 +13,7 @@ import AppKit
 // MARK: - GlassModifier
 
 /// A view modifier that applies Liquid Glass effect on macOS 26+ with fallback for earlier versions.
-/// Uses environment override to keep glass effect active even when window loses focus.
+/// Follows Apple's standard Liquid Glass implementation.
 struct GlassModifier: ViewModifier {
 
     // MARK: - Properties
@@ -46,10 +45,8 @@ struct GlassModifier: ViewModifier {
         if #available(macOS 26, *) {
             // macOS 26+: Use native Liquid Glass effect
             // .clear provides a lighter glass appearance with less visible border
-            // .environment(\.controlActiveState, .active) keeps the appearance consistent
             content
                 .glassEffect(.clear, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                .environment(\.controlActiveState, .active)
         } else {
             // Fallback for earlier versions: Use NSVisualEffectView
             content
@@ -75,12 +72,12 @@ struct GlassProminentButtonModifier: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 26, *) {
             // macOS 26+: Use native glass prominent button style
+            // Use .foregroundStyle(.primary) to let system handle contrast automatically
             content
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.white)
+                .foregroundStyle(.primary)
                 .padding(10)
                 .glassEffect(.clear.interactive(), in: Circle())
-                .environment(\.controlActiveState, .active)
                 .contentShape(Circle())  // Must be after glassEffect to expand hit area
                 .background(WindowDragBlocker())  // Prevent window dragging in button area
         } else {
@@ -133,7 +130,6 @@ struct GlassButtonModifier: ViewModifier {
             content
                 .padding(6)
                 .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .environment(\.controlActiveState, .active)
         } else {
             // Fallback: Subtle hover effect
             content
@@ -204,7 +200,6 @@ struct AdaptiveGlassContainer<Content: View>: View {
             GlassEffectContainer(spacing: spacing ?? 0) {
                 content()
             }
-            .environment(\.controlActiveState, .active)
         } else {
             // Fallback: Simple VStack
             VStack(spacing: spacing ?? 0) {
@@ -230,7 +225,6 @@ struct GlassMessageBubbleModifier: ViewModifier {
                     .regular,
                     in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                 )
-                .environment(\.controlActiveState, .active)
         } else {
             // Fallback: Semi-transparent background
             content

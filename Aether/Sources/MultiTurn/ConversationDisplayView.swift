@@ -56,8 +56,10 @@ struct ConversationDisplayView: View {
     private var titleBar: some View {
         HStack {
             // Clean design without colored indicator (pure glass style)
+            // Use .foregroundStyle(.primary) to let system handle contrast automatically
             Text(viewModel.displayTitle)
                 .font(.headline)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
 
             Spacer()
@@ -66,7 +68,7 @@ struct ConversationDisplayView: View {
             Button(action: viewModel.copyAllMessages) {
                 Image(systemName: "doc.on.doc")
                     .font(.system(size: 12))
-                    .foregroundColor(.primary.opacity(0.6))
+                    .foregroundStyle(.primary.opacity(0.6))
             }
             .buttonStyle(.plain)
             .adaptiveGlassButton()
@@ -127,11 +129,11 @@ struct ConversationDisplayView: View {
         VStack(spacing: 8) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 32))
-                .foregroundColor(.primary.opacity(0.5))
+                .foregroundStyle(.primary.opacity(0.5))
 
             Text("Start a conversation")
                 .font(.subheadline)
-                .foregroundColor(.primary.opacity(0.6))
+                .foregroundStyle(.primary.opacity(0.6))
         }
         .frame(maxWidth: .infinity)
         .frame(height: 100)
@@ -192,8 +194,10 @@ struct MessageBubbleView: View {
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
                 // Message content with glass bubble effect
+                // Use .foregroundStyle(.primary) to let system handle contrast automatically
                 Text(message.content)
                     .font(.system(size: 13))
+                    .foregroundStyle(.primary)
                     .textSelection(.enabled)
                     .padding(12)
                     .glassBubble(isUser: isUser)
@@ -206,7 +210,7 @@ struct MessageBubbleView: View {
                             Text("Copy")
                         }
                         .font(.caption2)
-                        .foregroundColor(.primary.opacity(0.6))
+                        .foregroundStyle(.primary.opacity(0.6))
                     }
                     .buttonStyle(.plain)
                 }
