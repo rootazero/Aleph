@@ -15,6 +15,9 @@ pub struct RigAgentConfig {
     /// Max tokens
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
+    /// Max turns for tool calling loop (prevents MaxDepthError)
+    #[serde(default = "default_max_turns")]
+    pub max_turns: usize,
     /// System prompt
     #[serde(default)]
     pub system_prompt: String,
@@ -34,6 +37,10 @@ fn default_max_tokens() -> u32 {
     4096
 }
 
+fn default_max_turns() -> usize {
+    10
+}
+
 impl Default for RigAgentConfig {
     fn default() -> Self {
         Self {
@@ -41,6 +48,7 @@ impl Default for RigAgentConfig {
             model: "gpt-4o".to_string(),
             temperature: default_temperature(),
             max_tokens: default_max_tokens(),
+            max_turns: default_max_turns(),
             system_prompt: "You are Aether, an intelligent assistant.".to_string(),
             api_key: None,
             base_url: None,

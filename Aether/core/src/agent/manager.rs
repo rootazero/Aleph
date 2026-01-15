@@ -258,6 +258,7 @@ impl RigAgentManager {
         );
 
         // Build agent based on provider type and call prompt
+        // Use multi_turn() to allow tool calling loops (prevents MaxDepthError)
         let response = match self.config.provider.as_str() {
             "openai" | "gpt" => {
                 let client = self.create_openai_client()?;
@@ -270,6 +271,7 @@ impl RigAgentManager {
                     .build();
                 agent
                     .prompt(input)
+                    .multi_turn(self.config.max_turns)
                     .await
                     .map_err(|e| AetherError::provider(format!("OpenAI error: {}", e)))?
             }
@@ -284,6 +286,7 @@ impl RigAgentManager {
                     .build();
                 agent
                     .prompt(input)
+                    .multi_turn(self.config.max_turns)
                     .await
                     .map_err(|e| AetherError::provider(format!("Anthropic error: {}", e)))?
             }
@@ -299,6 +302,7 @@ impl RigAgentManager {
                     .build();
                 agent
                     .prompt(input)
+                    .multi_turn(self.config.max_turns)
                     .await
                     .map_err(|e| AetherError::provider(format!("Provider error: {}", e)))?
             }
@@ -338,6 +342,7 @@ impl RigAgentManager {
         let message = self.build_multimodal_message(input, attachments);
 
         // Use agent.prompt(message) - Message implements Into<Message>
+        // Use multi_turn() to allow tool calling loops (prevents MaxDepthError)
         let response = match self.config.provider.as_str() {
             "openai" | "gpt" => {
                 let client = self.create_openai_client()?;
@@ -350,6 +355,7 @@ impl RigAgentManager {
                     .build();
                 agent
                     .prompt(message)
+                    .multi_turn(self.config.max_turns)
                     .await
                     .map_err(|e| AetherError::provider(format!("OpenAI error: {}", e)))?
             }
@@ -364,6 +370,7 @@ impl RigAgentManager {
                     .build();
                 agent
                     .prompt(message)
+                    .multi_turn(self.config.max_turns)
                     .await
                     .map_err(|e| AetherError::provider(format!("Anthropic error: {}", e)))?
             }
@@ -379,6 +386,7 @@ impl RigAgentManager {
                     .build();
                 agent
                     .prompt(message)
+                    .multi_turn(self.config.max_turns)
                     .await
                     .map_err(|e| AetherError::provider(format!("Provider error: {}", e)))?
             }
