@@ -88,6 +88,9 @@ pub struct Config {
     /// Dispatcher Layer configuration (intelligent tool routing)
     #[serde(default)]
     pub dispatcher: DispatcherConfigToml,
+    /// Cowork task orchestration configuration
+    #[serde(default)]
+    pub cowork: CoworkConfigToml,
 }
 
 // =============================================================================
@@ -168,6 +171,7 @@ impl Default for Config {
             smart_flow: SmartFlowConfig::default(),
             smart_matching: SmartMatchingConfig::default(),
             dispatcher: DispatcherConfigToml::default(),
+            cowork: CoworkConfigToml::default(),
         }
     }
 }
@@ -830,6 +834,33 @@ impl Config {
                 );
             }
         }
+
+        // Validate Cowork config
+        if let Err(e) = self.cowork.validate() {
+            error!(error = %e, "Cowork config validation failed");
+            return Err(AetherError::invalid_config(e));
+        }
+
+        // Validate planner_provider exists if specified
+        if let Some(ref provider_name) = self.cowork.planner_provider {
+            if !self.providers.contains_key(provider_name) {
+                error!(
+                    provider = %provider_name,
+                    "Cowork planner_provider not found in providers"
+                );
+                return Err(AetherError::invalid_config(format!(
+                    "Cowork planner_provider '{}' not found in providers",
+                    provider_name
+                )));
+            }
+        }
+
+        debug!(
+            enabled = self.cowork.enabled,
+            require_confirmation = self.cowork.require_confirmation,
+            max_parallelism = self.cowork.max_parallelism,
+            "Cowork config validated"
+        );
 
         info!(
             providers_count = self.providers.len(),

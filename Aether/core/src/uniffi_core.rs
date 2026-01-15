@@ -1802,8 +1802,16 @@ impl AetherCore {
             return Ok(Arc::clone(engine));
         }
 
-        // Get the config for cowork (use defaults for now)
-        let cowork_config = crate::cowork::CoworkConfig::default();
+        // Get the config for cowork from the loaded configuration
+        let cowork_config = {
+            let config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
+            // Access the raw config to get cowork settings
+            // FullConfig doesn't have cowork yet, so we load from file or use defaults
+            match Config::load() {
+                Ok(cfg) => cfg.cowork.to_engine_config(),
+                Err(_) => crate::cowork::CoworkConfig::default(),
+            }
+        };
 
         // Get an AI provider for the planner
         let full_config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());

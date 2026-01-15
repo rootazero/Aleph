@@ -197,7 +197,8 @@ struct SidebarWithTrafficLights: View {
             NavigationItemConfig(tab: .memory, iconName: "brain", titleKey: "settings.memory.title"),
             NavigationItemConfig(tab: .search, iconName: "magnifyingglass", titleKey: "settings.search.title"),
             NavigationItemConfig(tab: .mcp, iconName: "wrench.and.screwdriver", titleKey: "settings.mcp.title"),
-            NavigationItemConfig(tab: .skills, iconName: "wand.and.stars", titleKey: "settings.skills.title")
+            NavigationItemConfig(tab: .skills, iconName: "wand.and.stars", titleKey: "settings.skills.title"),
+            NavigationItemConfig(tab: .cowork, iconName: "square.grid.3x3.fill", titleKey: "settings.cowork.title")
         ]
     }
 }
@@ -226,6 +227,7 @@ private struct NavigationItemConfig {
         case .search: return "Search"
         case .mcp: return "MCP"
         case .skills: return "Skills"
+        case .cowork: return "Cowork"
         }
     }
 }

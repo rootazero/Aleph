@@ -136,6 +136,8 @@ struct RootContentView: View {
             return L("settings.mcp.title")
         case .skills:
             return L("settings.skills.title")
+        case .cowork:
+            return L("settings.cowork.title")
         }
     }
 
@@ -160,6 +162,8 @@ struct RootContentView: View {
             return L("settings.mcp.description")
         case .skills:
             return L("settings.skills.description")
+        case .cowork:
+            return L("settings.cowork.description")
         }
     }
 
@@ -288,6 +292,15 @@ struct RootContentView: View {
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Skills management requires AetherCore initialization")
+            }
+
+        case .cowork:
+            // core used for cowork settings
+            if let core = core {
+                CoworkSettingsView(core: core, saveBarState: saveBarState)
+                    .id(configReloadTrigger)
+            } else {
+                placeholderView("Cowork settings requires AetherCore initialization")
             }
         }
     }

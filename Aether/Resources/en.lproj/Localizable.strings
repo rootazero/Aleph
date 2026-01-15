@@ -797,3 +797,20 @@
 // MARK: - MCP Startup (hot-reload-optimization)
 "mcp.startup_partial" = "MCP Startup Warning";
 "mcp.servers_failed" = "Some MCP servers failed to start: %@";
+
+// MARK: - Settings Window - Cowork Tab
+"settings.cowork.title" = "Cowork";
+"settings.cowork.description" = "Configure Cowork task orchestration. Cowork decomposes complex requests into task graphs and executes them with parallel scheduling.";
+"settings.cowork.enabled" = "Task Orchestration";
+"settings.cowork.enabled_description" = "Enable Cowork to break down complex tasks into manageable sub-tasks that can run in parallel.";
+"settings.cowork.enabled_toggle" = "Enable Cowork";
+"settings.cowork.confirmation" = "Confirmation";
+"settings.cowork.confirmation_description" = "Require user confirmation before executing task graphs. When enabled, you'll see a preview of all planned tasks.";
+"settings.cowork.confirmation_toggle" = "Require Confirmation";
+"settings.cowork.parallelism" = "Parallel Execution";
+"settings.cowork.parallelism_description" = "Maximum number of tasks that can run simultaneously. Higher values improve speed but use more resources.";
+"settings.cowork.parallelism_hint" = "Recommended: 2-4 for normal use, 8+ for powerful machines";
+"settings.cowork.dry_run" = "Dry Run Mode";
+"settings.cowork.dry_run_description" = "Plan tasks but don't execute them. Useful for testing and debugging task graphs.";
+"settings.cowork.dry_run_toggle" = "Enable Dry Run";
+"settings.cowork.dry_run_warning" = "Tasks will be planned but not executed";

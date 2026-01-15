@@ -21,6 +21,7 @@ enum SettingsTab: Hashable {
     case search
     case mcp
     case skills
+    case cowork
 }
 
 // MARK: - UTType Extension

@@ -13,7 +13,9 @@
 //! - `video`: Video transcript settings (VideoConfig)
 //! - `skills`: Claude Agent Skills settings (SkillsConfig)
 //! - `dispatcher`: Dispatcher Layer settings (DispatcherConfigToml)
+//! - `cowork`: Cowork task orchestration settings (CoworkConfigToml)
 
+pub mod cowork;
 pub mod dispatcher;
 pub mod general;
 pub mod memory;
@@ -27,6 +29,7 @@ pub mod video;
 
 // Re-export all types for backward compatibility
 // Users can still use `use crate::config::XXX` instead of `use crate::config::types::XXX`
+pub use cowork::*;
 pub use dispatcher::*;
 pub use general::*;
 pub use memory::*;

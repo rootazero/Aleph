@@ -799,3 +799,20 @@
 // MARK: - MCP Startup (hot-reload-optimization)
 "mcp.startup_partial" = "MCP 启动警告";
 "mcp.servers_failed" = "部分 MCP 服务器启动失败: %@";
+
+// MARK: - Settings Window - Cowork Tab
+"settings.cowork.title" = "协作模式";
+"settings.cowork.description" = "配置 Cowork 任务编排。Cowork 将复杂请求分解为任务图，并行调度执行。";
+"settings.cowork.enabled" = "任务编排";
+"settings.cowork.enabled_description" = "启用 Cowork 将复杂任务分解为可并行执行的子任务。";
+"settings.cowork.enabled_toggle" = "启用 Cowork";
+"settings.cowork.confirmation" = "确认设置";
+"settings.cowork.confirmation_description" = "执行任务图前需要用户确认。启用后，您将看到所有计划任务的预览。";
+"settings.cowork.confirmation_toggle" = "需要确认";
+"settings.cowork.parallelism" = "并行执行";
+"settings.cowork.parallelism_description" = "可同时运行的最大任务数。较高的值可提升速度，但会占用更多资源。";
+"settings.cowork.parallelism_hint" = "建议：普通使用 2-4，高性能机器 8+";
+"settings.cowork.dry_run" = "演练模式";
+"settings.cowork.dry_run_description" = "规划任务但不执行。用于测试和调试任务图。";
+"settings.cowork.dry_run_toggle" = "启用演练模式";
+"settings.cowork.dry_run_warning" = "任务将被规划但不会执行";
