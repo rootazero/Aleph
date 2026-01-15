@@ -126,6 +126,19 @@ impl CoworkEngine {
         &mut self.executors
     }
 
+    /// Register the FileOpsExecutor with the given configuration
+    ///
+    /// This should be called after creating the engine to enable file operations.
+    pub fn register_file_ops_executor(&mut self, config: crate::config::types::cowork::FileOpsConfigToml) {
+        if config.enabled {
+            let executor = config.create_executor();
+            self.executors.register("file_ops", Arc::new(executor));
+            info!("Registered FileOpsExecutor");
+        } else {
+            debug!("FileOpsExecutor disabled by configuration");
+        }
+    }
+
     /// Subscribe to progress events
     pub fn subscribe(&self, subscriber: Arc<dyn ProgressSubscriber>) {
         self.monitor.subscribe(subscriber);

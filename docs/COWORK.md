@@ -229,6 +229,44 @@ blocked_categories = []
 - `app_automation` - Controlling applications
 - `ai_inference` - AI model calls
 
+### File Operations Configuration
+
+```toml
+[cowork.file_ops]
+# Enable file operations executor
+enabled = true
+
+# Paths allowed for file operations (glob patterns)
+# Empty = all paths allowed (except denied)
+allowed_paths = ["~/Downloads/**", "~/Documents/**"]
+
+# Paths denied for file operations (takes precedence)
+# Default denied paths (~/.ssh, ~/.gnupg, etc.) are always applied
+denied_paths = []
+
+# Maximum file size for read operations (human-readable)
+max_file_size = "100MB"
+
+# Require confirmation before write operations
+require_confirmation_for_write = true
+
+# Require confirmation before delete operations
+require_confirmation_for_delete = true
+```
+
+### Default Denied Paths
+
+For security, these paths are always denied regardless of configuration:
+
+- `~/.ssh/**` - SSH keys
+- `~/.gnupg/**` - GPG keys
+- `~/.config/aether/**` - Aether config
+- `~/.aws/**` - AWS credentials
+- `~/.kube/**` - Kubernetes config
+- `/etc/passwd` - System password file
+- `/etc/shadow` - System shadow file
+- `/etc/sudoers` - Sudo configuration
+
 ### Settings UI
 
 Access via: **Settings → Cowork**
@@ -341,13 +379,29 @@ Test categories:
 
 ## Future Enhancements
 
-### Phase 2 (Planned)
-- Real executor implementations (file, code, document)
+### Phase 2 - File Operations (In Progress)
+
+**Completed:**
+- ✅ FileOpsExecutor implementation (Read, Write, Move, Copy, Delete, Search, List)
+- ✅ Permission system with allowed/denied paths
+- ✅ Glob pattern support for path matching
+- ✅ Path canonicalization (resolve symlinks, ~, ..)
+- ✅ Default denied paths for security
+- ✅ Configuration types (FileOpsConfigToml)
+- ✅ Integration with CoworkEngine
+
+**Remaining:**
+- [ ] Swift UI settings for file_ops
+- [ ] Atomic batch operations with rollback
+- [ ] Parallel IO with configurable concurrency
+
+### Phase 3 (Planned)
+- Code execution executor
 - AppleScript automation executor
 - Checkpoint/resume for long-running graphs
 - Task result caching
 
-### Phase 3 (Planned)
+### Phase 4 (Planned)
 - Visual DAG editor in UI
 - Custom task type definitions
 - Workflow templates
@@ -362,10 +416,12 @@ Test categories:
 | `core/src/cowork/planner/` | LLM-based task planning |
 | `core/src/cowork/scheduler/` | DAG scheduler |
 | `core/src/cowork/executor/` | Executor trait and registry |
+| `core/src/cowork/executor/file_ops.rs` | File operations executor |
+| `core/src/cowork/executor/permission.rs` | Path permission checking |
 | `core/src/cowork/monitor/` | Progress events and tracking |
 | `core/src/cowork/engine.rs` | CoworkEngine unified API |
 | `core/src/cowork_ffi.rs` | UniFFI type conversions |
-| `core/src/config/types/cowork.rs` | Configuration types |
+| `core/src/config/types/cowork.rs` | Configuration types (incl. FileOpsConfigToml) |
 | `Sources/CoworkSettingsView.swift` | Settings UI |
 | `Sources/Components/CoworkConfirmationView.swift` | Confirmation UI |
 | `Sources/Components/CoworkProgressView.swift` | Progress UI |

@@ -2,10 +2,14 @@
 //!
 //! This module provides the executor registry and trait for task execution.
 
+mod file_ops;
 mod noop;
+mod permission;
 mod registry;
 
+pub use file_ops::FileOpsExecutor;
 pub use noop::NoopExecutor;
+pub use permission::{FileOpError, PathPermissionChecker};
 pub use registry::ExecutorRegistry;
 
 use async_trait::async_trait;
