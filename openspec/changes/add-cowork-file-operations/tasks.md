@@ -78,9 +78,9 @@
 - [x] 9.1 Write integration tests for FileOpsExecutor
 - [x] 9.2 Test permission denial scenarios
 - [ ] 9.3 Test batch operation rollback
-- [ ] 9.4 Update docs/COWORK.md with FileOps section
+- [x] 9.4 Update docs/COWORK.md with FileOps section
 - [ ] 9.5 Add example usage scenarios
-- [ ] 9.6 Run cargo clippy and fix warnings
+- [x] 9.6 Run cargo clippy and fix warnings
 
 ## Completion Checklist
 
