@@ -113,10 +113,12 @@ pub struct FileOpsExecutor {
     /// Permission checker
     permission_checker: PathPermissionChecker,
 
-    /// Require confirmation for write operations
+    /// Require confirmation for write operations (reserved for future UI integration)
+    #[allow(dead_code)]
     require_confirmation_for_write: bool,
 
-    /// Require confirmation for delete operations
+    /// Require confirmation for delete operations (reserved for future UI integration)
+    #[allow(dead_code)]
     require_confirmation_for_delete: bool,
 }
 
