@@ -219,7 +219,7 @@ final class MultiTurnCoordinator {
             appContext: "com.aether.multi-turn",
             windowTitle: nil,
             stream: true,
-            attachments: nil  // Multi-turn mode doesn't support attachments yet
+            attachments: attachments.isEmpty ? nil : attachments
         )
 
         do {
