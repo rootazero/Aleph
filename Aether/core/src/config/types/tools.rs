@@ -258,22 +258,22 @@ impl UnifiedToolsConfig {
 
     /// Check if filesystem service is enabled
     pub fn is_fs_enabled(&self) -> bool {
-        self.enabled && self.native.fs.as_ref().map_or(true, |c| c.enabled)
+        self.enabled && self.native.fs.as_ref().is_none_or(|c| c.enabled)
     }
 
     /// Check if git service is enabled
     pub fn is_git_enabled(&self) -> bool {
-        self.enabled && self.native.git.as_ref().map_or(true, |c| c.enabled)
+        self.enabled && self.native.git.as_ref().is_none_or(|c| c.enabled)
     }
 
     /// Check if shell service is enabled
     pub fn is_shell_enabled(&self) -> bool {
-        self.enabled && self.native.shell.as_ref().map_or(false, |c| c.enabled)
+        self.enabled && self.native.shell.as_ref().is_some_and(|c| c.enabled)
     }
 
     /// Check if system info service is enabled
     pub fn is_system_info_enabled(&self) -> bool {
-        self.enabled && self.native.system_info.as_ref().map_or(true, |c| c.enabled)
+        self.enabled && self.native.system_info.as_ref().is_none_or(|c| c.enabled)
     }
 
     /// Get filesystem allowed roots
@@ -299,12 +299,12 @@ impl UnifiedToolsConfig {
 
     /// Check if clipboard service is enabled
     pub fn is_clipboard_enabled(&self) -> bool {
-        self.enabled && self.native.clipboard.as_ref().map_or(true, |c| c.enabled)
+        self.enabled && self.native.clipboard.as_ref().is_none_or(|c| c.enabled)
     }
 
     /// Check if screen capture service is enabled
     pub fn is_screen_capture_enabled(&self) -> bool {
-        self.enabled && self.native.screen_capture.as_ref().map_or(true, |c| c.enabled)
+        self.enabled && self.native.screen_capture.as_ref().is_none_or(|c| c.enabled)
     }
 
     /// Get screen capture configuration
@@ -314,7 +314,7 @@ impl UnifiedToolsConfig {
 
     /// Check if search tool service is enabled
     pub fn is_search_tool_enabled(&self) -> bool {
-        self.enabled && self.native.search.as_ref().map_or(true, |c| c.enabled)
+        self.enabled && self.native.search.as_ref().is_none_or(|c| c.enabled)
     }
 
     /// Get search tool configuration

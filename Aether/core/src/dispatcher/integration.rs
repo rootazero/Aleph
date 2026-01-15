@@ -580,7 +580,7 @@ impl DispatcherIntegration {
             params.clone(),
             confidence,
             reason_str,
-            routing_layer.clone(),
+            routing_layer,
         );
 
         // Extract pending confirmation and notify Swift

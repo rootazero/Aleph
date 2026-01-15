@@ -242,11 +242,10 @@ impl TaskGraph {
         let mut path: Vec<String> = Vec::new();
 
         for task in &self.tasks {
-            if !visited.contains(task.id.as_str()) {
-                if self.dfs_detect_cycle(&task.id, &adj, &mut visited, &mut rec_stack, &mut path) {
+            if !visited.contains(task.id.as_str())
+                && self.dfs_detect_cycle(&task.id, &adj, &mut visited, &mut rec_stack, &mut path) {
                     return Some(path);
                 }
-            }
         }
 
         None

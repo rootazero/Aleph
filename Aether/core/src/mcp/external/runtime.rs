@@ -21,6 +21,7 @@ pub enum RuntimeKind {
 
 impl RuntimeKind {
     /// Parse runtime kind from string
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "node" | "nodejs" => Self::Node,

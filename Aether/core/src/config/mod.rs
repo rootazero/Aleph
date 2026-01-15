@@ -1093,6 +1093,7 @@ impl Config {
 
                     if let toml::Value::Table(ref mut parent) = parent_table {
                         // Get value from current config
+                        #[allow(clippy::collapsible_match)]
                         if let Some(current_parent) = current_table.get(parent_key) {
                             if let toml::Value::Table(ref cp) = current_parent {
                                 if let Some(value) = cp.get(child_key) {

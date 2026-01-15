@@ -133,7 +133,7 @@ impl ChatMessage {
 
     /// Check if this message has tool calls
     pub fn has_tool_calls(&self) -> bool {
-        self.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty())
+        self.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty())
     }
 
     /// Convert to JSON value for API calls (OpenAI format)
@@ -327,7 +327,7 @@ impl ConversationHistory {
 
     /// Check if the last message has pending tool calls
     pub fn has_pending_tool_calls(&self) -> bool {
-        self.messages.last().map_or(false, |m| m.has_tool_calls())
+        self.messages.last().is_some_and(|m| m.has_tool_calls())
     }
 
     /// Convert to OpenAI API format

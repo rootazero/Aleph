@@ -109,7 +109,7 @@ impl CapabilityStrategy for SkillsStrategy {
 
         // If skill_id is specified, look up directly
         if let Some(id) = skill_id {
-            if let Some(skill) = registry.get_skill(&id) {
+            if let Some(skill) = registry.get_skill(id) {
                 info!(
                     skill_id = %id,
                     skill_name = %skill.name(),

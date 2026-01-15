@@ -113,6 +113,7 @@ impl MemoryEntry {
 /// Type classification for memory facts
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum FactType {
     /// User preferences (likes, habits, style choices)
     Preference,
@@ -125,6 +126,7 @@ pub enum FactType {
     /// Personal information (non-sensitive)
     Personal,
     /// Other facts that don't fit above categories
+    #[default]
     Other,
 }
 
@@ -142,6 +144,7 @@ impl FactType {
     }
 
     /// Parse from string
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "preference" => FactType::Preference,
@@ -154,11 +157,6 @@ impl FactType {
     }
 }
 
-impl Default for FactType {
-    fn default() -> Self {
-        FactType::Other
-    }
-}
 
 impl std::fmt::Display for FactType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

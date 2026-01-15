@@ -170,7 +170,7 @@ impl CapabilityDeclaration {
             .with_parameter(CapabilityParameter::new(
                 "tool",
                 "string",
-                &format!("The MCP tool name to invoke. Must be one of: {}", tool_list.join(", ")),
+                format!("The MCP tool name to invoke. Must be one of: {}", tool_list.join(", ")),
                 true,
             ))
             .with_parameter(CapabilityParameter::new(

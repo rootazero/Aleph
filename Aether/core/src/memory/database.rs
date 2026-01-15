@@ -1013,10 +1013,8 @@ impl VectorDatabase {
             })
             .map_err(|e| AetherError::config(format!("Failed to query fact types: {}", e)))?;
 
-        for row in rows {
-            if let Ok((fact_type, count)) = row {
-                facts_by_type.insert(fact_type, count);
-            }
+        for (fact_type, count) in rows.flatten() {
+            facts_by_type.insert(fact_type, count);
         }
 
         // Timestamps

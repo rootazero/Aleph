@@ -238,7 +238,7 @@ impl ConfirmationState {
         Self::Confirmed {
             tool: pending.tool.clone(),
             parameters: pending.parameters.clone(),
-            routing_layer: pending.routing_layer.clone(),
+            routing_layer: pending.routing_layer,
             confidence: pending.confidence,
         }
     }

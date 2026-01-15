@@ -1663,7 +1663,7 @@ impl AetherCore {
                 node_type: crate::command::CommandType::Action,
                 has_children: tool.has_subtools,
                 source_id: tool.source_id.clone(),
-                source_type: tool.source_type.clone(),
+                source_type: tool.source_type,
             })
             .collect()
     }
@@ -1804,9 +1804,9 @@ impl AetherCore {
 
         // Get the config for cowork from the loaded configuration
         let cowork_config = {
-            let config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
-            // Access the raw config to get cowork settings
-            // FullConfig doesn't have cowork yet, so we load from file or use defaults
+            // Note: We lock full_config briefly to ensure consistent state, but load from file
+            // because FullConfig doesn't expose cowork settings directly
+            let _config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
             match Config::load() {
                 Ok(cfg) => cfg.cowork.to_engine_config(),
                 Err(_) => crate::cowork::CoworkConfig::default(),

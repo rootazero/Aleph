@@ -310,7 +310,7 @@ impl CapabilitySystem {
             .capabilities
             .into_iter()
             .map(|health| CapabilityDiagnostics {
-                capability: health.capability.clone(),
+                capability: health.capability,
                 name: health.name.clone(),
                 status: if health.is_operational() {
                     CapabilityStatus::Operational

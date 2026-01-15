@@ -167,7 +167,7 @@ impl GitOps for GitRepository {
                 if let Some(hunk) = hunk {
                     if let Some(path) = delta.new_file().path() {
                         // Check if we need to create a new entry
-                        let should_create = results.last().map_or(true, |last| {
+                        let should_create = results.last().is_none_or(|last| {
                             last.file_path != path.to_string_lossy() ||
                             last.new_start != hunk.new_start()
                         });

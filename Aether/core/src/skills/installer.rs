@@ -104,11 +104,10 @@ impl SkillsInstaller {
         let url = url.trim();
 
         // Handle short format: user/repo
-        if !url.contains("://") && !url.starts_with("github.com") {
-            if url.matches('/').count() == 1 && !url.contains(' ') {
+        if !url.contains("://") && !url.starts_with("github.com")
+            && url.matches('/').count() == 1 && !url.contains(' ') {
                 return Ok(format!("https://github.com/{}", url));
             }
-        }
 
         // Handle github.com/user/repo
         if url.starts_with("github.com/") {

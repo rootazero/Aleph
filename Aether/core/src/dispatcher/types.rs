@@ -782,8 +782,7 @@ impl UnifiedTool {
                     let hints: Vec<String> = props
                         .as_object()
                         .map(|obj| {
-                            obj.keys()
-                                .map(|k| k.clone())
+                            obj.keys().cloned()
                                 .collect()
                         })
                         .unwrap_or_default();

@@ -322,7 +322,7 @@ impl RigAgentManager {
         attachments: Option<&[MediaAttachment]>,
     ) -> Result<AgentResponse> {
         // If no attachments, delegate to existing process()
-        if attachments.map_or(true, |a| a.is_empty()) {
+        if attachments.is_none_or(|a| a.is_empty()) {
             return self.process(input).await;
         }
 

@@ -71,6 +71,7 @@ pub fn clean_title(title: &str) -> String {
 ///
 /// # Returns
 /// The title if valid, or a default title based on user input
+#[allow(dead_code)]
 pub fn validate_title(title: &str, user_input: &str) -> String {
     let cleaned = clean_title(title);
     if cleaned.is_empty() || cleaned.chars().count() > 50 {

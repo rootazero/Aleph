@@ -57,6 +57,7 @@ impl MemoryStore {
             AetherError::config(format!("Failed to initialize embedding model: {}", e))
         })?;
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let store = Self {
             conn: Arc::new(RwLock::new(conn)),
             embedding_model,

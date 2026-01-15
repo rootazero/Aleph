@@ -266,7 +266,7 @@ impl ToolConfirmation {
         // Add parameters if enabled and present
         if self.config.show_parameters {
             if let Some(params) = parameters {
-                if !params.is_null() && params.as_object().map_or(false, |o| !o.is_empty()) {
+                if !params.is_null() && params.as_object().is_some_and(|o| !o.is_empty()) {
                     prompt.push_str("\n\n**Parameters:**\n");
                     prompt.push_str(&format_parameters(params));
                 }

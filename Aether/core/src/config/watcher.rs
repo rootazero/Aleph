@@ -62,6 +62,7 @@ pub struct ConfigWatcher {
     debouncer: Arc<Mutex<Option<Debouncer<RecommendedWatcher, FileIdMap>>>>,
 }
 
+#[allow(dead_code)]
 impl ConfigWatcher {
     /// Create a new config watcher
     ///

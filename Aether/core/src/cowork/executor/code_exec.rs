@@ -221,7 +221,11 @@ impl CommandChecker {
 }
 
 /// Sandbox configuration for macOS
+///
+/// Note: Fields are currently unused as sandbox integration is pending.
+/// They will be used when sandbox-exec integration is completed.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SandboxConfig {
     /// Whether sandbox is enabled
     pub enabled: bool,
@@ -253,7 +257,10 @@ impl Default for SandboxConfig {
 
 impl SandboxConfig {
     /// Generate macOS sandbox-exec profile
+    ///
+    /// Note: Currently unused, will be integrated when sandbox execution is enabled.
     #[cfg(target_os = "macos")]
+    #[allow(dead_code)]
     pub fn generate_profile(&self) -> String {
         let mut profile = String::from("(version 1)\n(deny default)\n");
 
@@ -311,13 +318,15 @@ pub struct CodeExecutor {
     /// Whether code execution is enabled
     enabled: bool,
 
-    /// Default runtime
+    /// Default runtime (reserved for future use when auto-selecting runtime)
+    #[allow(dead_code)]
     default_runtime: String,
 
     /// Execution timeout in seconds
     timeout_seconds: u64,
 
-    /// Sandbox configuration
+    /// Sandbox configuration (reserved for sandbox-exec integration)
+    #[allow(dead_code)]
     sandbox_config: SandboxConfig,
 
     /// Allowed runtimes (empty = all)
@@ -341,6 +350,7 @@ pub struct CodeExecutor {
 
 impl CodeExecutor {
     /// Create a new code executor
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         enabled: bool,
         default_runtime: String,
@@ -519,7 +529,7 @@ impl CodeExecutor {
         let canonical_path = self
             .permission_checker
             .check_path(path)
-            .map_err(|e| AetherError::other(CodeExecError::PathNotAllowed(path.to_path_buf()).to_string()))?;
+            .map_err(|_e| AetherError::other(CodeExecError::PathNotAllowed(path.to_path_buf()).to_string()))?;
 
         // Detect language from extension
         let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -570,7 +580,7 @@ impl CodeExecutor {
         &self,
         runtime: &str,
         args: &[String],
-        script_path: Option<&Path>,
+        _script_path: Option<&Path>,
         ctx: &ExecutionContext,
     ) -> Result<CodeExecResult> {
         let start = Instant::now();
