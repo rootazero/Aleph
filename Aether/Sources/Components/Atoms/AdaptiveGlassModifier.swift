@@ -79,22 +79,44 @@ struct GlassProminentButtonModifier: ViewModifier {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(.white)
                 .padding(10)
-                .contentShape(Circle())  // Expand hit area to full circle
                 .glassEffect(.clear.interactive(), in: Circle())
                 .environment(\.controlActiveState, .active)
+                .contentShape(Circle())  // Must be after glassEffect to expand hit area
+                .background(WindowDragBlocker())  // Prevent window dragging in button area
         } else {
             // Fallback: Custom prominent button styling
             content
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(.white)
                 .padding(10)
-                .contentShape(Circle())  // Expand hit area to full circle
                 .background(
                     Circle()
                         .fill(isEnabled ? Color.primary.opacity(0.8) : Color.primary.opacity(0.4))
                 )
+                .contentShape(Circle())  // Must be after background to expand hit area
+                .background(WindowDragBlocker())  // Prevent window dragging in button area
         }
     }
+}
+
+// MARK: - Window Drag Blocker
+
+/// An NSView wrapper that prevents window dragging in its area.
+/// Used for buttons that need to be clickable in windows with isMovableByWindowBackground = true.
+struct WindowDragBlocker: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NonDraggableView()
+        view.wantsLayer = true
+        view.layer?.backgroundColor = .clear
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+/// Custom NSView that blocks window dragging
+private class NonDraggableView: NSView {
+    override var mouseDownCanMoveWindow: Bool { false }
 }
 
 // MARK: - GlassButtonModifier
