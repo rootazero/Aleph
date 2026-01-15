@@ -4,7 +4,7 @@
 //
 //  Custom glass effect modifiers using NSVisualEffectView.
 //  Uses .state = .active to maintain consistent appearance regardless of window focus.
-//  Uses white text for better contrast on translucent backgrounds.
+//  Uses .primary color for automatic light/dark mode adaptation.
 //
 
 import SwiftUI
@@ -64,15 +64,15 @@ struct GlassProminentButtonModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .font(.system(size: 16, weight: .semibold))
-            .foregroundColor(.white)
+            .foregroundColor(.primary)
             .padding(10)
             .background(
                 Circle()
-                    .fill(isEnabled ? Color.white.opacity(0.2) : Color.white.opacity(0.1))
+                    .fill(isEnabled ? Color.primary.opacity(0.2) : Color.primary.opacity(0.1))
             )
             .overlay(
                 Circle()
-                    .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                    .stroke(Color.primary.opacity(0.3), lineWidth: 1)
             )
             .contentShape(Circle())
             .background(WindowDragBlocker())
@@ -111,7 +111,7 @@ struct GlassButtonModifier: ViewModifier {
             .padding(6)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isHovering ? Color.white.opacity(0.15) : Color.clear)
+                    .fill(isHovering ? Color.primary.opacity(0.1) : Color.clear)
             )
             .onHover { hovering in
                 withAnimation(.easeInOut(duration: 0.15)) {
@@ -184,7 +184,7 @@ struct GlassMessageBubbleModifier: ViewModifier {
         content
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(isUser ? 0.15 : 0.1))
+                    .fill(Color.primary.opacity(isUser ? 0.08 : 0.05))
             )
     }
 }
@@ -202,13 +202,11 @@ extension View {
     VStack(spacing: 20) {
         Text("Custom Glass Effect Demo")
             .font(.headline)
-            .foregroundColor(.white)
 
         VStack(spacing: 12) {
             Text("Using NSVisualEffectView")
-                .foregroundColor(.white)
             Text("Always stays active regardless of focus")
-                .foregroundColor(.white.opacity(0.7))
+                .foregroundColor(.secondary)
         }
         .padding(20)
         .frame(width: 300)
@@ -216,7 +214,6 @@ extension View {
 
         HStack(spacing: 16) {
             Button("Secondary") {}
-                .foregroundColor(.white)
                 .adaptiveGlassButton()
 
             Button {} label: {
@@ -227,7 +224,6 @@ extension View {
         }
     }
     .padding(40)
-    .background(Color.black.opacity(0.5))
 }
 
 #Preview("Glass Message Bubbles") {
@@ -235,7 +231,6 @@ extension View {
         // AI message
         HStack {
             Text("Hello! How can I help you today?")
-                .foregroundColor(.white)
                 .padding(12)
                 .glassBubble(isUser: false)
             Spacer()
@@ -245,7 +240,6 @@ extension View {
         HStack {
             Spacer()
             Text("I'd like to learn about glass effects")
-                .foregroundColor(.white)
                 .padding(12)
                 .glassBubble(isUser: true)
         }

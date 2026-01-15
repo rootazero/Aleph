@@ -59,7 +59,7 @@ struct ConversationDisplayView: View {
             // Use white color for consistent contrast on transparent glass
             Text(viewModel.displayTitle)
                 .font(.headline)
-                .foregroundColor(.white)
+                .foregroundColor(.primary)
                 .lineLimit(1)
 
             Spacer()
@@ -68,7 +68,7 @@ struct ConversationDisplayView: View {
             Button(action: viewModel.copyAllMessages) {
                 Image(systemName: "doc.on.doc")
                     .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundColor(.primary.opacity(0.7))
             }
             .buttonStyle(.plain)
             .adaptiveGlassButton()
@@ -129,11 +129,11 @@ struct ConversationDisplayView: View {
         VStack(spacing: 8) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 32))
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundColor(.primary.opacity(0.6))
 
             Text("Start a conversation")
                 .font(.subheadline)
-                .foregroundColor(.white.opacity(0.7))
+                .foregroundColor(.primary.opacity(0.7))
         }
         .frame(maxWidth: .infinity)
         .frame(height: 100)
@@ -151,7 +151,7 @@ struct ConversationDisplayView: View {
         HStack(spacing: 6) {
             ForEach(0..<3, id: \.self) { index in
                 Circle()
-                    .fill(.white.opacity(0.5))
+                    .fill(.primary.opacity(0.5))
                     .frame(width: 6, height: 6)
             }
         }
@@ -197,7 +197,7 @@ struct MessageBubbleView: View {
                 // Use white color for consistent contrast on transparent glass
                 Text(message.content)
                     .font(.system(size: 13))
-                    .foregroundColor(.white)
+                    .foregroundColor(.primary)
                     .textSelection(.enabled)
                     .padding(12)
                     .glassBubble(isUser: isUser)
@@ -210,7 +210,7 @@ struct MessageBubbleView: View {
                             Text("Copy")
                         }
                         .font(.caption2)
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(.primary.opacity(0.7))
                     }
                     .buttonStyle(.plain)
                 }
