@@ -816,3 +816,21 @@
 "settings.cowork.dry_run_description" = "规划任务但不执行。用于测试和调试任务图。";
 "settings.cowork.dry_run_toggle" = "启用演练模式";
 "settings.cowork.dry_run_warning" = "任务将被规划但不会执行";
+
+// 代码执行设置 (Phase 3)
+"settings.cowork.code_exec.title" = "代码执行";
+"settings.cowork.code_exec.description" = "配置 Cowork 任务的代码执行设置。代码执行允许运行 shell 脚本、Python 和 Node.js 代码。";
+"settings.cowork.code_exec.enabled" = "启用代码执行";
+"settings.cowork.code_exec.enabled_description" = "允许 Cowork 在任务工作流中执行代码。出于安全考虑，默认禁用。";
+"settings.cowork.code_exec.enabled_toggle" = "启用代码执行";
+"settings.cowork.code_exec.security_warning" = "代码执行可能存在安全风险。仅在信任任务来源时启用。";
+"settings.cowork.code_exec.sandbox" = "沙箱";
+"settings.cowork.code_exec.sandbox_description" = "在受限的沙箱环境中运行代码，限制对系统资源的访问。";
+"settings.cowork.code_exec.sandbox_toggle" = "启用沙箱";
+"settings.cowork.code_exec.network" = "网络访问";
+"settings.cowork.code_exec.network_description" = "允许沙箱中的代码访问网络。除非必要，请保持禁用。";
+"settings.cowork.code_exec.timeout" = "执行超时";
+"settings.cowork.code_exec.timeout_description" = "代码执行的最大允许时间。长时间运行的任务将被终止。";
+"settings.cowork.code_exec.runtime" = "默认运行时";
+"settings.cowork.code_exec.runtime_description" = "代码执行任务的默认编程环境。";
+"settings.cowork.code_exec.runtime_picker" = "选择运行时";

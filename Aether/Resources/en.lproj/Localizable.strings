@@ -814,3 +814,21 @@
 "settings.cowork.dry_run_description" = "Plan tasks but don't execute them. Useful for testing and debugging task graphs.";
 "settings.cowork.dry_run_toggle" = "Enable Dry Run";
 "settings.cowork.dry_run_warning" = "Tasks will be planned but not executed";
+
+// Code Execution Settings (Phase 3)
+"settings.cowork.code_exec.title" = "Code Execution";
+"settings.cowork.code_exec.description" = "Configure code execution settings for Cowork tasks. Code execution allows running shell scripts, Python, and Node.js code.";
+"settings.cowork.code_exec.enabled" = "Enable Code Execution";
+"settings.cowork.code_exec.enabled_description" = "Allow Cowork to execute code as part of task workflows. Disabled by default for security.";
+"settings.cowork.code_exec.enabled_toggle" = "Enable Code Execution";
+"settings.cowork.code_exec.security_warning" = "Code execution can pose security risks. Enable only if you trust the task sources.";
+"settings.cowork.code_exec.sandbox" = "Sandbox";
+"settings.cowork.code_exec.sandbox_description" = "Run code in a restricted sandbox environment to limit access to system resources.";
+"settings.cowork.code_exec.sandbox_toggle" = "Enable Sandbox";
+"settings.cowork.code_exec.network" = "Network Access";
+"settings.cowork.code_exec.network_description" = "Allow sandboxed code to access the network. Keep disabled unless required.";
+"settings.cowork.code_exec.timeout" = "Execution Timeout";
+"settings.cowork.code_exec.timeout_description" = "Maximum time allowed for code execution. Long-running tasks will be terminated.";
+"settings.cowork.code_exec.runtime" = "Default Runtime";
+"settings.cowork.code_exec.runtime_description" = "The default programming environment for code execution tasks.";
+"settings.cowork.code_exec.runtime_picker" = "Select Runtime";

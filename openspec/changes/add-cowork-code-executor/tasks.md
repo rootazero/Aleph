@@ -78,18 +78,18 @@
 - [x] 8.1 Register CodeExecutor in ExecutorRegistry
 - [x] 8.2 Update CoworkEngine to load code_exec config
 - [ ] 8.3 Add code execution preview to HaloState
-- [ ] 8.4 Update UniFFI bindings for new types
+- [x] 8.4 Update UniFFI bindings for new types
 - [ ] 8.5 Test end-to-end code execution task
 
 ## 9. Swift UI
 
-- [ ] 9.1 Add CodeExec section to CoworkSettingsView
-- [ ] 9.2 Create runtime selector component
-- [ ] 9.3 Add timeout picker
-- [ ] 9.4 Add sandbox toggle with explanation
-- [ ] 9.5 Add network access toggle
+- [x] 9.1 Add CodeExec section to CoworkSettingsView
+- [x] 9.2 Create runtime selector component
+- [x] 9.3 Add timeout picker
+- [x] 9.4 Add sandbox toggle with explanation
+- [x] 9.5 Add network access toggle
 - [ ] 9.6 Add blocked commands editor
-- [ ] 9.7 Add localization strings
+- [x] 9.7 Add localization strings
 
 ## 10. Security Review
 
@@ -98,7 +98,7 @@
 - [x] 10.3 Review resource limit effectiveness
 - [x] 10.4 Review environment variable leakage
 - [ ] 10.5 Document security model
-- [ ] 10.6 Add security warnings to UI
+- [x] 10.6 Add security warnings to UI
 
 ## 11. Testing & Documentation
 

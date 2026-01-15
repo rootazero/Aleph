@@ -132,6 +132,77 @@ impl From<CoworkConfigFFI> for CoworkConfig {
     }
 }
 
+/// Code execution configuration for FFI
+#[derive(Debug, Clone)]
+pub struct CodeExecConfigFFI {
+    /// Enable code execution (disabled by default for security)
+    pub enabled: bool,
+    /// Default runtime (shell, python, node)
+    pub default_runtime: String,
+    /// Execution timeout in seconds
+    pub timeout_seconds: u64,
+    /// Enable sandboxed execution
+    pub sandbox_enabled: bool,
+    /// Allow network access in sandbox
+    pub allow_network: bool,
+    /// Allowed runtimes (empty = all)
+    pub allowed_runtimes: Vec<String>,
+    /// Working directory for executions
+    pub working_directory: Option<String>,
+    /// Environment variables to pass
+    pub pass_env: Vec<String>,
+    /// Blocked command patterns
+    pub blocked_commands: Vec<String>,
+}
+
+impl Default for CodeExecConfigFFI {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_runtime: "shell".to_string(),
+            timeout_seconds: 60,
+            sandbox_enabled: true,
+            allow_network: false,
+            allowed_runtimes: Vec::new(),
+            working_directory: None,
+            pass_env: vec!["PATH".to_string(), "HOME".to_string(), "USER".to_string()],
+            blocked_commands: Vec::new(),
+        }
+    }
+}
+
+impl From<crate::config::types::cowork::CodeExecConfigToml> for CodeExecConfigFFI {
+    fn from(config: crate::config::types::cowork::CodeExecConfigToml) -> Self {
+        Self {
+            enabled: config.enabled,
+            default_runtime: config.default_runtime,
+            timeout_seconds: config.timeout_seconds,
+            sandbox_enabled: config.sandbox_enabled,
+            allow_network: config.allow_network,
+            allowed_runtimes: config.allowed_runtimes,
+            working_directory: config.working_directory,
+            pass_env: config.pass_env,
+            blocked_commands: config.blocked_commands,
+        }
+    }
+}
+
+impl From<CodeExecConfigFFI> for crate::config::types::cowork::CodeExecConfigToml {
+    fn from(config: CodeExecConfigFFI) -> Self {
+        Self {
+            enabled: config.enabled,
+            default_runtime: config.default_runtime,
+            timeout_seconds: config.timeout_seconds,
+            sandbox_enabled: config.sandbox_enabled,
+            allow_network: config.allow_network,
+            allowed_runtimes: config.allowed_runtimes,
+            working_directory: config.working_directory,
+            pass_env: config.pass_env,
+            blocked_commands: config.blocked_commands,
+        }
+    }
+}
+
 /// Cowork task for FFI (simplified)
 #[derive(Debug, Clone)]
 pub struct CoworkTaskFFI {

@@ -592,6 +592,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func coworkExecute(graph: CoworkTaskGraphFfi) throws  -> CoworkExecutionSummaryFfi
     
+    func coworkGetCodeExecConfig()  -> CodeExecConfigFfi
+    
     func coworkGetConfig()  -> CoworkConfigFfi
     
     func coworkGetState()  -> CoworkExecutionState
@@ -607,6 +609,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func coworkResume() 
     
     func coworkSubscribe(handler: CoworkProgressHandler) 
+    
+    func coworkUpdateCodeExecConfig(config: CodeExecConfigFfi) throws 
     
     func coworkUpdateConfig(config: CoworkConfigFfi) throws 
     
@@ -815,6 +819,13 @@ open func coworkExecute(graph: CoworkTaskGraphFfi)throws  -> CoworkExecutionSumm
 })
 }
     
+open func coworkGetCodeExecConfig() -> CodeExecConfigFfi {
+    return try!  FfiConverterTypeCodeExecConfigFFI.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_get_code_exec_config(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func coworkGetConfig() -> CoworkConfigFfi {
     return try!  FfiConverterTypeCoworkConfigFFI.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_cowork_get_config(self.uniffiClonePointer(),$0
@@ -866,6 +877,13 @@ open func coworkResume() {try! rustCall() {
 open func coworkSubscribe(handler: CoworkProgressHandler) {try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_cowork_subscribe(self.uniffiClonePointer(),
         FfiConverterCallbackInterfaceCoworkProgressHandler.lower(handler),$0
+    )
+}
+}
+    
+open func coworkUpdateCodeExecConfig(config: CodeExecConfigFfi)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_cowork_update_code_exec_config(self.uniffiClonePointer(),
+        FfiConverterTypeCodeExecConfigFFI.lower(config),$0
     )
 }
 }
@@ -1780,6 +1798,128 @@ public func FfiConverterTypeClarificationResult_lift(_ buf: RustBuffer) throws -
 #endif
 public func FfiConverterTypeClarificationResult_lower(_ value: ClarificationResult) -> RustBuffer {
     return FfiConverterTypeClarificationResult.lower(value)
+}
+
+
+public struct CodeExecConfigFfi {
+    public var enabled: Bool
+    public var defaultRuntime: String
+    public var timeoutSeconds: UInt64
+    public var sandboxEnabled: Bool
+    public var allowNetwork: Bool
+    public var allowedRuntimes: [String]
+    public var workingDirectory: String?
+    public var passEnv: [String]
+    public var blockedCommands: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(enabled: Bool, defaultRuntime: String, timeoutSeconds: UInt64, sandboxEnabled: Bool, allowNetwork: Bool, allowedRuntimes: [String], workingDirectory: String?, passEnv: [String], blockedCommands: [String]) {
+        self.enabled = enabled
+        self.defaultRuntime = defaultRuntime
+        self.timeoutSeconds = timeoutSeconds
+        self.sandboxEnabled = sandboxEnabled
+        self.allowNetwork = allowNetwork
+        self.allowedRuntimes = allowedRuntimes
+        self.workingDirectory = workingDirectory
+        self.passEnv = passEnv
+        self.blockedCommands = blockedCommands
+    }
+}
+
+
+
+extension CodeExecConfigFfi: Equatable, Hashable {
+    public static func ==(lhs: CodeExecConfigFfi, rhs: CodeExecConfigFfi) -> Bool {
+        if lhs.enabled != rhs.enabled {
+            return false
+        }
+        if lhs.defaultRuntime != rhs.defaultRuntime {
+            return false
+        }
+        if lhs.timeoutSeconds != rhs.timeoutSeconds {
+            return false
+        }
+        if lhs.sandboxEnabled != rhs.sandboxEnabled {
+            return false
+        }
+        if lhs.allowNetwork != rhs.allowNetwork {
+            return false
+        }
+        if lhs.allowedRuntimes != rhs.allowedRuntimes {
+            return false
+        }
+        if lhs.workingDirectory != rhs.workingDirectory {
+            return false
+        }
+        if lhs.passEnv != rhs.passEnv {
+            return false
+        }
+        if lhs.blockedCommands != rhs.blockedCommands {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(enabled)
+        hasher.combine(defaultRuntime)
+        hasher.combine(timeoutSeconds)
+        hasher.combine(sandboxEnabled)
+        hasher.combine(allowNetwork)
+        hasher.combine(allowedRuntimes)
+        hasher.combine(workingDirectory)
+        hasher.combine(passEnv)
+        hasher.combine(blockedCommands)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCodeExecConfigFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CodeExecConfigFfi {
+        return
+            try CodeExecConfigFfi(
+                enabled: FfiConverterBool.read(from: &buf), 
+                defaultRuntime: FfiConverterString.read(from: &buf), 
+                timeoutSeconds: FfiConverterUInt64.read(from: &buf), 
+                sandboxEnabled: FfiConverterBool.read(from: &buf), 
+                allowNetwork: FfiConverterBool.read(from: &buf), 
+                allowedRuntimes: FfiConverterSequenceString.read(from: &buf), 
+                workingDirectory: FfiConverterOptionString.read(from: &buf), 
+                passEnv: FfiConverterSequenceString.read(from: &buf), 
+                blockedCommands: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CodeExecConfigFfi, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterString.write(value.defaultRuntime, into: &buf)
+        FfiConverterUInt64.write(value.timeoutSeconds, into: &buf)
+        FfiConverterBool.write(value.sandboxEnabled, into: &buf)
+        FfiConverterBool.write(value.allowNetwork, into: &buf)
+        FfiConverterSequenceString.write(value.allowedRuntimes, into: &buf)
+        FfiConverterOptionString.write(value.workingDirectory, into: &buf)
+        FfiConverterSequenceString.write(value.passEnv, into: &buf)
+        FfiConverterSequenceString.write(value.blockedCommands, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCodeExecConfigFFI_lift(_ buf: RustBuffer) throws -> CodeExecConfigFfi {
+    return try FfiConverterTypeCodeExecConfigFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCodeExecConfigFFI_lower(_ value: CodeExecConfigFfi) -> RustBuffer {
+    return FfiConverterTypeCodeExecConfigFFI.lower(value)
 }
 
 
@@ -9674,6 +9814,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_cowork_execute() != 42847) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_get_code_exec_config() != 38916) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_cowork_get_config() != 16398) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -9696,6 +9839,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_cowork_subscribe() != 18543) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_update_code_exec_config() != 21281) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_cowork_update_config() != 43915) {

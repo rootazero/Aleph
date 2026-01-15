@@ -150,9 +150,10 @@ pub use crate::vision::{
 };
 // Cowork FFI exports (task orchestration)
 pub use crate::cowork_ffi::{
-    CoworkConfigFFI, CoworkExecutionState, CoworkExecutionSummaryFFI, CoworkProgressEventFFI,
-    CoworkProgressEventType, CoworkProgressHandler, CoworkTaskDependencyFFI, CoworkTaskFFI,
-    CoworkTaskGraphFFI, CoworkTaskStatusState, CoworkTaskTypeCategory, FfiProgressSubscriber,
+    CodeExecConfigFFI, CoworkConfigFFI, CoworkExecutionState, CoworkExecutionSummaryFFI,
+    CoworkProgressEventFFI, CoworkProgressEventType, CoworkProgressHandler,
+    CoworkTaskDependencyFFI, CoworkTaskFFI, CoworkTaskGraphFFI, CoworkTaskStatusState,
+    CoworkTaskTypeCategory, FfiProgressSubscriber,
 };
 
 // Core interface exports (rig-core based architecture)

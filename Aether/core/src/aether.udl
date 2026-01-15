@@ -939,6 +939,15 @@ interface AetherCore {
 
     // Subscribe to progress events
     void cowork_subscribe(CoworkProgressHandler handler);
+
+    // ===== CODE EXECUTION CONFIG =====
+
+    // Get code execution configuration
+    CodeExecConfigFFI cowork_get_code_exec_config();
+
+    // Update code execution configuration
+    [Throws=AetherFfiError]
+    void cowork_update_code_exec_config(CodeExecConfigFFI config);
 };
 
 dictionary ProcessOptions {
@@ -1000,6 +1009,19 @@ dictionary CoworkConfigFFI {
   boolean require_confirmation;  // Require user confirmation before execution
   u32 max_parallelism;           // Max parallel tasks
   boolean dry_run;               // Dry-run mode (no actual execution)
+};
+
+// Code execution configuration (Phase 3)
+dictionary CodeExecConfigFFI {
+  boolean enabled;                    // Enable code execution (disabled by default)
+  string default_runtime;             // Default runtime (shell, python, node)
+  u64 timeout_seconds;                // Execution timeout in seconds
+  boolean sandbox_enabled;            // Enable sandboxed execution
+  boolean allow_network;              // Allow network access in sandbox
+  sequence<string> allowed_runtimes;  // Allowed runtimes (empty = all)
+  string? working_directory;          // Working directory for executions
+  sequence<string> pass_env;          // Environment variables to pass
+  sequence<string> blocked_commands;  // Blocked command patterns
 };
 
 // Cowork task (simplified for FFI)

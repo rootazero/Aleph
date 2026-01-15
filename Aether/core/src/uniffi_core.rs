@@ -1970,6 +1970,38 @@ impl AetherCore {
             info!("Cowork progress subscriber added");
         }
     }
+
+    // ===== CODE EXECUTION CONFIG =====
+
+    /// Get code execution configuration
+    pub fn cowork_get_code_exec_config(&self) -> crate::cowork_ffi::CodeExecConfigFFI {
+        // Load from config file or return defaults
+        match crate::config::Config::load() {
+            Ok(cfg) => crate::cowork_ffi::CodeExecConfigFFI::from(cfg.cowork.code_exec),
+            Err(_) => crate::cowork_ffi::CodeExecConfigFFI::default(),
+        }
+    }
+
+    /// Update code execution configuration
+    pub fn cowork_update_code_exec_config(
+        &self,
+        config: crate::cowork_ffi::CodeExecConfigFFI,
+    ) -> Result<(), AetherFfiError> {
+        // Load current config
+        let mut full_config = crate::config::Config::load()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to load config: {}", e)))?;
+
+        // Update code_exec section
+        full_config.cowork.code_exec = config.into();
+
+        // Save to file
+        full_config
+            .save()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to save config: {}", e)))?;
+
+        info!("Code execution configuration updated");
+        Ok(())
+    }
 }
 
 /// Initialize AetherCore
