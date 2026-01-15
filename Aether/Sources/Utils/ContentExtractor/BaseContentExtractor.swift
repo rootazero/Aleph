@@ -130,6 +130,7 @@ class BaseContentExtractor {
             mediaType: "image",
             mimeType: mimeType,
             data: base64Data,
+            encoding: "base64",
             filename: filename,
             sizeBytes: UInt64(data.count)
         )
@@ -147,6 +148,7 @@ class BaseContentExtractor {
             mediaType: "document",
             mimeType: mimeType,
             data: content,
+            encoding: "utf8",
             filename: filename,
             sizeBytes: UInt64(content.utf8.count)
         )

@@ -81,6 +81,7 @@ final class DirectImageExtractor: ContentExtractor {
                     mediaType: "image",
                     mimeType: finalMimeType,
                     data: base64Data,
+                    encoding: "base64",
                     filename: nil,
                     sizeBytes: sizeBytes
                 )

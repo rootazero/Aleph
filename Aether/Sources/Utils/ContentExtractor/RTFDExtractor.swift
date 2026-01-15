@@ -153,6 +153,7 @@ final class RTFDExtractor: ContentExtractor {
                 mediaType: "image",
                 mimeType: finalMimeType,
                 data: base64Data,
+                encoding: "base64",
                 filename: filename,
                 sizeBytes: finalSizeBytes
             )

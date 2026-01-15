@@ -97,6 +97,7 @@ final class FileImageExtractor: ContentExtractor {
                 mediaType: "image",
                 mimeType: finalMimeType,
                 data: base64Data,
+                encoding: "base64",
                 filename: url.lastPathComponent,
                 sizeBytes: finalSizeBytes
             )

@@ -121,6 +121,7 @@ final class DocumentExtractor: ContentExtractor {
                 mediaType: "document",
                 mimeType: mimeType,
                 data: truncatedContent,
+                encoding: "utf8",
                 filename: url.lastPathComponent,
                 sizeBytes: UInt64(truncatedContent.utf8.count)
             )

@@ -8,12 +8,18 @@
 //! - AppMemoryInfo: App memory info for UI
 
 /// Media attachment for multimodal content (add-multimodal-content-support)
-/// Supports images, videos, and files from clipboard
+/// Supports images, videos, and documents from clipboard
+///
+/// # Encoding
+/// The `data` field format depends on the `encoding` field:
+/// - "base64": Binary content encoded as Base64 (images, PDFs)
+/// - "utf8": Plain text content (markdown, txt, extracted text)
 #[derive(Debug, Clone)]
 pub struct MediaAttachment {
-    pub media_type: String,   // "image", "video", "file"
-    pub mime_type: String,    // "image/png", "image/jpeg", "video/mp4", etc.
-    pub data: String,         // Base64-encoded content
+    pub media_type: String,   // "image", "document", "video", "file"
+    pub mime_type: String,    // "image/png", "text/markdown", "application/pdf", etc.
+    pub data: String,         // Content (format depends on `encoding` field)
+    pub encoding: String,     // "base64" | "utf8" - specifies data format
     pub filename: Option<String>, // Optional original filename
     pub size_bytes: u64,      // Original size in bytes for logging/validation
 }

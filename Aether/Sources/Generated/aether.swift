@@ -3299,15 +3299,17 @@ public struct MediaAttachment {
     public var mediaType: String
     public var mimeType: String
     public var data: String
+    public var encoding: String
     public var filename: String?
     public var sizeBytes: UInt64
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(mediaType: String, mimeType: String, data: String, filename: String?, sizeBytes: UInt64) {
+    public init(mediaType: String, mimeType: String, data: String, encoding: String, filename: String?, sizeBytes: UInt64) {
         self.mediaType = mediaType
         self.mimeType = mimeType
         self.data = data
+        self.encoding = encoding
         self.filename = filename
         self.sizeBytes = sizeBytes
     }
@@ -3326,6 +3328,9 @@ extension MediaAttachment: Equatable, Hashable {
         if lhs.data != rhs.data {
             return false
         }
+        if lhs.encoding != rhs.encoding {
+            return false
+        }
         if lhs.filename != rhs.filename {
             return false
         }
@@ -3339,6 +3344,7 @@ extension MediaAttachment: Equatable, Hashable {
         hasher.combine(mediaType)
         hasher.combine(mimeType)
         hasher.combine(data)
+        hasher.combine(encoding)
         hasher.combine(filename)
         hasher.combine(sizeBytes)
     }
@@ -3355,6 +3361,7 @@ public struct FfiConverterTypeMediaAttachment: FfiConverterRustBuffer {
                 mediaType: FfiConverterString.read(from: &buf), 
                 mimeType: FfiConverterString.read(from: &buf), 
                 data: FfiConverterString.read(from: &buf), 
+                encoding: FfiConverterString.read(from: &buf), 
                 filename: FfiConverterOptionString.read(from: &buf), 
                 sizeBytes: FfiConverterUInt64.read(from: &buf)
         )
@@ -3364,6 +3371,7 @@ public struct FfiConverterTypeMediaAttachment: FfiConverterRustBuffer {
         FfiConverterString.write(value.mediaType, into: &buf)
         FfiConverterString.write(value.mimeType, into: &buf)
         FfiConverterString.write(value.data, into: &buf)
+        FfiConverterString.write(value.encoding, into: &buf)
         FfiConverterOptionString.write(value.filename, into: &buf)
         FfiConverterUInt64.write(value.sizeBytes, into: &buf)
     }

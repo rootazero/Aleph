@@ -534,11 +534,16 @@ dictionary CapturedContext {
 };
 
 // Media attachment for multimodal content (add-multimodal-content-support)
-// Supports images, videos, and files from clipboard
+// Supports images, documents, videos, and files from clipboard
+//
+// Encoding field specifies data format:
+// - "base64": Binary content encoded as Base64 (images, PDFs)
+// - "utf8": Plain text content (markdown, txt, extracted text)
 dictionary MediaAttachment {
-  string media_type;    // "image", "video", "file"
-  string mime_type;     // "image/png", "image/jpeg", "video/mp4", etc.
-  string data;          // Base64-encoded content
+  string media_type;    // "image", "document", "video", "file"
+  string mime_type;     // "image/png", "text/markdown", "application/pdf", etc.
+  string data;          // Content (format depends on `encoding` field)
+  string encoding;      // "base64" | "utf8" - specifies data format
   string? filename;     // Optional original filename
   u64 size_bytes;       // Original size in bytes for logging/validation
 };

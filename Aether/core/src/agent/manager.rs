@@ -23,7 +23,7 @@ use rig::tool::server::{ToolServer, ToolServerHandle};
 use rig::tool::{ToolDyn, ToolSet};
 use rig::OneOrMany;
 use std::sync::{Arc, RwLock};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Response from agent processing
 #[derive(Debug, Clone)]
@@ -389,34 +389,63 @@ impl RigAgentManager {
     }
 
     /// Build a multimodal Message from text input and attachments
+    ///
+    /// Handles both image and document attachments based on their encoding:
+    /// - encoding == "base64": Binary content (images) - sent as Image content
+    /// - encoding == "utf8": Text content (documents) - sent as Text content with header
     fn build_multimodal_message(&self, input: &str, attachments: &[MediaAttachment]) -> Message {
         let mut content_items: Vec<UserContent> = Vec::new();
 
         // Add text content first (even if empty, to have at least one item)
         content_items.push(UserContent::Text(Text {
             text: if input.is_empty() {
-                "Describe this image in detail.".to_string()
+                "Describe this content in detail.".to_string()
             } else {
                 input.to_string()
             },
         }));
 
-        // Add image attachments
+        // Process attachments based on encoding
         for attachment in attachments {
-            if attachment.media_type == "image" {
-                let media_type = match attachment.mime_type.as_str() {
-                    "image/png" => Some(ImageMediaType::PNG),
-                    "image/jpeg" => Some(ImageMediaType::JPEG),
-                    "image/gif" => Some(ImageMediaType::GIF),
-                    "image/webp" => Some(ImageMediaType::WEBP),
-                    _ => None,
-                };
-                content_items.push(UserContent::Image(Image {
-                    data: DocumentSourceKind::base64(&attachment.data),
-                    media_type,
-                    detail: None,
-                    additional_params: None,
-                }));
+            match attachment.encoding.as_str() {
+                "base64" => {
+                    // Binary content (images) - only process if media_type is image
+                    if attachment.media_type == "image" {
+                        let media_type = match attachment.mime_type.as_str() {
+                            "image/png" => Some(ImageMediaType::PNG),
+                            "image/jpeg" => Some(ImageMediaType::JPEG),
+                            "image/gif" => Some(ImageMediaType::GIF),
+                            "image/webp" => Some(ImageMediaType::WEBP),
+                            _ => None,
+                        };
+                        content_items.push(UserContent::Image(Image {
+                            data: DocumentSourceKind::base64(&attachment.data),
+                            media_type,
+                            detail: None,
+                            additional_params: None,
+                        }));
+                    }
+                }
+                "utf8" => {
+                    // Text content (documents) - add as text block with header
+                    let filename = attachment.filename.as_deref().unwrap_or("document");
+                    let doc_content = format!(
+                        "\n\n--- {} ---\n{}",
+                        filename,
+                        attachment.data
+                    );
+                    content_items.push(UserContent::Text(Text {
+                        text: doc_content,
+                    }));
+                }
+                _ => {
+                    // Unknown encoding - log and skip
+                    warn!(
+                        encoding = %attachment.encoding,
+                        media_type = %attachment.media_type,
+                        "Unknown attachment encoding, skipping"
+                    );
+                }
             }
         }
 
