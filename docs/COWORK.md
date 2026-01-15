@@ -267,6 +267,58 @@ For security, these paths are always denied regardless of configuration:
 - `/etc/shadow` - System shadow file
 - `/etc/sudoers` - Sudo configuration
 
+### Code Execution Configuration
+
+```toml
+[cowork.code_exec]
+# Enable code execution (DISABLED by default for security)
+enabled = false
+
+# Default runtime for code execution
+default_runtime = "shell"
+
+# Execution timeout in seconds
+timeout_seconds = 60
+
+# Enable sandboxed execution (macOS sandbox-exec)
+sandbox_enabled = true
+
+# Allowed runtimes (empty = all)
+allowed_runtimes = ["shell", "python"]
+
+# Allow network access in sandbox
+allow_network = false
+
+# Working directory for executions
+working_directory = "~/Downloads"
+
+# Environment variables to pass to executed code
+pass_env = ["PATH", "HOME", "USER"]
+
+# Blocked command patterns (regex)
+blocked_commands = ["rm\\s+-rf\\s+/", "sudo\\s+"]
+```
+
+### Supported Runtimes
+
+| Runtime | Command | Use Case |
+|---------|---------|----------|
+| Shell | `bash`, `zsh` | System commands, file processing |
+| Python | `python3` | Data analysis, scripts |
+| Node.js | `node` | Web-related, JSON processing |
+| Ruby | `ruby` | Scripting |
+
+### Default Blocked Commands
+
+For security, these command patterns are always blocked:
+
+- `rm -rf /` - Recursive delete root
+- `rm -rf ~` - Recursive delete home
+- `sudo *` - Privilege escalation
+- `chmod 777 /` - Dangerous permissions
+- Fork bomb patterns
+- Disk overwrite commands (`dd`, `mkfs`)
+
 ### Settings UI
 
 Access via: **Settings → Cowork**
@@ -379,9 +431,8 @@ Test categories:
 
 ## Future Enhancements
 
-### Phase 2 - File Operations (In Progress)
+### Phase 2 - File Operations (Complete)
 
-**Completed:**
 - ✅ FileOpsExecutor implementation (Read, Write, Move, Copy, Delete, Search, List)
 - ✅ Permission system with allowed/denied paths
 - ✅ Glob pattern support for path matching
@@ -390,22 +441,32 @@ Test categories:
 - ✅ Configuration types (FileOpsConfigToml)
 - ✅ Integration with CoworkEngine
 
-**Remaining:**
-- [ ] Swift UI settings for file_ops
-- [ ] Atomic batch operations with rollback
-- [ ] Parallel IO with configurable concurrency
+### Phase 3 - Code Execution (In Progress)
 
-### Phase 3 (Planned)
-- Code execution executor
-- AppleScript automation executor
-- Checkpoint/resume for long-running graphs
-- Task result caching
+**Completed:**
+- ✅ CodeExecutor implementation (Shell, Python, Node.js)
+- ✅ RuntimeInfo for detecting available runtimes
+- ✅ CommandChecker for blocking dangerous commands
+- ✅ SandboxConfig for macOS sandbox-exec profiles
+- ✅ Timeout handling with process cleanup
+- ✅ Output capture with size limits (10MB stdout, 1MB stderr)
+- ✅ Configuration types (CodeExecConfigToml)
+- ✅ Integration with CoworkEngine
+- ✅ 73 tests passing
+
+**Remaining:**
+- [ ] Swift UI settings for code_exec
+- [ ] Runtime availability caching
+- [ ] Sandbox integration tests
+- [ ] AppleScript automation executor
 
 ### Phase 4 (Planned)
 - Visual DAG editor in UI
 - Custom task type definitions
 - Workflow templates
 - Multi-graph orchestration
+- Checkpoint/resume for long-running graphs
+- Task result caching
 
 ## Files Reference
 
@@ -417,11 +478,12 @@ Test categories:
 | `core/src/cowork/scheduler/` | DAG scheduler |
 | `core/src/cowork/executor/` | Executor trait and registry |
 | `core/src/cowork/executor/file_ops.rs` | File operations executor |
+| `core/src/cowork/executor/code_exec.rs` | Code execution executor |
 | `core/src/cowork/executor/permission.rs` | Path permission checking |
 | `core/src/cowork/monitor/` | Progress events and tracking |
 | `core/src/cowork/engine.rs` | CoworkEngine unified API |
 | `core/src/cowork_ffi.rs` | UniFFI type conversions |
-| `core/src/config/types/cowork.rs` | Configuration types (incl. FileOpsConfigToml) |
+| `core/src/config/types/cowork.rs` | Configuration types (FileOpsConfigToml, CodeExecConfigToml) |
 | `Sources/CoworkSettingsView.swift` | Settings UI |
 | `Sources/Components/CoworkConfirmationView.swift` | Confirmation UI |
 | `Sources/Components/CoworkProgressView.swift` | Progress UI |

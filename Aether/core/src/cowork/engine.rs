@@ -139,6 +139,30 @@ impl CoworkEngine {
         }
     }
 
+    /// Register the CodeExecutor with the given configuration
+    ///
+    /// This should be called after creating the engine to enable code execution.
+    /// Code execution is disabled by default for security reasons.
+    pub fn register_code_executor(
+        &mut self,
+        config: crate::config::types::cowork::CodeExecConfigToml,
+        file_ops_config: &crate::config::types::cowork::FileOpsConfigToml,
+    ) {
+        if config.enabled {
+            // Create permission checker from file_ops config (shared permission model)
+            let permission_checker = crate::cowork::executor::PathPermissionChecker::new(
+                file_ops_config.allowed_paths.clone(),
+                file_ops_config.denied_paths.clone(),
+                file_ops_config.max_file_size,
+            );
+            let executor = config.create_executor(permission_checker);
+            self.executors.register("code_exec", Arc::new(executor));
+            info!("Registered CodeExecutor");
+        } else {
+            debug!("CodeExecutor disabled by configuration (default)");
+        }
+    }
+
     /// Subscribe to progress events
     pub fn subscribe(&self, subscriber: Arc<dyn ProgressSubscriber>) {
         self.monitor.subscribe(subscriber);

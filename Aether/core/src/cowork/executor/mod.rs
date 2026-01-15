@@ -2,11 +2,13 @@
 //!
 //! This module provides the executor registry and trait for task execution.
 
+mod code_exec;
 mod file_ops;
 mod noop;
 mod permission;
 mod registry;
 
+pub use code_exec::{CodeExecError, CodeExecResult, CodeExecutor, CommandChecker, RuntimeInfo};
 pub use file_ops::FileOpsExecutor;
 pub use noop::NoopExecutor;
 pub use permission::{FileOpError, PathPermissionChecker};
