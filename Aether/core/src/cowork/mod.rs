@@ -46,6 +46,7 @@
 //! ```
 
 pub mod executor;
+pub mod model_router;
 pub mod monitor;
 pub mod planner;
 pub mod scheduler;
@@ -63,4 +64,7 @@ pub use types::{
     AiTask, AppAuto, CodeExec, DocGen, ExecutionSummary, FileOp, GraphValidationError, Language,
     Task, TaskCountByStatus, TaskDependency, TaskGraph, TaskGraphMeta, TaskResult, TaskStatus,
     TaskType,
+};
+pub use model_router::{
+    Capability, CostStrategy, CostTier, LatencyTier, ModelProfile, ModelRoutingRules,
 };

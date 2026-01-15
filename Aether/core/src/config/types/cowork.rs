@@ -3,11 +3,15 @@
 //! Contains Cowork task orchestration configuration:
 //! - CoworkConfigToml: Main configuration for the Cowork engine
 //! - FileOpsConfigToml: File operations executor configuration
+//! - ModelProfileConfigToml: AI model profile configuration
+//! - ModelRoutingConfigToml: Multi-model routing configuration
 //!
 //! Cowork is a multi-task orchestration system that decomposes complex requests
 //! into DAG-structured task graphs and executes them with parallel scheduling.
 
+use crate::cowork::model_router::{Capability, CostStrategy, CostTier, LatencyTier, ModelProfile, ModelRoutingRules};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 // =============================================================================
 // CoworkConfigToml
@@ -92,6 +96,15 @@ pub struct CoworkConfigToml {
     /// Code execution configuration
     #[serde(default)]
     pub code_exec: CodeExecConfigToml,
+
+    /// Model profiles configuration
+    /// Maps profile ID to profile configuration
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub model_profiles: HashMap<String, ModelProfileConfigToml>,
+
+    /// Model routing configuration
+    #[serde(default)]
+    pub model_routing: ModelRoutingConfigToml,
 }
 
 // =============================================================================
@@ -297,6 +310,354 @@ impl CodeExecConfigToml {
     }
 }
 
+// =============================================================================
+// ModelProfileConfigToml
+// =============================================================================
+
+/// Model profile configuration from TOML
+///
+/// Defines an AI model's capabilities, cost tier, and performance characteristics.
+/// Used for intelligent task-to-model routing in multi-model pipelines.
+///
+/// # Example TOML
+/// ```toml
+/// [cowork.model_profiles.claude-opus]
+/// provider = "anthropic"
+/// model = "claude-opus-4"
+/// capabilities = ["reasoning", "code_generation", "long_context"]
+/// cost_tier = "high"
+/// latency_tier = "slow"
+/// max_context = 200000
+///
+/// [cowork.model_profiles.ollama-llama]
+/// provider = "ollama"
+/// model = "llama3.2"
+/// capabilities = ["local_privacy", "fast_response"]
+/// cost_tier = "free"
+/// local = true
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelProfileConfigToml {
+    /// Provider name (anthropic, openai, google, ollama)
+    pub provider: String,
+
+    /// Model name for API calls
+    pub model: String,
+
+    /// Capability tags for this model
+    #[serde(default)]
+    pub capabilities: Vec<Capability>,
+
+    /// Cost tier for cost-aware routing
+    #[serde(default)]
+    pub cost_tier: CostTier,
+
+    /// Latency tier for latency-sensitive tasks
+    #[serde(default)]
+    pub latency_tier: LatencyTier,
+
+    /// Maximum context window in tokens
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_context: Option<u32>,
+
+    /// Whether this is a local model (no network calls)
+    #[serde(default)]
+    pub local: bool,
+
+    /// Custom parameters for provider-specific settings
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameters: Option<serde_json::Value>,
+}
+
+impl ModelProfileConfigToml {
+    /// Convert to ModelProfile with the given ID
+    pub fn to_model_profile(&self, id: String) -> ModelProfile {
+        ModelProfile {
+            id,
+            provider: self.provider.clone(),
+            model: self.model.clone(),
+            capabilities: self.capabilities.clone(),
+            cost_tier: self.cost_tier,
+            latency_tier: self.latency_tier,
+            max_context: self.max_context,
+            local: self.local,
+            parameters: self.parameters.clone(),
+        }
+    }
+
+    /// Validate the model profile configuration
+    pub fn validate(&self, profile_id: &str) -> Result<(), String> {
+        // Validate provider is not empty
+        if self.provider.is_empty() {
+            return Err(format!(
+                "cowork.model_profiles.{}.provider cannot be empty",
+                profile_id
+            ));
+        }
+
+        // Validate model is not empty
+        if self.model.is_empty() {
+            return Err(format!(
+                "cowork.model_profiles.{}.model cannot be empty",
+                profile_id
+            ));
+        }
+
+        // Validate known providers
+        let known_providers = ["anthropic", "openai", "google", "ollama", "gemini"];
+        if !known_providers.contains(&self.provider.as_str()) {
+            tracing::warn!(
+                profile_id = profile_id,
+                provider = self.provider,
+                "Unknown provider in model profile, routing may not work"
+            );
+        }
+
+        // Validate max_context if specified
+        if let Some(max_ctx) = self.max_context {
+            if max_ctx == 0 {
+                return Err(format!(
+                    "cowork.model_profiles.{}.max_context must be greater than 0",
+                    profile_id
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// =============================================================================
+// ModelRoutingConfigToml
+// =============================================================================
+
+/// Model routing configuration from TOML
+///
+/// Defines how tasks are routed to different AI models based on task type,
+/// required capabilities, and cost optimization strategy.
+///
+/// # Example TOML
+/// ```toml
+/// [cowork.model_routing]
+/// code_generation = "claude-opus"
+/// code_review = "claude-sonnet"
+/// image_analysis = "gpt-4o"
+/// video_understanding = "gemini-pro"
+/// long_document = "gemini-pro"
+/// quick_tasks = "claude-haiku"
+/// privacy_sensitive = "ollama-llama"
+/// reasoning = "claude-opus"
+/// cost_strategy = "balanced"
+/// enable_pipelines = true
+/// default_model = "claude-sonnet"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelRoutingConfigToml {
+    /// Model for code generation tasks
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_generation: Option<String>,
+
+    /// Model for code review tasks
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_review: Option<String>,
+
+    /// Model for image analysis tasks
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_analysis: Option<String>,
+
+    /// Model for video understanding tasks
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_understanding: Option<String>,
+
+    /// Model for long document processing
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_document: Option<String>,
+
+    /// Model for quick/simple tasks
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quick_tasks: Option<String>,
+
+    /// Model for privacy-sensitive tasks (should be local)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy_sensitive: Option<String>,
+
+    /// Model for complex reasoning tasks
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+
+    /// Cost optimization strategy
+    #[serde(default)]
+    pub cost_strategy: CostStrategy,
+
+    /// Enable multi-model pipeline execution
+    #[serde(default = "default_enable_pipelines")]
+    pub enable_pipelines: bool,
+
+    /// Default model when no specific routing rule matches
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+
+    /// User overrides for specific task types
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub overrides: HashMap<String, String>,
+}
+
+fn default_enable_pipelines() -> bool {
+    true
+}
+
+impl Default for ModelRoutingConfigToml {
+    fn default() -> Self {
+        Self {
+            code_generation: None,
+            code_review: None,
+            image_analysis: None,
+            video_understanding: None,
+            long_document: None,
+            quick_tasks: None,
+            privacy_sensitive: None,
+            reasoning: None,
+            cost_strategy: CostStrategy::default(),
+            enable_pipelines: true,
+            default_model: None,
+            overrides: HashMap::new(),
+        }
+    }
+}
+
+impl ModelRoutingConfigToml {
+    /// Convert to ModelRoutingRules
+    pub fn to_routing_rules(&self) -> ModelRoutingRules {
+        let mut rules = ModelRoutingRules::default();
+
+        // Set cost strategy
+        rules.cost_strategy = self.cost_strategy;
+        rules.enable_pipelines = self.enable_pipelines;
+        rules.default_model = self.default_model.clone();
+
+        // Add task type mappings
+        if let Some(ref model) = self.code_generation {
+            rules.task_type_mappings.insert("code_generation".to_string(), model.clone());
+        }
+        if let Some(ref model) = self.code_review {
+            rules.task_type_mappings.insert("code_review".to_string(), model.clone());
+        }
+        if let Some(ref model) = self.image_analysis {
+            rules.task_type_mappings.insert("image_analysis".to_string(), model.clone());
+        }
+        if let Some(ref model) = self.video_understanding {
+            rules.task_type_mappings.insert("video_understanding".to_string(), model.clone());
+        }
+        if let Some(ref model) = self.long_document {
+            rules.task_type_mappings.insert("long_document".to_string(), model.clone());
+        }
+        if let Some(ref model) = self.quick_tasks {
+            rules.task_type_mappings.insert("quick_tasks".to_string(), model.clone());
+        }
+        if let Some(ref model) = self.privacy_sensitive {
+            rules.task_type_mappings.insert("privacy_sensitive".to_string(), model.clone());
+        }
+        if let Some(ref model) = self.reasoning {
+            rules.task_type_mappings.insert("reasoning".to_string(), model.clone());
+        }
+
+        // Add user overrides
+        for (task_type, model) in &self.overrides {
+            rules.task_type_mappings.insert(task_type.clone(), model.clone());
+        }
+
+        // Add capability mappings based on task types
+        if let Some(ref model) = self.code_generation {
+            rules.capability_mappings.insert(Capability::CodeGeneration, model.clone());
+        }
+        if let Some(ref model) = self.code_review {
+            rules.capability_mappings.insert(Capability::CodeReview, model.clone());
+        }
+        if let Some(ref model) = self.image_analysis {
+            rules.capability_mappings.insert(Capability::ImageUnderstanding, model.clone());
+        }
+        if let Some(ref model) = self.video_understanding {
+            rules.capability_mappings.insert(Capability::VideoUnderstanding, model.clone());
+        }
+        if let Some(ref model) = self.long_document {
+            rules.capability_mappings.insert(Capability::LongDocument, model.clone());
+        }
+        if let Some(ref model) = self.quick_tasks {
+            rules.capability_mappings.insert(Capability::FastResponse, model.clone());
+        }
+        if let Some(ref model) = self.privacy_sensitive {
+            rules.capability_mappings.insert(Capability::LocalPrivacy, model.clone());
+        }
+        if let Some(ref model) = self.reasoning {
+            rules.capability_mappings.insert(Capability::Reasoning, model.clone());
+        }
+
+        rules
+    }
+
+    /// Validate routing configuration against available model profiles
+    pub fn validate(&self, available_profiles: &[&str]) -> Result<(), String> {
+        let profile_set: std::collections::HashSet<&str> = available_profiles.iter().copied().collect();
+
+        // Helper to validate a model reference
+        let validate_model = |model: &Option<String>, field: &str| -> Result<(), String> {
+            if let Some(ref model_id) = model {
+                if !profile_set.contains(model_id.as_str()) {
+                    return Err(format!(
+                        "cowork.model_routing.{} references unknown profile '{}'. Available: {:?}",
+                        field, model_id, available_profiles
+                    ));
+                }
+            }
+            Ok(())
+        };
+
+        // Validate all model references
+        validate_model(&self.code_generation, "code_generation")?;
+        validate_model(&self.code_review, "code_review")?;
+        validate_model(&self.image_analysis, "image_analysis")?;
+        validate_model(&self.video_understanding, "video_understanding")?;
+        validate_model(&self.long_document, "long_document")?;
+        validate_model(&self.quick_tasks, "quick_tasks")?;
+        validate_model(&self.privacy_sensitive, "privacy_sensitive")?;
+        validate_model(&self.reasoning, "reasoning")?;
+        validate_model(&self.default_model, "default_model")?;
+
+        // Validate overrides
+        for (task_type, model_id) in &self.overrides {
+            if !profile_set.contains(model_id.as_str()) {
+                return Err(format!(
+                    "cowork.model_routing.overrides.{} references unknown profile '{}'. Available: {:?}",
+                    task_type, model_id, available_profiles
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Get all model IDs referenced in routing config
+    pub fn referenced_model_ids(&self) -> Vec<&str> {
+        let mut ids = Vec::new();
+
+        if let Some(ref m) = self.code_generation { ids.push(m.as_str()); }
+        if let Some(ref m) = self.code_review { ids.push(m.as_str()); }
+        if let Some(ref m) = self.image_analysis { ids.push(m.as_str()); }
+        if let Some(ref m) = self.video_understanding { ids.push(m.as_str()); }
+        if let Some(ref m) = self.long_document { ids.push(m.as_str()); }
+        if let Some(ref m) = self.quick_tasks { ids.push(m.as_str()); }
+        if let Some(ref m) = self.privacy_sensitive { ids.push(m.as_str()); }
+        if let Some(ref m) = self.reasoning { ids.push(m.as_str()); }
+        if let Some(ref m) = self.default_model { ids.push(m.as_str()); }
+
+        for m in self.overrides.values() {
+            ids.push(m.as_str());
+        }
+
+        ids
+    }
+}
+
 // Code execution default functions
 fn default_code_exec_enabled() -> bool {
     false // Disabled by default for security
@@ -447,6 +808,8 @@ impl Default for CoworkConfigToml {
             blocked_categories: Vec::new(),
             file_ops: FileOpsConfigToml::default(),
             code_exec: CodeExecConfigToml::default(),
+            model_profiles: HashMap::new(),
+            model_routing: ModelRoutingConfigToml::default(),
         }
     }
 }
@@ -592,7 +955,36 @@ impl CoworkConfigToml {
         // Validate code_exec configuration
         self.code_exec.validate()?;
 
+        // Validate model profiles
+        for (profile_id, profile_config) in &self.model_profiles {
+            profile_config.validate(profile_id)?;
+        }
+
+        // Validate model routing (check profile references)
+        let profile_ids: Vec<&str> = self.model_profiles.keys().map(|s| s.as_str()).collect();
+        self.model_routing.validate(&profile_ids)?;
+
         Ok(())
+    }
+
+    /// Get all model profiles as ModelProfile objects
+    pub fn get_model_profiles(&self) -> Vec<ModelProfile> {
+        self.model_profiles
+            .iter()
+            .map(|(id, config)| config.to_model_profile(id.clone()))
+            .collect()
+    }
+
+    /// Get model routing rules
+    pub fn get_routing_rules(&self) -> ModelRoutingRules {
+        self.model_routing.to_routing_rules()
+    }
+
+    /// Get a specific model profile by ID
+    pub fn get_model_profile(&self, id: &str) -> Option<ModelProfile> {
+        self.model_profiles
+            .get(id)
+            .map(|config| config.to_model_profile(id.to_string()))
     }
 
     /// Check if a task category is allowed
@@ -747,5 +1139,328 @@ mod tests {
         let config = CoworkConfigToml::default();
         assert!(config.file_ops.enabled);
         assert!(config.file_ops.require_confirmation_for_write);
+    }
+
+    // =========================================================================
+    // ModelProfileConfigToml Tests
+    // =========================================================================
+
+    #[test]
+    fn test_model_profile_config_to_model_profile() {
+        let config = ModelProfileConfigToml {
+            provider: "anthropic".to_string(),
+            model: "claude-opus-4".to_string(),
+            capabilities: vec![Capability::Reasoning, Capability::CodeGeneration],
+            cost_tier: CostTier::High,
+            latency_tier: LatencyTier::Slow,
+            max_context: Some(200_000),
+            local: false,
+            parameters: None,
+        };
+
+        let profile = config.to_model_profile("claude-opus".to_string());
+        assert_eq!(profile.id, "claude-opus");
+        assert_eq!(profile.provider, "anthropic");
+        assert_eq!(profile.model, "claude-opus-4");
+        assert!(profile.has_capability(Capability::Reasoning));
+        assert!(profile.has_capability(Capability::CodeGeneration));
+        assert_eq!(profile.cost_tier, CostTier::High);
+        assert_eq!(profile.latency_tier, LatencyTier::Slow);
+        assert_eq!(profile.max_context, Some(200_000));
+        assert!(!profile.local);
+    }
+
+    #[test]
+    fn test_model_profile_config_validation() {
+        // Valid config
+        let valid = ModelProfileConfigToml {
+            provider: "anthropic".to_string(),
+            model: "claude-opus-4".to_string(),
+            capabilities: vec![],
+            cost_tier: CostTier::default(),
+            latency_tier: LatencyTier::default(),
+            max_context: None,
+            local: false,
+            parameters: None,
+        };
+        assert!(valid.validate("test").is_ok());
+
+        // Empty provider
+        let empty_provider = ModelProfileConfigToml {
+            provider: "".to_string(),
+            model: "claude-opus-4".to_string(),
+            capabilities: vec![],
+            cost_tier: CostTier::default(),
+            latency_tier: LatencyTier::default(),
+            max_context: None,
+            local: false,
+            parameters: None,
+        };
+        assert!(empty_provider.validate("test").is_err());
+
+        // Empty model
+        let empty_model = ModelProfileConfigToml {
+            provider: "anthropic".to_string(),
+            model: "".to_string(),
+            capabilities: vec![],
+            cost_tier: CostTier::default(),
+            latency_tier: LatencyTier::default(),
+            max_context: None,
+            local: false,
+            parameters: None,
+        };
+        assert!(empty_model.validate("test").is_err());
+
+        // Zero max_context
+        let zero_context = ModelProfileConfigToml {
+            provider: "anthropic".to_string(),
+            model: "claude".to_string(),
+            capabilities: vec![],
+            cost_tier: CostTier::default(),
+            latency_tier: LatencyTier::default(),
+            max_context: Some(0),
+            local: false,
+            parameters: None,
+        };
+        assert!(zero_context.validate("test").is_err());
+    }
+
+    // =========================================================================
+    // ModelRoutingConfigToml Tests
+    // =========================================================================
+
+    #[test]
+    fn test_model_routing_config_default() {
+        let config = ModelRoutingConfigToml::default();
+        assert!(config.code_generation.is_none());
+        assert!(config.default_model.is_none());
+        assert_eq!(config.cost_strategy, CostStrategy::Balanced);
+        assert!(config.enable_pipelines);
+        assert!(config.overrides.is_empty());
+    }
+
+    #[test]
+    fn test_model_routing_config_to_rules() {
+        let config = ModelRoutingConfigToml {
+            code_generation: Some("claude-opus".to_string()),
+            code_review: Some("claude-sonnet".to_string()),
+            image_analysis: Some("gpt-4o".to_string()),
+            video_understanding: None,
+            long_document: None,
+            quick_tasks: Some("claude-haiku".to_string()),
+            privacy_sensitive: Some("ollama-llama".to_string()),
+            reasoning: None,
+            cost_strategy: CostStrategy::Balanced,
+            enable_pipelines: true,
+            default_model: Some("claude-sonnet".to_string()),
+            overrides: HashMap::new(),
+        };
+
+        let rules = config.to_routing_rules();
+        assert_eq!(rules.get_for_task_type("code_generation"), Some("claude-opus"));
+        assert_eq!(rules.get_for_task_type("code_review"), Some("claude-sonnet"));
+        assert_eq!(rules.get_for_task_type("image_analysis"), Some("gpt-4o"));
+        assert_eq!(rules.get_for_task_type("quick_tasks"), Some("claude-haiku"));
+        assert_eq!(rules.get_default(), Some("claude-sonnet"));
+        assert_eq!(rules.cost_strategy, CostStrategy::Balanced);
+        assert!(rules.enable_pipelines);
+    }
+
+    #[test]
+    fn test_model_routing_config_with_overrides() {
+        let mut overrides = HashMap::new();
+        overrides.insert("code_generation".to_string(), "gpt-4-turbo".to_string());
+
+        let config = ModelRoutingConfigToml {
+            code_generation: Some("claude-opus".to_string()),
+            overrides,
+            ..Default::default()
+        };
+
+        let rules = config.to_routing_rules();
+        // Override should win
+        assert_eq!(rules.get_for_task_type("code_generation"), Some("gpt-4-turbo"));
+    }
+
+    #[test]
+    fn test_model_routing_config_validation() {
+        let available = ["claude-opus", "claude-sonnet", "gpt-4o"];
+
+        // Valid config
+        let valid = ModelRoutingConfigToml {
+            code_generation: Some("claude-opus".to_string()),
+            default_model: Some("claude-sonnet".to_string()),
+            ..Default::default()
+        };
+        assert!(valid.validate(&available).is_ok());
+
+        // Invalid profile reference
+        let invalid = ModelRoutingConfigToml {
+            code_generation: Some("nonexistent-model".to_string()),
+            ..Default::default()
+        };
+        assert!(invalid.validate(&available).is_err());
+
+        // Invalid default model
+        let invalid_default = ModelRoutingConfigToml {
+            default_model: Some("nonexistent-model".to_string()),
+            ..Default::default()
+        };
+        assert!(invalid_default.validate(&available).is_err());
+    }
+
+    #[test]
+    fn test_model_routing_referenced_ids() {
+        let config = ModelRoutingConfigToml {
+            code_generation: Some("claude-opus".to_string()),
+            image_analysis: Some("gpt-4o".to_string()),
+            default_model: Some("claude-sonnet".to_string()),
+            ..Default::default()
+        };
+
+        let ids = config.referenced_model_ids();
+        assert!(ids.contains(&"claude-opus"));
+        assert!(ids.contains(&"gpt-4o"));
+        assert!(ids.contains(&"claude-sonnet"));
+    }
+
+    // =========================================================================
+    // CoworkConfigToml Model Integration Tests
+    // =========================================================================
+
+    #[test]
+    fn test_cowork_config_model_profiles() {
+        let mut config = CoworkConfigToml::default();
+
+        // Add model profiles
+        config.model_profiles.insert(
+            "claude-opus".to_string(),
+            ModelProfileConfigToml {
+                provider: "anthropic".to_string(),
+                model: "claude-opus-4".to_string(),
+                capabilities: vec![Capability::Reasoning],
+                cost_tier: CostTier::High,
+                latency_tier: LatencyTier::Slow,
+                max_context: Some(200_000),
+                local: false,
+                parameters: None,
+            },
+        );
+
+        config.model_profiles.insert(
+            "claude-sonnet".to_string(),
+            ModelProfileConfigToml {
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet-4".to_string(),
+                capabilities: vec![Capability::CodeGeneration],
+                cost_tier: CostTier::Medium,
+                latency_tier: LatencyTier::Medium,
+                max_context: Some(200_000),
+                local: false,
+                parameters: None,
+            },
+        );
+
+        // Get profiles
+        let profiles = config.get_model_profiles();
+        assert_eq!(profiles.len(), 2);
+
+        // Get specific profile
+        let opus = config.get_model_profile("claude-opus").unwrap();
+        assert_eq!(opus.provider, "anthropic");
+        assert_eq!(opus.model, "claude-opus-4");
+
+        // Non-existent profile
+        assert!(config.get_model_profile("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_cowork_config_model_routing_validation() {
+        let mut config = CoworkConfigToml::default();
+
+        // Add a model profile
+        config.model_profiles.insert(
+            "claude-opus".to_string(),
+            ModelProfileConfigToml {
+                provider: "anthropic".to_string(),
+                model: "claude-opus-4".to_string(),
+                capabilities: vec![],
+                cost_tier: CostTier::High,
+                latency_tier: LatencyTier::Slow,
+                max_context: None,
+                local: false,
+                parameters: None,
+            },
+        );
+
+        // Valid routing reference
+        config.model_routing.code_generation = Some("claude-opus".to_string());
+        assert!(config.validate().is_ok());
+
+        // Invalid routing reference
+        config.model_routing.code_review = Some("nonexistent".to_string());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_cowork_config_get_routing_rules() {
+        let mut config = CoworkConfigToml::default();
+
+        config.model_routing = ModelRoutingConfigToml {
+            code_generation: Some("claude-opus".to_string()),
+            cost_strategy: CostStrategy::BestQuality,
+            enable_pipelines: false,
+            default_model: Some("claude-sonnet".to_string()),
+            ..Default::default()
+        };
+
+        let rules = config.get_routing_rules();
+        assert_eq!(rules.get_for_task_type("code_generation"), Some("claude-opus"));
+        assert_eq!(rules.cost_strategy, CostStrategy::BestQuality);
+        assert!(!rules.enable_pipelines);
+        assert_eq!(rules.get_default(), Some("claude-sonnet"));
+    }
+
+    #[test]
+    fn test_model_profile_toml_deserialization() {
+        let toml_str = r#"
+            provider = "anthropic"
+            model = "claude-opus-4"
+            capabilities = ["reasoning", "code_generation"]
+            cost_tier = "high"
+            latency_tier = "slow"
+            max_context = 200000
+            local = false
+        "#;
+
+        let config: ModelProfileConfigToml = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.provider, "anthropic");
+        assert_eq!(config.model, "claude-opus-4");
+        assert!(config.capabilities.contains(&Capability::Reasoning));
+        assert!(config.capabilities.contains(&Capability::CodeGeneration));
+        assert_eq!(config.cost_tier, CostTier::High);
+        assert_eq!(config.latency_tier, LatencyTier::Slow);
+        assert_eq!(config.max_context, Some(200_000));
+        assert!(!config.local);
+    }
+
+    #[test]
+    fn test_model_routing_toml_deserialization() {
+        let toml_str = r#"
+            code_generation = "claude-opus"
+            code_review = "claude-sonnet"
+            image_analysis = "gpt-4o"
+            cost_strategy = "balanced"
+            enable_pipelines = true
+            default_model = "claude-sonnet"
+        "#;
+
+        let config: ModelRoutingConfigToml = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.code_generation, Some("claude-opus".to_string()));
+        assert_eq!(config.code_review, Some("claude-sonnet".to_string()));
+        assert_eq!(config.image_analysis, Some("gpt-4o".to_string()));
+        assert_eq!(config.cost_strategy, CostStrategy::Balanced);
+        assert!(config.enable_pipelines);
+        assert_eq!(config.default_model, Some("claude-sonnet".to_string()));
     }
 }
