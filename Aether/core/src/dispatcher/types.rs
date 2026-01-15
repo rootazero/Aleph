@@ -1233,6 +1233,7 @@ mod tests {
     // =========================================================================
 
     #[test]
+    #[allow(deprecated)] // Testing legacy ToolCategory::Native behavior
     fn test_infer_safety_level_high_risk() {
         assert_eq!(
             UnifiedTool::infer_safety_level("delete_file", ToolCategory::Native),
@@ -1253,6 +1254,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // Testing legacy ToolCategory::Native behavior
     fn test_infer_safety_level_low_risk() {
         assert_eq!(
             UnifiedTool::infer_safety_level("send_notification", ToolCategory::Builtin),
@@ -1273,6 +1275,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // Testing legacy ToolCategory::Native behavior
     fn test_infer_safety_level_reversible() {
         assert_eq!(
             UnifiedTool::infer_safety_level("create_file", ToolCategory::Native),
@@ -1293,6 +1296,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // Testing legacy ToolCategory::Native behavior
     fn test_infer_safety_level_readonly() {
         assert_eq!(
             UnifiedTool::infer_safety_level("search_web", ToolCategory::Native),
@@ -1317,6 +1321,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // Testing legacy ToolCategory::Native behavior
     fn test_infer_safety_level_category_fallback() {
         // Unknown tool names should fall back to category-based inference
         assert_eq!(
