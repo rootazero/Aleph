@@ -301,6 +301,7 @@ Use trait-based abstractions for all core components:
 ### Core Architecture
 - [Architecture Guide](./docs/ARCHITECTURE.md) - Structured Context Protocol, request flow
 - [Dispatcher Layer](./docs/DISPATCHER.md) - Multi-layer routing, L3 Agent
+- [Cowork Task Orchestration](./docs/COWORK.md) - DAG-based multi-task execution
 - [Configuration Schema](./docs/CONFIGURATION.md) - config.toml reference
 - [Permissions](./docs/PERMISSIONS.md) - Permission authorization architecture
 

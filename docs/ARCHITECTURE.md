@@ -262,6 +262,46 @@ similarity_threshold = 0.7     # Min cosine similarity (0.0-1.0)
 
 ---
 
+### Cowork Task Orchestration
+
+**Location**: `core/src/cowork/`
+
+**Purpose**: Decomposes complex user requests into DAG-structured task graphs and executes them with parallel scheduling.
+
+**Components**:
+- `TaskPlanner` - LLM-based task decomposition
+- `DAGScheduler` - Topological sort execution with parallelism
+- `ExecutorRegistry` - Extensible task execution backends
+- `TaskMonitor` - Real-time progress tracking
+- `CoworkEngine` - Unified API
+
+**Execution Flow**:
+```
+User Request → TaskPlanner → TaskGraph → User Confirmation → DAGScheduler → Results
+                   ↓              ↓                              ↓
+               LLM Inference   Validation                  Parallel Execution
+```
+
+**Configuration**:
+```toml
+[cowork]
+enabled = true
+require_confirmation = true
+max_parallelism = 4
+dry_run = false
+```
+
+**Task Categories**:
+- `FileOperation` - File system operations
+- `CodeExecution` - Script/code execution
+- `DocumentGeneration` - Document creation
+- `AppAutomation` - AppleScript automation
+- `AiInference` - AI model calls
+
+See [COWORK.md](./COWORK.md) for detailed documentation.
+
+---
+
 ## Data Structures
 
 ### AgentPayload

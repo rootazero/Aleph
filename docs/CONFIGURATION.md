@@ -63,6 +63,19 @@ plan_confirmation_required = true  # Require user confirmation before execution
 allow_irreversible_without_confirmation = false  # Show warning for irreversible steps
 heuristics_threshold = 2           # Action signals needed to trigger planning
 
+[cowork]
+enabled = true                     # Enable Cowork task orchestration
+require_confirmation = true        # Show task graph before execution
+max_parallelism = 4                # Max concurrent tasks
+dry_run = false                    # Plan without executing
+planner_provider = "claude"        # AI provider for task planning
+auto_execute_threshold = 0.95      # Confidence for auto-execution
+max_tasks_per_graph = 20           # Maximum tasks per graph
+task_timeout_seconds = 300         # Task execution timeout (5 min)
+sandbox_enabled = true             # Sandbox code execution tasks
+allowed_categories = []            # Empty = all allowed
+blocked_categories = []            # Empty = none blocked
+
 [routing.pipeline]
 enabled = true
 
@@ -194,6 +207,26 @@ capabilities = ["memory"]          # Enable memory for all requests
 | `plan_confirmation_required` | Boolean | `true` | Require user confirmation |
 | `heuristics_threshold` | Integer | `2` | Action signals for planning trigger |
 
+### [cowork]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | Boolean | `true` | Enable Cowork task orchestration |
+| `require_confirmation` | Boolean | `true` | Show task graph before execution |
+| `max_parallelism` | Integer | `4` | Max concurrent tasks (1-32) |
+| `dry_run` | Boolean | `false` | Plan without executing |
+| `planner_provider` | String | `null` | AI provider for planning (uses default if null) |
+| `auto_execute_threshold` | Float | `0.95` | Confidence for auto-execution (0.0-1.0) |
+| `max_tasks_per_graph` | Integer | `20` | Maximum tasks per graph |
+| `task_timeout_seconds` | Integer | `300` | Task execution timeout (0 = none) |
+| `sandbox_enabled` | Boolean | `true` | Sandbox code execution tasks |
+| `allowed_categories` | Array | `[]` | Allowed task types (empty = all) |
+| `blocked_categories` | Array | `[]` | Blocked task types (overrides allowed) |
+
+**Valid Categories**: `file_operation`, `code_execution`, `document_generation`, `app_automation`, `ai_inference`
+
+See [COWORK.md](./COWORK.md) for detailed documentation.
+
 ### [providers.*]
 
 | Field | Type | Default | Description |
@@ -277,4 +310,4 @@ final_system_prompt = slash_command_prompt + keyword_rule1_prompt + keyword_rule
 
 ---
 
-**Last Updated**: 2026-01-11
+**Last Updated**: 2026-01-15
