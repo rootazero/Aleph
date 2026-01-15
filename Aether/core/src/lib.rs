@@ -153,7 +153,7 @@ pub use crate::cowork_ffi::{
     CodeExecConfigFFI, CoworkConfigFFI, CoworkExecutionState, CoworkExecutionSummaryFFI,
     CoworkProgressEventFFI, CoworkProgressEventType, CoworkProgressHandler,
     CoworkTaskDependencyFFI, CoworkTaskFFI, CoworkTaskGraphFFI, CoworkTaskStatusState,
-    CoworkTaskTypeCategory, FfiProgressSubscriber,
+    CoworkTaskTypeCategory, FileOpsConfigFFI, FfiProgressSubscriber,
 };
 
 // Core interface exports (rig-core based architecture)

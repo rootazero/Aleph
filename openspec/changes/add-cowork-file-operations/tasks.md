@@ -58,12 +58,12 @@
 
 ## 7. Swift UI
 
-- [ ] 7.1 Add FileOps section to CoworkSettingsView
-- [ ] 7.2 Create AllowedPathsEditor component
-- [ ] 7.3 Create DeniedPathsEditor component
-- [ ] 7.4 Add file size limit picker
-- [ ] 7.5 Add confirmation toggles for write/delete
-- [ ] 7.6 Add localization strings
+- [x] 7.1 Add FileOps section to CoworkSettingsView
+- [x] 7.2 Create AllowedPathsEditor component
+- [x] 7.3 Create DeniedPathsEditor component
+- [x] 7.4 Add file size limit picker
+- [x] 7.5 Add confirmation toggles for write/delete
+- [x] 7.6 Add localization strings
 
 ## 8. Security Review
 

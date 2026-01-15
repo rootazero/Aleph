@@ -948,6 +948,15 @@ interface AetherCore {
     // Update code execution configuration
     [Throws=AetherFfiError]
     void cowork_update_code_exec_config(CodeExecConfigFFI config);
+
+    // ===== FILE OPERATIONS CONFIG =====
+
+    // Get file operations configuration
+    FileOpsConfigFFI cowork_get_file_ops_config();
+
+    // Update file operations configuration
+    [Throws=AetherFfiError]
+    void cowork_update_file_ops_config(FileOpsConfigFFI config);
 };
 
 dictionary ProcessOptions {
@@ -1022,6 +1031,16 @@ dictionary CodeExecConfigFFI {
   string? working_directory;          // Working directory for executions
   sequence<string> pass_env;          // Environment variables to pass
   sequence<string> blocked_commands;  // Blocked command patterns
+};
+
+// File operations configuration (Phase 2)
+dictionary FileOpsConfigFFI {
+  boolean enabled;                           // Enable file operations
+  sequence<string> allowed_paths;            // Allowed paths (glob patterns)
+  sequence<string> denied_paths;             // Denied paths (glob patterns)
+  u64 max_file_size;                         // Max file size in bytes
+  boolean require_confirmation_for_write;    // Require confirmation for write
+  boolean require_confirmation_for_delete;   // Require confirmation for delete
 };
 
 // Cowork task (simplified for FFI)

@@ -817,6 +817,29 @@
 "settings.cowork.dry_run_toggle" = "启用演练模式";
 "settings.cowork.dry_run_warning" = "任务将被规划但不会执行";
 
+// 文件操作设置 (Phase 2)
+"settings.cowork.file_ops.title" = "文件操作";
+"settings.cowork.file_ops.description" = "配置 Cowork 任务的文件操作设置。文件操作包括读取、写入、复制、移动和删除文件。";
+"settings.cowork.file_ops.enabled" = "启用文件操作";
+"settings.cowork.file_ops.enabled_description" = "允许 Cowork 在任务工作流中执行文件操作。";
+"settings.cowork.file_ops.enabled_toggle" = "启用文件操作";
+"settings.cowork.file_ops.allowed_paths" = "允许路径";
+"settings.cowork.file_ops.allowed_paths_description" = "允许进行文件操作的目录。留空表示允许所有路径（拒绝路径除外）。";
+"settings.cowork.file_ops.add_allowed_path" = "添加允许路径...";
+"settings.cowork.file_ops.denied_paths" = "拒绝路径";
+"settings.cowork.file_ops.denied_paths_description" = "禁止进行文件操作的目录。这些路径优先于允许路径。";
+"settings.cowork.file_ops.add_denied_path" = "添加拒绝路径...";
+"settings.cowork.file_ops.default_denied_note" = "敏感路径（~/.ssh、~/.gnupg 等）始终默认被拒绝。";
+"settings.cowork.file_ops.max_file_size" = "最大文件大小";
+"settings.cowork.file_ops.max_file_size_description" = "读取操作允许的最大文件大小。超过此大小的文件将被拒绝。";
+"settings.cowork.file_ops.max_file_size_picker" = "选择大小";
+"settings.cowork.file_ops.confirmations" = "确认";
+"settings.cowork.file_ops.confirmations_description" = "在执行可能具有破坏性的文件操作前要求确认。";
+"settings.cowork.file_ops.confirm_write" = "确认写入操作";
+"settings.cowork.file_ops.confirm_delete" = "确认删除操作";
+"settings.cowork.file_ops.confirmations_warning" = "禁用确认将允许操作在无用户批准的情况下执行。";
+"settings.cowork.file_ops.browse" = "浏览文件夹";
+
 // 代码执行设置 (Phase 3)
 "settings.cowork.code_exec.title" = "代码执行";
 "settings.cowork.code_exec.description" = "配置 Cowork 任务的代码执行设置。代码执行允许运行 shell 脚本、Python 和 Node.js 代码。";

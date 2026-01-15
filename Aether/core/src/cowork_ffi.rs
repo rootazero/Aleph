@@ -203,6 +203,62 @@ impl From<CodeExecConfigFFI> for crate::config::types::cowork::CodeExecConfigTom
     }
 }
 
+/// File operations configuration for FFI
+#[derive(Debug, Clone)]
+pub struct FileOpsConfigFFI {
+    /// Enable file operations executor
+    pub enabled: bool,
+    /// Paths that are allowed for file operations (glob patterns)
+    pub allowed_paths: Vec<String>,
+    /// Paths that are denied for file operations (glob patterns)
+    pub denied_paths: Vec<String>,
+    /// Maximum file size in bytes for read operations
+    pub max_file_size: u64,
+    /// Require confirmation before write operations
+    pub require_confirmation_for_write: bool,
+    /// Require confirmation before delete operations
+    pub require_confirmation_for_delete: bool,
+}
+
+impl Default for FileOpsConfigFFI {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            allowed_paths: Vec::new(),
+            denied_paths: Vec::new(),
+            max_file_size: 100 * 1024 * 1024, // 100MB
+            require_confirmation_for_write: true,
+            require_confirmation_for_delete: true,
+        }
+    }
+}
+
+impl From<crate::config::types::cowork::FileOpsConfigToml> for FileOpsConfigFFI {
+    fn from(config: crate::config::types::cowork::FileOpsConfigToml) -> Self {
+        Self {
+            enabled: config.enabled,
+            allowed_paths: config.allowed_paths,
+            denied_paths: config.denied_paths,
+            max_file_size: config.max_file_size,
+            require_confirmation_for_write: config.require_confirmation_for_write,
+            require_confirmation_for_delete: config.require_confirmation_for_delete,
+        }
+    }
+}
+
+impl From<FileOpsConfigFFI> for crate::config::types::cowork::FileOpsConfigToml {
+    fn from(config: FileOpsConfigFFI) -> Self {
+        Self {
+            enabled: config.enabled,
+            allowed_paths: config.allowed_paths,
+            denied_paths: config.denied_paths,
+            max_file_size: config.max_file_size,
+            require_confirmation_for_write: config.require_confirmation_for_write,
+            require_confirmation_for_delete: config.require_confirmation_for_delete,
+        }
+    }
+}
+
 /// Cowork task for FFI (simplified)
 #[derive(Debug, Clone)]
 pub struct CoworkTaskFFI {

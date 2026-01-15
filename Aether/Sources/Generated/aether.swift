@@ -596,6 +596,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func coworkGetConfig()  -> CoworkConfigFfi
     
+    func coworkGetFileOpsConfig()  -> FileOpsConfigFfi
+    
     func coworkGetState()  -> CoworkExecutionState
     
     func coworkIsCancelled()  -> Bool
@@ -613,6 +615,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func coworkUpdateCodeExecConfig(config: CodeExecConfigFfi) throws 
     
     func coworkUpdateConfig(config: CoworkConfigFfi) throws 
+    
+    func coworkUpdateFileOpsConfig(config: FileOpsConfigFfi) throws 
     
     func deleteMcpServer(id: String) throws 
     
@@ -833,6 +837,13 @@ open func coworkGetConfig() -> CoworkConfigFfi {
 })
 }
     
+open func coworkGetFileOpsConfig() -> FileOpsConfigFfi {
+    return try!  FfiConverterTypeFileOpsConfigFFI.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_get_file_ops_config(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func coworkGetState() -> CoworkExecutionState {
     return try!  FfiConverterTypeCoworkExecutionState.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_cowork_get_state(self.uniffiClonePointer(),$0
@@ -891,6 +902,13 @@ open func coworkUpdateCodeExecConfig(config: CodeExecConfigFfi)throws  {try rust
 open func coworkUpdateConfig(config: CoworkConfigFfi)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
     uniffi_aethecore_fn_method_aethercore_cowork_update_config(self.uniffiClonePointer(),
         FfiConverterTypeCoworkConfigFFI.lower(config),$0
+    )
+}
+}
+    
+open func coworkUpdateFileOpsConfig(config: FileOpsConfigFfi)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_cowork_update_file_ops_config(self.uniffiClonePointer(),
+        FfiConverterTypeFileOpsConfigFFI.lower(config),$0
     )
 }
 }
@@ -2974,6 +2992,104 @@ public func FfiConverterTypeCoworkTaskGraphFFI_lift(_ buf: RustBuffer) throws ->
 #endif
 public func FfiConverterTypeCoworkTaskGraphFFI_lower(_ value: CoworkTaskGraphFfi) -> RustBuffer {
     return FfiConverterTypeCoworkTaskGraphFFI.lower(value)
+}
+
+
+public struct FileOpsConfigFfi {
+    public var enabled: Bool
+    public var allowedPaths: [String]
+    public var deniedPaths: [String]
+    public var maxFileSize: UInt64
+    public var requireConfirmationForWrite: Bool
+    public var requireConfirmationForDelete: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(enabled: Bool, allowedPaths: [String], deniedPaths: [String], maxFileSize: UInt64, requireConfirmationForWrite: Bool, requireConfirmationForDelete: Bool) {
+        self.enabled = enabled
+        self.allowedPaths = allowedPaths
+        self.deniedPaths = deniedPaths
+        self.maxFileSize = maxFileSize
+        self.requireConfirmationForWrite = requireConfirmationForWrite
+        self.requireConfirmationForDelete = requireConfirmationForDelete
+    }
+}
+
+
+
+extension FileOpsConfigFfi: Equatable, Hashable {
+    public static func ==(lhs: FileOpsConfigFfi, rhs: FileOpsConfigFfi) -> Bool {
+        if lhs.enabled != rhs.enabled {
+            return false
+        }
+        if lhs.allowedPaths != rhs.allowedPaths {
+            return false
+        }
+        if lhs.deniedPaths != rhs.deniedPaths {
+            return false
+        }
+        if lhs.maxFileSize != rhs.maxFileSize {
+            return false
+        }
+        if lhs.requireConfirmationForWrite != rhs.requireConfirmationForWrite {
+            return false
+        }
+        if lhs.requireConfirmationForDelete != rhs.requireConfirmationForDelete {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(enabled)
+        hasher.combine(allowedPaths)
+        hasher.combine(deniedPaths)
+        hasher.combine(maxFileSize)
+        hasher.combine(requireConfirmationForWrite)
+        hasher.combine(requireConfirmationForDelete)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFileOpsConfigFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FileOpsConfigFfi {
+        return
+            try FileOpsConfigFfi(
+                enabled: FfiConverterBool.read(from: &buf), 
+                allowedPaths: FfiConverterSequenceString.read(from: &buf), 
+                deniedPaths: FfiConverterSequenceString.read(from: &buf), 
+                maxFileSize: FfiConverterUInt64.read(from: &buf), 
+                requireConfirmationForWrite: FfiConverterBool.read(from: &buf), 
+                requireConfirmationForDelete: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FileOpsConfigFfi, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterSequenceString.write(value.allowedPaths, into: &buf)
+        FfiConverterSequenceString.write(value.deniedPaths, into: &buf)
+        FfiConverterUInt64.write(value.maxFileSize, into: &buf)
+        FfiConverterBool.write(value.requireConfirmationForWrite, into: &buf)
+        FfiConverterBool.write(value.requireConfirmationForDelete, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFileOpsConfigFFI_lift(_ buf: RustBuffer) throws -> FileOpsConfigFfi {
+    return try FfiConverterTypeFileOpsConfigFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFileOpsConfigFFI_lower(_ value: FileOpsConfigFfi) -> RustBuffer {
+    return FfiConverterTypeFileOpsConfigFFI.lower(value)
 }
 
 
@@ -9820,6 +9936,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_cowork_get_config() != 16398) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_get_file_ops_config() != 14218) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_cowork_get_state() != 15480) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -9845,6 +9964,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_cowork_update_config() != 43915) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_update_file_ops_config() != 59295) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_delete_mcp_server() != 52792) {

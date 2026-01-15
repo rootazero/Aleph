@@ -2002,6 +2002,38 @@ impl AetherCore {
         info!("Code execution configuration updated");
         Ok(())
     }
+
+    // ===== FILE OPERATIONS CONFIG =====
+
+    /// Get file operations configuration
+    pub fn cowork_get_file_ops_config(&self) -> crate::cowork_ffi::FileOpsConfigFFI {
+        // Load from config file or return defaults
+        match crate::config::Config::load() {
+            Ok(cfg) => crate::cowork_ffi::FileOpsConfigFFI::from(cfg.cowork.file_ops),
+            Err(_) => crate::cowork_ffi::FileOpsConfigFFI::default(),
+        }
+    }
+
+    /// Update file operations configuration
+    pub fn cowork_update_file_ops_config(
+        &self,
+        config: crate::cowork_ffi::FileOpsConfigFFI,
+    ) -> Result<(), AetherFfiError> {
+        // Load current config
+        let mut full_config = crate::config::Config::load()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to load config: {}", e)))?;
+
+        // Update file_ops section
+        full_config.cowork.file_ops = config.into();
+
+        // Save to file
+        full_config
+            .save()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to save config: {}", e)))?;
+
+        info!("File operations configuration updated");
+        Ok(())
+    }
 }
 
 /// Initialize AetherCore

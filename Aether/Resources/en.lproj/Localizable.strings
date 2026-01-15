@@ -815,6 +815,29 @@
 "settings.cowork.dry_run_toggle" = "Enable Dry Run";
 "settings.cowork.dry_run_warning" = "Tasks will be planned but not executed";
 
+// File Operations Settings (Phase 2)
+"settings.cowork.file_ops.title" = "File Operations";
+"settings.cowork.file_ops.description" = "Configure file operations settings for Cowork tasks. File operations include reading, writing, copying, moving, and deleting files.";
+"settings.cowork.file_ops.enabled" = "Enable File Operations";
+"settings.cowork.file_ops.enabled_description" = "Allow Cowork to perform file operations as part of task workflows.";
+"settings.cowork.file_ops.enabled_toggle" = "Enable File Operations";
+"settings.cowork.file_ops.allowed_paths" = "Allowed Paths";
+"settings.cowork.file_ops.allowed_paths_description" = "Directories where file operations are permitted. Leave empty to allow all paths (except denied paths).";
+"settings.cowork.file_ops.add_allowed_path" = "Add allowed path...";
+"settings.cowork.file_ops.denied_paths" = "Denied Paths";
+"settings.cowork.file_ops.denied_paths_description" = "Directories where file operations are forbidden. These take precedence over allowed paths.";
+"settings.cowork.file_ops.add_denied_path" = "Add denied path...";
+"settings.cowork.file_ops.default_denied_note" = "Sensitive paths (~/.ssh, ~/.gnupg, etc.) are always denied by default.";
+"settings.cowork.file_ops.max_file_size" = "Maximum File Size";
+"settings.cowork.file_ops.max_file_size_description" = "Maximum file size allowed for read operations. Larger files will be rejected.";
+"settings.cowork.file_ops.max_file_size_picker" = "Select Size";
+"settings.cowork.file_ops.confirmations" = "Confirmations";
+"settings.cowork.file_ops.confirmations_description" = "Require confirmation before potentially destructive file operations.";
+"settings.cowork.file_ops.confirm_write" = "Confirm Write Operations";
+"settings.cowork.file_ops.confirm_delete" = "Confirm Delete Operations";
+"settings.cowork.file_ops.confirmations_warning" = "Disabling confirmations allows operations without user approval.";
+"settings.cowork.file_ops.browse" = "Browse for folder";
+
 // Code Execution Settings (Phase 3)
 "settings.cowork.code_exec.title" = "Code Execution";
 "settings.cowork.code_exec.description" = "Configure code execution settings for Cowork tasks. Code execution allows running shell scripts, Python, and Node.js code.";
