@@ -434,6 +434,7 @@ final class InputCoordinator {
                 let options = ProcessOptions(
                     appContext: capturedContext.appBundleId,
                     windowTitle: capturedContext.windowTitle,
+                    topicId: nil,  // Single-turn mode
                     stream: true,
                     attachments: capturedContext.attachments
                 )

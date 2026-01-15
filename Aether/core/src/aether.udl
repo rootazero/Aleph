@@ -904,6 +904,7 @@ interface AetherCore {
 dictionary ProcessOptions {
     string? app_context;
     string? window_title;
+    string? topic_id;    // Topic ID for multi-turn conversations (nil = "single-turn")
     boolean stream;
     sequence<MediaAttachment>? attachments;
 };

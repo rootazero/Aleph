@@ -641,6 +641,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             let options = ProcessOptions(
                 appContext: appContext,
                 windowTitle: windowTitle,
+                topicId: nil,  // Single-turn mode
                 stream: stream,
                 attachments: nil  // No attachments for direct process calls
             )

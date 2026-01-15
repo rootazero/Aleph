@@ -4096,14 +4096,16 @@ public func FfiConverterTypePendingConfirmationInfo_lower(_ value: PendingConfir
 public struct ProcessOptions {
     public var appContext: String?
     public var windowTitle: String?
+    public var topicId: String?
     public var stream: Bool
     public var attachments: [MediaAttachment]?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(appContext: String?, windowTitle: String?, stream: Bool, attachments: [MediaAttachment]?) {
+    public init(appContext: String?, windowTitle: String?, topicId: String?, stream: Bool, attachments: [MediaAttachment]?) {
         self.appContext = appContext
         self.windowTitle = windowTitle
+        self.topicId = topicId
         self.stream = stream
         self.attachments = attachments
     }
@@ -4119,6 +4121,9 @@ extension ProcessOptions: Equatable, Hashable {
         if lhs.windowTitle != rhs.windowTitle {
             return false
         }
+        if lhs.topicId != rhs.topicId {
+            return false
+        }
         if lhs.stream != rhs.stream {
             return false
         }
@@ -4131,6 +4136,7 @@ extension ProcessOptions: Equatable, Hashable {
     public func hash(into hasher: inout Hasher) {
         hasher.combine(appContext)
         hasher.combine(windowTitle)
+        hasher.combine(topicId)
         hasher.combine(stream)
         hasher.combine(attachments)
     }
@@ -4146,6 +4152,7 @@ public struct FfiConverterTypeProcessOptions: FfiConverterRustBuffer {
             try ProcessOptions(
                 appContext: FfiConverterOptionString.read(from: &buf), 
                 windowTitle: FfiConverterOptionString.read(from: &buf), 
+                topicId: FfiConverterOptionString.read(from: &buf), 
                 stream: FfiConverterBool.read(from: &buf), 
                 attachments: FfiConverterOptionSequenceTypeMediaAttachment.read(from: &buf)
         )
@@ -4154,6 +4161,7 @@ public struct FfiConverterTypeProcessOptions: FfiConverterRustBuffer {
     public static func write(_ value: ProcessOptions, into buf: inout [UInt8]) {
         FfiConverterOptionString.write(value.appContext, into: &buf)
         FfiConverterOptionString.write(value.windowTitle, into: &buf)
+        FfiConverterOptionString.write(value.topicId, into: &buf)
         FfiConverterBool.write(value.stream, into: &buf)
         FfiConverterOptionSequenceTypeMediaAttachment.write(value.attachments, into: &buf)
     }

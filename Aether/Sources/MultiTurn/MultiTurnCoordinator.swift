@@ -218,6 +218,7 @@ final class MultiTurnCoordinator {
         let options = ProcessOptions(
             appContext: "com.aether.multi-turn",
             windowTitle: nil,
+            topicId: topic.id,  // Pass topic ID for memory storage
             stream: true,
             attachments: attachments.isEmpty ? nil : attachments
         )
