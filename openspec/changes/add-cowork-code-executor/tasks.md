@@ -14,7 +14,7 @@
 - [x] 2.2 Implement `RuntimeManager` for detecting available runtimes - RuntimeInfo::detect()
 - [x] 2.3 Add `which` command wrapper for path detection
 - [x] 2.4 Implement version detection for each runtime
-- [ ] 2.5 Add runtime availability caching
+- [x] 2.5 Add runtime availability caching
 - [x] 2.6 Write unit tests for runtime detection
 
 ## 3. Command Validation

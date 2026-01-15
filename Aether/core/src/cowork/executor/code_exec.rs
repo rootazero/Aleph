@@ -334,6 +334,9 @@ pub struct CodeExecutor {
 
     /// Environment variables to pass
     pass_env: Vec<String>,
+
+    /// Runtime info cache to avoid repeated detection
+    runtime_cache: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, RuntimeInfo>>>,
 }
 
 impl CodeExecutor {
@@ -366,7 +369,30 @@ impl CodeExecutor {
             permission_checker,
             working_directory,
             pass_env,
+            runtime_cache: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         }
+    }
+
+    /// Get cached runtime info, detecting if not cached
+    async fn get_runtime_info(&self, runtime: &str) -> RuntimeInfo {
+        // Check cache first
+        {
+            let cache = self.runtime_cache.read().await;
+            if let Some(info) = cache.get(runtime) {
+                return info.clone();
+            }
+        }
+
+        // Not cached, detect and cache
+        let info = RuntimeInfo::detect(runtime).await;
+
+        // Store in cache
+        {
+            let mut cache = self.runtime_cache.write().await;
+            cache.insert(runtime.to_string(), info.clone());
+        }
+
+        info
     }
 
     /// Get the runtime command for a language
@@ -406,8 +432,8 @@ impl CodeExecutor {
             return Err(AetherError::other(CodeExecError::Blocked { reason }.to_string()));
         }
 
-        // Check runtime availability
-        let runtime_info = RuntimeInfo::detect(cmd).await;
+        // Check runtime availability (using cache)
+        let runtime_info = self.get_runtime_info(cmd).await;
         if !runtime_info.available {
             return Err(AetherError::other(
                 CodeExecError::RuntimeNotFound(cmd.to_string()).to_string(),
@@ -450,8 +476,8 @@ impl CodeExecutor {
             return Err(AetherError::other(CodeExecError::Blocked { reason }.to_string()));
         }
 
-        // Check runtime availability
-        let runtime_info = RuntimeInfo::detect(runtime).await;
+        // Check runtime availability (using cache)
+        let runtime_info = self.get_runtime_info(runtime).await;
         if !runtime_info.available {
             return Err(AetherError::other(
                 CodeExecError::RuntimeNotFound(runtime.to_string()).to_string(),
@@ -515,8 +541,8 @@ impl CodeExecutor {
             ));
         }
 
-        // Check runtime availability
-        let runtime_info = RuntimeInfo::detect(runtime).await;
+        // Check runtime availability (using cache)
+        let runtime_info = self.get_runtime_info(runtime).await;
         if !runtime_info.available {
             return Err(AetherError::other(
                 CodeExecError::RuntimeNotFound(runtime.to_string()).to_string(),
