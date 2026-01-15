@@ -37,8 +37,10 @@
 //! let profile = matcher.route(&task)?;
 //! ```
 
+mod matcher;
 mod profiles;
 mod rules;
 
+pub use matcher::{ModelMatcher, ModelRouter, RoutingError};
 pub use profiles::{Capability, CostTier, LatencyTier, ModelProfile};
 pub use rules::{CostStrategy, ModelRoutingRules};

@@ -66,5 +66,6 @@ pub use types::{
     TaskType,
 };
 pub use model_router::{
-    Capability, CostStrategy, CostTier, LatencyTier, ModelProfile, ModelRoutingRules,
+    Capability, CostStrategy, CostTier, LatencyTier, ModelMatcher, ModelProfile,
+    ModelRouter, ModelRoutingRules, RoutingError,
 };

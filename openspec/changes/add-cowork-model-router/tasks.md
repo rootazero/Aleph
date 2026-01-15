@@ -36,34 +36,34 @@
 
 ## 3. ModelMatcher Implementation
 
-- [ ] 3.1 Define `ModelRouter` trait in `matcher.rs`
-  - [ ] 3.1.1 Define `route(&self, task: &Task) -> Result<ModelProfile>`
-  - [ ] 3.1.2 Define `get_profile(&self, id: &str) -> Option<&ModelProfile>`
-  - [ ] 3.1.3 Define `profiles(&self) -> &[ModelProfile]`
-  - [ ] 3.1.4 Define `supports_capability(&self, profile_id: &str, capability: &Capability) -> bool`
-- [ ] 3.2 Implement `ModelMatcher` struct
-  - [ ] 3.2.1 Store profiles in HashMap by ID
-  - [ ] 3.2.2 Store routing rules
-  - [ ] 3.2.3 Implement profile lookup cache
-- [ ] 3.3 Implement routing logic
-  - [ ] 3.3.1 Match by task type first
-  - [ ] 3.3.2 Fall back to capability matching
-  - [ ] 3.3.3 Apply cost strategy for tie-breaking
-  - [ ] 3.3.4 Use default model as final fallback
-- [ ] 3.4 Implement capability-based routing
-  - [ ] 3.4.1 `find_best_for(capability: Capability) -> Option<ModelProfile>`
-  - [ ] 3.4.2 `find_balanced() -> Option<ModelProfile>`
-  - [ ] 3.4.3 `find_cheapest_with(capability: Capability) -> Option<ModelProfile>`
-- [ ] 3.5 Add routing hints from Task
-  - [ ] 3.5.1 Check `task.model_preference` for override
-  - [ ] 3.5.2 Check `task.requires_privacy` flag
-  - [ ] 3.5.3 Check `task.has_images` flag
-  - [ ] 3.5.4 Check `task.context_length` for long context
-- [ ] 3.6 Write unit tests for ModelMatcher
-  - [ ] 3.6.1 Test task type routing
-  - [ ] 3.6.2 Test capability routing
-  - [ ] 3.6.3 Test cost strategy
-  - [ ] 3.6.4 Test fallback behavior
+- [x] 3.1 Define `ModelRouter` trait in `matcher.rs`
+  - [x] 3.1.1 Define `route(&self, task: &Task) -> Result<ModelProfile>`
+  - [x] 3.1.2 Define `get_profile(&self, id: &str) -> Option<&ModelProfile>`
+  - [x] 3.1.3 Define `profiles(&self) -> &[ModelProfile]`
+  - [x] 3.1.4 Define `supports_capability(&self, profile_id: &str, capability: &Capability) -> bool`
+- [x] 3.2 Implement `ModelMatcher` struct
+  - [x] 3.2.1 Store profiles in HashMap by ID
+  - [x] 3.2.2 Store routing rules
+  - [x] 3.2.3 Implement profile lookup cache (capability_index)
+- [x] 3.3 Implement routing logic
+  - [x] 3.3.1 Match by task type first
+  - [x] 3.3.2 Fall back to capability matching
+  - [x] 3.3.3 Apply cost strategy for tie-breaking
+  - [x] 3.3.4 Use default model as final fallback
+- [x] 3.4 Implement capability-based routing
+  - [x] 3.4.1 `find_best_for(capability: Capability) -> Option<ModelProfile>`
+  - [x] 3.4.2 `find_balanced() -> Option<ModelProfile>`
+  - [x] 3.4.3 `find_cheapest_with(capability: Capability) -> Option<ModelProfile>`
+- [x] 3.5 Add routing hints from Task
+  - [x] 3.5.1 Check `task.model_preference` for override
+  - [x] 3.5.2 Check `task.requires_privacy` flag
+  - [x] 3.5.3 Check `task.has_images` flag
+  - [x] 3.5.4 Check `task.context_length` for long context
+- [x] 3.6 Write unit tests for ModelMatcher
+  - [x] 3.6.1 Test task type routing
+  - [x] 3.6.2 Test capability routing
+  - [x] 3.6.3 Test cost strategy
+  - [x] 3.6.4 Test fallback behavior
 
 ## 4. Pipeline Executor
 
