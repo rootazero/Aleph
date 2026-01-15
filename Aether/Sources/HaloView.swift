@@ -89,6 +89,22 @@ struct HaloView: View {
                     progressInfo: progressInfo,
                     onCancel: viewModel.callbacks.planConfirmationOnCancel
                 )
+
+            case .coworkConfirmation(let taskGraph):
+                CoworkConfirmationView(
+                    taskGraph: taskGraph,
+                    onExecute: { viewModel.callbacks.coworkConfirmationOnExecute?() },
+                    onCancel: { viewModel.callbacks.coworkConfirmationOnCancel?() }
+                )
+
+            case .coworkProgress(let taskGraph, let state):
+                CoworkProgressView(
+                    taskGraph: taskGraph,
+                    executionState: state,
+                    onPause: viewModel.callbacks.coworkOnPause,
+                    onResume: viewModel.callbacks.coworkOnResume,
+                    onCancel: viewModel.callbacks.coworkOnCancel
+                )
             }
         }
         .animation(.easeInOut(duration: 0.2), value: viewModel.state)

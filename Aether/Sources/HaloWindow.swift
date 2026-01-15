@@ -122,6 +122,10 @@ final class HaloWindow: NSWindow {
             size = NSSize(width: 380, height: 420)  // Plan progress needs most space
         case .conversationInput:
             size = NSSize(width: 0, height: 0)  // Handled by MultiTurnInputWindow
+        case .coworkConfirmation:
+            size = NSSize(width: 400, height: 450)  // Cowork confirmation with DAG view
+        case .coworkProgress:
+            size = NSSize(width: 400, height: 480)  // Cowork progress with task list
         }
 
         setContentSize(size)
@@ -130,7 +134,8 @@ final class HaloWindow: NSWindow {
     private func updateInteractivity() {
         // Enable mouse events for interactive states
         switch viewModel.state {
-        case .error, .toast, .clarification, .toolConfirmation, .planConfirmation, .planProgress:
+        case .error, .toast, .clarification, .toolConfirmation, .planConfirmation, .planProgress,
+             .coworkConfirmation, .coworkProgress:
             ignoresMouseEvents = false
         default:
             ignoresMouseEvents = true

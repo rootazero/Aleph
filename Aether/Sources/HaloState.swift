@@ -58,6 +58,12 @@ enum HaloState {
     /// Plan execution progress (multi-step execution)
     case planProgress(progressInfo: PlanProgressInfo)
 
+    /// Cowork task graph confirmation (multi-task orchestration)
+    case coworkConfirmation(taskGraph: CoworkTaskGraphFfi)
+
+    /// Cowork task graph execution progress
+    case coworkProgress(taskGraph: CoworkTaskGraphFfi, state: CoworkExecutionState)
+
     // MARK: - State Query Helpers
 
     /// Check if state is toast
@@ -99,6 +105,18 @@ enum HaloState {
         if case .planProgress = self { return true }
         return false
     }
+
+    /// Check if state is cowork confirmation
+    var isCoworkConfirmation: Bool {
+        if case .coworkConfirmation = self { return true }
+        return false
+    }
+
+    /// Check if state is cowork progress
+    var isCoworkProgress: Bool {
+        if case .coworkProgress = self { return true }
+        return false
+    }
 }
 
 // MARK: - Supporting Types
@@ -137,6 +155,10 @@ extension HaloState: Equatable {
             return lInfo == rInfo
         case (.planProgress(let lInfo), .planProgress(let rInfo)):
             return lInfo == rInfo
+        case (.coworkConfirmation(let lGraph), .coworkConfirmation(let rGraph)):
+            return lGraph == rGraph
+        case (.coworkProgress(let lGraph, let lState), .coworkProgress(let rGraph, let rState)):
+            return lGraph == rGraph && lState == rState
         default:
             return false
         }
@@ -184,6 +206,11 @@ class HaloStateCallbacks {
     var toolConfirmationOnCancel: (() -> Void)?
     var planConfirmationOnExecute: (() -> Void)?
     var planConfirmationOnCancel: (() -> Void)?
+    var coworkConfirmationOnExecute: (() -> Void)?
+    var coworkConfirmationOnCancel: (() -> Void)?
+    var coworkOnPause: (() -> Void)?
+    var coworkOnResume: (() -> Void)?
+    var coworkOnCancel: (() -> Void)?
 
     func reset() {
         toastOnDismiss = nil
@@ -191,6 +218,11 @@ class HaloStateCallbacks {
         toolConfirmationOnCancel = nil
         planConfirmationOnExecute = nil
         planConfirmationOnCancel = nil
+        coworkConfirmationOnExecute = nil
+        coworkConfirmationOnCancel = nil
+        coworkOnPause = nil
+        coworkOnResume = nil
+        coworkOnCancel = nil
     }
 }
 

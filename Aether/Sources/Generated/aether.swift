@@ -588,6 +588,28 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func clearMemory() throws 
     
+    func coworkCancel() 
+    
+    func coworkExecute(graph: CoworkTaskGraphFfi) throws  -> CoworkExecutionSummaryFfi
+    
+    func coworkGetConfig()  -> CoworkConfigFfi
+    
+    func coworkGetState()  -> CoworkExecutionState
+    
+    func coworkIsCancelled()  -> Bool
+    
+    func coworkIsPaused()  -> Bool
+    
+    func coworkPause() 
+    
+    func coworkPlan(request: String) throws  -> CoworkTaskGraphFfi
+    
+    func coworkResume() 
+    
+    func coworkSubscribe(handler: CoworkProgressHandler) 
+    
+    func coworkUpdateConfig(config: CoworkConfigFfi) throws 
+    
     func deleteMcpServer(id: String) throws 
     
     func deleteMemoriesByTopicId(topicId: String) throws  -> UInt64
@@ -775,6 +797,82 @@ open func clearMemories(appBundleId: String?, windowTitle: String?)throws  -> UI
     
 open func clearMemory()throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
     uniffi_aethecore_fn_method_aethercore_clear_memory(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+open func coworkCancel() {try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_cancel(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+open func coworkExecute(graph: CoworkTaskGraphFfi)throws  -> CoworkExecutionSummaryFfi {
+    return try  FfiConverterTypeCoworkExecutionSummaryFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_cowork_execute(self.uniffiClonePointer(),
+        FfiConverterTypeCoworkTaskGraphFFI.lower(graph),$0
+    )
+})
+}
+    
+open func coworkGetConfig() -> CoworkConfigFfi {
+    return try!  FfiConverterTypeCoworkConfigFFI.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_get_config(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func coworkGetState() -> CoworkExecutionState {
+    return try!  FfiConverterTypeCoworkExecutionState.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_get_state(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func coworkIsCancelled() -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_is_cancelled(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func coworkIsPaused() -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_is_paused(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func coworkPause() {try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_pause(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+open func coworkPlan(request: String)throws  -> CoworkTaskGraphFfi {
+    return try  FfiConverterTypeCoworkTaskGraphFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_cowork_plan(self.uniffiClonePointer(),
+        FfiConverterString.lower(request),$0
+    )
+})
+}
+    
+open func coworkResume() {try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_resume(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+open func coworkSubscribe(handler: CoworkProgressHandler) {try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_subscribe(self.uniffiClonePointer(),
+        FfiConverterCallbackInterfaceCoworkProgressHandler.lower(handler),$0
+    )
+}
+}
+    
+open func coworkUpdateConfig(config: CoworkConfigFfi)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_cowork_update_config(self.uniffiClonePointer(),
+        FfiConverterTypeCoworkConfigFFI.lower(config),$0
     )
 }
 }
@@ -2188,6 +2286,554 @@ public func FfiConverterTypeConversationTurn_lift(_ buf: RustBuffer) throws -> C
 #endif
 public func FfiConverterTypeConversationTurn_lower(_ value: ConversationTurn) -> RustBuffer {
     return FfiConverterTypeConversationTurn.lower(value)
+}
+
+
+public struct CoworkConfigFfi {
+    public var enabled: Bool
+    public var requireConfirmation: Bool
+    public var maxParallelism: UInt32
+    public var dryRun: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(enabled: Bool, requireConfirmation: Bool, maxParallelism: UInt32, dryRun: Bool) {
+        self.enabled = enabled
+        self.requireConfirmation = requireConfirmation
+        self.maxParallelism = maxParallelism
+        self.dryRun = dryRun
+    }
+}
+
+
+
+extension CoworkConfigFfi: Equatable, Hashable {
+    public static func ==(lhs: CoworkConfigFfi, rhs: CoworkConfigFfi) -> Bool {
+        if lhs.enabled != rhs.enabled {
+            return false
+        }
+        if lhs.requireConfirmation != rhs.requireConfirmation {
+            return false
+        }
+        if lhs.maxParallelism != rhs.maxParallelism {
+            return false
+        }
+        if lhs.dryRun != rhs.dryRun {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(enabled)
+        hasher.combine(requireConfirmation)
+        hasher.combine(maxParallelism)
+        hasher.combine(dryRun)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCoworkConfigFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CoworkConfigFfi {
+        return
+            try CoworkConfigFfi(
+                enabled: FfiConverterBool.read(from: &buf), 
+                requireConfirmation: FfiConverterBool.read(from: &buf), 
+                maxParallelism: FfiConverterUInt32.read(from: &buf), 
+                dryRun: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CoworkConfigFfi, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterBool.write(value.requireConfirmation, into: &buf)
+        FfiConverterUInt32.write(value.maxParallelism, into: &buf)
+        FfiConverterBool.write(value.dryRun, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkConfigFFI_lift(_ buf: RustBuffer) throws -> CoworkConfigFfi {
+    return try FfiConverterTypeCoworkConfigFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkConfigFFI_lower(_ value: CoworkConfigFfi) -> RustBuffer {
+    return FfiConverterTypeCoworkConfigFFI.lower(value)
+}
+
+
+public struct CoworkExecutionSummaryFfi {
+    public var graphId: String
+    public var totalTasks: UInt32
+    public var completedTasks: UInt32
+    public var failedTasks: UInt32
+    public var cancelledTasks: UInt32
+    public var totalDurationMs: UInt64
+    public var errors: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(graphId: String, totalTasks: UInt32, completedTasks: UInt32, failedTasks: UInt32, cancelledTasks: UInt32, totalDurationMs: UInt64, errors: [String]) {
+        self.graphId = graphId
+        self.totalTasks = totalTasks
+        self.completedTasks = completedTasks
+        self.failedTasks = failedTasks
+        self.cancelledTasks = cancelledTasks
+        self.totalDurationMs = totalDurationMs
+        self.errors = errors
+    }
+}
+
+
+
+extension CoworkExecutionSummaryFfi: Equatable, Hashable {
+    public static func ==(lhs: CoworkExecutionSummaryFfi, rhs: CoworkExecutionSummaryFfi) -> Bool {
+        if lhs.graphId != rhs.graphId {
+            return false
+        }
+        if lhs.totalTasks != rhs.totalTasks {
+            return false
+        }
+        if lhs.completedTasks != rhs.completedTasks {
+            return false
+        }
+        if lhs.failedTasks != rhs.failedTasks {
+            return false
+        }
+        if lhs.cancelledTasks != rhs.cancelledTasks {
+            return false
+        }
+        if lhs.totalDurationMs != rhs.totalDurationMs {
+            return false
+        }
+        if lhs.errors != rhs.errors {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(graphId)
+        hasher.combine(totalTasks)
+        hasher.combine(completedTasks)
+        hasher.combine(failedTasks)
+        hasher.combine(cancelledTasks)
+        hasher.combine(totalDurationMs)
+        hasher.combine(errors)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCoworkExecutionSummaryFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CoworkExecutionSummaryFfi {
+        return
+            try CoworkExecutionSummaryFfi(
+                graphId: FfiConverterString.read(from: &buf), 
+                totalTasks: FfiConverterUInt32.read(from: &buf), 
+                completedTasks: FfiConverterUInt32.read(from: &buf), 
+                failedTasks: FfiConverterUInt32.read(from: &buf), 
+                cancelledTasks: FfiConverterUInt32.read(from: &buf), 
+                totalDurationMs: FfiConverterUInt64.read(from: &buf), 
+                errors: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CoworkExecutionSummaryFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.graphId, into: &buf)
+        FfiConverterUInt32.write(value.totalTasks, into: &buf)
+        FfiConverterUInt32.write(value.completedTasks, into: &buf)
+        FfiConverterUInt32.write(value.failedTasks, into: &buf)
+        FfiConverterUInt32.write(value.cancelledTasks, into: &buf)
+        FfiConverterUInt64.write(value.totalDurationMs, into: &buf)
+        FfiConverterSequenceString.write(value.errors, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkExecutionSummaryFFI_lift(_ buf: RustBuffer) throws -> CoworkExecutionSummaryFfi {
+    return try FfiConverterTypeCoworkExecutionSummaryFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkExecutionSummaryFFI_lower(_ value: CoworkExecutionSummaryFfi) -> RustBuffer {
+    return FfiConverterTypeCoworkExecutionSummaryFFI.lower(value)
+}
+
+
+public struct CoworkProgressEventFfi {
+    public var eventType: CoworkProgressEventType
+    public var taskId: String?
+    public var taskName: String?
+    public var progress: Float
+    public var message: String?
+    public var error: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(eventType: CoworkProgressEventType, taskId: String?, taskName: String?, progress: Float, message: String?, error: String?) {
+        self.eventType = eventType
+        self.taskId = taskId
+        self.taskName = taskName
+        self.progress = progress
+        self.message = message
+        self.error = error
+    }
+}
+
+
+
+extension CoworkProgressEventFfi: Equatable, Hashable {
+    public static func ==(lhs: CoworkProgressEventFfi, rhs: CoworkProgressEventFfi) -> Bool {
+        if lhs.eventType != rhs.eventType {
+            return false
+        }
+        if lhs.taskId != rhs.taskId {
+            return false
+        }
+        if lhs.taskName != rhs.taskName {
+            return false
+        }
+        if lhs.progress != rhs.progress {
+            return false
+        }
+        if lhs.message != rhs.message {
+            return false
+        }
+        if lhs.error != rhs.error {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(eventType)
+        hasher.combine(taskId)
+        hasher.combine(taskName)
+        hasher.combine(progress)
+        hasher.combine(message)
+        hasher.combine(error)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCoworkProgressEventFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CoworkProgressEventFfi {
+        return
+            try CoworkProgressEventFfi(
+                eventType: FfiConverterTypeCoworkProgressEventType.read(from: &buf), 
+                taskId: FfiConverterOptionString.read(from: &buf), 
+                taskName: FfiConverterOptionString.read(from: &buf), 
+                progress: FfiConverterFloat.read(from: &buf), 
+                message: FfiConverterOptionString.read(from: &buf), 
+                error: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CoworkProgressEventFfi, into buf: inout [UInt8]) {
+        FfiConverterTypeCoworkProgressEventType.write(value.eventType, into: &buf)
+        FfiConverterOptionString.write(value.taskId, into: &buf)
+        FfiConverterOptionString.write(value.taskName, into: &buf)
+        FfiConverterFloat.write(value.progress, into: &buf)
+        FfiConverterOptionString.write(value.message, into: &buf)
+        FfiConverterOptionString.write(value.error, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkProgressEventFFI_lift(_ buf: RustBuffer) throws -> CoworkProgressEventFfi {
+    return try FfiConverterTypeCoworkProgressEventFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkProgressEventFFI_lower(_ value: CoworkProgressEventFfi) -> RustBuffer {
+    return FfiConverterTypeCoworkProgressEventFFI.lower(value)
+}
+
+
+public struct CoworkTaskDependencyFfi {
+    public var fromTaskId: String
+    public var toTaskId: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(fromTaskId: String, toTaskId: String) {
+        self.fromTaskId = fromTaskId
+        self.toTaskId = toTaskId
+    }
+}
+
+
+
+extension CoworkTaskDependencyFfi: Equatable, Hashable {
+    public static func ==(lhs: CoworkTaskDependencyFfi, rhs: CoworkTaskDependencyFfi) -> Bool {
+        if lhs.fromTaskId != rhs.fromTaskId {
+            return false
+        }
+        if lhs.toTaskId != rhs.toTaskId {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(fromTaskId)
+        hasher.combine(toTaskId)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCoworkTaskDependencyFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CoworkTaskDependencyFfi {
+        return
+            try CoworkTaskDependencyFfi(
+                fromTaskId: FfiConverterString.read(from: &buf), 
+                toTaskId: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CoworkTaskDependencyFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.fromTaskId, into: &buf)
+        FfiConverterString.write(value.toTaskId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkTaskDependencyFFI_lift(_ buf: RustBuffer) throws -> CoworkTaskDependencyFfi {
+    return try FfiConverterTypeCoworkTaskDependencyFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkTaskDependencyFFI_lower(_ value: CoworkTaskDependencyFfi) -> RustBuffer {
+    return FfiConverterTypeCoworkTaskDependencyFFI.lower(value)
+}
+
+
+public struct CoworkTaskFfi {
+    public var id: String
+    public var name: String
+    public var description: String?
+    public var taskType: CoworkTaskTypeCategory
+    public var status: CoworkTaskStatusState
+    public var progress: Float
+    public var errorMessage: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, name: String, description: String?, taskType: CoworkTaskTypeCategory, status: CoworkTaskStatusState, progress: Float, errorMessage: String?) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.taskType = taskType
+        self.status = status
+        self.progress = progress
+        self.errorMessage = errorMessage
+    }
+}
+
+
+
+extension CoworkTaskFfi: Equatable, Hashable {
+    public static func ==(lhs: CoworkTaskFfi, rhs: CoworkTaskFfi) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.taskType != rhs.taskType {
+            return false
+        }
+        if lhs.status != rhs.status {
+            return false
+        }
+        if lhs.progress != rhs.progress {
+            return false
+        }
+        if lhs.errorMessage != rhs.errorMessage {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(name)
+        hasher.combine(description)
+        hasher.combine(taskType)
+        hasher.combine(status)
+        hasher.combine(progress)
+        hasher.combine(errorMessage)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCoworkTaskFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CoworkTaskFfi {
+        return
+            try CoworkTaskFfi(
+                id: FfiConverterString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                description: FfiConverterOptionString.read(from: &buf), 
+                taskType: FfiConverterTypeCoworkTaskTypeCategory.read(from: &buf), 
+                status: FfiConverterTypeCoworkTaskStatusState.read(from: &buf), 
+                progress: FfiConverterFloat.read(from: &buf), 
+                errorMessage: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CoworkTaskFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterOptionString.write(value.description, into: &buf)
+        FfiConverterTypeCoworkTaskTypeCategory.write(value.taskType, into: &buf)
+        FfiConverterTypeCoworkTaskStatusState.write(value.status, into: &buf)
+        FfiConverterFloat.write(value.progress, into: &buf)
+        FfiConverterOptionString.write(value.errorMessage, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkTaskFFI_lift(_ buf: RustBuffer) throws -> CoworkTaskFfi {
+    return try FfiConverterTypeCoworkTaskFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkTaskFFI_lower(_ value: CoworkTaskFfi) -> RustBuffer {
+    return FfiConverterTypeCoworkTaskFFI.lower(value)
+}
+
+
+public struct CoworkTaskGraphFfi {
+    public var id: String
+    public var title: String
+    public var originalRequest: String?
+    public var tasks: [CoworkTaskFfi]
+    public var edges: [CoworkTaskDependencyFfi]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, title: String, originalRequest: String?, tasks: [CoworkTaskFfi], edges: [CoworkTaskDependencyFfi]) {
+        self.id = id
+        self.title = title
+        self.originalRequest = originalRequest
+        self.tasks = tasks
+        self.edges = edges
+    }
+}
+
+
+
+extension CoworkTaskGraphFfi: Equatable, Hashable {
+    public static func ==(lhs: CoworkTaskGraphFfi, rhs: CoworkTaskGraphFfi) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.title != rhs.title {
+            return false
+        }
+        if lhs.originalRequest != rhs.originalRequest {
+            return false
+        }
+        if lhs.tasks != rhs.tasks {
+            return false
+        }
+        if lhs.edges != rhs.edges {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(title)
+        hasher.combine(originalRequest)
+        hasher.combine(tasks)
+        hasher.combine(edges)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCoworkTaskGraphFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CoworkTaskGraphFfi {
+        return
+            try CoworkTaskGraphFfi(
+                id: FfiConverterString.read(from: &buf), 
+                title: FfiConverterString.read(from: &buf), 
+                originalRequest: FfiConverterOptionString.read(from: &buf), 
+                tasks: FfiConverterSequenceTypeCoworkTaskFFI.read(from: &buf), 
+                edges: FfiConverterSequenceTypeCoworkTaskDependencyFFI.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CoworkTaskGraphFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.title, into: &buf)
+        FfiConverterOptionString.write(value.originalRequest, into: &buf)
+        FfiConverterSequenceTypeCoworkTaskFFI.write(value.tasks, into: &buf)
+        FfiConverterSequenceTypeCoworkTaskDependencyFFI.write(value.edges, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkTaskGraphFFI_lift(_ buf: RustBuffer) throws -> CoworkTaskGraphFfi {
+    return try FfiConverterTypeCoworkTaskGraphFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkTaskGraphFFI_lower(_ value: CoworkTaskGraphFfi) -> RustBuffer {
+    return FfiConverterTypeCoworkTaskGraphFFI.lower(value)
 }
 
 
@@ -6383,6 +7029,374 @@ extension CommandType: Equatable, Hashable {}
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum CoworkExecutionState {
+    
+    case idle
+    case planning
+    case awaitingConfirmation
+    case executing
+    case paused
+    case cancelled
+    case completed
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCoworkExecutionState: FfiConverterRustBuffer {
+    typealias SwiftType = CoworkExecutionState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CoworkExecutionState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .idle
+        
+        case 2: return .planning
+        
+        case 3: return .awaitingConfirmation
+        
+        case 4: return .executing
+        
+        case 5: return .paused
+        
+        case 6: return .cancelled
+        
+        case 7: return .completed
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: CoworkExecutionState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .idle:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .planning:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .awaitingConfirmation:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .executing:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .paused:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .cancelled:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .completed:
+            writeInt(&buf, Int32(7))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkExecutionState_lift(_ buf: RustBuffer) throws -> CoworkExecutionState {
+    return try FfiConverterTypeCoworkExecutionState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkExecutionState_lower(_ value: CoworkExecutionState) -> RustBuffer {
+    return FfiConverterTypeCoworkExecutionState.lower(value)
+}
+
+
+
+extension CoworkExecutionState: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum CoworkProgressEventType {
+    
+    case taskStarted
+    case taskProgress
+    case taskCompleted
+    case taskFailed
+    case taskCancelled
+    case graphProgress
+    case graphCompleted
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCoworkProgressEventType: FfiConverterRustBuffer {
+    typealias SwiftType = CoworkProgressEventType
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CoworkProgressEventType {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .taskStarted
+        
+        case 2: return .taskProgress
+        
+        case 3: return .taskCompleted
+        
+        case 4: return .taskFailed
+        
+        case 5: return .taskCancelled
+        
+        case 6: return .graphProgress
+        
+        case 7: return .graphCompleted
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: CoworkProgressEventType, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .taskStarted:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .taskProgress:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .taskCompleted:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .taskFailed:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .taskCancelled:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .graphProgress:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .graphCompleted:
+            writeInt(&buf, Int32(7))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkProgressEventType_lift(_ buf: RustBuffer) throws -> CoworkProgressEventType {
+    return try FfiConverterTypeCoworkProgressEventType.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkProgressEventType_lower(_ value: CoworkProgressEventType) -> RustBuffer {
+    return FfiConverterTypeCoworkProgressEventType.lower(value)
+}
+
+
+
+extension CoworkProgressEventType: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum CoworkTaskStatusState {
+    
+    case pending
+    case running
+    case completed
+    case failed
+    case cancelled
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCoworkTaskStatusState: FfiConverterRustBuffer {
+    typealias SwiftType = CoworkTaskStatusState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CoworkTaskStatusState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .pending
+        
+        case 2: return .running
+        
+        case 3: return .completed
+        
+        case 4: return .failed
+        
+        case 5: return .cancelled
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: CoworkTaskStatusState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .pending:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .running:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .completed:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .failed:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .cancelled:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkTaskStatusState_lift(_ buf: RustBuffer) throws -> CoworkTaskStatusState {
+    return try FfiConverterTypeCoworkTaskStatusState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkTaskStatusState_lower(_ value: CoworkTaskStatusState) -> RustBuffer {
+    return FfiConverterTypeCoworkTaskStatusState.lower(value)
+}
+
+
+
+extension CoworkTaskStatusState: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum CoworkTaskTypeCategory {
+    
+    case fileOperation
+    case codeExecution
+    case documentGeneration
+    case appAutomation
+    case aiInference
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCoworkTaskTypeCategory: FfiConverterRustBuffer {
+    typealias SwiftType = CoworkTaskTypeCategory
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CoworkTaskTypeCategory {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .fileOperation
+        
+        case 2: return .codeExecution
+        
+        case 3: return .documentGeneration
+        
+        case 4: return .appAutomation
+        
+        case 5: return .aiInference
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: CoworkTaskTypeCategory, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .fileOperation:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .codeExecution:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .documentGeneration:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .appAutomation:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .aiInference:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkTaskTypeCategory_lift(_ buf: RustBuffer) throws -> CoworkTaskTypeCategory {
+    return try FfiConverterTypeCoworkTaskTypeCategory.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoworkTaskTypeCategory_lower(_ value: CoworkTaskTypeCategory) -> RustBuffer {
+    return FfiConverterTypeCoworkTaskTypeCategory.lower(value)
+}
+
+
+
+extension CoworkTaskTypeCategory: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum ErrorType {
     
     case network
@@ -7287,6 +8301,105 @@ extension FfiConverterCallbackInterfaceAetherEventHandler : FfiConverter {
 
 
 
+public protocol CoworkProgressHandler : AnyObject {
+    
+    func onProgressEvent(event: CoworkProgressEventFfi) 
+    
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceCoworkProgressHandler {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    static var vtable: UniffiVTableCallbackInterfaceCoworkProgressHandler = UniffiVTableCallbackInterfaceCoworkProgressHandler(
+        onProgressEvent: { (
+            uniffiHandle: UInt64,
+            event: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceCoworkProgressHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onProgressEvent(
+                     event: try FfiConverterTypeCoworkProgressEventFFI.lift(event)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            let result = try? FfiConverterCallbackInterfaceCoworkProgressHandler.handleMap.remove(handle: uniffiHandle)
+            if result == nil {
+                print("Uniffi callback interface CoworkProgressHandler: handle missing in uniffiFree")
+            }
+        }
+    )
+}
+
+private func uniffiCallbackInitCoworkProgressHandler() {
+    uniffi_aethecore_fn_init_callback_vtable_coworkprogresshandler(&UniffiCallbackInterfaceCoworkProgressHandler.vtable)
+}
+
+// FfiConverter protocol for callback interfaces
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterCallbackInterfaceCoworkProgressHandler {
+    fileprivate static var handleMap = UniffiHandleMap<CoworkProgressHandler>()
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+extension FfiConverterCallbackInterfaceCoworkProgressHandler : FfiConverter {
+    typealias SwiftType = CoworkProgressHandler
+    typealias FfiType = UInt64
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
+
+
+
 public protocol InitializationProgressHandler : AnyObject {
     
     func onInitStarted() 
@@ -8052,6 +9165,56 @@ fileprivate struct FfiConverterSequenceTypeContextRuleConfig: FfiConverterRustBu
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeCoworkTaskDependencyFFI: FfiConverterRustBuffer {
+    typealias SwiftType = [CoworkTaskDependencyFfi]
+
+    public static func write(_ value: [CoworkTaskDependencyFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeCoworkTaskDependencyFFI.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [CoworkTaskDependencyFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [CoworkTaskDependencyFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeCoworkTaskDependencyFFI.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeCoworkTaskFFI: FfiConverterRustBuffer {
+    typealias SwiftType = [CoworkTaskFfi]
+
+    public static func write(_ value: [CoworkTaskFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeCoworkTaskFFI.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [CoworkTaskFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [CoworkTaskFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeCoworkTaskFFI.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeKeywordRuleConfig: FfiConverterRustBuffer {
     typealias SwiftType = [KeywordRuleConfig]
 
@@ -8505,6 +9668,39 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_clear_memory() != 33517) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_cancel() != 36328) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_execute() != 42847) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_get_config() != 16398) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_get_state() != 15480) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_is_cancelled() != 53540) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_is_paused() != 5316) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_pause() != 57835) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_plan() != 18037) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_resume() != 1477) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_subscribe() != 18543) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_update_config() != 43915) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_delete_mcp_server() != 52792) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8682,6 +9878,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_memory_stored() != 30752) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_coworkprogresshandler_on_progress_event() != 54161) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_init_started() != 45699) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8702,6 +9901,7 @@ private var initializationResult: InitializationResult = {
     }
 
     uniffiCallbackInitAetherEventHandler()
+    uniffiCallbackInitCoworkProgressHandler()
     uniffiCallbackInitInitializationProgressHandler()
     return InitializationResult.ok
 }()
