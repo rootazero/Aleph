@@ -1901,6 +1901,22 @@ pub fn init_core(
     // Each operation will get a fresh token via reset_cancel_token()
     let current_op_token = Arc::new(RwLock::new(CancellationToken::new()));
 
+    // Set up search tool environment variables from config BEFORE creating ToolServer
+    // This bridges the config file settings to the rig tools which read from env vars
+    if let Some(ref search_config) = full_config.search {
+        if search_config.enabled {
+            // Set Tavily API key if configured
+            if let Some(tavily_backend) = search_config.backends.get("tavily") {
+                if let Some(ref api_key) = tavily_backend.api_key {
+                    if !api_key.is_empty() {
+                        std::env::set_var("TAVILY_API_KEY", api_key);
+                        info!("Set TAVILY_API_KEY from config file");
+                    }
+                }
+            }
+        }
+    }
+
     // Create shared ToolServerHandle with built-in tools for hot-reload support
     // NOTE: ToolServer::run() requires a tokio runtime context (uses tokio::spawn)
     // We use runtime.enter() to set the current runtime context before creating the handle
