@@ -103,7 +103,7 @@
 ## 11. Testing & Documentation
 
 - [x] 11.1 Write integration tests for CodeExecutor
-- [ ] 11.2 Test sandbox isolation
+- [x] 11.2 Test sandbox isolation
 - [x] 11.3 Test timeout behavior
 - [x] 11.4 Test blocked command detection
 - [ ] 11.5 Update docs/COWORK.md with CodeExec section

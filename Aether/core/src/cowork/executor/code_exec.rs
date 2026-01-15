@@ -921,4 +921,120 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("disabled"));
     }
+
+    // ===== Sandbox Tests =====
+
+    #[test]
+    fn test_sandbox_config_default() {
+        let config = SandboxConfig::default();
+        // Default: sandbox enabled, allow_exec true (for running code)
+        assert!(config.enabled);
+        assert!(!config.allow_network);
+        assert!(config.allow_exec);
+        assert!(config.read_paths.is_empty());
+        assert!(config.write_paths.is_empty());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_sandbox_profile_generation_basic() {
+        let config = SandboxConfig {
+            enabled: true,
+            read_paths: vec![],
+            write_paths: vec![],
+            allow_network: false,
+            allow_exec: false,
+        };
+
+        let profile = config.generate_profile();
+
+        // Should contain version declaration
+        assert!(profile.contains("(version 1)"));
+
+        // Should have deny default which blocks everything not explicitly allowed
+        assert!(profile.contains("(deny default)"));
+
+        // Should NOT allow network when disabled
+        assert!(!profile.contains("(allow network*)"));
+
+        // Should NOT allow process-exec when disabled
+        assert!(!profile.contains("(allow process-exec)"));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_sandbox_profile_with_network() {
+        let config = SandboxConfig {
+            enabled: true,
+            read_paths: vec![],
+            write_paths: vec![],
+            allow_network: true,
+            allow_exec: false,
+        };
+
+        let profile = config.generate_profile();
+
+        // Should allow network when enabled
+        assert!(profile.contains("(allow network*)"));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_sandbox_profile_with_exec() {
+        let config = SandboxConfig {
+            enabled: true,
+            read_paths: vec![],
+            write_paths: vec![],
+            allow_network: false,
+            allow_exec: true,
+        };
+
+        let profile = config.generate_profile();
+
+        // Should allow process-exec when enabled
+        assert!(profile.contains("(allow process-exec)"));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_sandbox_profile_with_paths() {
+        let config = SandboxConfig {
+            enabled: true,
+            read_paths: vec![PathBuf::from("/tmp/test_read")],
+            write_paths: vec![PathBuf::from("/tmp/test_write")],
+            allow_network: false,
+            allow_exec: false,
+        };
+
+        let profile = config.generate_profile();
+
+        // Should include read path
+        assert!(profile.contains("/tmp/test_read"));
+
+        // Should include write path
+        assert!(profile.contains("/tmp/test_write"));
+    }
+
+    #[test]
+    fn test_sandbox_config_with_executor() {
+        let permission_checker = PathPermissionChecker::default();
+
+        // Create executor with sandbox enabled
+        let executor = CodeExecutor::new(
+            true,
+            "bash".to_string(),
+            60,
+            true, // sandbox_enabled
+            vec![],
+            false, // allow_network
+            vec![],
+            permission_checker,
+            None,
+            vec!["PATH".to_string()],
+        );
+
+        // Verify sandbox config is set correctly
+        assert!(executor.sandbox_config.enabled);
+        assert!(!executor.sandbox_config.allow_network);
+    }
 }
