@@ -10,7 +10,8 @@ import Foundation
 
 /// Clipboard change event data
 struct ClipboardChange {
-    let content: String
+    /// Text content (nil for non-text clipboard content like images)
+    let content: String?
     let timestamp: Date
     let changeCount: Int
 }
@@ -101,12 +102,10 @@ class ClipboardMonitor {
         // Clipboard changed - record the event
         lastChangeCount = currentChangeCount
 
-        // Get current clipboard content
-        guard let content = clipboardManager.getText() else {
-            return // No text content
-        }
+        // Get current clipboard content (may be nil for non-text content like images)
+        let content = clipboardManager.getText()
 
-        // Record the change
+        // Record the change (even for non-text content, we need the timestamp)
         let change = ClipboardChange(
             content: content,
             timestamp: Date(),
@@ -115,7 +114,11 @@ class ClipboardMonitor {
 
         lastChange = change
 
-        print("[ClipboardMonitor] Clipboard changed (count: \(currentChangeCount), content: \(content.prefix(30))...)")
+        if let content = content {
+            print("[ClipboardMonitor] Clipboard changed (count: \(currentChangeCount), text: \(content.prefix(30))...)")
+        } else {
+            print("[ClipboardMonitor] Clipboard changed (count: \(currentChangeCount), non-text content)")
+        }
     }
 
     // MARK: - Query Methods
@@ -129,12 +132,17 @@ class ClipboardMonitor {
         }
 
         // CRITICAL: Check if clipboard has changed since we recorded this change.
-        // If user copied non-text content (e.g., image) after the text was recorded,
+        // If user copied new content after this was recorded,
         // changeCount will be different, meaning our recorded content is stale.
         let currentChangeCount = clipboardManager.changeCount()
         if change.changeCount != currentChangeCount {
             print("[ClipboardMonitor] Clipboard changeCount mismatch (\(change.changeCount) vs \(currentChangeCount)) - content is stale")
             return nil
+        }
+
+        // Check if this change had text content
+        guard let content = change.content else {
+            return nil // Non-text content (e.g., image)
         }
 
         let elapsed = Date().timeIntervalSince(change.timestamp)
@@ -145,7 +153,7 @@ class ClipboardMonitor {
         }
 
         print("[ClipboardMonitor] Found recent clipboard content (\(Int(elapsed))s ago)")
-        return change.content
+        return content
     }
 
     /// Check if clipboard was changed within the recent threshold
@@ -156,16 +164,14 @@ class ClipboardMonitor {
     /// - Returns: true if clipboard was changed within `recentThresholdSeconds`
     func isClipboardRecent() -> Bool {
         guard let change = lastChange else {
-            // No recorded text change - cannot determine recency without timestamp
+            // No recorded change - cannot determine recency without timestamp
             return false
         }
 
-        // CRITICAL: Check if clipboard has changed since we recorded this change.
-        // If user copied non-text content (e.g., image) after the text was recorded,
-        // changeCount will be different, meaning our recorded timestamp is stale.
+        // Check if clipboard has changed since we recorded this change.
         let currentChangeCount = clipboardManager.changeCount()
         if change.changeCount != currentChangeCount {
-            // Clipboard changed since last text recording - we don't have
+            // Clipboard changed since last recording - we don't have
             // timestamp for the new content, so we can't determine recency.
             // To be safe, return false to avoid including stale content.
             print("[ClipboardMonitor] Clipboard changeCount mismatch - cannot determine recency")
@@ -177,6 +183,9 @@ class ClipboardMonitor {
 
         if !isRecent {
             print("[ClipboardMonitor] Clipboard too old for attachments (\(Int(elapsed))s > \(Int(recentThresholdSeconds))s)")
+        } else {
+            let contentType = change.content != nil ? "text" : "non-text"
+            print("[ClipboardMonitor] Clipboard is recent (\(Int(elapsed))s, \(contentType) content)")
         }
 
         return isRecent
