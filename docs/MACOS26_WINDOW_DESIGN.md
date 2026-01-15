@@ -1,8 +1,8 @@
 # macOS 26 Window Design Architecture
 
-**Status**: ✅ Implemented (Phase 1 & 2 Complete)
+**Status**: ✅ Implemented (Phase 1, 2 & 3 Complete)
 
-Aether 采用 macOS 26 最新设计语言，将系统控制按钮（交通灯）集成到左侧圆角侧边栏中，实现现代化、沉浸式的设置窗口体验。
+Aether 采用 macOS 26 最新设计语言，包括 Liquid Glass 效果、自定义交通灯按钮，以及将系统控制按钮集成到左侧圆角侧边栏中，实现现代化、沉浸式的窗口体验。
 
 ## Design Philosophy
 
@@ -11,6 +11,82 @@ Aether 采用 macOS 26 最新设计语言，将系统控制按钮（交通灯）
 - **Unified Controls**: 交通灯按钮融入侧边栏，而非独立的标题栏
 - **Continuous Curves**: 使用 18pt continuous 圆角（Apple 标准）
 - **Adaptive Materials**: 自适应 Dark/Light Mode 背景材质
+- **Liquid Glass**: 原生玻璃效果，保持前后台一致外观
+
+---
+
+## Liquid Glass Implementation
+
+### Overview
+
+macOS 26 引入了 Liquid Glass 设计语言，Aether 通过 `.glassEffect()` API 实现原生玻璃效果，并使用环境变量覆盖确保窗口在前台/后台切换时保持一致的视觉外观。
+
+### Core Implementation
+
+```swift
+// AdaptiveGlassModifier.swift
+func body(content: Content) -> some View {
+    if #available(macOS 26, *) {
+        content
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .environment(\.controlActiveState, .active)  // 保持一致外观
+    } else {
+        // Fallback: NSVisualEffectView
+        content
+            .background(VisualEffectBackground(material: .hudWindow, blendingMode: .behindWindow))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+```
+
+### Design Decision: Consistent Appearance
+
+**问题**: 默认情况下，Liquid Glass 在窗口失去焦点时会自动变淡（系统行为），导致视觉跳跃。
+
+**解决方案**: 使用 `.environment(\.controlActiveState, .active)` 强制保持一致的玻璃外观。
+
+**为什么选择 `.active` 而非 `.key`**:
+
+| 值 | 含义 | 适用场景 |
+|---|------|---------|
+| `.active` | 窗口属于前台应用 | 通用活跃状态（推荐） |
+| `.key` | 窗口接收键盘输入 | 多窗口场景区分焦点 |
+| `.inactive` | 窗口完全非活跃 | 后台状态 |
+
+**最终效果**: 稍微淡化的玻璃效果，提供更好的文字可读性，同时保持前后台视觉一致性。
+
+### Glass Effect Components
+
+| 组件 | API | 用途 |
+|------|-----|------|
+| `GlassModifier` | `.glassEffect(.regular)` | 通用玻璃背景 |
+| `GlassProminentButtonModifier` | `.glassEffect(.regular.interactive())` | 主要按钮 |
+| `GlassButtonModifier` | `.glassEffect(.regular)` | 次要按钮 |
+| `AdaptiveGlassContainer` | `GlassEffectContainer` | 玻璃元素分组/融合 |
+| `GlassMessageBubbleModifier` | `.glassEffect(.regular)` | 消息气泡 |
+
+### Usage
+
+```swift
+// 应用玻璃效果
+VStack {
+    Text("Content")
+}
+.adaptiveGlass()  // 自动适配 macOS 26+ / 旧版本
+
+// 玻璃按钮
+Button("Action") {}
+    .adaptiveGlassButton()
+
+// 玻璃容器（支持元素融合）
+AdaptiveGlassContainer(spacing: 8) {
+    // 子元素会自动共享玻璃上下文
+}
+```
+
+### File Location
+
+`Aether/Sources/Components/Atoms/AdaptiveGlassModifier.swift`
 
 ---
 
@@ -300,7 +376,8 @@ struct RootContentView: View {
 ### 兼容性
 
 - 最低支持: macOS 13 (Ventura)
-- 最佳体验: macOS 14+ (Sonoma, Sequoia)
+- 最佳体验: macOS 26+ (Tahoe) - 完整 Liquid Glass 支持
+- macOS 14/15: NSVisualEffectView fallback
 - `.continuous` 圆角在所有版本正确渲染
 
 ---
@@ -343,15 +420,17 @@ NSApp.keyWindow?.performClose(nil)
 - `Aether/Sources/Components/Window/SidebarWithTrafficLights.swift` - 圆角侧边栏
 - `Aether/Sources/Components/Window/RootContentView.swift` - 根布局容器
 
-### 修改文件 (2 个文件)
+### 修改文件 (3 个文件)
 
 - `Aether/Sources/AetherApp.swift` - 添加 WindowGroup（Feature Flag 控制）
 - `Aether/Sources/AppDelegate.swift` - 暴露 core/keychainManager，更新 showSettings()
+- `Aether/Sources/Components/Atoms/AdaptiveGlassModifier.swift` - Liquid Glass 实现
 
 ### 代码统计
 
 - 新增代码: ~525 行（含 WindowConfigurator）
-- Preview 数量: 6 个
+- Liquid Glass: ~280 行（含 fallback 和 Preview）
+- Preview 数量: 8 个
 - 文档注释: 完整的 MARK 和 DocC 注释
 
 ---
@@ -378,6 +457,15 @@ NSApp.keyWindow?.performClose(nil)
 - [ ] macOS 13 (Ventura) 兼容性
 - [ ] macOS 14 (Sonoma) 兼容性
 - [ ] macOS 15 (Sequoia) 兼容性
+- [ ] macOS 26 (Tahoe) Liquid Glass 兼容性
+
+### Liquid Glass 验证
+
+- [ ] Liquid Glass 效果正确显示（macOS 26+）
+- [ ] 窗口失焦时玻璃效果保持一致（不变淡/变暗）
+- [ ] 文字在玻璃背景上清晰可读
+- [ ] NSVisualEffectView fallback 在旧版本正常工作
+- [ ] GlassEffectContainer 元素正确融合
 
 ---
 
