@@ -45,10 +45,10 @@ struct GlassModifier: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 26, *) {
             // macOS 26+: Use native Liquid Glass effect
-            // .environment(\.controlActiveState, .active) keeps the glass appearance consistent
-            // regardless of window focus state, providing better text readability
+            // .clear provides a lighter glass appearance with less visible border
+            // .environment(\.controlActiveState, .active) keeps the appearance consistent
             content
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .glassEffect(.clear, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                 .environment(\.controlActiveState, .active)
         } else {
             // Fallback for earlier versions: Use NSVisualEffectView
@@ -108,7 +108,7 @@ struct GlassButtonModifier: ViewModifier {
             // macOS 26+: Use native glass button style
             content
                 .padding(6)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .glassEffect(.clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .environment(\.controlActiveState, .active)
         } else {
             // Fallback: Subtle hover effect
