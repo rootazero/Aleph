@@ -84,6 +84,7 @@ mod title_generator; // Title generation for conversation topics
 pub mod tools; // Tool type definitions (ToolCategory, ToolDefinition, ToolResult)
 pub mod vision; // NEW: Vision capability (screen OCR, image understanding)
 pub mod cowork; // NEW: Cowork task orchestration (Phase 1)
+pub mod cowork_ffi; // NEW: Cowork FFI bindings
 
 // Integration tests module
 #[cfg(test)]
@@ -146,6 +147,12 @@ pub use crate::tools::{ToolCategory, ToolDefinition, ToolResult};
 pub use crate::utils::pii;
 pub use crate::vision::{
     CaptureMode, VisionConfig, VisionRequest, VisionResult, VisionService, VisionTask,
+};
+// Cowork FFI exports (task orchestration)
+pub use crate::cowork_ffi::{
+    CoworkConfigFFI, CoworkExecutionState, CoworkExecutionSummaryFFI, CoworkProgressEventFFI,
+    CoworkProgressEventType, CoworkProgressHandler, CoworkTaskDependencyFFI, CoworkTaskFFI,
+    CoworkTaskGraphFFI, CoworkTaskStatusState, CoworkTaskTypeCategory, FfiProgressSubscriber,
 };
 
 // Core interface exports (rig-core based architecture)

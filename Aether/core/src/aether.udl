@@ -899,6 +899,46 @@ interface AetherCore {
     // Extract text from image data using OCR
     [Throws=AetherFfiError]
     string extract_text(sequence<u8> image_data);
+
+    // ===== COWORK TASK ORCHESTRATION =====
+
+    // Get Cowork configuration
+    CoworkConfigFFI cowork_get_config();
+
+    // Update Cowork configuration
+    [Throws=AetherFfiError]
+    void cowork_update_config(CoworkConfigFFI config);
+
+    // Plan a task from natural language request
+    // Returns a task graph that can be reviewed before execution
+    [Throws=AetherFfiError]
+    CoworkTaskGraphFFI cowork_plan(string request);
+
+    // Execute a task graph
+    // Returns execution summary when complete
+    [Throws=AetherFfiError]
+    CoworkExecutionSummaryFFI cowork_execute(CoworkTaskGraphFFI graph);
+
+    // Get current execution state
+    CoworkExecutionState cowork_get_state();
+
+    // Pause execution (running tasks complete, no new tasks start)
+    void cowork_pause();
+
+    // Resume execution after pause
+    void cowork_resume();
+
+    // Cancel execution (running tasks complete, then terminates)
+    void cowork_cancel();
+
+    // Check if execution is paused
+    boolean cowork_is_paused();
+
+    // Check if execution is cancelled
+    boolean cowork_is_cancelled();
+
+    // Subscribe to progress events
+    void cowork_subscribe(CoworkProgressHandler handler);
 };
 
 dictionary ProcessOptions {
@@ -921,4 +961,107 @@ dictionary MemoryItem {
     string assistant_response;
     i64 timestamp;
     string? app_context;
+};
+
+// ===== COWORK TASK ORCHESTRATION (add-cowork-task-orchestration) =====
+
+// Cowork execution state
+enum CoworkExecutionState {
+  "Idle",                 // Not executing
+  "Planning",             // Planning a task
+  "AwaitingConfirmation", // Waiting for user confirmation
+  "Executing",            // Executing tasks
+  "Paused",               // Execution paused
+  "Cancelled",            // Execution cancelled
+  "Completed",            // Execution completed
+};
+
+// Cowork task status state (simplified for FFI)
+enum CoworkTaskStatusState {
+  "Pending",    // Task waiting to execute
+  "Running",    // Task currently executing
+  "Completed",  // Task completed successfully
+  "Failed",     // Task failed
+  "Cancelled",  // Task was cancelled
+};
+
+// Cowork task type category
+enum CoworkTaskTypeCategory {
+  "FileOperation",        // File system operations
+  "CodeExecution",        // Code/script execution
+  "DocumentGeneration",   // Document generation (Excel, PDF, etc.)
+  "AppAutomation",        // macOS app automation
+  "AiInference",          // AI inference task
+};
+
+// Cowork configuration
+dictionary CoworkConfigFFI {
+  boolean enabled;               // Whether Cowork is enabled
+  boolean require_confirmation;  // Require user confirmation before execution
+  u32 max_parallelism;           // Max parallel tasks
+  boolean dry_run;               // Dry-run mode (no actual execution)
+};
+
+// Cowork task (simplified for FFI)
+dictionary CoworkTaskFFI {
+  string id;                         // Unique task identifier
+  string name;                       // Human-readable name
+  string? description;               // Optional description
+  CoworkTaskTypeCategory task_type;  // Task type category
+  CoworkTaskStatusState status;      // Current status
+  f32 progress;                      // Progress (0.0 - 1.0)
+  string? error_message;             // Error message if failed
+};
+
+// Cowork task dependency
+dictionary CoworkTaskDependencyFFI {
+  string from_task_id;  // Predecessor task ID
+  string to_task_id;    // Successor task ID
+};
+
+// Cowork task graph (simplified for FFI)
+dictionary CoworkTaskGraphFFI {
+  string id;                                   // Graph unique identifier
+  string title;                                // Graph title
+  string? original_request;                    // Original user request
+  sequence<CoworkTaskFFI> tasks;               // All tasks in the graph
+  sequence<CoworkTaskDependencyFFI> edges;     // Task dependencies
+};
+
+// Cowork execution summary
+dictionary CoworkExecutionSummaryFFI {
+  string graph_id;           // Graph ID that was executed
+  u32 total_tasks;           // Total number of tasks
+  u32 completed_tasks;       // Successfully completed tasks
+  u32 failed_tasks;          // Failed tasks
+  u32 cancelled_tasks;       // Cancelled tasks
+  u64 total_duration_ms;     // Total execution duration in milliseconds
+  sequence<string> errors;   // Error messages from failed tasks
+};
+
+// Cowork progress event type
+enum CoworkProgressEventType {
+  "TaskStarted",      // Task execution started
+  "TaskProgress",     // Task progress update
+  "TaskCompleted",    // Task completed successfully
+  "TaskFailed",       // Task failed
+  "TaskCancelled",    // Task was cancelled
+  "GraphProgress",    // Overall graph progress update
+  "GraphCompleted",   // Entire graph completed
+};
+
+// Cowork progress event (for real-time updates)
+dictionary CoworkProgressEventFFI {
+  CoworkProgressEventType event_type;  // Event type
+  string? task_id;                     // Task ID (if task-related)
+  string? task_name;                   // Task name (if task-related)
+  f32 progress;                        // Progress value (0.0 - 1.0)
+  string? message;                     // Optional message
+  string? error;                       // Error message (for failed events)
+};
+
+// Callback interface for Cowork progress events
+callback interface CoworkProgressHandler {
+  // Called when a progress event occurs
+  void on_progress_event(CoworkProgressEventFFI event);
 };

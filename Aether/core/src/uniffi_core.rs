@@ -232,6 +232,8 @@ pub struct AetherCore {
     tool_server_handle: ToolServerHandle,
     /// Names of registered tools (for tracking and display)
     registered_tools: Arc<RwLock<Vec<String>>>,
+    /// Cowork engine for task orchestration (lazily initialized)
+    cowork_engine: Arc<RwLock<Option<Arc<crate::cowork::CoworkEngine>>>>,
 }
 
 impl AetherCore {
@@ -1775,6 +1777,191 @@ impl AetherCore {
                 .map_err(|e| AetherFfiError::Config(format!("OCR failed: {}", e)))
         })
     }
+
+    // ========================================================================
+    // COWORK TASK ORCHESTRATION METHODS
+    // ========================================================================
+
+    /// Get or create the Cowork engine
+    ///
+    /// Lazily initializes the CoworkEngine on first use.
+    fn get_or_create_cowork_engine(&self) -> Result<Arc<crate::cowork::CoworkEngine>, AetherFfiError> {
+        // Check if engine already exists
+        {
+            let engine_guard = self.cowork_engine.read().unwrap();
+            if let Some(engine) = engine_guard.as_ref() {
+                return Ok(Arc::clone(engine));
+            }
+        }
+
+        // Need to create the engine
+        let mut engine_guard = self.cowork_engine.write().unwrap();
+
+        // Double-check after acquiring write lock
+        if let Some(engine) = engine_guard.as_ref() {
+            return Ok(Arc::clone(engine));
+        }
+
+        // Get the config for cowork (use defaults for now)
+        let cowork_config = crate::cowork::CoworkConfig::default();
+
+        // Get an AI provider for the planner
+        let full_config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
+        let default_provider_name = full_config.general.default_provider.clone()
+            .unwrap_or_else(|| "openai".to_string());
+
+        // Find the provider config
+        let provider_config = full_config.providers.iter()
+            .find(|(name, _)| **name == default_provider_name)
+            .map(|(_, config)| config.clone())
+            .ok_or_else(|| AetherFfiError::Provider(format!(
+                "Default provider '{}' not found in config",
+                default_provider_name
+            )))?;
+
+        // Create a provider from config
+        let provider = crate::providers::create_provider(&default_provider_name, provider_config)
+            .map_err(|e| AetherFfiError::Provider(format!("Failed to create provider for Cowork: {}", e)))?;
+
+        // Create the engine
+        let engine = Arc::new(crate::cowork::CoworkEngine::new(cowork_config, provider));
+
+        *engine_guard = Some(Arc::clone(&engine));
+        info!("Cowork engine initialized");
+
+        Ok(engine)
+    }
+
+    /// Get Cowork configuration
+    pub fn cowork_get_config(&self) -> crate::cowork_ffi::CoworkConfigFFI {
+        // Return current config or default
+        crate::cowork_ffi::CoworkConfigFFI::from(crate::cowork::CoworkConfig::default())
+    }
+
+    /// Update Cowork configuration
+    pub fn cowork_update_config(
+        &self,
+        config: crate::cowork_ffi::CoworkConfigFFI,
+    ) -> Result<(), AetherFfiError> {
+        // For now, this would reinitialize the engine with new config
+        // Reset the engine so it gets recreated with new config
+        let mut engine_guard = self.cowork_engine.write().unwrap();
+        *engine_guard = None;
+
+        info!(
+            enabled = config.enabled,
+            max_parallelism = config.max_parallelism,
+            "Cowork configuration updated"
+        );
+
+        Ok(())
+    }
+
+    /// Plan a task from natural language request
+    pub fn cowork_plan(
+        &self,
+        request: String,
+    ) -> Result<crate::cowork_ffi::CoworkTaskGraphFFI, AetherFfiError> {
+        let engine = self.get_or_create_cowork_engine()?;
+
+        info!(request = %request, "Planning Cowork task");
+
+        let graph = self.runtime.block_on(async {
+            engine.plan(&request).await
+        }).map_err(|e| AetherFfiError::Provider(format!("Planning failed: {}", e)))?;
+
+        Ok(crate::cowork_ffi::CoworkTaskGraphFFI::from(&graph))
+    }
+
+    /// Execute a task graph
+    pub fn cowork_execute(
+        &self,
+        graph_ffi: crate::cowork_ffi::CoworkTaskGraphFFI,
+    ) -> Result<crate::cowork_ffi::CoworkExecutionSummaryFFI, AetherFfiError> {
+        let engine = self.get_or_create_cowork_engine()?;
+
+        info!(graph_id = %graph_ffi.id, "Executing Cowork task graph");
+
+        // Convert FFI graph back to internal TaskGraph
+        // For now, we'll re-plan to get an executable graph
+        // In a full implementation, we'd store the original graph
+        let original_request = graph_ffi.original_request.clone()
+            .unwrap_or_else(|| "Execute planned tasks".to_string());
+
+        let graph = self.runtime.block_on(async {
+            engine.plan(&original_request).await
+        }).map_err(|e| AetherFfiError::Provider(format!("Re-planning failed: {}", e)))?;
+
+        let summary = self.runtime.block_on(async {
+            engine.execute(graph).await
+        }).map_err(|e| AetherFfiError::Provider(format!("Execution failed: {}", e)))?;
+
+        Ok(crate::cowork_ffi::CoworkExecutionSummaryFFI::from(summary))
+    }
+
+    /// Get current execution state
+    pub fn cowork_get_state(&self) -> crate::cowork_ffi::CoworkExecutionState {
+        if let Ok(engine) = self.get_or_create_cowork_engine() {
+            self.runtime.block_on(async {
+                crate::cowork_ffi::CoworkExecutionState::from(engine.state().await)
+            })
+        } else {
+            crate::cowork_ffi::CoworkExecutionState::Idle
+        }
+    }
+
+    /// Pause execution
+    pub fn cowork_pause(&self) {
+        if let Ok(engine) = self.get_or_create_cowork_engine() {
+            engine.pause();
+            info!("Cowork execution paused");
+        }
+    }
+
+    /// Resume execution
+    pub fn cowork_resume(&self) {
+        if let Ok(engine) = self.get_or_create_cowork_engine() {
+            engine.resume();
+            info!("Cowork execution resumed");
+        }
+    }
+
+    /// Cancel execution
+    pub fn cowork_cancel(&self) {
+        if let Ok(engine) = self.get_or_create_cowork_engine() {
+            engine.cancel();
+            info!("Cowork execution cancelled");
+        }
+    }
+
+    /// Check if execution is paused
+    pub fn cowork_is_paused(&self) -> bool {
+        if let Ok(engine) = self.get_or_create_cowork_engine() {
+            engine.is_paused()
+        } else {
+            false
+        }
+    }
+
+    /// Check if execution is cancelled
+    pub fn cowork_is_cancelled(&self) -> bool {
+        if let Ok(engine) = self.get_or_create_cowork_engine() {
+            engine.is_cancelled()
+        } else {
+            false
+        }
+    }
+
+    /// Subscribe to progress events
+    pub fn cowork_subscribe(&self, handler: Box<dyn crate::cowork_ffi::CoworkProgressHandler>) {
+        if let Ok(engine) = self.get_or_create_cowork_engine() {
+            // Convert Box to Arc for internal use
+            let handler_arc: Arc<dyn crate::cowork_ffi::CoworkProgressHandler> = Arc::from(handler);
+            let subscriber = Arc::new(crate::cowork_ffi::FfiProgressSubscriber::new(handler_arc));
+            engine.subscribe(subscriber);
+            info!("Cowork progress subscriber added");
+        }
+    }
 }
 
 /// Initialize AetherCore
@@ -1942,6 +2129,7 @@ pub fn init_core(
         current_op_token,
         tool_server_handle,
         registered_tools,
+        cowork_engine: Arc::new(RwLock::new(None)),  // Lazily initialized
     }))
 }
 
