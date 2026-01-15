@@ -79,7 +79,8 @@ struct GlassProminentButtonModifier: ViewModifier {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(.white)
                 .padding(10)
-                .glassEffect(.regular.interactive(), in: Circle())
+                .contentShape(Circle())  // Expand hit area to full circle
+                .glassEffect(.clear.interactive(), in: Circle())
                 .environment(\.controlActiveState, .active)
         } else {
             // Fallback: Custom prominent button styling
@@ -87,6 +88,7 @@ struct GlassProminentButtonModifier: ViewModifier {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(.white)
                 .padding(10)
+                .contentShape(Circle())  // Expand hit area to full circle
                 .background(
                     Circle()
                         .fill(isEnabled ? Color.primary.opacity(0.8) : Color.primary.opacity(0.4))
