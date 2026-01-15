@@ -1034,6 +1034,7 @@ mod tests {
             media_type: "image".to_string(),
             mime_type: "image/png".to_string(),
             data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_string(),
+            encoding: "base64".to_string(),
             filename: Some("test.png".to_string()),
             size_bytes: 100,
         }];

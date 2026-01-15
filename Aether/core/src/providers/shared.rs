@@ -88,6 +88,7 @@ mod tests {
             media_type: media_type.to_string(),
             mime_type: if media_type == "image" { "image/png".to_string() } else { "text/plain".to_string() },
             data: data.to_string(),
+            encoding: if media_type == "image" { "base64".to_string() } else { "utf8".to_string() },
             filename: filename.map(|s| s.to_string()),
             size_bytes: data.len() as u64,
         }

@@ -83,6 +83,7 @@ pub mod dispatcher; // NEW: Intelligent tool routing (Dispatcher Layer)
 mod title_generator; // Title generation for conversation topics
 pub mod tools; // Tool type definitions (ToolCategory, ToolDefinition, ToolResult)
 pub mod vision; // NEW: Vision capability (screen OCR, image understanding)
+pub mod cowork; // NEW: Cowork task orchestration (Phase 1)
 
 // Integration tests module
 #[cfg(test)]
