@@ -28,5 +28,5 @@ pub mod classifier;
 pub mod task_category;
 
 pub use ai_detector::{AiIntentDetector, AiIntentResult};
-pub use classifier::{ExecutableTask, ExecutionIntent};
+pub use classifier::{ExecutableTask, ExecutionIntent, IntentClassifier};
 pub use task_category::TaskCategory;
