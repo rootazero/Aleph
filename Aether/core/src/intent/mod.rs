@@ -1,7 +1,8 @@
 //! Intent detection module for AI-powered conversation flow.
 //!
-//! This module provides AI-powered detection of user intent and automatic
-//! capability invocation (search, video, skills, mcp).
+//! This module provides:
+//! - **AiIntentDetector**: AI-powered detection for capability invocation
+//! - **IntentClassifier**: Task classification for Agent execution mode
 //!
 //! # Architecture
 //!
@@ -23,5 +24,7 @@
 //! ```
 
 pub mod ai_detector;
+pub mod task_category;
 
 pub use ai_detector::{AiIntentDetector, AiIntentResult};
+pub use task_category::TaskCategory;
