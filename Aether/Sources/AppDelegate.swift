@@ -46,10 +46,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Global hotkey monitor (Swift layer)
     private var hotkeyMonitor: GlobalHotkeyMonitor?
 
-    // Vision hotkey manager for screen capture OCR
+    // Vision hotkey manager for screen capture OCR (legacy - now managed by HotkeyService)
     private var visionHotkeyManager: VisionHotkeyManager?
 
-    // Multi-turn conversation hotkey monitors (Cmd+Opt+/)
+    // Unified hotkey service (manages all hotkey systems)
+    private var hotkeyService: HotkeyService?
+
+    // Multi-turn conversation hotkey monitors (legacy - now managed by HotkeyService)
     // Global monitor for when other apps are active
     private var multiTurnHotkeyGlobalMonitor: Any?
     // Local monitor for when Aether is active
@@ -120,13 +123,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Stop hotkey monitoring
+        // Stop unified hotkey service (manages all hotkey systems)
+        hotkeyService?.stopAllHotkeys()
+
+        // Legacy cleanup (in case HotkeyService wasn't used)
         hotkeyMonitor?.stopMonitoring()
-
-        // Stop vision hotkey monitoring
         visionHotkeyManager?.unregisterHotkeys()
-
-        // Stop multi-turn hotkey monitoring
         if let monitor = multiTurnHotkeyGlobalMonitor {
             NSEvent.removeMonitor(monitor)
             multiTurnHotkeyGlobalMonitor = nil
@@ -143,7 +145,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         outputCoordinator?.stop()
 
         // Clean up Rust core (only if initialized)
-        // Note: No need to call stopListening() as hotkey monitoring is now in Swift
         print("[Aether] Application terminating")
     }
 
@@ -515,34 +516,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             return
         }
 
-        // Initialize the trigger-based hotkey system (GlobalHotkeyMonitor)
-        // This uses the two-callback architecture:
-        // - Replace hotkey (default: double-tap left Shift) → handleReplaceTriggered()
-        // - Append hotkey (default: double-tap right Shift) → handleAppendTriggered()
-        print("[Aether] Initializing trigger-based hotkey system...")
-        initializeTriggerSystem()
+        // Initialize unified HotkeyService (manages all hotkey systems)
+        // - Replace/Append hotkeys (double-tap modifier keys)
+        // - Vision/OCR hotkey (Cmd+Option+O)
+        // - Multi-turn conversation hotkey (Cmd+Option+/)
+        print("[Aether] Initializing HotkeyService...")
 
-        // Initialize vision hotkey manager for screen capture OCR
-        // Hotkeys: Cmd+Option+O (Region selection capture + OCR)
-        NSLog("[Aether] Initializing VisionHotkeys...")
-        initializeVisionHotkeys()
-        NSLog("[Aether] VisionHotkeys initialized")
-
-        // Check if monitoring started successfully
-        guard hotkeyMonitor != nil else {
-            print("[Aether] ❌ Failed to initialize trigger system")
-            // Fall back to showing permission gate
-            DispatchQueue.mainAsync(weakRef: self) { slf in
-                slf.showPermissionGate()
+        hotkeyService = HotkeyService()
+        hotkeyService?.configure(
+            core: core,
+            onReplace: { [weak self] in
+                self?.inputCoordinator?.handleReplaceTriggered()
+            },
+            onAppend: { [weak self] in
+                self?.inputCoordinator?.handleAppendTriggered()
             }
-            return
-        }
+        )
 
-        print("[Aether] Trigger system initialized successfully")
+        let triggerConfig = loadTriggerConfiguration()
+        hotkeyService?.startAllHotkeys(triggerConfig: triggerConfig)
 
-        // Setup Cmd+Opt+/ hotkey to route to MultiTurnCoordinator
-        setupMultiTurnHotkey()
-        print("[Aether] MultiTurn hotkey installed")
+        print("[Aether] HotkeyService initialized successfully")
 
         // Hide startup Halo animation (initialization succeeded)
         haloWindow?.hide()
@@ -907,13 +901,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Update unified input hotkey at runtime (called from ShortcutsView)
     func updateCommandPromptHotkey(_ shortcuts: ShortcutsConfig) {
-        // Update multi-turn hotkey configuration
-        updateMultiTurnHotkeyConfig(shortcuts)
+        // Delegate to HotkeyService
+        hotkeyService?.updateMultiTurnHotkey(shortcuts: shortcuts)
     }
 
     /// Update OCR capture hotkey configuration at runtime
     func updateOcrCaptureHotkey(_ shortcuts: ShortcutsConfig) {
-        visionHotkeyManager?.updateHotkey(from: shortcuts)
+        // Delegate to HotkeyService
+        hotkeyService?.updateVisionHotkey(shortcuts: shortcuts)
     }
 
     /// Get HaloWindow for external components (e.g., OCR feedback)
@@ -1104,12 +1099,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Update trigger configuration at runtime
     func updateTriggerConfiguration(_ triggerConfig: TriggerConfig) {
-        let replaceKey = triggerConfig.replaceKey
-        let appendKey = triggerConfig.appendKey
+        // Delegate to HotkeyService
+        hotkeyService?.updateGlobalHotkeys(triggerConfig: triggerConfig)
 
-        hotkeyMonitor?.configureTrigger(replaceKey: replaceKey, appendKey: appendKey)
-
-        print("[AppDelegate] Trigger config updated: replace=\(replaceKey.rawValue), append=\(appendKey.rawValue)")
+        print("[AppDelegate] Trigger config updated via HotkeyService")
     }
 
     // MARK: - Vision Hotkeys

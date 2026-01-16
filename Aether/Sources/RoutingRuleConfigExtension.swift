@@ -20,6 +20,7 @@ extension RoutingRuleConfig: Codable {
         case stripPrefix = "strip_prefix"
         case capabilities
         case intentType = "intent_type"
+        case preferredModel = "preferred_model"
         case contextFormat = "context_format"
         case skillId = "skill_id"
         case skillVersion = "skill_version"
@@ -40,6 +41,7 @@ extension RoutingRuleConfig: Codable {
         let stripPrefix = try container.decodeIfPresent(Bool.self, forKey: .stripPrefix)
         let capabilities = try container.decodeIfPresent([String].self, forKey: .capabilities)
         let intentType = try container.decodeIfPresent(String.self, forKey: .intentType)
+        let preferredModel = try container.decodeIfPresent(String.self, forKey: .preferredModel)
         let contextFormat = try container.decodeIfPresent(String.self, forKey: .contextFormat)
         let skillId = try container.decodeIfPresent(String.self, forKey: .skillId)
         let skillVersion = try container.decodeIfPresent(String.self, forKey: .skillVersion)
@@ -58,6 +60,7 @@ extension RoutingRuleConfig: Codable {
             stripPrefix: stripPrefix,
             capabilities: capabilities,
             intentType: intentType,
+            preferredModel: preferredModel,
             contextFormat: contextFormat,
             skillId: skillId,
             skillVersion: skillVersion,
@@ -90,6 +93,9 @@ extension RoutingRuleConfig: Codable {
         }
         if let intentType = intentType {
             try container.encode(intentType, forKey: .intentType)
+        }
+        if let preferredModel = preferredModel {
+            try container.encode(preferredModel, forKey: .preferredModel)
         }
         if let contextFormat = contextFormat {
             try container.encode(contextFormat, forKey: .contextFormat)

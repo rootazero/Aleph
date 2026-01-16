@@ -66,6 +66,39 @@ struct CoworkSettingsView: View {
     @State private var isShowingModelRouting = false
 
     var body: some View {
+        mainContent
+            .onAppear {
+                loadSettings()
+                updateSaveBarState()
+            }
+            .applyCoworkChangeTracking(
+                enabled: enabled,
+                requireConfirmation: requireConfirmation,
+                maxParallelism: maxParallelism,
+                dryRun: dryRun,
+                codeExecEnabled: codeExecEnabled,
+                sandboxEnabled: sandboxEnabled,
+                allowNetwork: allowNetwork,
+                timeoutSeconds: timeoutSeconds,
+                defaultRuntime: defaultRuntime,
+                fileOpsEnabled: fileOpsEnabled,
+                fileOpsAllowedPaths: fileOpsAllowedPaths,
+                fileOpsDeniedPaths: fileOpsDeniedPaths,
+                fileOpsMaxFileSize: fileOpsMaxFileSize,
+                fileOpsConfirmWrite: fileOpsConfirmWrite,
+                fileOpsConfirmDelete: fileOpsConfirmDelete,
+                isSaving: isSaving,
+                onUpdate: updateSaveBarState
+            )
+            .sheet(isPresented: $isShowingModelProfiles) {
+                ModelProfilesSettingsView(core: core, isPresented: $isShowingModelProfiles)
+            }
+            .sheet(isPresented: $isShowingModelRouting) {
+                ModelRoutingSettingsView(core: core, isPresented: $isShowingModelRouting)
+            }
+    }
+
+    private var mainContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
                 enabledSection
@@ -101,32 +134,6 @@ struct CoworkSettingsView: View {
         }
         .scrollEdge(edges: [.top, .bottom], style: .hard())
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear {
-            loadSettings()
-            updateSaveBarState()
-        }
-        .onChange(of: enabled) { _, _ in updateSaveBarState() }
-        .onChange(of: requireConfirmation) { _, _ in updateSaveBarState() }
-        .onChange(of: maxParallelism) { _, _ in updateSaveBarState() }
-        .onChange(of: dryRun) { _, _ in updateSaveBarState() }
-        .onChange(of: codeExecEnabled) { _, _ in updateSaveBarState() }
-        .onChange(of: sandboxEnabled) { _, _ in updateSaveBarState() }
-        .onChange(of: allowNetwork) { _, _ in updateSaveBarState() }
-        .onChange(of: timeoutSeconds) { _, _ in updateSaveBarState() }
-        .onChange(of: defaultRuntime) { _, _ in updateSaveBarState() }
-        .onChange(of: fileOpsEnabled) { _, _ in updateSaveBarState() }
-        .onChange(of: fileOpsAllowedPaths) { _, _ in updateSaveBarState() }
-        .onChange(of: fileOpsDeniedPaths) { _, _ in updateSaveBarState() }
-        .onChange(of: fileOpsMaxFileSize) { _, _ in updateSaveBarState() }
-        .onChange(of: fileOpsConfirmWrite) { _, _ in updateSaveBarState() }
-        .onChange(of: fileOpsConfirmDelete) { _, _ in updateSaveBarState() }
-        .onChange(of: isSaving) { _, _ in updateSaveBarState() }
-        .sheet(isPresented: $isShowingModelProfiles) {
-            ModelProfilesSettingsView(core: core, isPresented: $isShowingModelProfiles)
-        }
-        .sheet(isPresented: $isShowingModelRouting) {
-            ModelRoutingSettingsView(core: core, isPresented: $isShowingModelRouting)
-        }
     }
 
     // MARK: - View Components
@@ -957,6 +964,91 @@ struct PathListEditor: View {
             }
         }
         newPath = ""
+    }
+}
+
+// MARK: - Change Tracking Modifier
+
+/// View modifier to consolidate onChange tracking and avoid compiler type-check timeout
+private struct CoworkChangeTrackingModifier: ViewModifier {
+    let enabled: Bool
+    let requireConfirmation: Bool
+    let maxParallelism: UInt32
+    let dryRun: Bool
+    let codeExecEnabled: Bool
+    let sandboxEnabled: Bool
+    let allowNetwork: Bool
+    let timeoutSeconds: UInt64
+    let defaultRuntime: String
+    let fileOpsEnabled: Bool
+    let fileOpsAllowedPaths: [String]
+    let fileOpsDeniedPaths: [String]
+    let fileOpsMaxFileSize: UInt64
+    let fileOpsConfirmWrite: Bool
+    let fileOpsConfirmDelete: Bool
+    let isSaving: Bool
+    let onUpdate: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: enabled) { _, _ in onUpdate() }
+            .onChange(of: requireConfirmation) { _, _ in onUpdate() }
+            .onChange(of: maxParallelism) { _, _ in onUpdate() }
+            .onChange(of: dryRun) { _, _ in onUpdate() }
+            .onChange(of: codeExecEnabled) { _, _ in onUpdate() }
+            .onChange(of: sandboxEnabled) { _, _ in onUpdate() }
+            .onChange(of: allowNetwork) { _, _ in onUpdate() }
+            .onChange(of: timeoutSeconds) { _, _ in onUpdate() }
+            .onChange(of: defaultRuntime) { _, _ in onUpdate() }
+            .onChange(of: fileOpsEnabled) { _, _ in onUpdate() }
+            .onChange(of: fileOpsAllowedPaths) { _, _ in onUpdate() }
+            .onChange(of: fileOpsDeniedPaths) { _, _ in onUpdate() }
+            .onChange(of: fileOpsMaxFileSize) { _, _ in onUpdate() }
+            .onChange(of: fileOpsConfirmWrite) { _, _ in onUpdate() }
+            .onChange(of: fileOpsConfirmDelete) { _, _ in onUpdate() }
+            .onChange(of: isSaving) { _, _ in onUpdate() }
+    }
+}
+
+private extension View {
+    func applyCoworkChangeTracking(
+        enabled: Bool,
+        requireConfirmation: Bool,
+        maxParallelism: UInt32,
+        dryRun: Bool,
+        codeExecEnabled: Bool,
+        sandboxEnabled: Bool,
+        allowNetwork: Bool,
+        timeoutSeconds: UInt64,
+        defaultRuntime: String,
+        fileOpsEnabled: Bool,
+        fileOpsAllowedPaths: [String],
+        fileOpsDeniedPaths: [String],
+        fileOpsMaxFileSize: UInt64,
+        fileOpsConfirmWrite: Bool,
+        fileOpsConfirmDelete: Bool,
+        isSaving: Bool,
+        onUpdate: @escaping () -> Void
+    ) -> some View {
+        modifier(CoworkChangeTrackingModifier(
+            enabled: enabled,
+            requireConfirmation: requireConfirmation,
+            maxParallelism: maxParallelism,
+            dryRun: dryRun,
+            codeExecEnabled: codeExecEnabled,
+            sandboxEnabled: sandboxEnabled,
+            allowNetwork: allowNetwork,
+            timeoutSeconds: timeoutSeconds,
+            defaultRuntime: defaultRuntime,
+            fileOpsEnabled: fileOpsEnabled,
+            fileOpsAllowedPaths: fileOpsAllowedPaths,
+            fileOpsDeniedPaths: fileOpsDeniedPaths,
+            fileOpsMaxFileSize: fileOpsMaxFileSize,
+            fileOpsConfirmWrite: fileOpsConfirmWrite,
+            fileOpsConfirmDelete: fileOpsConfirmDelete,
+            isSaving: isSaving,
+            onUpdate: onUpdate
+        ))
     }
 }
 

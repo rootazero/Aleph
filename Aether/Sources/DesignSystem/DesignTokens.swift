@@ -19,6 +19,9 @@ enum DesignTokens {
         /// Main content background
         static let contentBackground = Color(nsColor: .windowBackgroundColor)
 
+        /// Secondary surface background (lighter than card, for nested containers)
+        static let surfaceSecondary = Color(nsColor: .unemphasizedSelectedContentBackgroundColor)
+
         // MARK: Accent Colors
 
         /// Primary accent color (blue) - used for primary actions and selected states

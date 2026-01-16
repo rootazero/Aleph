@@ -557,6 +557,7 @@ struct RuleEditorView: View {
                     stripPrefix: nil,
                     capabilities: nil,
                     intentType: nil,
+                    preferredModel: nil,
                     contextFormat: nil,
                     skillId: nil,
                     skillVersion: nil,
