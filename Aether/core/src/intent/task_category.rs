@@ -3,6 +3,8 @@
 /// Categories of executable tasks
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TaskCategory {
+    /// General task (explicit /agent command, category TBD)
+    General,
     /// File organization (sort, classify)
     FileOrganize,
     /// File transfer (move, copy)
@@ -23,6 +25,7 @@ impl TaskCategory {
     /// Returns the string representation of the category
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::General => "general",
             Self::FileOrganize => "file_organize",
             Self::FileTransfer => "file_transfer",
             Self::FileCleanup => "file_cleanup",

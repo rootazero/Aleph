@@ -1020,6 +1020,7 @@ dictionary MemoryItem {
 
 // Task category for executable tasks
 enum TaskCategoryFFI {
+  "General",            // General task (explicit /agent command)
   "FileOrganize",       // File organization (sort, classify)
   "FileTransfer",       // File transfer (move, copy)
   "FileCleanup",        // File cleanup (delete, archive)

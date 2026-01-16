@@ -9464,6 +9464,7 @@ extension ProcessingState: Equatable, Hashable {}
 
 public enum TaskCategoryFfi {
     
+    case general
     case fileOrganize
     case fileTransfer
     case fileCleanup
@@ -9484,19 +9485,21 @@ public struct FfiConverterTypeTaskCategoryFFI: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
         
-        case 1: return .fileOrganize
+        case 1: return .general
         
-        case 2: return .fileTransfer
+        case 2: return .fileOrganize
         
-        case 3: return .fileCleanup
+        case 3: return .fileTransfer
         
-        case 4: return .codeExecution
+        case 4: return .fileCleanup
         
-        case 5: return .appAutomation
+        case 5: return .codeExecution
         
-        case 6: return .documentGenerate
+        case 6: return .appAutomation
         
-        case 7: return .dataProcess
+        case 7: return .documentGenerate
+        
+        case 8: return .dataProcess
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -9506,32 +9509,36 @@ public struct FfiConverterTypeTaskCategoryFFI: FfiConverterRustBuffer {
         switch value {
         
         
-        case .fileOrganize:
+        case .general:
             writeInt(&buf, Int32(1))
         
         
-        case .fileTransfer:
+        case .fileOrganize:
             writeInt(&buf, Int32(2))
         
         
-        case .fileCleanup:
+        case .fileTransfer:
             writeInt(&buf, Int32(3))
         
         
-        case .codeExecution:
+        case .fileCleanup:
             writeInt(&buf, Int32(4))
         
         
-        case .appAutomation:
+        case .codeExecution:
             writeInt(&buf, Int32(5))
         
         
-        case .documentGenerate:
+        case .appAutomation:
             writeInt(&buf, Int32(6))
         
         
-        case .dataProcess:
+        case .documentGenerate:
             writeInt(&buf, Int32(7))
+        
+        
+        case .dataProcess:
+            writeInt(&buf, Int32(8))
         
         }
     }

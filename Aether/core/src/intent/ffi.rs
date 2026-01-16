@@ -14,6 +14,7 @@ use super::{
 /// FFI-safe task category enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskCategoryFFI {
+    General,
     FileOrganize,
     FileTransfer,
     FileCleanup,
@@ -26,6 +27,7 @@ pub enum TaskCategoryFFI {
 impl From<TaskCategory> for TaskCategoryFFI {
     fn from(cat: TaskCategory) -> Self {
         match cat {
+            TaskCategory::General => Self::General,
             TaskCategory::FileOrganize => Self::FileOrganize,
             TaskCategory::FileTransfer => Self::FileTransfer,
             TaskCategory::FileCleanup => Self::FileCleanup,
@@ -40,6 +42,7 @@ impl From<TaskCategory> for TaskCategoryFFI {
 impl From<TaskCategoryFFI> for TaskCategory {
     fn from(cat: TaskCategoryFFI) -> Self {
         match cat {
+            TaskCategoryFFI::General => Self::General,
             TaskCategoryFFI::FileOrganize => Self::FileOrganize,
             TaskCategoryFFI::FileTransfer => Self::FileTransfer,
             TaskCategoryFFI::FileCleanup => Self::FileCleanup,

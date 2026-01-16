@@ -119,27 +119,55 @@ impl AetherCore {
 
             handler.on_thinking();
 
-            // Classify user input for agent execution mode
-            let classifier = IntentClassifier::new();
-            let intent = runtime.block_on(classifier.classify(&input));
-            debug!(intent = ?intent, "Intent classification result");
-
-            // Notify UI if executable task detected (agent mode)
-            // Also inject agent mode prompt to guide AI behavior
-            let processed_input = if let ExecutionIntent::Executable(ref task) = intent {
-                info!(
-                    category = ?task.category,
-                    action = %task.action,
-                    confidence = task.confidence,
-                    "Agent execution mode detected"
-                );
-                handler.on_agent_mode_detected(task.into());
-
-                // Inject agent mode prompt to guide AI into execution mode
-                let agent_prompt = AgentModePrompt::new().generate();
-                format!("{}\n\n---\n\n用户请求: {}", agent_prompt, input)
+            // Check for explicit /agent command first (hybrid mode)
+            let (is_explicit_agent, task_input) = if input.trim().starts_with("/agent ") {
+                // Extract task description after "/agent "
+                let task = input.trim().strip_prefix("/agent ").unwrap_or(&input).trim();
+                info!(task = %task, "Explicit /agent command detected");
+                (true, task.to_string())
+            } else if input.trim() == "/agent" {
+                // Just "/agent" without task - treat as conversational
+                (false, input.clone())
             } else {
-                input.clone()
+                (false, input.clone())
+            };
+
+            // Determine agent mode: explicit command OR automatic classification
+            let processed_input = if is_explicit_agent {
+                // Explicit /agent command - always inject agent prompt
+                let agent_prompt = AgentModePrompt::new().generate();
+
+                // Create a synthetic ExecutableTask for UI notification
+                let task = crate::intent::ExecutableTask {
+                    category: crate::intent::TaskCategory::General,
+                    action: task_input.clone(),
+                    target: None,
+                    confidence: 1.0, // Explicit command = full confidence
+                };
+                handler.on_agent_mode_detected((&task).into());
+
+                format!("{}\n\n---\n\n用户请求: {}", agent_prompt, task_input)
+            } else {
+                // Automatic classification for non-explicit inputs
+                let classifier = IntentClassifier::new();
+                let intent = runtime.block_on(classifier.classify(&task_input));
+                debug!(intent = ?intent, "Intent classification result");
+
+                if let ExecutionIntent::Executable(ref task) = intent {
+                    info!(
+                        category = ?task.category,
+                        action = %task.action,
+                        confidence = task.confidence,
+                        "Agent execution mode detected (auto)"
+                    );
+                    handler.on_agent_mode_detected(task.into());
+
+                    // Inject agent mode prompt to guide AI into execution mode
+                    let agent_prompt = AgentModePrompt::new().generate();
+                    format!("{}\n\n---\n\n用户请求: {}", agent_prompt, task_input)
+                } else {
+                    task_input.clone()
+                }
             };
 
             // Create manager with shared ToolServerHandle (all tools persist across calls)

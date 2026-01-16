@@ -205,6 +205,25 @@ impl AetherCore {
                 sort_order: 30,
                 has_subtools: false,
             },
+            crate::dispatcher::UnifiedToolInfo {
+                id: "builtin:agent".to_string(),
+                name: "agent".to_string(),
+                display_name: "Agent".to_string(),
+                description: "Execute task in Agent mode (auto plan + confirm + execute)".to_string(),
+                source_type: crate::dispatcher::ToolSourceType::Builtin,
+                source_id: None,
+                parameters_schema: None,
+                is_active: true,
+                requires_confirmation: false,
+                safety_level: "Needs Confirmation".to_string(),
+                service_name: None,
+                icon: Some("gearshape.2".to_string()),
+                usage: Some("/agent <task description>".to_string()),
+                localization_key: Some("tool.agent".to_string()),
+                is_builtin: true,
+                sort_order: 40,
+                has_subtools: false,
+            },
         ]
     }
 
