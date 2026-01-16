@@ -25,12 +25,14 @@
 
 pub mod ai_detector;
 pub mod classifier;
+pub mod defaults;
 pub mod parameters;
 pub mod presets;
 pub mod task_category;
 
 pub use ai_detector::{AiIntentDetector, AiIntentResult};
 pub use classifier::{ExecutableTask, ExecutionIntent, IntentClassifier};
+pub use defaults::DefaultsResolver;
 pub use parameters::{ConflictResolution, OrganizeMethod, ParameterSource, TaskParameters};
 pub use presets::{PresetRegistry, ScenarioPreset};
 pub use task_category::TaskCategory;
