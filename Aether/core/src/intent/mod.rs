@@ -23,6 +23,7 @@
 //! // result.params["location"] == "Madrid"
 //! ```
 
+pub mod agent_prompt;
 pub mod ai_detector;
 pub mod classifier;
 pub mod defaults;
@@ -30,6 +31,7 @@ pub mod parameters;
 pub mod presets;
 pub mod task_category;
 
+pub use agent_prompt::AgentModePrompt;
 pub use ai_detector::{AiIntentDetector, AiIntentResult};
 pub use classifier::{ExecutableTask, ExecutionIntent, IntentClassifier};
 pub use defaults::DefaultsResolver;
