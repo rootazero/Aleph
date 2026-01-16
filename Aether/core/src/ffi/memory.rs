@@ -9,25 +9,32 @@ use tracing::info;
 impl AetherCore {
     /// Search memory for relevant entries
     ///
-    /// Searches the memory store for entries matching the query.
+    /// Searches the memory store for entries matching the query using vector similarity.
     pub fn search_memory(&self, query: String, limit: u32) -> Result<Vec<MemoryItem>, AetherFfiError> {
         let memory_path = self.memory_path.as_ref().ok_or_else(|| {
             AetherFfiError::Memory("Memory store not initialized".to_string())
         })?;
 
-        // Create a temporary MemoryStore for the query
-        // This is necessary because MemoryStore contains non-Send types
-        let db_path = memory_path.clone();
-        let query_clone = query.clone();
+        use crate::memory::{EmbeddingModel, VectorDatabase};
 
-        let result = self.runtime.block_on(async move {
-            use crate::store::MemoryStore;
-            let store = MemoryStore::new(&db_path).await?;
-            store.search(&query_clone, limit as usize).await
+        let db_path = PathBuf::from(memory_path);
+
+        // Create embedding model and database
+        let model_path = EmbeddingModel::get_default_model_path()
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
+        let embedding_model = EmbeddingModel::new(model_path)
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
+        let db = VectorDatabase::new(db_path)
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
+
+        // Generate query embedding and search
+        let result = self.runtime.block_on(async {
+            let query_embedding = embedding_model.embed_text(&query).await?;
+            db.search_memories("", "", &query_embedding, limit).await
         });
 
         match result {
-            Ok(entries) => Ok(entries.into_iter().map(|(e, _)| e.into()).collect()),
+            Ok(entries) => Ok(entries.into_iter().map(|e| e.into()).collect()),
             Err(e) => Err(AetherFfiError::Memory(e.to_string())),
         }
     }
@@ -38,15 +45,15 @@ impl AetherCore {
             AetherFfiError::Memory("Memory store not initialized".to_string())
         })?;
 
-        let db_path = memory_path.clone();
+        use crate::memory::VectorDatabase;
+        let db_path = PathBuf::from(memory_path);
+        let db = VectorDatabase::new(db_path)
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
-        let result = self.runtime.block_on(async move {
-            use crate::store::MemoryStore;
-            let store = MemoryStore::new(&db_path).await?;
-            store.clear().await
-        });
-
-        result.map_err(|e| AetherFfiError::Memory(e.to_string()))
+        // Clear all memories (no filter)
+        self.runtime.block_on(db.clear_memories(None, None))
+            .map(|_| ())
+            .map_err(|e| AetherFfiError::Memory(e.to_string()))
     }
 
     /// Get memory configuration

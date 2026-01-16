@@ -76,7 +76,6 @@ pub mod video; // NEW: Video transcript extraction (YouTube)
 pub mod services; // NEW: Shared foundation services (FileOps, GitOps, SystemInfo)
 pub mod mcp; // NEW: MCP (Model Context Protocol) capability
 pub mod agent; // NEW: Agent loop for tool calling
-pub mod store; // NEW: Rig-based vector store for memory
 pub mod rig_tools; // NEW: Rig-compatible tool wrapper
 pub mod ffi; // FFI module - split AetherCore implementation
 pub mod uniffi_core; // UniFFI core bindings - re-exports from ffi module

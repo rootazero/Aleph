@@ -14,7 +14,6 @@ use super::config::RigAgentConfig;
 use crate::core::MediaAttachment;
 use crate::error::{AetherError, Result};
 use crate::rig_tools::{SearchTool, WebFetchTool, YouTubeTool};
-use crate::store::MemoryStore;
 use rig::client::CompletionClient;
 use rig::completion::message::{DocumentSourceKind, Image, ImageMediaType, Text, UserContent};
 use rig::completion::{Message, Prompt};
@@ -60,7 +59,6 @@ impl AgentResponse {
 /// - All operations are thread-safe and async
 pub struct RigAgentManager {
     config: RigAgentConfig,
-    memory_store: Option<Arc<RwLock<MemoryStore>>>,
     /// Tool server handle for hot-reload support
     tool_server_handle: ToolServerHandle,
     /// Names of currently registered tools (for tracking)
@@ -93,7 +91,6 @@ impl RigAgentManager {
 
         Self {
             config,
-            memory_store: None,
             tool_server_handle,
             registered_tools,
         }
@@ -115,7 +112,6 @@ impl RigAgentManager {
     ) -> Self {
         Self {
             config,
-            memory_store: None,
             tool_server_handle,
             registered_tools,
         }
@@ -133,20 +129,9 @@ impl RigAgentManager {
         (tool_server_handle, registered_tools)
     }
 
-    /// Add a memory store to the manager (builder pattern)
-    pub fn with_memory(mut self, store: Arc<RwLock<MemoryStore>>) -> Self {
-        self.memory_store = Some(store);
-        self
-    }
-
     /// Get the current configuration
     pub fn config(&self) -> &RigAgentConfig {
         &self.config
-    }
-
-    /// Check if memory store is configured
-    pub fn has_memory(&self) -> bool {
-        self.memory_store.is_some()
     }
 
     /// Get the tool server handle for external use
@@ -565,7 +550,6 @@ mod tests {
         let config = RigAgentConfig::default();
         let manager = RigAgentManager::new(config);
         assert_eq!(manager.config().provider, "openai");
-        assert!(!manager.has_memory());
     }
 
     #[tokio::test]
@@ -629,22 +613,6 @@ mod tests {
         let simple = AgentResponse::simple("Simple".to_string());
         assert_eq!(simple.content, "Simple");
         assert!(simple.tools_called.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_manager_with_memory() {
-        use crate::store::MemoryStore;
-        use tempfile::tempdir;
-
-        let config = RigAgentConfig::default();
-
-        // Create a temporary directory for the test database
-        let temp_dir = tempdir().unwrap();
-        let db_path = temp_dir.path().join("test_memory.db");
-        let store = MemoryStore::new(db_path.to_str().unwrap()).await.unwrap();
-        let manager = RigAgentManager::new(config).with_memory(Arc::new(RwLock::new(store)));
-
-        assert!(manager.has_memory());
     }
 
     #[tokio::test]

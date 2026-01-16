@@ -21,7 +21,7 @@ mod tools;
 
 use crate::agent::{RigAgentConfig, RigAgentManager};
 use crate::config::Config;
-use crate::store::sqlite::MemoryEntry;
+use crate::memory::MemoryEntry;
 use rig::tool::server::ToolServerHandle;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
@@ -120,9 +120,9 @@ impl From<MemoryEntry> for MemoryItem {
         Self {
             id: entry.id,
             user_input: entry.user_input,
-            assistant_response: entry.assistant_response,
-            timestamp: entry.timestamp,
-            app_context: entry.app_context,
+            assistant_response: entry.ai_output,
+            timestamp: entry.context.timestamp,
+            app_context: Some(entry.context.app_bundle_id),
         }
     }
 }
