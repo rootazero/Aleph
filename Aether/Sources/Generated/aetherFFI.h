@@ -300,6 +300,13 @@ typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod6)(uint64_t, void*
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD7
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD7
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod7)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_COWORK_PROGRESS_HANDLER_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_COWORK_PROGRESS_HANDLER_METHOD0
 typedef void (*UniffiCallbackInterfaceCoworkProgressHandlerMethod0)(uint64_t, RustBuffer, void* _Nonnull, 
@@ -359,6 +366,7 @@ typedef struct UniffiVTableCallbackInterfaceAetherEventHandler {
     UniffiCallbackInterfaceAetherEventHandlerMethod4 _Nonnull onComplete;
     UniffiCallbackInterfaceAetherEventHandlerMethod5 _Nonnull onError;
     UniffiCallbackInterfaceAetherEventHandlerMethod6 _Nonnull onMemoryStored;
+    UniffiCallbackInterfaceAetherEventHandlerMethod7 _Nonnull onAgentModeDetected;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceAetherEventHandler;
 
@@ -1700,6 +1708,12 @@ uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_error(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_MEMORY_STORED
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_MEMORY_STORED
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_memory_stored(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_AGENT_MODE_DETECTED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_AGENT_MODE_DETECTED
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_agent_mode_detected(void
     
 );
 #endif

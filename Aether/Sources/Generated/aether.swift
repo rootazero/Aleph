@@ -1424,6 +1424,72 @@ public func FfiConverterTypeAetherCore_lower(_ value: AetherCore) -> UnsafeMutab
 }
 
 
+public struct AmbiguousTaskFfi {
+    public var taskHint: String
+    public var clarification: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(taskHint: String, clarification: String) {
+        self.taskHint = taskHint
+        self.clarification = clarification
+    }
+}
+
+
+
+extension AmbiguousTaskFfi: Equatable, Hashable {
+    public static func ==(lhs: AmbiguousTaskFfi, rhs: AmbiguousTaskFfi) -> Bool {
+        if lhs.taskHint != rhs.taskHint {
+            return false
+        }
+        if lhs.clarification != rhs.clarification {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(taskHint)
+        hasher.combine(clarification)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAmbiguousTaskFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AmbiguousTaskFfi {
+        return
+            try AmbiguousTaskFfi(
+                taskHint: FfiConverterString.read(from: &buf), 
+                clarification: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AmbiguousTaskFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.taskHint, into: &buf)
+        FfiConverterString.write(value.clarification, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAmbiguousTaskFFI_lift(_ buf: RustBuffer) throws -> AmbiguousTaskFfi {
+    return try FfiConverterTypeAmbiguousTaskFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAmbiguousTaskFFI_lower(_ value: AmbiguousTaskFfi) -> RustBuffer {
+    return FfiConverterTypeAmbiguousTaskFFI.lower(value)
+}
+
+
 public struct AppMemoryInfo {
     public var appBundleId: String
     public var memoryCount: UInt64
@@ -3131,6 +3197,88 @@ public func FfiConverterTypeCoworkTaskGraphFFI_lift(_ buf: RustBuffer) throws ->
 #endif
 public func FfiConverterTypeCoworkTaskGraphFFI_lower(_ value: CoworkTaskGraphFfi) -> RustBuffer {
     return FfiConverterTypeCoworkTaskGraphFFI.lower(value)
+}
+
+
+public struct ExecutableTaskFfi {
+    public var category: TaskCategoryFfi
+    public var action: String
+    public var target: String?
+    public var confidence: Float
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(category: TaskCategoryFfi, action: String, target: String?, confidence: Float) {
+        self.category = category
+        self.action = action
+        self.target = target
+        self.confidence = confidence
+    }
+}
+
+
+
+extension ExecutableTaskFfi: Equatable, Hashable {
+    public static func ==(lhs: ExecutableTaskFfi, rhs: ExecutableTaskFfi) -> Bool {
+        if lhs.category != rhs.category {
+            return false
+        }
+        if lhs.action != rhs.action {
+            return false
+        }
+        if lhs.target != rhs.target {
+            return false
+        }
+        if lhs.confidence != rhs.confidence {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(category)
+        hasher.combine(action)
+        hasher.combine(target)
+        hasher.combine(confidence)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeExecutableTaskFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ExecutableTaskFfi {
+        return
+            try ExecutableTaskFfi(
+                category: FfiConverterTypeTaskCategoryFFI.read(from: &buf), 
+                action: FfiConverterString.read(from: &buf), 
+                target: FfiConverterOptionString.read(from: &buf), 
+                confidence: FfiConverterFloat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ExecutableTaskFfi, into buf: inout [UInt8]) {
+        FfiConverterTypeTaskCategoryFFI.write(value.category, into: &buf)
+        FfiConverterString.write(value.action, into: &buf)
+        FfiConverterOptionString.write(value.target, into: &buf)
+        FfiConverterFloat.write(value.confidence, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExecutableTaskFFI_lift(_ buf: RustBuffer) throws -> ExecutableTaskFfi {
+    return try FfiConverterTypeExecutableTaskFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExecutableTaskFFI_lower(_ value: ExecutableTaskFfi) -> RustBuffer {
+    return FfiConverterTypeExecutableTaskFFI.lower(value)
 }
 
 
@@ -6758,6 +6906,80 @@ public func FfiConverterTypeStageResultFFI_lower(_ value: StageResultFfi) -> Rus
 }
 
 
+public struct TaskParametersFfi {
+    public var organizeMethod: OrganizeMethodFfi
+    public var conflictResolution: ConflictResolutionFfi
+    public var source: ParameterSourceFfi
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(organizeMethod: OrganizeMethodFfi, conflictResolution: ConflictResolutionFfi, source: ParameterSourceFfi) {
+        self.organizeMethod = organizeMethod
+        self.conflictResolution = conflictResolution
+        self.source = source
+    }
+}
+
+
+
+extension TaskParametersFfi: Equatable, Hashable {
+    public static func ==(lhs: TaskParametersFfi, rhs: TaskParametersFfi) -> Bool {
+        if lhs.organizeMethod != rhs.organizeMethod {
+            return false
+        }
+        if lhs.conflictResolution != rhs.conflictResolution {
+            return false
+        }
+        if lhs.source != rhs.source {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(organizeMethod)
+        hasher.combine(conflictResolution)
+        hasher.combine(source)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTaskParametersFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TaskParametersFfi {
+        return
+            try TaskParametersFfi(
+                organizeMethod: FfiConverterTypeOrganizeMethodFFI.read(from: &buf), 
+                conflictResolution: FfiConverterTypeConflictResolutionFFI.read(from: &buf), 
+                source: FfiConverterTypeParameterSourceFFI.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TaskParametersFfi, into buf: inout [UInt8]) {
+        FfiConverterTypeOrganizeMethodFFI.write(value.organizeMethod, into: &buf)
+        FfiConverterTypeConflictResolutionFFI.write(value.conflictResolution, into: &buf)
+        FfiConverterTypeParameterSourceFFI.write(value.source, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTaskParametersFFI_lift(_ buf: RustBuffer) throws -> TaskParametersFfi {
+    return try FfiConverterTypeTaskParametersFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTaskParametersFFI_lower(_ value: TaskParametersFfi) -> RustBuffer {
+    return FfiConverterTypeTaskParametersFFI.lower(value)
+}
+
+
 public struct TaskTypeMappingFfi {
     public var taskType: String
     public var modelId: String
@@ -7816,6 +8038,77 @@ extension CommandType: Equatable, Hashable {}
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum ConflictResolutionFfi {
+    
+    case skip
+    case rename
+    case overwrite
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeConflictResolutionFFI: FfiConverterRustBuffer {
+    typealias SwiftType = ConflictResolutionFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ConflictResolutionFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .skip
+        
+        case 2: return .rename
+        
+        case 3: return .overwrite
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ConflictResolutionFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .skip:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .rename:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .overwrite:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeConflictResolutionFFI_lift(_ buf: RustBuffer) throws -> ConflictResolutionFfi {
+    return try FfiConverterTypeConflictResolutionFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeConflictResolutionFFI_lower(_ value: ConflictResolutionFfi) -> RustBuffer {
+    return FfiConverterTypeConflictResolutionFFI.lower(value)
+}
+
+
+
+extension ConflictResolutionFfi: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum CoworkExecutionState {
     
     case idle
@@ -8263,6 +8556,77 @@ public func FfiConverterTypeErrorType_lower(_ value: ErrorType) -> RustBuffer {
 
 
 extension ErrorType: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum ExecutionIntentTypeFfi {
+    
+    case executable
+    case ambiguous
+    case conversational
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeExecutionIntentTypeFFI: FfiConverterRustBuffer {
+    typealias SwiftType = ExecutionIntentTypeFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ExecutionIntentTypeFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .executable
+        
+        case 2: return .ambiguous
+        
+        case 3: return .conversational
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ExecutionIntentTypeFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .executable:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .ambiguous:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .conversational:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExecutionIntentTypeFFI_lift(_ buf: RustBuffer) throws -> ExecutionIntentTypeFfi {
+    return try FfiConverterTypeExecutionIntentTypeFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExecutionIntentTypeFFI_lower(_ value: ExecutionIntentTypeFfi) -> RustBuffer {
+    return FfiConverterTypeExecutionIntentTypeFFI.lower(value)
+}
+
+
+
+extension ExecutionIntentTypeFfi: Equatable, Hashable {}
 
 
 
@@ -8843,6 +9207,155 @@ extension ModelLatencyTierFfi: Equatable, Hashable {}
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum OrganizeMethodFfi {
+    
+    case byExtension
+    case byCategory
+    case byDate
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOrganizeMethodFFI: FfiConverterRustBuffer {
+    typealias SwiftType = OrganizeMethodFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OrganizeMethodFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .byExtension
+        
+        case 2: return .byCategory
+        
+        case 3: return .byDate
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: OrganizeMethodFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .byExtension:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .byCategory:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .byDate:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOrganizeMethodFFI_lift(_ buf: RustBuffer) throws -> OrganizeMethodFfi {
+    return try FfiConverterTypeOrganizeMethodFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOrganizeMethodFFI_lower(_ value: OrganizeMethodFfi) -> RustBuffer {
+    return FfiConverterTypeOrganizeMethodFFI.lower(value)
+}
+
+
+
+extension OrganizeMethodFfi: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum ParameterSourceFfi {
+    
+    case userPreference
+    case preset
+    case inference
+    case `default`
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeParameterSourceFFI: FfiConverterRustBuffer {
+    typealias SwiftType = ParameterSourceFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ParameterSourceFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .userPreference
+        
+        case 2: return .preset
+        
+        case 3: return .inference
+        
+        case 4: return .`default`
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ParameterSourceFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .userPreference:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .preset:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .inference:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .`default`:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeParameterSourceFFI_lift(_ buf: RustBuffer) throws -> ParameterSourceFfi {
+    return try FfiConverterTypeParameterSourceFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeParameterSourceFFI_lower(_ value: ParameterSourceFfi) -> RustBuffer {
+    return FfiConverterTypeParameterSourceFFI.lower(value)
+}
+
+
+
+extension ParameterSourceFfi: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum ProcessingState {
     
     case idle
@@ -8943,6 +9456,105 @@ public func FfiConverterTypeProcessingState_lower(_ value: ProcessingState) -> R
 
 
 extension ProcessingState: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum TaskCategoryFfi {
+    
+    case fileOrganize
+    case fileTransfer
+    case fileCleanup
+    case codeExecution
+    case appAutomation
+    case documentGenerate
+    case dataProcess
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTaskCategoryFFI: FfiConverterRustBuffer {
+    typealias SwiftType = TaskCategoryFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TaskCategoryFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .fileOrganize
+        
+        case 2: return .fileTransfer
+        
+        case 3: return .fileCleanup
+        
+        case 4: return .codeExecution
+        
+        case 5: return .appAutomation
+        
+        case 6: return .documentGenerate
+        
+        case 7: return .dataProcess
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: TaskCategoryFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .fileOrganize:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .fileTransfer:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .fileCleanup:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .codeExecution:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .appAutomation:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .documentGenerate:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .dataProcess:
+            writeInt(&buf, Int32(7))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTaskCategoryFFI_lift(_ buf: RustBuffer) throws -> TaskCategoryFfi {
+    return try FfiConverterTypeTaskCategoryFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTaskCategoryFFI_lower(_ value: TaskCategoryFfi) -> RustBuffer {
+    return FfiConverterTypeTaskCategoryFFI.lower(value)
+}
+
+
+
+extension TaskCategoryFfi: Equatable, Hashable {}
 
 
 
@@ -9192,6 +9804,8 @@ public protocol AetherEventHandler : AnyObject {
     
     func onMemoryStored() 
     
+    func onAgentModeDetected(task: ExecutableTaskFfi) 
+    
 }
 
 // Magic number for the Rust proxy to call using the same mechanism as every other method,
@@ -9363,6 +9977,30 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onMemoryStored(
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onAgentModeDetected: { (
+            uniffiHandle: UInt64,
+            task: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onAgentModeDetected(
+                     task: try FfiConverterTypeExecutableTaskFFI.lift(task)
                 )
             }
 
@@ -11146,6 +11784,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_memory_stored() != 30752) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_agent_mode_detected() != 15957) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_coworkprogresshandler_on_progress_event() != 54161) {

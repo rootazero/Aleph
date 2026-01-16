@@ -105,6 +105,46 @@ struct HaloView: View {
                     onResume: viewModel.callbacks.coworkOnResume,
                     onCancel: viewModel.callbacks.coworkOnCancel
                 )
+
+            case .agentPlan(let planId, let title, let operations, let summary):
+                AgentPlanView(
+                    planId: planId,
+                    title: title,
+                    operations: operations,
+                    summary: summary,
+                    onExecute: { viewModel.callbacks.agentPlanOnExecute?() },
+                    onCancel: { viewModel.callbacks.agentPlanOnCancel?() }
+                )
+
+            case .agentProgress(let planId, let progress, let currentOperation, let completedCount, let totalCount):
+                AgentProgressView(
+                    planId: planId,
+                    progress: progress,
+                    currentOperation: currentOperation,
+                    completedCount: completedCount,
+                    totalCount: totalCount,
+                    onCancel: viewModel.callbacks.agentOnCancel
+                )
+
+            case .agentConflict(_, let fileName, let targetPath, _):
+                // Agent conflict resolution - simplified for now
+                VStack(spacing: 12) {
+                    Text(L("agent.conflict.title"))
+                        .font(.headline)
+                    Text(fileName)
+                        .font(.subheadline)
+                    Text(targetPath)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    HStack {
+                        Button(L("agent.conflict.skip")) { viewModel.callbacks.agentConflictOnSkip?() }
+                        Button(L("agent.conflict.rename")) { viewModel.callbacks.agentConflictOnRename?() }
+                        Button(L("agent.conflict.overwrite")) { viewModel.callbacks.agentConflictOnOverwrite?() }
+                    }
+                }
+                .padding()
+                .background(.ultraThinMaterial)
+                .cornerRadius(12)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: viewModel.state)

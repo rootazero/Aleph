@@ -482,4 +482,5 @@ class PreviewEventHandler: AetherEventHandler {
     func onComplete(response: String) {}
     func onError(message: String) {}
     func onMemoryStored() {}
+    func onAgentModeDetected(task: ExecutableTaskFfi) {}
 }

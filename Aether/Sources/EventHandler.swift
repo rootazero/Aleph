@@ -224,6 +224,28 @@ class EventHandler: AetherEventHandler {
         }
     }
 
+    /// Called when agent execution mode is detected
+    /// - Parameter task: The executable task that was classified
+    func onAgentModeDetected(task: ExecutableTaskFfi) {
+        print("[EventHandler] Agent mode detected: category=\(task.category), action=\(task.action), confidence=\(task.confidence)")
+
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            // Skip agent mode notification in multi-turn mode for now
+            // (multi-turn conversation UI will handle agent plans separately)
+            guard !slf.isInMultiTurnMode else {
+                print("[EventHandler] Skipping agent mode notification (multi-turn mode)")
+                return
+            }
+
+            // Log the detection for now
+            // TODO: Integrate with AgentPlanView when AI returns __agent_plan__ JSON
+            print("[EventHandler] Executable task: \(task.category) - \(task.action)")
+            if let target = task.target {
+                print("[EventHandler] Target: \(target)")
+            }
+        }
+    }
+
     // MARK: - Error Notification
 
     private func showErrorNotification(message: String) {
