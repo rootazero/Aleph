@@ -188,6 +188,29 @@ impl IntentClassifier {
         }
         None
     }
+
+    /// Main classification entry point
+    /// Tries L1 → L2 → L3 in order, returns first match
+    pub async fn classify(&self, input: &str) -> ExecutionIntent {
+        // Skip very short inputs
+        if input.trim().len() < 3 {
+            return ExecutionIntent::Conversational;
+        }
+
+        // L1: Regex matching (<5ms)
+        if let Some(task) = self.match_regex(input) {
+            return ExecutionIntent::Executable(task);
+        }
+
+        // L2: Keyword matching (<20ms)
+        if let Some(task) = self.match_keywords(input) {
+            return ExecutionIntent::Executable(task);
+        }
+
+        // L3: LLM classification (future - for now return Conversational)
+        // TODO: Implement LLM-based classification when needed
+        ExecutionIntent::Conversational
+    }
 }
 
 impl Default for IntentClassifier {
@@ -320,5 +343,45 @@ mod tests {
         assert!(result.is_some());
         let task = result.unwrap();
         assert_eq!(task.category, TaskCategory::FileOrganize);
+    }
+
+    #[tokio::test]
+    async fn test_classify_executable_l1() {
+        let classifier = IntentClassifier::new();
+        let result = classifier
+            .classify("帮我整理一下/Downloads/文件夹里的文件")
+            .await;
+        assert!(matches!(result, ExecutionIntent::Executable(_)));
+        if let ExecutionIntent::Executable(task) = result {
+            assert_eq!(task.category, TaskCategory::FileOrganize);
+            assert_eq!(task.confidence, 1.0); // L1 regex = full confidence
+        }
+    }
+
+    #[tokio::test]
+    async fn test_classify_executable_l2() {
+        let classifier = IntentClassifier::new();
+        let result = classifier
+            .classify("能不能帮忙把下载里的东西按类型分一下")
+            .await;
+        assert!(matches!(result, ExecutionIntent::Executable(_)));
+        if let ExecutionIntent::Executable(task) = result {
+            assert_eq!(task.category, TaskCategory::FileOrganize);
+            assert!(task.confidence < 1.0); // L2 = lower confidence
+        }
+    }
+
+    #[tokio::test]
+    async fn test_classify_conversational() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.classify("你好").await;
+        assert!(matches!(result, ExecutionIntent::Conversational));
+    }
+
+    #[tokio::test]
+    async fn test_classify_short_input() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.classify("hi").await;
+        assert!(matches!(result, ExecutionIntent::Conversational));
     }
 }
