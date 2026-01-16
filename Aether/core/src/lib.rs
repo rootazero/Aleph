@@ -78,7 +78,8 @@ pub mod mcp; // NEW: MCP (Model Context Protocol) capability
 pub mod agent; // NEW: Agent loop for tool calling
 pub mod store; // NEW: Rig-based vector store for memory
 pub mod rig_tools; // NEW: Rig-compatible tool wrapper
-pub mod uniffi_core; // UniFFI core bindings for rig-based architecture
+pub mod ffi; // FFI module - split AetherCore implementation
+pub mod uniffi_core; // UniFFI core bindings - re-exports from ffi module
 pub mod dispatcher; // NEW: Intelligent tool routing (Dispatcher Layer)
 mod title_generator; // Title generation for conversation topics
 pub mod tools; // Tool type definitions (ToolCategory, ToolDefinition, ToolResult)
