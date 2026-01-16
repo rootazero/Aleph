@@ -1014,6 +1014,71 @@ dictionary MemoryItem {
     string? app_context;
 };
 
+// ===== AGENT EXECUTION MODE (agent-execution-mode) =====
+
+// Task category for executable tasks
+enum TaskCategoryFFI {
+  "FileOrganize",       // File organization (sort, classify)
+  "FileTransfer",       // File transfer (move, copy)
+  "FileCleanup",        // File cleanup (delete, archive)
+  "CodeExecution",      // Code execution
+  "AppAutomation",      // Application automation
+  "DocumentGenerate",   // Document generation
+  "DataProcess",        // Data processing
+};
+
+// Execution intent classification result
+enum ExecutionIntentTypeFFI {
+  "Executable",      // Directly executable task
+  "Ambiguous",       // Needs clarification
+  "Conversational",  // Pure conversation
+};
+
+// Parameter source for transparency
+enum ParameterSourceFFI {
+  "UserPreference",  // From user's stored preferences
+  "Preset",          // From preset scenario
+  "Inference",       // Inferred from context
+  "Default",         // Default fallback
+};
+
+// How to organize files
+enum OrganizeMethodFFI {
+  "ByExtension",  // Group by file extension
+  "ByCategory",   // Group by category
+  "ByDate",       // Group by date
+};
+
+// How to handle file conflicts
+enum ConflictResolutionFFI {
+  "Skip",       // Skip conflicting files
+  "Rename",     // Rename with suffix
+  "Overwrite",  // Overwrite existing files
+};
+
+// Executable task information
+dictionary ExecutableTaskFFI {
+  TaskCategoryFFI category;     // Task category
+  string action;                 // Action description
+  string? target;               // Target path or object
+  f32 confidence;               // Classification confidence (0.0-1.0)
+};
+
+// Ambiguous task information
+dictionary AmbiguousTaskFFI {
+  string task_hint;       // Hint about the task
+  string clarification;   // Clarification question
+};
+
+// Task parameters for execution
+dictionary TaskParametersFFI {
+  OrganizeMethodFFI organize_method;
+  ConflictResolutionFFI conflict_resolution;
+  ParameterSourceFFI source;
+};
+
+// ===== END AGENT EXECUTION MODE =====
+
 // ===== MODEL ROUTER TYPES (add-cowork-model-router) =====
 
 // Model capability tags for characterizing model strengths

@@ -129,9 +129,11 @@ pub use crate::clarification::{
 };
 pub use crate::conversation::{ConversationManager, ConversationSession, ConversationTurn};
 pub use crate::intent::{
-    AgentModePrompt, AiIntentDetector, AiIntentResult, ConflictResolution, DefaultsResolver,
-    ExecutableTask, ExecutionIntent, IntentClassifier, OrganizeMethod, ParameterSource,
-    PresetRegistry, ScenarioPreset, TaskCategory, TaskParameters,
+    AgentModePrompt, AiIntentDetector, AiIntentResult, AmbiguousTaskFFI, ConflictResolution,
+    ConflictResolutionFFI, DefaultsResolver, ExecutableTask, ExecutableTaskFFI, ExecutionIntent,
+    ExecutionIntentTypeFFI, IntentClassifier, OrganizeMethod, OrganizeMethodFFI, ParameterSource,
+    ParameterSourceFFI, PresetRegistry, ScenarioPreset, TaskCategory, TaskCategoryFFI,
+    TaskParameters, TaskParametersFFI,
 };
 pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
 pub use crate::skills::{Skill, SkillInfo, SkillsInstaller, SkillsRegistry};
