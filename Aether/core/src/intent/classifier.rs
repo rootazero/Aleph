@@ -57,10 +57,27 @@ struct KeywordSet {
     category: TaskCategory,
 }
 
+/// Exclusion patterns - inputs containing these should NOT trigger agent mode
+/// These are non-executable verbs that indicate analysis/understanding rather than action
+static EXCLUSION_VERBS: &[&str] = &[
+    // Chinese analysis/understanding verbs
+    "分析", "理解", "解释", "描述", "识别", "检测", "看看", "看一下", "看下",
+    "告诉我", "说说", "讲讲", "什么是", "是什么", "怎么样",
+    // Chinese summarization verbs
+    "总结", "摘要", "概括", "归纳", "提炼", "概述", "梳理", "提取要点",
+    // English analysis verbs
+    "analyze", "analyse", "understand", "explain", "describe", "identify",
+    "detect", "recognize", "what is", "tell me", "look at",
+    // English summarization verbs
+    "summarize", "summarise", "summary", "abstract", "recap", "outline",
+    "extract", "highlight", "key points",
+];
+
 /// Static keyword sets for L2 matching
 static KEYWORD_SETS: &[KeywordSet] = &[
     KeywordSet {
-        verbs: &["整理", "归类", "分类", "分", "organize", "sort", "classify"],
+        // Removed "分" - too short, causes false matches (e.g., "分析" contains "分")
+        verbs: &["整理", "归类", "分类", "organize", "sort", "classify"],
         nouns: &[
             "文件", "文件夹", "目录", "下载", "照片", "图片",
             "files", "folder", "directory", "downloads", "photos", "pictures",
@@ -150,6 +167,13 @@ impl IntentClassifier {
 
     /// L1: Regex pattern matching (<5ms)
     pub fn match_regex(&self, input: &str) -> Option<ExecutableTask> {
+        let input_lower = input.to_lowercase();
+
+        // Check exclusion patterns first - analysis/understanding verbs override regex matches
+        if self.contains_exclusion_verb(&input_lower) {
+            return None;
+        }
+
         for (pattern, category) in EXECUTABLE_PATTERNS.iter() {
             if pattern.is_match(input) {
                 let target = self.extract_path(input);
@@ -173,6 +197,12 @@ impl IntentClassifier {
     pub fn match_keywords(&self, input: &str) -> Option<ExecutableTask> {
         let input_lower = input.to_lowercase();
 
+        // Check exclusion patterns first - if input contains analysis/understanding verbs,
+        // it should NOT trigger agent mode (e.g., "分析图片" is analysis, not file operation)
+        if self.contains_exclusion_verb(&input_lower) {
+            return None;
+        }
+
         for set in KEYWORD_SETS {
             let has_verb = set.verbs.iter().any(|v| input_lower.contains(v));
             let has_noun = set.nouns.iter().any(|n| input_lower.contains(n));
@@ -188,6 +218,11 @@ impl IntentClassifier {
             }
         }
         None
+    }
+
+    /// Check if input contains exclusion verbs (analysis/understanding actions)
+    fn contains_exclusion_verb(&self, input: &str) -> bool {
+        EXCLUSION_VERBS.iter().any(|v| input.contains(v))
     }
 
     /// Main classification entry point
@@ -313,8 +348,8 @@ mod tests {
     #[test]
     fn test_l2_keywords_file_organize() {
         let classifier = IntentClassifier::new();
-        // This input doesn't match L1 regex exactly but has keywords
-        let result = classifier.match_keywords("能不能帮忙把下载里的东西按类型分一下");
+        // Use "整理" (organize) verb which is more explicit than ambiguous "分"
+        let result = classifier.match_keywords("能不能帮忙整理一下下载目录");
         assert!(result.is_some());
         let task = result.unwrap();
         assert_eq!(task.category, TaskCategory::FileOrganize);
@@ -362,8 +397,9 @@ mod tests {
     #[tokio::test]
     async fn test_classify_executable_l2() {
         let classifier = IntentClassifier::new();
+        // Use clearer expression with "整理" instead of ambiguous "分"
         let result = classifier
-            .classify("能不能帮忙把下载里的东西按类型分一下")
+            .classify("能不能帮忙整理一下下载里的东西")
             .await;
         assert!(matches!(result, ExecutionIntent::Executable(_)));
         if let ExecutionIntent::Executable(task) = result {
@@ -384,5 +420,124 @@ mod tests {
         let classifier = IntentClassifier::new();
         let result = classifier.classify("hi").await;
         assert!(matches!(result, ExecutionIntent::Conversational));
+    }
+
+    // Tests for exclusion patterns - analysis/understanding requests should NOT trigger agent mode
+
+    #[test]
+    fn test_exclusion_analyze_image_chinese() {
+        let classifier = IntentClassifier::new();
+        // "分析图片" should be conversational (analysis), not file operation
+        let result = classifier.match_keywords("分析这幅图片");
+        assert!(result.is_none(), "Analysis requests should not trigger agent mode");
+    }
+
+    #[test]
+    fn test_exclusion_analyze_image_english() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.match_keywords("analyze this picture");
+        assert!(result.is_none(), "Analysis requests should not trigger agent mode");
+    }
+
+    #[test]
+    fn test_exclusion_describe_photo() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.match_keywords("描述一下这张照片");
+        assert!(result.is_none(), "Description requests should not trigger agent mode");
+    }
+
+    #[test]
+    fn test_exclusion_explain_file() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.match_keywords("解释这个文件的内容");
+        assert!(result.is_none(), "Explanation requests should not trigger agent mode");
+    }
+
+    #[test]
+    fn test_exclusion_what_is_image() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.match_keywords("这张图片是什么");
+        assert!(result.is_none(), "Question about content should not trigger agent mode");
+    }
+
+    #[test]
+    fn test_exclusion_look_at_photo() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.match_keywords("看看这张照片");
+        assert!(result.is_none(), "Look at requests should not trigger agent mode");
+    }
+
+    #[test]
+    fn test_exclusion_summarize_document_chinese() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.match_keywords("总结这个文档");
+        assert!(result.is_none(), "Summarization requests should not trigger agent mode");
+    }
+
+    #[test]
+    fn test_exclusion_summarize_webpage() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.match_keywords("帮我总结一下这个网页");
+        assert!(result.is_none(), "Webpage summarization should not trigger agent mode");
+    }
+
+    #[test]
+    fn test_exclusion_abstract_file() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.match_keywords("给这个文件写个摘要");
+        assert!(result.is_none(), "Abstract requests should not trigger agent mode");
+    }
+
+    #[test]
+    fn test_exclusion_summarize_english() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.match_keywords("summarize this document");
+        assert!(result.is_none(), "English summarization should not trigger agent mode");
+    }
+
+    #[test]
+    fn test_exclusion_outline_file() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.match_keywords("概括一下这个文件的内容");
+        assert!(result.is_none(), "Outline requests should not trigger agent mode");
+    }
+
+    #[tokio::test]
+    async fn test_classify_analyze_image_is_conversational() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.classify("分析这幅图片").await;
+        assert!(
+            matches!(result, ExecutionIntent::Conversational),
+            "分析图片 should be classified as Conversational, not Executable"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_classify_describe_photo_is_conversational() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.classify("描述这张照片里有什么").await;
+        assert!(
+            matches!(result, ExecutionIntent::Conversational),
+            "描述照片 should be classified as Conversational"
+        );
+    }
+
+    // Ensure real file operations still work
+
+    #[test]
+    fn test_real_file_organize_still_works() {
+        let classifier = IntentClassifier::new();
+        // Clear file organize request should still work
+        let result = classifier.match_keywords("帮我整理下载文件夹");
+        assert!(result.is_some(), "Clear file organize requests should still work");
+        assert_eq!(result.unwrap().category, TaskCategory::FileOrganize);
+    }
+
+    #[test]
+    fn test_real_file_cleanup_still_works() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.match_keywords("清理一下缓存文件");
+        assert!(result.is_some(), "Clear file cleanup requests should still work");
+        assert_eq!(result.unwrap().category, TaskCategory::FileCleanup);
     }
 }
