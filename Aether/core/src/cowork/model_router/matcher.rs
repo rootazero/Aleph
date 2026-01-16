@@ -3,7 +3,9 @@
 //! This module provides intelligent routing of tasks to optimal AI models
 //! based on task characteristics, model capabilities, and cost preferences.
 
-use super::{Capability, CostStrategy, CostTier, LatencyTier, ModelProfile, ModelRoutingRules};
+use super::{
+    Capability, CostStrategy, CostTier, LatencyTier, ModelProfile, ModelRoutingRules, TaskIntent,
+};
 use crate::cowork::types::{Task, TaskType};
 use std::collections::HashMap;
 
@@ -44,7 +46,55 @@ pub trait ModelRouter: Send + Sync {
     fn find_cheapest_with(&self, capability: Capability) -> Option<ModelProfile>;
 }
 
+/// Fallback provider configuration for when Model Router has no suitable model
+#[derive(Debug, Clone)]
+pub struct FallbackProvider {
+    /// Provider name (e.g., "openai", "anthropic")
+    pub provider: String,
+    /// Optional model name (uses provider default if not set)
+    pub model: Option<String>,
+}
+
+impl FallbackProvider {
+    /// Create a new fallback provider
+    pub fn new(provider: impl Into<String>) -> Self {
+        Self {
+            provider: provider.into(),
+            model: None,
+        }
+    }
+
+    /// Set the model name
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    /// Convert to a basic ModelProfile for routing result
+    pub fn to_model_profile(&self) -> ModelProfile {
+        let model_name = self.model.clone().unwrap_or_else(|| {
+            // Use provider default model names
+            match self.provider.to_lowercase().as_str() {
+                "openai" => "gpt-4o".to_string(),
+                "anthropic" | "claude" => "claude-sonnet-4-20250514".to_string(),
+                "google" | "gemini" => "gemini-1.5-flash".to_string(),
+                "ollama" => "llama3.2".to_string(),
+                _ => "default".to_string(),
+            }
+        });
+
+        ModelProfile::new(
+            format!("fallback-{}", self.provider),
+            &self.provider,
+            &model_name,
+        )
+        .with_cost_tier(CostTier::Medium)
+        .with_latency_tier(LatencyTier::Medium)
+    }
+}
+
 /// Model matcher that routes tasks to optimal AI models
+#[derive(Clone)]
 pub struct ModelMatcher {
     /// Model profiles indexed by ID
     profiles_by_id: HashMap<String, ModelProfile>,
@@ -54,6 +104,9 @@ pub struct ModelMatcher {
 
     /// Routing rules configuration
     rules: ModelRoutingRules,
+
+    /// Fallback provider when no suitable model is found
+    fallback_provider: Option<FallbackProvider>,
 
     /// Profiles indexed by capability for fast lookup
     capability_index: HashMap<Capability, Vec<String>>,
@@ -81,8 +134,51 @@ impl ModelMatcher {
             profiles_by_id,
             profiles_vec: profiles,
             rules,
+            fallback_provider: None,
             capability_index,
         }
+    }
+
+    /// Set the fallback provider for when no suitable model is found
+    ///
+    /// This integrates with the system's `default_provider` configuration.
+    /// When all routing rules fail (no profiles, no capability match, no default_model),
+    /// the fallback provider will be used to create a basic ModelProfile.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let matcher = ModelMatcher::new(profiles, rules)
+    ///     .with_fallback_provider("openai");
+    /// ```
+    pub fn with_fallback_provider(mut self, provider: impl Into<String>) -> Self {
+        self.fallback_provider = Some(FallbackProvider::new(provider));
+        self
+    }
+
+    /// Set the fallback provider with a specific model
+    pub fn with_fallback_provider_and_model(
+        mut self,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        self.fallback_provider = Some(FallbackProvider::new(provider).with_model(model));
+        self
+    }
+
+    /// Set fallback provider from FallbackProvider instance
+    pub fn set_fallback_provider(&mut self, fallback: Option<FallbackProvider>) {
+        self.fallback_provider = fallback;
+    }
+
+    /// Get the fallback provider
+    pub fn fallback_provider(&self) -> Option<&FallbackProvider> {
+        self.fallback_provider.as_ref()
+    }
+
+    /// Check if a fallback provider is configured
+    pub fn has_fallback(&self) -> bool {
+        self.fallback_provider.is_some()
     }
 
     /// Get the routing rules
@@ -190,6 +286,142 @@ impl ModelMatcher {
         self.rules
             .get_default()
             .and_then(|id| self.profiles_by_id.get(id))
+            .cloned()
+    }
+
+    // =========================================================================
+    // TaskIntent-based Routing (Unified Router Integration)
+    // =========================================================================
+
+    /// Route based on TaskIntent
+    ///
+    /// This method bridges the legacy routing system with the Model Router,
+    /// providing a unified entry point for model selection based on user intent.
+    ///
+    /// # Routing Priority
+    ///
+    /// 1. Explicit task type mapping from `[cowork.model_routing]`
+    /// 2. Capability-based routing if intent requires specific capability
+    /// 3. Cost strategy application
+    /// 4. Default model fallback
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let intent = TaskIntent::CodeGeneration;
+    /// let profile = matcher.route_by_intent(&intent)?;
+    /// // Returns profile mapped to "code_generation" in config
+    /// ```
+    pub fn route_by_intent(&self, intent: &TaskIntent) -> Option<ModelProfile> {
+        // 1. Check for explicit task type mapping
+        let task_type = intent.to_task_type();
+        if let Some(profile) = self.route_by_task_type(task_type) {
+            tracing::debug!(
+                intent = %intent,
+                task_type = task_type,
+                model = %profile.id,
+                "Routed by task type mapping"
+            );
+            return Some(profile);
+        }
+
+        // 2. Check for capability requirement
+        if let Some(capability) = intent.required_capability() {
+            if let Some(profile) = self.route_by_capability(capability) {
+                tracing::debug!(
+                    intent = %intent,
+                    capability = ?capability,
+                    model = %profile.id,
+                    "Routed by capability requirement"
+                );
+                return Some(profile);
+            }
+        }
+
+        // 3. Apply cost strategy to find any suitable model
+        let candidates: Vec<&ModelProfile> = self.profiles_vec.iter().collect();
+        if let Some(profile) = self.apply_cost_strategy(&candidates) {
+            tracing::debug!(
+                intent = %intent,
+                model = %profile.id,
+                strategy = ?self.rules.cost_strategy,
+                "Routed by cost strategy"
+            );
+            return Some(profile);
+        }
+
+        // 4. Fall back to default model
+        if let Some(profile) = self.get_default_profile() {
+            tracing::debug!(
+                intent = %intent,
+                model = %profile.id,
+                "Routed to default model"
+            );
+            return Some(profile);
+        }
+
+        // 5. Fall back to fallback_provider (from default_provider config)
+        if let Some(fallback) = &self.fallback_provider {
+            let profile = fallback.to_model_profile();
+            tracing::info!(
+                intent = %intent,
+                provider = %fallback.provider,
+                model = %profile.model,
+                "Routed to fallback provider (default_provider)"
+            );
+            return Some(profile);
+        }
+
+        tracing::warn!(
+            intent = %intent,
+            has_profiles = !self.profiles_vec.is_empty(),
+            has_default = self.rules.default_model.is_some(),
+            has_fallback = self.fallback_provider.is_some(),
+            "No suitable model found for intent"
+        );
+        None
+    }
+
+    /// Route by intent with explicit model preference override
+    ///
+    /// This allows routing rules to specify a preferred model that overrides
+    /// the automatic selection.
+    pub fn route_by_intent_with_preference(
+        &self,
+        intent: &TaskIntent,
+        preferred_model: Option<&str>,
+    ) -> Option<ModelProfile> {
+        // Check preferred model first
+        if let Some(model_id) = preferred_model {
+            if let Some(profile) = self.profiles_by_id.get(model_id) {
+                tracing::debug!(
+                    intent = %intent,
+                    model = model_id,
+                    "Using preferred model override"
+                );
+                return Some(profile.clone());
+            }
+            tracing::warn!(
+                intent = %intent,
+                preferred = model_id,
+                "Preferred model not found, falling back to automatic routing"
+            );
+        }
+
+        // Fall back to intent-based routing
+        self.route_by_intent(intent)
+    }
+
+    /// Get the model profile for a specific provider/model combination
+    ///
+    /// This is useful for migrating from legacy `provider` field to Model Router.
+    pub fn find_by_provider_model(&self, provider: &str, model: Option<&str>) -> Option<ModelProfile> {
+        self.profiles_vec
+            .iter()
+            .find(|p| {
+                p.provider.eq_ignore_ascii_case(provider)
+                    && model.map_or(true, |m| p.model.eq_ignore_ascii_case(m))
+            })
             .cloned()
     }
 }
@@ -797,5 +1029,381 @@ mod tests {
             let profile = matcher.route(task).unwrap();
             assert_eq!(profile.id, *expected, "Task {} routed incorrectly", task.id);
         }
+    }
+
+    // =========================================================================
+    // TaskIntent-Based Routing Tests
+    // =========================================================================
+
+    #[test]
+    fn test_route_by_intent_code_generation() {
+        let matcher = create_matcher();
+
+        // CodeGeneration intent should route to claude-opus (per task_type mapping)
+        let profile = matcher.route_by_intent(&TaskIntent::CodeGeneration).unwrap();
+        assert_eq!(profile.id, "claude-opus");
+    }
+
+    #[test]
+    fn test_route_by_intent_code_review() {
+        let matcher = create_matcher();
+
+        // CodeReview intent should route to claude-sonnet (per task_type mapping)
+        let profile = matcher.route_by_intent(&TaskIntent::CodeReview).unwrap();
+        assert_eq!(profile.id, "claude-sonnet");
+    }
+
+    #[test]
+    fn test_route_by_intent_image_analysis() {
+        let matcher = create_matcher();
+
+        // ImageAnalysis intent should route to gpt-4o (per task_type mapping)
+        let profile = matcher.route_by_intent(&TaskIntent::ImageAnalysis).unwrap();
+        assert_eq!(profile.id, "gpt-4o");
+    }
+
+    #[test]
+    fn test_route_by_intent_quick_task() {
+        let matcher = create_matcher();
+
+        // QuickTask intent should route to claude-haiku (per task_type mapping)
+        let profile = matcher.route_by_intent(&TaskIntent::QuickTask).unwrap();
+        assert_eq!(profile.id, "claude-haiku");
+    }
+
+    #[test]
+    fn test_route_by_intent_privacy_sensitive() {
+        let matcher = create_matcher();
+
+        // PrivacySensitive intent should route to ollama-llama (per task_type mapping)
+        let profile = matcher.route_by_intent(&TaskIntent::PrivacySensitive).unwrap();
+        assert_eq!(profile.id, "ollama-llama");
+    }
+
+    #[test]
+    fn test_route_by_intent_general_chat() {
+        let matcher = create_matcher();
+
+        // GeneralChat intent should fall back to default model
+        let profile = matcher.route_by_intent(&TaskIntent::GeneralChat).unwrap();
+        // Default is claude-sonnet in our test setup
+        assert_eq!(profile.id, "claude-sonnet");
+    }
+
+    #[test]
+    fn test_route_by_intent_capability_fallback() {
+        // Test that when no task_type mapping exists, it falls back to capability
+        let profiles = create_test_profiles();
+        // Create rules without task_type mappings, only capability mappings
+        let rules = ModelRoutingRules::new("claude-sonnet")
+            .with_capability(Capability::ImageUnderstanding, "gpt-4o")
+            .with_capability(Capability::LocalPrivacy, "ollama-llama");
+        let matcher = ModelMatcher::new(profiles, rules);
+
+        // ImageAnalysis requires ImageUnderstanding capability
+        let profile = matcher.route_by_intent(&TaskIntent::ImageAnalysis).unwrap();
+        assert_eq!(profile.id, "gpt-4o");
+
+        // PrivacySensitive requires LocalPrivacy capability
+        let profile = matcher.route_by_intent(&TaskIntent::PrivacySensitive).unwrap();
+        assert_eq!(profile.id, "ollama-llama");
+    }
+
+    #[test]
+    fn test_route_by_intent_with_preference_override() {
+        let matcher = create_matcher();
+
+        // Even though CodeGeneration maps to claude-opus, explicit preference should win
+        let profile = matcher
+            .route_by_intent_with_preference(&TaskIntent::CodeGeneration, Some("claude-haiku"))
+            .unwrap();
+        assert_eq!(profile.id, "claude-haiku");
+    }
+
+    #[test]
+    fn test_route_by_intent_with_preference_invalid_fallback() {
+        let matcher = create_matcher();
+
+        // Invalid preference should fall back to intent-based routing
+        let profile = matcher
+            .route_by_intent_with_preference(&TaskIntent::CodeGeneration, Some("nonexistent-model"))
+            .unwrap();
+        // Falls back to task_type mapping (claude-opus)
+        assert_eq!(profile.id, "claude-opus");
+    }
+
+    #[test]
+    fn test_route_by_intent_with_preference_none() {
+        let matcher = create_matcher();
+
+        // None preference should behave like route_by_intent
+        let profile = matcher
+            .route_by_intent_with_preference(&TaskIntent::ImageAnalysis, None)
+            .unwrap();
+        assert_eq!(profile.id, "gpt-4o");
+    }
+
+    #[test]
+    fn test_route_by_intent_skills() {
+        let matcher = create_matcher();
+
+        // Skills intent has no required capability, should fall back to default
+        let profile = matcher
+            .route_by_intent(&TaskIntent::Skills("pdf".to_string()))
+            .unwrap();
+        assert_eq!(profile.id, "claude-sonnet"); // default
+    }
+
+    #[test]
+    fn test_route_by_intent_custom() {
+        let matcher = create_matcher();
+
+        // Custom intent has no required capability, should fall back to default
+        let profile = matcher
+            .route_by_intent(&TaskIntent::Custom("my_workflow".to_string()))
+            .unwrap();
+        assert_eq!(profile.id, "claude-sonnet"); // default
+    }
+
+    // =========================================================================
+    // Provider/Model Lookup Tests
+    // =========================================================================
+
+    #[test]
+    fn test_find_by_provider_model_exact() {
+        let matcher = create_matcher();
+
+        // Find by exact provider and model
+        let profile = matcher
+            .find_by_provider_model("anthropic", Some("claude-opus-4"))
+            .unwrap();
+        assert_eq!(profile.id, "claude-opus");
+    }
+
+    #[test]
+    fn test_find_by_provider_model_case_insensitive() {
+        let matcher = create_matcher();
+
+        // Case insensitive matching
+        let profile = matcher
+            .find_by_provider_model("ANTHROPIC", Some("CLAUDE-OPUS-4"))
+            .unwrap();
+        assert_eq!(profile.id, "claude-opus");
+    }
+
+    #[test]
+    fn test_find_by_provider_only() {
+        let matcher = create_matcher();
+
+        // Find by provider only (returns first match)
+        let profile = matcher.find_by_provider_model("openai", None).unwrap();
+        assert_eq!(profile.id, "gpt-4o");
+    }
+
+    #[test]
+    fn test_find_by_provider_model_not_found() {
+        let matcher = create_matcher();
+
+        // Nonexistent provider
+        let profile = matcher.find_by_provider_model("nonexistent", None);
+        assert!(profile.is_none());
+
+        // Existing provider but wrong model
+        let profile = matcher.find_by_provider_model("anthropic", Some("wrong-model"));
+        assert!(profile.is_none());
+    }
+
+    // =========================================================================
+    // Fallback Provider Tests
+    // =========================================================================
+
+    #[test]
+    fn test_fallback_provider_new() {
+        let fallback = FallbackProvider::new("openai");
+        assert_eq!(fallback.provider, "openai");
+        assert!(fallback.model.is_none());
+    }
+
+    #[test]
+    fn test_fallback_provider_with_model() {
+        let fallback = FallbackProvider::new("anthropic").with_model("claude-opus-4");
+        assert_eq!(fallback.provider, "anthropic");
+        assert_eq!(fallback.model.as_deref(), Some("claude-opus-4"));
+    }
+
+    #[test]
+    fn test_fallback_provider_to_model_profile_openai() {
+        let fallback = FallbackProvider::new("openai");
+        let profile = fallback.to_model_profile();
+
+        assert_eq!(profile.id, "fallback-openai");
+        assert_eq!(profile.provider, "openai");
+        assert_eq!(profile.model, "gpt-4o"); // default model
+        assert_eq!(profile.cost_tier, CostTier::Medium);
+        assert_eq!(profile.latency_tier, LatencyTier::Medium);
+    }
+
+    #[test]
+    fn test_fallback_provider_to_model_profile_anthropic() {
+        let fallback = FallbackProvider::new("anthropic");
+        let profile = fallback.to_model_profile();
+
+        assert_eq!(profile.id, "fallback-anthropic");
+        assert_eq!(profile.provider, "anthropic");
+        assert_eq!(profile.model, "claude-sonnet-4-20250514");
+    }
+
+    #[test]
+    fn test_fallback_provider_to_model_profile_with_custom_model() {
+        let fallback = FallbackProvider::new("google").with_model("gemini-2.0-pro");
+        let profile = fallback.to_model_profile();
+
+        assert_eq!(profile.id, "fallback-google");
+        assert_eq!(profile.provider, "google");
+        assert_eq!(profile.model, "gemini-2.0-pro"); // custom model
+    }
+
+    #[test]
+    fn test_fallback_provider_to_model_profile_unknown_provider() {
+        let fallback = FallbackProvider::new("custom-provider");
+        let profile = fallback.to_model_profile();
+
+        assert_eq!(profile.id, "fallback-custom-provider");
+        assert_eq!(profile.provider, "custom-provider");
+        assert_eq!(profile.model, "default"); // unknown provider default
+    }
+
+    #[test]
+    fn test_matcher_with_fallback_provider() {
+        let rules = ModelRoutingRules::default();
+        let matcher = ModelMatcher::new(vec![], rules).with_fallback_provider("openai");
+
+        assert!(matcher.has_fallback());
+    }
+
+    #[test]
+    fn test_matcher_with_fallback_provider_and_model() {
+        let rules = ModelRoutingRules::default();
+        let matcher =
+            ModelMatcher::new(vec![], rules).with_fallback_provider_and_model("anthropic", "claude-opus-4");
+
+        assert!(matcher.has_fallback());
+    }
+
+    #[test]
+    fn test_matcher_without_fallback_provider() {
+        let matcher = create_matcher();
+        assert!(!matcher.has_fallback());
+    }
+
+    #[test]
+    fn test_route_by_intent_uses_fallback_when_no_profiles() {
+        let rules = ModelRoutingRules::default();
+        let matcher = ModelMatcher::new(vec![], rules).with_fallback_provider("openai");
+
+        // With no profiles configured, should use fallback
+        let profile = matcher
+            .route_by_intent(&TaskIntent::CodeGeneration)
+            .unwrap();
+        assert_eq!(profile.id, "fallback-openai");
+        assert_eq!(profile.provider, "openai");
+        assert_eq!(profile.model, "gpt-4o");
+    }
+
+    #[test]
+    fn test_route_by_intent_uses_cost_strategy_before_fallback() {
+        // Create matcher with only a haiku profile (no code generation capability)
+        let haiku = ModelProfile::new("claude-haiku", "anthropic", "claude-haiku-3.5")
+            .with_capabilities(vec![Capability::FastResponse, Capability::SimpleTask]);
+
+        let rules = ModelRoutingRules::default(); // no task type mappings
+        let matcher = ModelMatcher::new(vec![haiku], rules).with_fallback_provider("openai");
+
+        // Even though CodeGeneration requires that capability and haiku doesn't have it,
+        // cost_strategy will select haiku as a fallback before using fallback_provider.
+        // This is correct behavior - configured models are preferred over fallback_provider.
+        let profile = matcher
+            .route_by_intent(&TaskIntent::CodeGeneration)
+            .unwrap();
+        assert_eq!(profile.id, "claude-haiku"); // haiku selected via cost strategy
+    }
+
+    #[test]
+    fn test_route_by_intent_uses_fallback_only_when_no_profiles() {
+        // When there are no profiles at all, fallback_provider is used
+        let rules = ModelRoutingRules::default();
+        let matcher = ModelMatcher::new(vec![], rules).with_fallback_provider("openai");
+
+        let profile = matcher
+            .route_by_intent(&TaskIntent::CodeGeneration)
+            .unwrap();
+        assert_eq!(profile.id, "fallback-openai");
+    }
+
+    #[test]
+    fn test_route_by_intent_prefers_configured_model_over_fallback() {
+        // Create matcher with proper code generation model
+        let opus = ModelProfile::new("claude-opus", "anthropic", "claude-opus-4")
+            .with_capabilities(vec![Capability::CodeGeneration, Capability::Reasoning]);
+
+        let rules = ModelRoutingRules::default();
+        let matcher =
+            ModelMatcher::new(vec![opus], rules).with_fallback_provider("openai");
+
+        // Should use configured model, not fallback
+        let profile = matcher
+            .route_by_intent(&TaskIntent::CodeGeneration)
+            .unwrap();
+        assert_eq!(profile.id, "claude-opus");
+        assert_ne!(profile.id, "fallback-openai");
+    }
+
+    #[test]
+    fn test_route_by_intent_returns_none_without_fallback() {
+        let rules = ModelRoutingRules::default();
+        let matcher = ModelMatcher::new(vec![], rules); // no profiles, no fallback
+
+        // Should return None when no profiles and no fallback
+        let profile = matcher.route_by_intent(&TaskIntent::CodeGeneration);
+        assert!(profile.is_none());
+    }
+
+    #[test]
+    fn test_set_fallback_provider() {
+        let rules = ModelRoutingRules::default();
+        let mut matcher = ModelMatcher::new(vec![], rules);
+
+        assert!(!matcher.has_fallback());
+
+        matcher.set_fallback_provider(Some(FallbackProvider::new("google")));
+        assert!(matcher.has_fallback());
+
+        // Test routing uses fallback
+        let profile = matcher
+            .route_by_intent(&TaskIntent::GeneralChat)
+            .unwrap();
+        assert_eq!(profile.id, "fallback-google");
+    }
+
+    #[test]
+    fn test_fallback_provider_claude_alias() {
+        // "claude" should be treated same as "anthropic"
+        let fallback = FallbackProvider::new("claude");
+        let profile = fallback.to_model_profile();
+
+        assert_eq!(profile.id, "fallback-claude");
+        assert_eq!(profile.provider, "claude");
+        assert_eq!(profile.model, "claude-sonnet-4-20250514");
+    }
+
+    #[test]
+    fn test_fallback_provider_gemini_alias() {
+        // "gemini" should be treated same as "google"
+        let fallback = FallbackProvider::new("gemini");
+        let profile = fallback.to_model_profile();
+
+        assert_eq!(profile.id, "fallback-gemini");
+        assert_eq!(profile.provider, "gemini");
+        assert_eq!(profile.model, "gemini-1.5-flash");
     }
 }

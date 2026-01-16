@@ -38,6 +38,7 @@
 //! ```
 
 mod context;
+mod intent;
 mod matcher;
 mod pipeline;
 mod profiles;
@@ -47,7 +48,8 @@ pub use context::{
     ContextError, ContextSummary, StoredTaskResult, TaskContext, TaskContextManager,
     TaskResultMetadata,
 };
-pub use matcher::{ModelMatcher, ModelRouter, RoutingError};
+pub use intent::TaskIntent;
+pub use matcher::{FallbackProvider, ModelMatcher, ModelRouter, RoutingError};
 pub use pipeline::{
     ExecutionResult, PipelineContext, PipelineError, PipelineEvent, PipelineExecutor,
     PipelineProgressHandler, PipelineStage, PipelineState, PipelineSummary, ProviderAdapter,

@@ -323,6 +323,25 @@ Configure task-to-model routing rules.
 - `balanced` - Balance between cost and quality (default)
 - `best_quality` - Always select the highest quality model
 
+**Fallback Chain**:
+
+When routing a task, the Model Router uses a 5-level fallback chain:
+
+1. **Task Type Mapping** - Explicit `[cowork.model_routing]` mappings (e.g., `code_generation = "claude-opus"`)
+2. **Capability Matching** - Find model with required capability (e.g., `ImageUnderstanding`)
+3. **Cost Strategy** - Apply cost strategy to all configured profiles
+4. **Default Model** - Use `default_model` from `[cowork.model_routing]`
+5. **Default Provider** - Use `default_provider` from `[general]` as final fallback
+
+The final fallback level ensures that even users without `[cowork.model_profiles]` configured will have working model routing. The system uses `[general].default_provider` with sensible model defaults:
+
+| Provider | Default Model |
+|----------|---------------|
+| `openai` | `gpt-4o` |
+| `anthropic` / `claude` | `claude-sonnet-4-20250514` |
+| `google` / `gemini` | `gemini-1.5-flash` |
+| `ollama` | `llama3.2` |
+
 **Example**:
 ```toml
 [cowork.model_routing]
@@ -352,11 +371,28 @@ default_model = "claude-sonnet"
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `regex` | String | Required | Regex pattern to match user input |
-| `provider` | String | Required | AI provider name |
+| `provider` | String | Required | AI provider name (legacy, use `preferred_model` for Model Router) |
 | `system_prompt` | String | Optional | Base system prompt for this rule |
 | `capabilities` | Array | `[]` | Capabilities: `["memory", "search", "mcp"]` |
-| `intent_type` | String | `null` | Intent classification for routing |
+| `intent_type` | String | `null` | Intent classification (maps to `TaskIntent` for Model Router) |
+| `preferred_model` | String | `null` | Model profile ID to override automatic Model Router selection |
 | `context_format` | String | `"markdown"` | Context format: markdown, xml, json |
+
+**Model Router Integration**:
+
+When `preferred_model` is set, it overrides the Model Router's automatic model selection based on `intent_type`. This is useful for:
+- Forcing specific models for certain commands
+- Testing different models for the same intent
+- Legacy provider migration
+
+Example with Model Router:
+```toml
+[[rules]]
+regex = "^/code"
+intent_type = "code_generation"        # Maps to TaskIntent::CodeGeneration
+preferred_model = "claude-opus"        # Override: use claude-opus instead of auto-selection
+system_prompt = "You are an expert programmer."
+```
 
 ---
 

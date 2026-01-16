@@ -1832,8 +1832,17 @@ impl AetherCore {
             .map_err(|e| AetherFfiError::Provider(format!("Failed to create provider for Cowork: {}", e)))?;
 
         // Create the engine
-        let engine = Arc::new(crate::cowork::CoworkEngine::new(cowork_config, provider));
+        let mut engine = crate::cowork::CoworkEngine::new(cowork_config, provider);
 
+        // Set fallback provider from default_provider config
+        // This ensures model routing works even without explicit model_profiles
+        engine.set_fallback_provider(&default_provider_name);
+        info!(
+            fallback_provider = %default_provider_name,
+            "Set fallback provider for model routing"
+        );
+
+        let engine = Arc::new(engine);
         *engine_guard = Some(Arc::clone(&engine));
         info!("Cowork engine initialized");
 

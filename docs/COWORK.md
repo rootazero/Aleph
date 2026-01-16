@@ -500,25 +500,59 @@ Intelligent model selection:
 ```rust
 impl ModelMatcher {
     // Find best model for a task type
-    pub fn route_by_task_type(&self, task_type: &str) -> Option<&ModelProfile>;
+    pub fn route_by_task_type(&self, task_type: &str) -> Option<ModelProfile>;
+
+    // Route by TaskIntent (unified routing integration)
+    pub fn route_by_intent(&self, intent: &TaskIntent) -> Option<ModelProfile>;
+    pub fn route_by_intent_with_preference(
+        &self, intent: &TaskIntent, preferred_model: Option<&str>
+    ) -> Option<ModelProfile>;
 
     // Find models with specific capability
     pub fn find_by_capability(&self, cap: Capability) -> Vec<&ModelProfile>;
 
     // Cost-optimized selection
-    pub fn find_cheapest_with_capability(&self, cap: Capability) -> Option<&ModelProfile>;
-    pub fn find_best_for_capability(&self, cap: Capability) -> Option<&ModelProfile>;
+    pub fn find_cheapest_with_capability(&self, cap: Capability) -> Option<ModelProfile>;
+    pub fn find_best_for_capability(&self, cap: Capability) -> Option<ModelProfile>;
 
     // Full routing with strategy
-    pub fn route(&self, requirements: &TaskRequirements) -> Option<&ModelProfile>;
+    pub fn route(&self, task: &Task) -> Result<ModelProfile, RoutingError>;
 }
 ```
 
-**Routing Priority**:
+##### Unified Routing Integration
+
+The `route_by_intent()` method integrates legacy routing rules with the Model Router:
+
+```rust
+use crate::cowork::model_router::TaskIntent;
+
+// Route based on TaskIntent (from RoutingRuleConfig.get_task_intent())
+let profile = matcher.route_by_intent(&TaskIntent::CodeGeneration)?;
+
+// Route with model preference override
+let profile = matcher.route_by_intent_with_preference(
+    &TaskIntent::CodeGeneration,
+    Some("claude-opus")  // Override automatic selection
+)?;
+```
+
+**TaskIntent enum** (`model_router/intent.rs`):
+- `CodeGeneration`, `CodeReview`, `TextAnalysis`, `ImageAnalysis`
+- `VideoUnderstanding`, `DocumentProcessing`, `Reasoning`, `QuickTask`
+- `PrivacySensitive`, `Translation`, `Skills(String)`, `Custom(String)`
+- `Search`, `McpTool`, `VideoSearch`, `GeneralChat`
+
+Each TaskIntent maps to a required `Capability` via `intent.required_capability()`.
+
+**Routing Priority (5-level fallback chain)**:
 1. Explicit task type mapping (code_generation → claude-opus)
-2. Required capability matching
+2. Required capability matching (e.g., ImageUnderstanding)
 3. Cost strategy application (cheapest/balanced/best_quality)
-4. Default model fallback
+4. Default model fallback (`[cowork.model_routing].default_model`)
+5. **Fallback provider** (`[general].default_provider` as final fallback)
+
+The 5th level ensures users without `[cowork.model_profiles]` configured still have working model routing via their default provider.
 
 #### 3. Cost Strategy (`model_router/rules.rs`)
 
@@ -798,6 +832,7 @@ cargo test model_router
 | `core/src/cowork/model_router/profiles.rs` | ModelProfile, Capability, CostTier |
 | `core/src/cowork/model_router/rules.rs` | RoutingRules, CostStrategy |
 | `core/src/cowork/model_router/matcher.rs` | ModelMatcher routing logic |
+| `core/src/cowork/model_router/intent.rs` | TaskIntent unified intent enum |
 | `core/src/cowork/model_router/pipeline.rs` | PipelineExecutor, PipelineStage |
 | `core/src/cowork/model_router/context.rs` | ContextManager, TaskContext |
 | `core/src/cowork_ffi.rs` | UniFFI type conversions |

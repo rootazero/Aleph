@@ -513,6 +513,61 @@ impl CoworkEngine {
         self.model_matcher.is_some()
     }
 
+    /// Set the fallback provider for model routing
+    ///
+    /// This should be called with the system's `default_provider` from config.
+    /// When no suitable model is found through normal routing, the fallback
+    /// provider will be used.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Set fallback from default_provider config
+    /// if let Some(default_provider) = config.general.default_provider.as_ref() {
+    ///     engine.set_fallback_provider(default_provider);
+    /// }
+    /// ```
+    pub fn set_fallback_provider(&mut self, provider: &str) {
+        if let Some(ref mut matcher) = self.model_matcher {
+            // We need to get a mutable reference, so we clone and replace
+            let mut new_matcher = (**matcher).clone();
+            new_matcher.set_fallback_provider(Some(
+                super::model_router::FallbackProvider::new(provider),
+            ));
+            *matcher = Arc::new(new_matcher);
+        } else {
+            // If model routing is not enabled, create a minimal matcher with just fallback
+            let rules = super::model_router::ModelRoutingRules::default();
+            let matcher = ModelMatcher::new(vec![], rules)
+                .with_fallback_provider(provider);
+            self.model_matcher = Some(Arc::new(matcher));
+        }
+    }
+
+    /// Set the fallback provider with a specific model
+    pub fn set_fallback_provider_with_model(&mut self, provider: &str, model: &str) {
+        if let Some(ref mut matcher) = self.model_matcher {
+            let mut new_matcher = (**matcher).clone();
+            new_matcher.set_fallback_provider(Some(
+                super::model_router::FallbackProvider::new(provider).with_model(model),
+            ));
+            *matcher = Arc::new(new_matcher);
+        } else {
+            let rules = super::model_router::ModelRoutingRules::default();
+            let matcher = ModelMatcher::new(vec![], rules)
+                .with_fallback_provider_and_model(provider, model);
+            self.model_matcher = Some(Arc::new(matcher));
+        }
+    }
+
+    /// Check if a fallback provider is configured
+    pub fn has_fallback_provider(&self) -> bool {
+        self.model_matcher
+            .as_ref()
+            .map(|m| m.has_fallback())
+            .unwrap_or(false)
+    }
+
     /// Route a task to the optimal model
     ///
     /// Returns the selected ModelProfile, or an error if routing fails.
@@ -522,6 +577,70 @@ impl CoworkEngine {
         })?;
 
         matcher.route(task).map_err(|e| AetherError::config(e.to_string()))
+    }
+
+    /// Route by TaskIntent for unified routing integration
+    ///
+    /// This method bridges the legacy routing rules to the Model Router by:
+    /// 1. Converting `intent_type` string to `TaskIntent` enum
+    /// 2. Optionally applying `preferred_model` override
+    /// 3. Returning the optimal `ModelProfile` for the intent
+    ///
+    /// # Arguments
+    ///
+    /// * `intent` - The TaskIntent to route
+    /// * `preferred_model` - Optional model ID to override automatic selection
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(ModelProfile)` - The selected model profile
+    /// * `Err` - If routing fails or model routing is disabled
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use aethecore::cowork::model_router::TaskIntent;
+    ///
+    /// // Route based on matched routing rule
+    /// let rule = config.find_matching_rule(input)?;
+    /// let intent = rule.get_task_intent();
+    /// let preferred = rule.get_preferred_model();
+    /// let profile = engine.route_by_intent(&intent, preferred)?;
+    /// ```
+    pub fn route_by_intent(
+        &self,
+        intent: &super::model_router::TaskIntent,
+        preferred_model: Option<&str>,
+    ) -> Result<ModelProfile> {
+        let matcher = self.model_matcher.as_ref().ok_or_else(|| {
+            AetherError::config("Model routing is not enabled")
+        })?;
+
+        matcher
+            .route_by_intent_with_preference(intent, preferred_model)
+            .ok_or_else(|| AetherError::config("No model available for intent"))
+    }
+
+    /// Route from a RoutingRuleConfig
+    ///
+    /// Convenience method that extracts TaskIntent and preferred_model from a rule
+    /// and routes to the optimal model.
+    ///
+    /// # Arguments
+    ///
+    /// * `rule` - The matched routing rule
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(ModelProfile)` - The selected model profile
+    /// * `Err` - If routing fails
+    pub fn route_from_rule(
+        &self,
+        rule: &crate::config::RoutingRuleConfig,
+    ) -> Result<ModelProfile> {
+        let intent = rule.get_task_intent();
+        let preferred = rule.get_preferred_model();
+        self.route_by_intent(&intent, preferred)
     }
 
     /// Execute a task graph with model routing
@@ -1018,5 +1137,58 @@ mod tests {
 
         assert_eq!(summary.total_tasks, 2);
         assert_eq!(summary.completed_tasks, 2);
+    }
+
+    #[test]
+    fn test_engine_route_by_intent() {
+        use crate::cowork::model_router::TaskIntent;
+
+        let config = create_routing_config();
+        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+
+        // Test routing by intent
+        let profile = engine
+            .route_by_intent(&TaskIntent::CodeGeneration, None)
+            .unwrap();
+        assert_eq!(profile.id, "claude-opus");
+
+        // Test routing with preferred model override
+        let profile = engine
+            .route_by_intent(&TaskIntent::CodeGeneration, Some("claude-haiku"))
+            .unwrap();
+        assert_eq!(profile.id, "claude-haiku");
+    }
+
+    #[test]
+    fn test_engine_route_from_rule() {
+        use crate::config::RoutingRuleConfig;
+
+        let config = create_routing_config();
+        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+
+        // Test routing from a rule with intent_type
+        let rule = RoutingRuleConfig::command("^/code", "anthropic", None)
+            .with_intent_type("code_generation");
+        let profile = engine.route_from_rule(&rule).unwrap();
+        assert_eq!(profile.id, "claude-opus");
+
+        // Test routing from a rule with preferred_model
+        let rule = RoutingRuleConfig::command("^/quick", "anthropic", None)
+            .with_intent_type("code_generation")
+            .with_preferred_model("claude-haiku");
+        let profile = engine.route_from_rule(&rule).unwrap();
+        assert_eq!(profile.id, "claude-haiku");
+    }
+
+    #[test]
+    fn test_engine_route_by_intent_disabled() {
+        use crate::cowork::model_router::TaskIntent;
+
+        // When model routing is disabled, should return error
+        let config = CoworkConfig::default();
+        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+
+        let result = engine.route_by_intent(&TaskIntent::CodeGeneration, None);
+        assert!(result.is_err());
     }
 }
