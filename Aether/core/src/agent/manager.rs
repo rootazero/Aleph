@@ -476,6 +476,104 @@ impl RigAgentManager {
         Ok(AgentResponse::simple(response))
     }
 
+    /// Process an input with both conversation history and attachments
+    ///
+    /// Combines multi-turn conversation support with multimodal content (images).
+    /// This is the recommended method for chat interfaces that support image uploads.
+    ///
+    /// # Arguments
+    /// * `input` - Current user input text
+    /// * `history` - Previous conversation messages (will be mutated to add current exchange)
+    /// * `attachments` - Optional media attachments (images, documents)
+    ///
+    /// # Returns
+    /// * `Ok(AgentResponse)` - Response with the assistant's message
+    pub async fn process_with_history_and_attachments(
+        &self,
+        input: &str,
+        history: &mut Vec<Message>,
+        attachments: Option<&[MediaAttachment]>,
+    ) -> Result<AgentResponse> {
+        // If no attachments, delegate to existing process_with_history()
+        if attachments.is_none_or(|a| a.is_empty()) {
+            return self.process_with_history(input, history).await;
+        }
+
+        let attachments = attachments.unwrap();
+        info!(
+            input_len = input.len(),
+            history_len = history.len(),
+            attachment_count = attachments.len(),
+            "Processing multimodal input with history"
+        );
+        debug!(
+            provider = %self.config.provider,
+            model = %self.config.model,
+            "Using config with tool server for multimodal + history"
+        );
+
+        // Build multimodal message
+        let message = self.build_multimodal_message(input, attachments);
+
+        // Use agent.prompt(message).with_history(history) for multimodal + multi-turn
+        let response = match self.config.provider.as_str() {
+            "openai" | "gpt" => {
+                let client = self.create_openai_client()?;
+                let agent = client
+                    .agent(&self.config.model)
+                    .preamble(&self.config.system_prompt)
+                    .temperature(self.config.temperature as f64)
+                    .max_tokens(self.config.max_tokens as u64)
+                    .tool_server_handle(self.tool_server_handle.clone())
+                    .build();
+                agent
+                    .prompt(message)
+                    .with_history(history)
+                    .multi_turn(self.config.max_turns)
+                    .await
+                    .map_err(|e| AetherError::provider(format!("OpenAI error: {}", e)))?
+            }
+            "anthropic" | "claude" => {
+                let client = self.create_anthropic_client()?;
+                let agent = client
+                    .agent(&self.config.model)
+                    .preamble(&self.config.system_prompt)
+                    .temperature(self.config.temperature as f64)
+                    .max_tokens(self.config.max_tokens as u64)
+                    .tool_server_handle(self.tool_server_handle.clone())
+                    .build();
+                agent
+                    .prompt(message)
+                    .with_history(history)
+                    .multi_turn(self.config.max_turns)
+                    .await
+                    .map_err(|e| AetherError::provider(format!("Anthropic error: {}", e)))?
+            }
+            _ => {
+                // For unknown providers, use OpenAI-compatible client with custom base_url
+                let client = self.create_custom_client()?;
+                let agent = client
+                    .completion_model(&self.config.model)
+                    .completions_api()
+                    .into_agent_builder()
+                    .preamble(&self.config.system_prompt)
+                    .temperature(self.config.temperature as f64)
+                    .max_tokens(self.config.max_tokens as u64)
+                    .tool_server_handle(self.tool_server_handle.clone())
+                    .build();
+                agent
+                    .prompt(message)
+                    .with_history(history)
+                    .multi_turn(self.config.max_turns)
+                    .await
+                    .map_err(|e| AetherError::provider(format!("Provider error: {}", e)))?
+            }
+        };
+
+        info!(response_len = response.len(), "Multimodal + history response received");
+        Ok(AgentResponse::simple(response))
+    }
+
     /// Build a multimodal Message from text input and attachments
     ///
     /// Handles both image and document attachments based on their encoding:

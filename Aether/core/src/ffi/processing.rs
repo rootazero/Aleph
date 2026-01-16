@@ -82,8 +82,8 @@ impl AetherCore {
         options: Option<ProcessOptions>,
     ) -> Result<(), AetherFfiError> {
         let options = options.unwrap_or_default();
-        // Extract attachments for multimodal support (currently unused with history-based processing)
-        let _attachments = options.attachments.clone();
+        // Extract attachments for multimodal support (images, documents)
+        let attachments = options.attachments.clone();
         // Extract context for memory storage
         let app_context = options.app_context.clone();
         let window_title = options.window_title.clone();
@@ -187,6 +187,9 @@ impl AetherCore {
             };
             let history_len_before = history.len();
 
+            // Convert attachments for the async block
+            let attachments_ref = attachments.as_deref();
+
             let result = runtime.block_on(async {
                 tokio::select! {
                     biased;
@@ -196,8 +199,8 @@ impl AetherCore {
                         Err(crate::error::AetherError::cancelled())
                     }
 
-                    // Process with conversation history for multi-turn support
-                    result = manager.process_with_history(&processed_input, &mut history) => {
+                    // Process with conversation history and attachments for multi-turn + multimodal support
+                    result = manager.process_with_history_and_attachments(&processed_input, &mut history, attachments_ref) => {
                         result
                     }
                 }
