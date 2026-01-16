@@ -64,6 +64,31 @@ enum HaloState {
     /// Cowork task graph execution progress
     case coworkProgress(taskGraph: CoworkTaskGraphFfi, state: CoworkExecutionState)
 
+    /// Agent plan confirmation (Cursor-style)
+    case agentPlan(
+        planId: String,
+        title: String,
+        operations: [AgentOperation],
+        summary: AgentPlanSummary
+    )
+
+    /// Agent execution progress
+    case agentProgress(
+        planId: String,
+        progress: Float,
+        currentOperation: String,
+        completedCount: Int,
+        totalCount: Int
+    )
+
+    /// Agent conflict resolution
+    case agentConflict(
+        planId: String,
+        fileName: String,
+        targetPath: String,
+        applyToAll: Bool
+    )
+
     // MARK: - State Query Helpers
 
     /// Check if state is toast
@@ -117,9 +142,71 @@ enum HaloState {
         if case .coworkProgress = self { return true }
         return false
     }
+
+    /// Check if state is agent plan
+    var isAgentPlan: Bool {
+        if case .agentPlan = self { return true }
+        return false
+    }
+
+    /// Check if state is agent progress
+    var isAgentProgress: Bool {
+        if case .agentProgress = self { return true }
+        return false
+    }
+
+    /// Check if state is agent conflict
+    var isAgentConflict: Bool {
+        if case .agentConflict = self { return true }
+        return false
+    }
 }
 
 // MARK: - Supporting Types
+
+// MARK: - Agent Operation Types
+
+/// Single operation in agent plan
+struct AgentOperation: Equatable {
+    /// Operation action type (e.g., "create_folder", "move_file")
+    let action: String
+    /// Source path (for move/copy operations)
+    let source: String?
+    /// Target path or folder
+    let target: String
+
+    /// Icon for the action type
+    var iconName: String {
+        switch action {
+        case "create_folder": return "folder.badge.plus"
+        case "move_file": return "arrow.right.doc"
+        case "copy_file": return "doc.on.doc"
+        case "delete_file": return "trash"
+        case "rename_file": return "pencil"
+        default: return "gearshape"
+        }
+    }
+
+    /// Localized action description
+    var actionDescription: String {
+        switch action {
+        case "create_folder": return L("agent.action.create_folder")
+        case "move_file": return L("agent.action.move_file")
+        case "copy_file": return L("agent.action.copy_file")
+        case "delete_file": return L("agent.action.delete_file")
+        case "rename_file": return L("agent.action.rename_file")
+        default: return action
+        }
+    }
+}
+
+/// Summary of agent plan
+struct AgentPlanSummary: Equatable {
+    /// Number of files affected
+    let filesAffected: Int
+    /// Number of folders to create
+    let foldersToCreate: Int
+}
 
 // MARK: - Equatable Conformance
 
@@ -159,6 +246,15 @@ extension HaloState: Equatable {
             return lGraph == rGraph
         case (.coworkProgress(let lGraph, let lState), .coworkProgress(let rGraph, let rState)):
             return lGraph == rGraph && lState == rState
+        case (.agentPlan(let lId, let lTitle, let lOps, let lSummary),
+              .agentPlan(let rId, let rTitle, let rOps, let rSummary)):
+            return lId == rId && lTitle == rTitle && lOps == rOps && lSummary == rSummary
+        case (.agentProgress(let lId, let lProgress, let lOp, let lCompleted, let lTotal),
+              .agentProgress(let rId, let rProgress, let rOp, let rCompleted, let rTotal)):
+            return lId == rId && lProgress == rProgress && lOp == rOp && lCompleted == rCompleted && lTotal == rTotal
+        case (.agentConflict(let lId, let lFile, let lPath, let lApply),
+              .agentConflict(let rId, let rFile, let rPath, let rApply)):
+            return lId == rId && lFile == rFile && lPath == rPath && lApply == rApply
         default:
             return false
         }
@@ -211,6 +307,14 @@ class HaloStateCallbacks {
     var coworkOnPause: (() -> Void)?
     var coworkOnResume: (() -> Void)?
     var coworkOnCancel: (() -> Void)?
+    // Agent mode callbacks
+    var agentPlanOnExecute: (() -> Void)?
+    var agentPlanOnCancel: (() -> Void)?
+    var agentConflictOnSkip: (() -> Void)?
+    var agentConflictOnRename: (() -> Void)?
+    var agentConflictOnOverwrite: (() -> Void)?
+    var agentConflictOnApplyToAll: ((Bool) -> Void)?
+    var agentOnCancel: (() -> Void)?
 
     func reset() {
         toastOnDismiss = nil
@@ -223,6 +327,14 @@ class HaloStateCallbacks {
         coworkOnPause = nil
         coworkOnResume = nil
         coworkOnCancel = nil
+        // Reset agent callbacks
+        agentPlanOnExecute = nil
+        agentPlanOnCancel = nil
+        agentConflictOnSkip = nil
+        agentConflictOnRename = nil
+        agentConflictOnOverwrite = nil
+        agentConflictOnApplyToAll = nil
+        agentOnCancel = nil
     }
 }
 
