@@ -1,5 +1,5 @@
 #!/bin/bash
-# 实时监控 Aether 启动过程
+# Monitor Aether startup process in real-time
 
 echo "=== Aether 启动监控 ==="
 echo ""
@@ -25,18 +25,18 @@ fi
 echo "✅ 找到 Aether 进程 (PID: $AETHER_PID)"
 echo ""
 
-# 获取完整路径
+# Get full path
 AETHER_PATH=$(ps -p $AETHER_PID -o command= | awk '{print $1}')
 APP_PATH=$(dirname $(dirname "$AETHER_PATH"))
 
 echo "📦 应用路径: $APP_PATH"
 echo ""
 
-# 检查是否有菜单栏图标
+# Check if menu bar icon is visible
 echo "✅ Aether 应该在菜单栏显示图标"
 echo ""
 
-# 监控系统日志中的 Aether 相关信息
+# Monitor Aether-related entries in system logs
 echo "📊 查看最近的系统日志..."
 log show --predicate 'process == "Aether"' --info --last 30s 2>/dev/null | \
     grep -E "\[Aether\]|Error|accessibility|hotkey|rdev" | \

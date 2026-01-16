@@ -10,31 +10,31 @@ use super::task_category::TaskCategory;
 /// Regex patterns for L1 classification (Chinese + English)
 static EXECUTABLE_PATTERNS: Lazy<Vec<(Regex, TaskCategory)>> = Lazy::new(|| {
     vec![
-        // FileOrganize: 整理/归类/分类 + 文件
+        // FileOrganize: organize/sort/classify + file
         (
             Regex::new(r"(?i)(整理|归类|分类|organize|sort|classify).*(文件|files?|folder|文件夹)")
                 .unwrap(),
             TaskCategory::FileOrganize,
         ),
-        // FileTransfer: 移动/复制/拷贝 + 到
+        // FileTransfer: move/copy/transfer + to
         (
             Regex::new(r"(?i)(移动|复制|拷贝|转移|move|copy|transfer).*(到|to)")
                 .unwrap(),
             TaskCategory::FileTransfer,
         ),
-        // FileCleanup: 删除/清理/清空
+        // FileCleanup: delete/remove/clean
         (
             Regex::new(r"(?i)(删除|清理|清空|清除|delete|remove|clean)")
                 .unwrap(),
             TaskCategory::FileCleanup,
         ),
-        // CodeExecution: 运行/执行 + 脚本/代码
+        // CodeExecution: run/execute + script/code
         (
             Regex::new(r"(?i)(运行|执行|跑一下|run|execute).*(脚本|代码|script|code)")
                 .unwrap(),
             TaskCategory::CodeExecution,
         ),
-        // DocumentGenerate: 生成/创建/导出 + 文档/报告
+        // DocumentGenerate: generate/create/export + document/report
         (
             Regex::new(r"(?i)(生成|创建|导出|写|generate|create|export).*(文档|报告|document|report)")
                 .unwrap(),

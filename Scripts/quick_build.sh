@@ -1,6 +1,5 @@
 #!/bin/bash
 # Quick Build Script for Aether
-# 快速构建脚本
 
 set -e  # Exit on error
 

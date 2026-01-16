@@ -14,7 +14,7 @@ async fn test_full_intent_classification_flow() {
     let resolver = DefaultsResolver::new();
 
     // Test file organize scenario with Downloads path
-    // Since "Downloads" matches the "下载" preset, it should return ByCategory
+    // Since "Downloads" matches the "downloads" preset, it should return ByCategory
     let intent = classifier
         .classify("帮我整理/Downloads/test文件夹里的文件")
         .await;
@@ -25,7 +25,7 @@ async fn test_full_intent_classification_flow() {
         assert!(task.confidence >= 0.85, "Confidence should be >= 0.85");
 
         let params = resolver.resolve(&task).await;
-        // "Downloads" in the path matches "下载" preset, so ByCategory is expected
+        // "Downloads" in the path matches "downloads" preset, so ByCategory is expected
         assert_eq!(params.organize_method, OrganizeMethod::ByCategory);
         assert_eq!(params.source, ParameterSource::Preset);
     } else {

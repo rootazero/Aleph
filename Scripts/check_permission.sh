@@ -1,10 +1,10 @@
 #!/bin/bash
-# 检查 Aether Accessibility 权限状态
+# Check Aether Accessibility permission status
 
 echo "=== Aether Accessibility 权限检查 ==="
 echo ""
 
-# 获取运行中的 Aether 路径
+# Get running Aether path
 AETHER_PID=$(pgrep -x "Aether" 2>/dev/null | head -1)
 
 if [ -z "$AETHER_PID" ]; then
@@ -22,13 +22,13 @@ APP_PATH=$(dirname $(dirname "$AETHER_PATH"))
 echo "📦 应用路径: $APP_PATH"
 echo ""
 
-# 检查 TCC 数据库（用户级）
+# Check TCC database (user level)
 USER_TCC_DB="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
 
 if [ -f "$USER_TCC_DB" ]; then
     echo "🔍 查询 TCC 数据库..."
 
-    # 查询 Accessibility 权限
+    # Query Accessibility permission
     RESULT=$(sqlite3 "$USER_TCC_DB" \
         "SELECT allowed FROM access WHERE service='kTCCServiceAccessibility' AND client LIKE '%Aether%';" \
         2>/dev/null | tail -1)

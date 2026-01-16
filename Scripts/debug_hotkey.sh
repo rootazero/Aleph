@@ -1,10 +1,10 @@
 #!/bin/bash
-# Aether 热键诊断脚本
+# Aether hotkey diagnostic script
 
 echo "=== Aether 热键诊断工具 ==="
 echo ""
 
-# 1. 检查应用是否在运行
+# 1. Check if application is running
 echo "1. 检查 Aether 应用状态..."
 if pgrep -x "Aether" > /dev/null; then
     echo "   ✅ Aether 正在运行"
@@ -15,13 +15,13 @@ else
 fi
 echo ""
 
-# 2. 检查 Accessibility 权限
+# 2. Check Accessibility permission
 echo "2. 检查 Accessibility 权限..."
 echo "   请手动检查: 系统设置 → 隐私与安全性 → 辅助功能"
 echo "   确保 'Aether' 已勾选"
 echo ""
 
-# 3. 检查 Rust core 库
+# 3. Check Rust core library
 echo "3. 检查 Rust core 库..."
 DYLIB_PATH="Aether/Frameworks/libaethecore.dylib"
 if [ -f "$DYLIB_PATH" ]; then
@@ -34,13 +34,13 @@ else
 fi
 echo ""
 
-# 4. 查看最近的应用日志
+# 4. View recent application logs
 echo "4. 查看最近的应用日志..."
 echo "   运行以下命令查看实时日志:"
 echo "   log stream --predicate 'processImagePath contains \"Aether\"' --level debug"
 echo ""
 
-# 5. 测试热键
+# 5. Hotkey testing info
 echo "5. 热键配置信息..."
 echo "   默认热键: Cmd + \` (Command + 反引号)"
 echo "   备选方式: 单独按 \` 键"

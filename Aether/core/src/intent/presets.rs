@@ -25,7 +25,7 @@ impl Default for PresetRegistry {
         // Order matters: more specific presets should come first
         Self {
             presets: vec![
-                // 照片整理 → 按日期分组 (specific, must come before generic "整理")
+                // Photo organization -> group by date (specific, must come before generic "organize")
                 ScenarioPreset {
                     keywords: vec![
                         "照片".to_string(),
@@ -38,7 +38,7 @@ impl Default for PresetRegistry {
                     parameters: TaskParameters::file_organize_by_date()
                         .with_source(ParameterSource::Preset),
                 },
-                // 清理下载 → 按大类分组 (specific, must come before generic "清理")
+                // Clean downloads -> group by category (specific, must come before generic "clean")
                 ScenarioPreset {
                     keywords: vec![
                         "清理下载".to_string(),
@@ -50,7 +50,7 @@ impl Default for PresetRegistry {
                     parameters: TaskParameters::file_organize_by_category()
                         .with_source(ParameterSource::Preset),
                 },
-                // 整理文件 → 按扩展名分组 (generic fallback)
+                // Organize files -> group by extension (generic fallback)
                 ScenarioPreset {
                     keywords: vec![
                         "整理".to_string(),

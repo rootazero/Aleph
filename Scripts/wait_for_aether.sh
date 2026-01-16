@@ -1,5 +1,5 @@
 #!/bin/bash
-# 实时检查 Aether 启动状态
+# Check Aether startup status in real-time
 
 echo "🔄 等待 Aether 启动..."
 echo "   请在 Xcode 中点击 Run 按钮 (▶️)"
@@ -14,16 +14,16 @@ for i in {1..10}; do
         echo "✅ Aether 已启动！(PID: $AETHER_PID)"
         echo ""
 
-        # 获取应用路径
+        # Get application path
         AETHER_PATH=$(ps -p $AETHER_PID -o command= | awk '{print $1}')
         echo "📦 应用路径: $AETHER_PATH"
         echo ""
 
-        # 等待 2 秒让应用完全初始化
+        # Wait 2 seconds for full initialization
         echo "⏳ 等待初始化..."
         sleep 2
 
-        # 检查菜单栏图标
+        # Check menu bar icon
         echo ""
         echo "✅ Aether 应该在菜单栏显示图标"
         echo ""
