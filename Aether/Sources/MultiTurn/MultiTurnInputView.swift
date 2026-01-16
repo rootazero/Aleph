@@ -307,8 +307,7 @@ struct MultiTurnInputView: View {
             Button(action: viewModel.submit) {
                 Image(systemName: "arrow.up")
             }
-            .buttonStyle(.plain)
-            .adaptiveGlassProminent()
+            .buttonStyle(GlassProminentButtonStyle())
             .disabled(viewModel.inputText.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding(16)

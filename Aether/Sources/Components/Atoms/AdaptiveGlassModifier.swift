@@ -53,10 +53,51 @@ struct GlassModifier: ViewModifier {
     }
 }
 
-// MARK: - GlassProminentButtonModifier
+// MARK: - GlassProminentButtonStyle
+
+/// A button style for prominent glass-style buttons.
+/// Uses contentShape inside makeBody to ensure entire circle area is clickable.
+struct GlassProminentButtonStyle: ButtonStyle {
+
+    func makeBody(configuration: Configuration) -> some View {
+        GlassProminentButtonContent(
+            configuration: configuration
+        )
+    }
+}
+
+/// Internal view for GlassProminentButtonStyle to access environment values.
+private struct GlassProminentButtonContent: View {
+
+    let configuration: ButtonStyle.Configuration
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        configuration.label
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundColor(.primary)
+            .padding(10)
+            .background(
+                Circle()
+                    .fill(fillColor)
+            )
+            .contentShape(Circle())
+            .opacity(configuration.isPressed ? 0.7 : 1.0)
+            .background(WindowDragBlocker())
+    }
+
+    private var fillColor: Color {
+        if !isEnabled {
+            return Color.primary.opacity(0.1)
+        }
+        return Color.primary.opacity(configuration.isPressed ? 0.3 : 0.2)
+    }
+}
+
+// MARK: - GlassProminentButtonModifier (Deprecated)
 
 /// A view modifier for prominent glass-style buttons.
-/// Uses white color for consistent contrast on transparent glass.
+/// @deprecated Use GlassProminentButtonStyle instead for proper hit testing.
 struct GlassProminentButtonModifier: ViewModifier {
 
     @Environment(\.isEnabled) private var isEnabled
@@ -215,8 +256,7 @@ extension View {
             Button {} label: {
                 Image(systemName: "arrow.up")
             }
-            .buttonStyle(.plain)
-            .adaptiveGlassProminent()
+            .buttonStyle(GlassProminentButtonStyle())
         }
     }
     .padding(40)
