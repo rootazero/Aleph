@@ -80,6 +80,12 @@ pub trait AetherEventHandler: Send + Sync {
 
     /// Called when a memory entry is stored
     fn on_memory_stored(&self);
+
+    /// Called when agent execution mode is detected
+    ///
+    /// This callback notifies the UI that the input has been classified
+    /// as an executable task and agent mode will be activated.
+    fn on_agent_mode_detected(&self, task: crate::intent::ExecutableTaskFFI);
 }
 
 /// Tool information for UI display

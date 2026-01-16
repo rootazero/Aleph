@@ -4,11 +4,12 @@
 
 use super::{AetherCore, AetherFfiError};
 use crate::agent::RigAgentManager;
+use crate::intent::{ExecutionIntent, IntentClassifier};
 use crate::memory::{ContextAnchor, EmbeddingModel, MemoryIngestion, VectorDatabase};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Processing options
 #[derive(Debug, Clone)]
@@ -117,6 +118,22 @@ impl AetherCore {
             }
 
             handler.on_thinking();
+
+            // Classify user input for agent execution mode
+            let classifier = IntentClassifier::new();
+            let intent = runtime.block_on(classifier.classify(&input));
+            debug!(intent = ?intent, "Intent classification result");
+
+            // Notify UI if executable task detected (agent mode)
+            if let ExecutionIntent::Executable(ref task) = intent {
+                info!(
+                    category = ?task.category,
+                    action = %task.action,
+                    confidence = task.confidence,
+                    "Agent execution mode detected"
+                );
+                handler.on_agent_mode_detected(task.into());
+            }
 
             // Create manager with shared ToolServerHandle (all tools persist across calls)
             let manager = RigAgentManager::with_shared_handle(config, tool_server_handle, registered_tools);

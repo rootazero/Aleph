@@ -727,6 +727,8 @@ callback interface AetherEventHandler {
     void on_complete(string response);
     void on_error(string message);
     void on_memory_stored();
+    // Agent execution mode notification
+    void on_agent_mode_detected(ExecutableTaskFFI task);
 };
 
 interface AetherCore {
