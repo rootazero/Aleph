@@ -2,7 +2,17 @@
 //!
 //! Contains routing rule configuration:
 //! - RoutingRuleConfig: AI routing rules with command/keyword types
+//!
+//! # Model Router Integration
+//!
+//! This module integrates with the Model Router system for intelligent model selection.
+//! The `intent_type` field is converted to `TaskIntent` which determines:
+//! - Required model capabilities
+//! - Optimal model selection via `ModelMatcher::route_by_intent()`
+//!
+//! Use `preferred_model` to override automatic model selection.
 
+use crate::cowork::model_router::TaskIntent;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
@@ -85,8 +95,20 @@ pub struct RoutingRuleConfig {
     /// Intent type identifier (for logging and UI display)
     /// Examples: "translation", "research", "code_generation", "skills:build-macos-apps"
     /// Default: "general"
+    ///
+    /// This is converted to `TaskIntent` via `get_task_intent()` for Model Router integration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent_type: Option<String>,
+
+    /// Preferred model ID for this rule (optional)
+    ///
+    /// If specified, this model is used instead of automatic selection via Model Router.
+    /// Must be a valid model profile ID (e.g., "claude-opus", "gpt-4o").
+    ///
+    /// When both `provider` and `preferred_model` are set, `preferred_model` takes precedence
+    /// for Model Router routing (provider is kept for backward compatibility).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_model: Option<String>,
 
     /// Context data injection format
     /// Options: "markdown", "xml", "json"
@@ -144,6 +166,7 @@ impl RoutingRuleConfig {
             strip_prefix: None,
             capabilities: None,
             intent_type: None,
+            preferred_model: None,
             context_format: None,
             icon: None,
             hint: None,
@@ -166,6 +189,7 @@ impl RoutingRuleConfig {
             strip_prefix: Some(true),
             capabilities: None,
             intent_type: None,
+            preferred_model: None,
             context_format: None,
             icon: None,
             hint: None,
@@ -188,6 +212,7 @@ impl RoutingRuleConfig {
             strip_prefix: None,
             capabilities: None,
             intent_type: None,
+            preferred_model: None,
             context_format: None,
             icon: None,
             hint: None,
@@ -197,6 +222,20 @@ impl RoutingRuleConfig {
             tools: None,
             knowledge_base: None,
         }
+    }
+
+    /// Set the intent type (builder pattern)
+    pub fn with_intent_type(mut self, intent_type: &str) -> Self {
+        self.intent_type = Some(intent_type.to_string());
+        self
+    }
+
+    /// Set the preferred model (builder pattern)
+    ///
+    /// The preferred model overrides automatic model selection via Model Router.
+    pub fn with_preferred_model(mut self, model_id: &str) -> Self {
+        self.preferred_model = Some(model_id.to_string());
+        self
     }
 
     /// Get the effective rule type (with auto-detection)
@@ -270,6 +309,34 @@ impl RoutingRuleConfig {
         self.intent_type.as_deref().unwrap_or("general")
     }
 
+    /// Get TaskIntent for Model Router integration
+    ///
+    /// Converts the `intent_type` string to a strongly-typed `TaskIntent` enum.
+    /// This is the bridge between legacy routing rules and the Model Router.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let rule = RoutingRuleConfig {
+    ///     intent_type: Some("code_generation".to_string()),
+    ///     ..Default::default()
+    /// };
+    /// let intent = rule.get_task_intent();
+    /// assert_eq!(intent, TaskIntent::CodeGeneration);
+    /// ```
+    pub fn get_task_intent(&self) -> TaskIntent {
+        TaskIntent::from_string(self.get_intent_type())
+    }
+
+    /// Get preferred model ID for Model Router
+    ///
+    /// Returns the preferred model if explicitly set, otherwise None.
+    /// When used with `ModelMatcher::route_by_intent_with_preference()`,
+    /// this allows rules to override automatic model selection.
+    pub fn get_preferred_model(&self) -> Option<&str> {
+        self.preferred_model.as_deref()
+    }
+
     /// Get context format (with default value)
     pub fn get_context_format(&self) -> crate::payload::ContextFormat {
         use crate::payload::ContextFormat;
@@ -303,5 +370,128 @@ impl RoutingRuleConfig {
             .as_ref()
             .and_then(|json_str| serde_json::from_str::<Vec<String>>(json_str).ok())
             .unwrap_or_default()
+    }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_task_intent_code_generation() {
+        let rule = RoutingRuleConfig {
+            intent_type: Some("code_generation".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(rule.get_task_intent(), TaskIntent::CodeGeneration);
+    }
+
+    #[test]
+    fn test_get_task_intent_code_aliases() {
+        // Test various aliases
+        let rule = RoutingRuleConfig {
+            intent_type: Some("code".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(rule.get_task_intent(), TaskIntent::CodeGeneration);
+
+        let rule = RoutingRuleConfig {
+            intent_type: Some("coding".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(rule.get_task_intent(), TaskIntent::CodeGeneration);
+    }
+
+    #[test]
+    fn test_get_task_intent_skills() {
+        let rule = RoutingRuleConfig {
+            intent_type: Some("skills:build-macos-apps".to_string()),
+            ..Default::default()
+        };
+        let intent = rule.get_task_intent();
+        assert!(matches!(intent, TaskIntent::Skills(ref id) if id == "build-macos-apps"));
+    }
+
+    #[test]
+    fn test_get_task_intent_default() {
+        let rule = RoutingRuleConfig::default();
+        assert_eq!(rule.get_task_intent(), TaskIntent::GeneralChat);
+    }
+
+    #[test]
+    fn test_get_preferred_model() {
+        let rule = RoutingRuleConfig {
+            preferred_model: Some("claude-opus".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(rule.get_preferred_model(), Some("claude-opus"));
+
+        let rule_none = RoutingRuleConfig::default();
+        assert_eq!(rule_none.get_preferred_model(), None);
+    }
+
+    #[test]
+    fn test_builder_with_intent_type() {
+        let rule = RoutingRuleConfig::command("^/code", "anthropic", None)
+            .with_intent_type("code_generation");
+        assert_eq!(rule.get_task_intent(), TaskIntent::CodeGeneration);
+    }
+
+    #[test]
+    fn test_builder_with_preferred_model() {
+        let rule = RoutingRuleConfig::command("^/code", "anthropic", None)
+            .with_preferred_model("claude-opus");
+        assert_eq!(rule.get_preferred_model(), Some("claude-opus"));
+    }
+
+    #[test]
+    fn test_builder_chain() {
+        let rule = RoutingRuleConfig::command("^/translate", "anthropic", None)
+            .with_intent_type("translation")
+            .with_preferred_model("gpt-4o");
+
+        assert_eq!(rule.get_task_intent(), TaskIntent::Translation);
+        assert_eq!(rule.get_preferred_model(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn test_task_intent_image_analysis() {
+        let rule = RoutingRuleConfig {
+            intent_type: Some("image_analysis".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(rule.get_task_intent(), TaskIntent::ImageAnalysis);
+    }
+
+    #[test]
+    fn test_task_intent_reasoning() {
+        let rule = RoutingRuleConfig {
+            intent_type: Some("reasoning".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(rule.get_task_intent(), TaskIntent::Reasoning);
+
+        // Test alias
+        let rule = RoutingRuleConfig {
+            intent_type: Some("think".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(rule.get_task_intent(), TaskIntent::Reasoning);
+    }
+
+    #[test]
+    fn test_task_intent_custom() {
+        let rule = RoutingRuleConfig {
+            intent_type: Some("my_custom_workflow".to_string()),
+            ..Default::default()
+        };
+        let intent = rule.get_task_intent();
+        assert!(
+            matches!(intent, TaskIntent::Custom(ref s) if s == "my_custom_workflow")
+        );
     }
 }

@@ -334,6 +334,7 @@ dictionary RoutingRuleConfig {
   // ===== Capability fields =====
   sequence<string>? capabilities;  // Required capabilities (e.g., ["memory", "search"])
   string? intent_type;              // Intent type identifier (e.g., "translation", "research")
+  string? preferred_model;          // Preferred model ID for Model Router (overrides automatic selection)
   string? context_format;           // Context injection format (e.g., "markdown", "xml", "json")
 
   // ===== Skills fields (reserved) =====

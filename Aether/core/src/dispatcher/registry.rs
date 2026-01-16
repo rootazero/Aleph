@@ -723,6 +723,7 @@ impl ToolRegistry {
                     Some(t.routing_capabilities.clone())
                 },
                 intent_type: t.routing_intent_type.clone(),
+                preferred_model: None,
                 context_format: t.routing_context_format.clone(),
                 skill_id: None,
                 skill_version: None,
