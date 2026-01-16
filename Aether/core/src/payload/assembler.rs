@@ -4,6 +4,7 @@
 /// using different formats (Markdown, XML, JSON).
 use super::{AgentContext, AgentPayload, ContextFormat};
 use crate::capability::CapabilityDeclaration;
+use crate::intent::{AgentModePrompt, ExecutionIntent};
 use crate::memory::{MemoryEntry, MemoryFact};
 use crate::search::SearchResult;
 use crate::utils::text_format::{escape_markdown, format_timestamp, truncate_text};
@@ -98,6 +99,43 @@ impl PromptAssembler {
                 prompt.push_str("\n\n");
                 prompt.push_str(&formatted_ctx);
             }
+        }
+
+        prompt
+    }
+
+    /// Build prompt with agent mode injection based on intent.
+    ///
+    /// When the intent is `ExecutionIntent::Executable`, this method injects
+    /// the Agent Mode Prompt that guides AI to:
+    /// 1. Skip asking for options - present best plan directly
+    /// 2. Show plan summary with operations
+    /// 3. Wait for user confirmation before destructive operations
+    ///
+    /// # Arguments
+    ///
+    /// * `base_prompt` - Base system prompt
+    /// * `capabilities` - List of available capabilities
+    /// * `context` - Optional existing context
+    /// * `intent` - Optional execution intent from IntentClassifier
+    ///
+    /// # Returns
+    ///
+    /// Complete system prompt with agent mode injection if applicable
+    pub fn build_prompt_with_intent(
+        &self,
+        base_prompt: &str,
+        capabilities: &[CapabilityDeclaration],
+        context: Option<&AgentContext>,
+        intent: Option<&ExecutionIntent>,
+    ) -> String {
+        let mut prompt = self.build_capability_aware_prompt(base_prompt, capabilities, context);
+
+        // Inject agent mode prompt if intent is executable
+        if let Some(ExecutionIntent::Executable(_)) = intent {
+            let agent_prompt = AgentModePrompt::new().generate();
+            prompt.push_str("\n\n");
+            prompt.push_str(&agent_prompt);
         }
 
         prompt
@@ -1045,5 +1083,80 @@ mod tests {
         assert!(prompt.contains("### Context Information"));
         assert!(prompt.contains("**Related Conversation History**"));
         assert!(prompt.contains("Previous question"));
+    }
+
+    #[test]
+    fn test_build_prompt_with_intent_executable() {
+        use crate::intent::{ExecutableTask, ExecutionIntent, TaskCategory};
+
+        let assembler = PromptAssembler::new(ContextFormat::Markdown);
+
+        let intent = ExecutionIntent::Executable(ExecutableTask {
+            category: TaskCategory::FileOrganize,
+            action: "整理文件".to_string(),
+            target: None,
+            confidence: 0.9,
+        });
+
+        let prompt = assembler.build_prompt_with_intent("Base prompt.", &[], None, Some(&intent));
+
+        // Should contain base prompt
+        assert!(prompt.contains("Base prompt."));
+
+        // Should contain agent mode prompt
+        assert!(prompt.contains("Agent执行模式"));
+        assert!(prompt.contains("禁止询问选项"));
+        assert!(prompt.contains("__agent_plan__"));
+    }
+
+    #[test]
+    fn test_build_prompt_with_intent_conversational() {
+        use crate::intent::ExecutionIntent;
+
+        let assembler = PromptAssembler::new(ContextFormat::Markdown);
+
+        let intent = ExecutionIntent::Conversational;
+
+        let prompt = assembler.build_prompt_with_intent("Base prompt.", &[], None, Some(&intent));
+
+        // Should contain base prompt
+        assert!(prompt.contains("Base prompt."));
+
+        // Should NOT contain agent mode prompt
+        assert!(!prompt.contains("Agent执行模式"));
+    }
+
+    #[test]
+    fn test_build_prompt_with_intent_none() {
+        let assembler = PromptAssembler::new(ContextFormat::Markdown);
+
+        let prompt = assembler.build_prompt_with_intent("Base prompt.", &[], None, None);
+
+        // Should contain only base prompt
+        assert_eq!(prompt, "Base prompt.");
+        assert!(!prompt.contains("Agent执行模式"));
+    }
+
+    #[test]
+    fn test_build_prompt_with_intent_and_capabilities() {
+        use crate::intent::{ExecutableTask, ExecutionIntent, TaskCategory};
+
+        let assembler = PromptAssembler::new(ContextFormat::Markdown);
+
+        let capabilities = vec![CapabilityDeclaration::search()];
+        let intent = ExecutionIntent::Executable(ExecutableTask {
+            category: TaskCategory::FileOrganize,
+            action: "整理文件".to_string(),
+            target: None,
+            confidence: 0.9,
+        });
+
+        let prompt =
+            assembler.build_prompt_with_intent("Base prompt.", &capabilities, None, Some(&intent));
+
+        // Should contain all three: base prompt, capabilities, and agent mode
+        assert!(prompt.contains("Base prompt."));
+        assert!(prompt.contains("## CRITICAL: Proactive Search Decision System"));
+        assert!(prompt.contains("Agent执行模式"));
     }
 }
