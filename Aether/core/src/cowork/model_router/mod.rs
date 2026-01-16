@@ -15,14 +15,6 @@
 //!   │
 //!   ▼
 //! ModelProfile (selected)
-//!   │
-//!   ▼
-//! ┌─────────────────┐
-//! │ PipelineExecutor│ ◀── TaskContextManager
-//! └─────────────────┘
-//!   │
-//!   ▼
-//! StageResult
 //! ```
 //!
 //! # Example
@@ -40,20 +32,14 @@
 mod context;
 mod intent;
 mod matcher;
-mod pipeline;
 mod profiles;
 mod rules;
 
-pub use context::{
-    ContextError, ContextSummary, StoredTaskResult, TaskContext, TaskContextManager,
-    TaskResultMetadata,
-};
+pub use context::TaskContextManager;
 pub use intent::TaskIntent;
 pub use matcher::{FallbackProvider, ModelMatcher, ModelRouter, RoutingError};
-pub use pipeline::{
-    ExecutionResult, PipelineContext, PipelineError, PipelineEvent, PipelineExecutor,
-    PipelineProgressHandler, PipelineStage, PipelineState, PipelineSummary, ProviderAdapter,
-    StageResult,
-};
 pub use profiles::{Capability, CostTier, LatencyTier, ModelProfile};
 pub use rules::{CostStrategy, ModelRoutingRules};
+
+// Re-export StageResult from types module for backward compatibility
+pub use super::types::StageResult;

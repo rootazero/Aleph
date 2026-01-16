@@ -85,6 +85,81 @@ mod duration_serde {
     }
 }
 
+/// Result of executing a single pipeline stage
+///
+/// Used by Model Router to track individual stage execution within multi-stage pipelines.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StageResult {
+    /// ID of the stage that produced this result
+    pub stage_id: String,
+
+    /// Model profile used for execution
+    pub model_used: String,
+
+    /// Provider name
+    pub provider: String,
+
+    /// Output from the stage execution
+    pub output: serde_json::Value,
+
+    /// Number of tokens used (estimated)
+    pub tokens_used: u32,
+
+    /// Execution duration
+    #[serde(with = "duration_serde")]
+    pub duration: Duration,
+
+    /// Whether the stage completed successfully
+    pub success: bool,
+
+    /// Error message if failed
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+impl StageResult {
+    /// Create a successful stage result
+    pub fn success(
+        stage_id: impl Into<String>,
+        model_used: impl Into<String>,
+        provider: impl Into<String>,
+        output: serde_json::Value,
+        tokens_used: u32,
+        duration: Duration,
+    ) -> Self {
+        Self {
+            stage_id: stage_id.into(),
+            model_used: model_used.into(),
+            provider: provider.into(),
+            output,
+            tokens_used,
+            duration,
+            success: true,
+            error: None,
+        }
+    }
+
+    /// Create a failed stage result
+    pub fn failure(
+        stage_id: impl Into<String>,
+        model_used: impl Into<String>,
+        provider: impl Into<String>,
+        error: impl Into<String>,
+        duration: Duration,
+    ) -> Self {
+        Self {
+            stage_id: stage_id.into(),
+            model_used: model_used.into(),
+            provider: provider.into(),
+            output: serde_json::Value::Null,
+            tokens_used: 0,
+            duration,
+            success: false,
+            error: Some(error.into()),
+        }
+    }
+}
+
 /// Summary of a completed task graph execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionSummary {

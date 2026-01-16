@@ -66,9 +66,6 @@ pub use types::{
     TaskType,
 };
 pub use model_router::{
-    Capability, ContextError, ContextSummary, CostStrategy, CostTier, ExecutionResult, LatencyTier,
-    ModelMatcher, ModelProfile, ModelRouter, ModelRoutingRules, PipelineContext, PipelineError,
-    PipelineEvent, PipelineExecutor, PipelineProgressHandler, PipelineStage, PipelineState,
-    PipelineSummary, ProviderAdapter, RoutingError, StageResult, StoredTaskResult, TaskContext,
-    TaskContextManager, TaskResultMetadata,
+    Capability, CostStrategy, CostTier, FallbackProvider, LatencyTier, ModelMatcher, ModelProfile,
+    ModelRouter, ModelRoutingRules, RoutingError, StageResult, TaskContextManager, TaskIntent,
 };
