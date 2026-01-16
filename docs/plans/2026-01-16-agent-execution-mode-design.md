@@ -266,7 +266,7 @@ impl PreferenceStore {
 | 整理文件 | 按扩展名分组到子文件夹 |
 | 清理下载 | 按大类分组（Images/Documents/Videos/Archives/Others） |
 | 备份项目 | 压缩为 `{项目名}_{日期}.zip` |
-| 导出报告 | 生成PDF到 ~/Documents |
+| 导出报告 | 生成Markdown文档到 ~/Documents |
 
 ```rust
 pub struct PresetRegistry {
