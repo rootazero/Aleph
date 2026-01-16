@@ -128,7 +128,10 @@ pub use crate::clarification::{
     ClarificationType,
 };
 pub use crate::conversation::{ConversationManager, ConversationSession, ConversationTurn};
-pub use crate::intent::{AiIntentDetector, AiIntentResult};
+pub use crate::intent::{
+    AiIntentDetector, AiIntentResult, ExecutableTask, ExecutionIntent, IntentClassifier,
+    TaskCategory,
+};
 pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
 pub use crate::skills::{Skill, SkillInfo, SkillsInstaller, SkillsRegistry};
 pub use crate::mcp::{
