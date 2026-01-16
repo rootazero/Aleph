@@ -5779,6 +5779,7 @@ public struct RoutingRuleConfig {
     public var stripPrefix: Bool?
     public var capabilities: [String]?
     public var intentType: String?
+    public var preferredModel: String?
     public var contextFormat: String?
     public var skillId: String?
     public var skillVersion: String?
@@ -5790,7 +5791,7 @@ public struct RoutingRuleConfig {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(ruleType: String?, isBuiltin: Bool, regex: String, provider: String?, systemPrompt: String?, stripPrefix: Bool?, capabilities: [String]?, intentType: String?, contextFormat: String?, skillId: String?, skillVersion: String?, workflow: String?, tools: String?, knowledgeBase: String?, icon: String?, hint: String?) {
+    public init(ruleType: String?, isBuiltin: Bool, regex: String, provider: String?, systemPrompt: String?, stripPrefix: Bool?, capabilities: [String]?, intentType: String?, preferredModel: String?, contextFormat: String?, skillId: String?, skillVersion: String?, workflow: String?, tools: String?, knowledgeBase: String?, icon: String?, hint: String?) {
         self.ruleType = ruleType
         self.isBuiltin = isBuiltin
         self.regex = regex
@@ -5799,6 +5800,7 @@ public struct RoutingRuleConfig {
         self.stripPrefix = stripPrefix
         self.capabilities = capabilities
         self.intentType = intentType
+        self.preferredModel = preferredModel
         self.contextFormat = contextFormat
         self.skillId = skillId
         self.skillVersion = skillVersion
@@ -5838,6 +5840,9 @@ extension RoutingRuleConfig: Equatable, Hashable {
         if lhs.intentType != rhs.intentType {
             return false
         }
+        if lhs.preferredModel != rhs.preferredModel {
+            return false
+        }
         if lhs.contextFormat != rhs.contextFormat {
             return false
         }
@@ -5874,6 +5879,7 @@ extension RoutingRuleConfig: Equatable, Hashable {
         hasher.combine(stripPrefix)
         hasher.combine(capabilities)
         hasher.combine(intentType)
+        hasher.combine(preferredModel)
         hasher.combine(contextFormat)
         hasher.combine(skillId)
         hasher.combine(skillVersion)
@@ -5901,6 +5907,7 @@ public struct FfiConverterTypeRoutingRuleConfig: FfiConverterRustBuffer {
                 stripPrefix: FfiConverterOptionBool.read(from: &buf), 
                 capabilities: FfiConverterOptionSequenceString.read(from: &buf), 
                 intentType: FfiConverterOptionString.read(from: &buf), 
+                preferredModel: FfiConverterOptionString.read(from: &buf), 
                 contextFormat: FfiConverterOptionString.read(from: &buf), 
                 skillId: FfiConverterOptionString.read(from: &buf), 
                 skillVersion: FfiConverterOptionString.read(from: &buf), 
@@ -5921,6 +5928,7 @@ public struct FfiConverterTypeRoutingRuleConfig: FfiConverterRustBuffer {
         FfiConverterOptionBool.write(value.stripPrefix, into: &buf)
         FfiConverterOptionSequenceString.write(value.capabilities, into: &buf)
         FfiConverterOptionString.write(value.intentType, into: &buf)
+        FfiConverterOptionString.write(value.preferredModel, into: &buf)
         FfiConverterOptionString.write(value.contextFormat, into: &buf)
         FfiConverterOptionString.write(value.skillId, into: &buf)
         FfiConverterOptionString.write(value.skillVersion, into: &buf)
