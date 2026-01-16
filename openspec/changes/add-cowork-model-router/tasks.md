@@ -67,83 +67,83 @@
 
 ## 4. Pipeline Executor
 
-- [ ] 4.1 Define pipeline types in `pipeline.rs`
-  - [ ] 4.1.1 Define `PipelineStage` struct
-  - [ ] 4.1.2 Define `PipelineContext` struct
-  - [ ] 4.1.3 Define `StageResult` struct
-- [ ] 4.2 Implement `PipelineExecutor`
-  - [ ] 4.2.1 Accept `ModelRouter` dependency
-  - [ ] 4.2.2 Store `TaskContextManager` for context passing
-- [ ] 4.3 Implement `execute_pipeline()` method
-  - [ ] 4.3.1 Iterate through stages
-  - [ ] 4.3.2 Route each stage to optimal model
-  - [ ] 4.3.3 Enrich task with context from dependencies
-  - [ ] 4.3.4 Execute with selected provider
-  - [ ] 4.3.5 Store result in context
-  - [ ] 4.3.6 Accumulate tokens and cost
-- [ ] 4.4 Implement provider execution wrapper
-  - [ ] 4.4.1 Look up provider by profile
-  - [ ] 4.4.2 Execute with proper model parameter
-  - [ ] 4.4.3 Handle provider errors
-  - [ ] 4.4.4 Track token usage
-- [ ] 4.5 Add pipeline control features
-  - [ ] 4.5.1 Support stage cancellation
-  - [ ] 4.5.2 Support pause/resume
-  - [ ] 4.5.3 Emit progress events
-- [ ] 4.6 Write integration tests for pipeline execution
+- [x] 4.1 Define pipeline types in `pipeline.rs`
+  - [x] 4.1.1 Define `PipelineStage` struct
+  - [x] 4.1.2 Define `PipelineContext` struct
+  - [x] 4.1.3 Define `StageResult` struct
+- [x] 4.2 Implement `PipelineExecutor`
+  - [x] 4.2.1 Accept `ModelRouter` dependency
+  - [x] 4.2.2 Store `ProviderAdapter` for execution
+- [x] 4.3 Implement `execute_pipeline()` method
+  - [x] 4.3.1 Iterate through stages with topological sort
+  - [x] 4.3.2 Route each stage to optimal model
+  - [x] 4.3.3 Enrich task with context from dependencies
+  - [x] 4.3.4 Execute with selected provider
+  - [x] 4.3.5 Store result in context
+  - [x] 4.3.6 Accumulate tokens and cost
+- [x] 4.4 Implement provider execution wrapper
+  - [x] 4.4.1 ProviderAdapter trait for abstraction
+  - [x] 4.4.2 Execute with proper model parameter
+  - [x] 4.4.3 Handle provider errors
+  - [x] 4.4.4 Track token usage
+- [x] 4.5 Add pipeline control features
+  - [x] 4.5.1 Support stage cancellation
+  - [x] 4.5.2 Support pause/resume
+  - [x] 4.5.3 Emit progress events via PipelineProgressHandler
+- [x] 4.6 Write integration tests for pipeline execution
 
 ## 5. Memory Integration
 
-- [ ] 5.1 Implement `TaskContextManager` in `context.rs`
-  - [ ] 5.1.1 Accept `MemoryStore` dependency
-  - [ ] 5.1.2 Track current graph ID
-- [ ] 5.2 Implement `store_result()` method
-  - [ ] 5.2.1 Create memory key with graph and task ID
-  - [ ] 5.2.2 Serialize task result to JSON
-  - [ ] 5.2.3 Add metadata (source, task_type, timestamp)
-  - [ ] 5.2.4 Store in memory module
-- [ ] 5.3 Implement `get_context()` method
-  - [ ] 5.3.1 Query memory for dependency results
-  - [ ] 5.3.2 Build TaskContext from results
-  - [ ] 5.3.3 Handle missing dependencies gracefully
-- [ ] 5.4 Implement context enrichment
-  - [ ] 5.4.1 `enrich_task(task: &Task, context: &TaskContext) -> Task`
-  - [ ] 5.4.2 Inject dependency outputs into task parameters
-  - [ ] 5.4.3 Truncate context if exceeds model max_context
-- [ ] 5.5 Write integration tests with Memory module
+- [x] 5.1 Implement `TaskContextManager` in `context.rs`
+  - [x] 5.1.1 Accept optional VectorDatabase dependency
+  - [x] 5.1.2 Track current graph ID
+- [x] 5.2 Implement `store_result()` method
+  - [x] 5.2.1 Create StoredTaskResult with metadata
+  - [x] 5.2.2 Serialize task result to JSON
+  - [x] 5.2.3 Add metadata (model, provider, timestamp, tokens)
+  - [x] 5.2.4 Store in-memory with optional persistence
+- [x] 5.3 Implement `get_context()` method
+  - [x] 5.3.1 Query in-memory results for dependencies
+  - [x] 5.3.2 Build TaskContext from results
+  - [x] 5.3.3 Handle missing dependencies gracefully
+- [x] 5.4 Implement context enrichment
+  - [x] 5.4.1 `enrich_task(task: &Task, dependencies: &[String]) -> Task`
+  - [x] 5.4.2 Inject dependency outputs into task parameters
+  - [x] 5.4.3 Truncate context if exceeds max_context_size
+- [x] 5.5 Write integration tests (12 unit tests)
 
 ## 6. CoworkEngine Integration
 
-- [ ] 6.1 Add ModelRouter to CoworkEngine
-  - [ ] 6.1.1 Initialize ModelMatcher from config
-  - [ ] 6.1.2 Create PipelineExecutor with router
-- [ ] 6.2 Update task execution flow
-  - [ ] 6.2.1 Route AiInference tasks through ModelRouter
-  - [ ] 6.2.2 Pass selected profile to provider
-  - [ ] 6.2.3 Track model usage in TaskResult
-- [ ] 6.3 Implement multi-model task graph execution
-  - [ ] 6.3.1 Create pipeline from TaskGraph
-  - [ ] 6.3.2 Execute pipeline with dependencies
-  - [ ] 6.3.3 Aggregate results
-- [ ] 6.4 Add model selection to planning phase
-  - [ ] 6.4.1 Include model hints in TaskPlanner prompt
-  - [ ] 6.4.2 Parse model preferences from plan
-- [ ] 6.5 Write end-to-end tests for multi-model execution
+- [x] 6.1 Add ModelRouter to CoworkEngine
+  - [x] 6.1.1 Initialize ModelMatcher from config
+  - [x] 6.1.2 Store provider reference for execution
+- [x] 6.2 Update task execution flow
+  - [x] 6.2.1 Route AiInference tasks through ModelRouter
+  - [x] 6.2.2 Pass selected profile to provider
+  - [x] 6.2.3 Track model usage in TaskResult
+- [x] 6.3 Implement multi-model task graph execution
+  - [x] 6.3.1 execute_with_routing() method
+  - [x] 6.3.2 TaskContextManager for tracking results
+  - [x] 6.3.3 Aggregate results with context summary
+- [x] 6.4 Add model selection helpers
+  - [x] 6.4.1 route_task() method
+  - [x] 6.4.2 model_profiles() getter
+- [x] 6.5 Write end-to-end tests (5 new tests)
 
 ## 7. UniFFI Exports
 
-- [ ] 7.1 Add model router types to aether.udl
-  - [ ] 7.1.1 Export ModelProfile
-  - [ ] 7.1.2 Export Capability enum
-  - [ ] 7.1.3 Export CostTier and LatencyTier enums
-  - [ ] 7.1.4 Export StageResult
-- [ ] 7.2 Add model router functions to aether.udl
-  - [ ] 7.2.1 `get_model_profiles() -> Vec<ModelProfile>`
-  - [ ] 7.2.2 `get_routing_rules() -> ModelRoutingRules`
-  - [ ] 7.2.3 `update_model_profile(profile: ModelProfile) -> Result<()>`
-  - [ ] 7.2.4 `update_routing_rule(task_type: String, model_id: String) -> Result<()>`
-- [ ] 7.3 Regenerate Swift bindings
-- [ ] 7.4 Test bindings from Swift
+- [x] 7.1 Add model router types to aether.udl
+  - [x] 7.1.1 Export ModelProfile
+  - [x] 7.1.2 Export Capability enum
+  - [x] 7.1.3 Export CostTier and LatencyTier enums
+  - [x] 7.1.4 Export StageResult
+- [x] 7.2 Add model router functions to aether.udl
+  - [x] 7.2.1 `get_model_profiles() -> Vec<ModelProfile>`
+  - [x] 7.2.2 `get_routing_rules() -> ModelRoutingRules`
+  - [x] 7.2.3 `update_model_profile(profile: ModelProfile) -> Result<()>`
+  - [x] 7.2.4 `update_routing_rule(task_type: String, model_id: String) -> Result<()>`
+- [x] 7.3 Regenerate Swift bindings
+- [x] 7.4 Test bindings from Swift
 
 ## 8. Settings UI (Swift)
 

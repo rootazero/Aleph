@@ -855,3 +855,93 @@
 "settings.cowork.code_exec.runtime" = "Default Runtime";
 "settings.cowork.code_exec.runtime_description" = "The default programming environment for code execution tasks.";
 "settings.cowork.code_exec.runtime_picker" = "Select Runtime";
+
+// Model Routing Settings
+"settings.model_routing.title" = "Model Routing";
+"settings.model_routing.description" = "Configure AI model profiles and routing rules for intelligent task dispatch.";
+
+// Model Profiles
+"settings.model_routing.profiles.title" = "Model Profiles";
+"settings.model_routing.profiles.description" = "Define AI models with their capabilities, costs, and performance characteristics.";
+"settings.model_routing.profiles.manage" = "Manage";
+"settings.model_routing.profiles.add" = "Add Profile";
+"settings.model_routing.profiles.add_first" = "Add First Profile";
+"settings.model_routing.profiles.empty" = "No model profiles configured";
+"settings.model_routing.profiles.local" = "Local";
+"settings.model_routing.profiles.max_context_value" = "%@ tokens";
+
+// Model Profile Edit
+"settings.model_routing.edit.title_add" = "Add Model Profile";
+"settings.model_routing.edit.title_edit" = "Edit Model Profile";
+"settings.model_routing.edit.basic" = "Basic Information";
+"settings.model_routing.edit.profile_id" = "Profile ID";
+"settings.model_routing.edit.provider" = "Provider";
+"settings.model_routing.edit.model_name" = "Model Name";
+"settings.model_routing.edit.capabilities" = "Capabilities";
+"settings.model_routing.edit.performance" = "Cost & Performance";
+"settings.model_routing.edit.cost_tier" = "Cost Tier";
+"settings.model_routing.edit.latency_tier" = "Latency Tier";
+"settings.model_routing.edit.advanced" = "Advanced";
+"settings.model_routing.edit.max_context" = "Max Context (tokens)";
+"settings.model_routing.edit.max_context_hint" = "Leave empty for default. Example: 200000";
+"settings.model_routing.edit.local" = "Local Model";
+"settings.model_routing.edit.local_hint" = "Local models run without network access for privacy-sensitive tasks.";
+
+// Capabilities
+"settings.model_routing.capability.code_generation" = "Code Generation";
+"settings.model_routing.capability.code_review" = "Code Review";
+"settings.model_routing.capability.text_analysis" = "Text Analysis";
+"settings.model_routing.capability.image_understanding" = "Image Understanding";
+"settings.model_routing.capability.video_understanding" = "Video Understanding";
+"settings.model_routing.capability.long_context" = "Long Context";
+"settings.model_routing.capability.reasoning" = "Reasoning";
+"settings.model_routing.capability.local_privacy" = "Local Privacy";
+"settings.model_routing.capability.fast_response" = "Fast Response";
+"settings.model_routing.capability.simple_task" = "Simple Task";
+"settings.model_routing.capability.long_document" = "Long Document";
+
+// Cost Tiers
+"settings.model_routing.cost.free" = "Free";
+"settings.model_routing.cost.low" = "Low";
+"settings.model_routing.cost.medium" = "Medium";
+"settings.model_routing.cost.high" = "High";
+
+// Latency Tiers
+"settings.model_routing.latency.fast" = "Fast";
+"settings.model_routing.latency.medium" = "Medium";
+"settings.model_routing.latency.slow" = "Slow";
+
+// Model Routing Rules
+"settings.model_routing.routing.title" = "Routing Rules";
+"settings.model_routing.routing.configure" = "Configure";
+"settings.model_routing.routing.cost_strategy" = "Cost Strategy";
+"settings.model_routing.routing.cost_strategy_description" = "Choose how to balance cost and quality when routing tasks.";
+"settings.model_routing.routing.cost_strategy_picker" = "Strategy";
+"settings.model_routing.routing.default_model" = "Default Model";
+"settings.model_routing.routing.default_model_description" = "Model to use when no specific routing rule matches.";
+"settings.model_routing.routing.default_model_picker" = "Select Model";
+"settings.model_routing.routing.none" = "None";
+"settings.model_routing.routing.auto" = "Auto";
+"settings.model_routing.routing.pipelines" = "Multi-Model Pipelines";
+"settings.model_routing.routing.pipelines_description" = "Enable using different models for different stages of complex tasks.";
+"settings.model_routing.routing.pipelines_toggle" = "Enable Pipelines";
+"settings.model_routing.routing.task_mappings" = "Task Type Mappings";
+"settings.model_routing.routing.task_mappings_description" = "Assign specific models to handle different types of tasks.";
+
+// Cost Strategy Descriptions
+"settings.model_routing.strategy.cheapest" = "Cheapest";
+"settings.model_routing.strategy.balanced" = "Balanced";
+"settings.model_routing.strategy.best_quality" = "Best Quality";
+"settings.model_routing.strategy.cheapest_hint" = "Always use the cheapest model that can handle the task.";
+"settings.model_routing.strategy.balanced_hint" = "Balance cost and quality for optimal results.";
+"settings.model_routing.strategy.best_quality_hint" = "Always use the best model regardless of cost.";
+
+// Task Types
+"settings.model_routing.task.code_generation" = "Code Generation";
+"settings.model_routing.task.code_review" = "Code Review";
+"settings.model_routing.task.image_analysis" = "Image Analysis";
+"settings.model_routing.task.video_understanding" = "Video Understanding";
+"settings.model_routing.task.long_document" = "Long Document";
+"settings.model_routing.task.quick_tasks" = "Quick Tasks";
+"settings.model_routing.task.privacy_sensitive" = "Privacy Sensitive";
+"settings.model_routing.task.reasoning" = "Reasoning";

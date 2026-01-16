@@ -857,3 +857,93 @@
 "settings.cowork.code_exec.runtime" = "默认运行时";
 "settings.cowork.code_exec.runtime_description" = "代码执行任务的默认编程环境。";
 "settings.cowork.code_exec.runtime_picker" = "选择运行时";
+
+// 模型路由设置
+"settings.model_routing.title" = "模型路由";
+"settings.model_routing.description" = "配置 AI 模型配置文件和路由规则，实现智能任务分发。";
+
+// 模型配置文件
+"settings.model_routing.profiles.title" = "模型配置";
+"settings.model_routing.profiles.description" = "定义 AI 模型的能力、成本和性能特征。";
+"settings.model_routing.profiles.manage" = "管理";
+"settings.model_routing.profiles.add" = "添加配置";
+"settings.model_routing.profiles.add_first" = "添加第一个配置";
+"settings.model_routing.profiles.empty" = "暂无模型配置";
+"settings.model_routing.profiles.local" = "本地";
+"settings.model_routing.profiles.max_context_value" = "%@ tokens";
+
+// 模型配置编辑
+"settings.model_routing.edit.title_add" = "添加模型配置";
+"settings.model_routing.edit.title_edit" = "编辑模型配置";
+"settings.model_routing.edit.basic" = "基本信息";
+"settings.model_routing.edit.profile_id" = "配置 ID";
+"settings.model_routing.edit.provider" = "提供商";
+"settings.model_routing.edit.model_name" = "模型名称";
+"settings.model_routing.edit.capabilities" = "能力";
+"settings.model_routing.edit.performance" = "成本与性能";
+"settings.model_routing.edit.cost_tier" = "成本等级";
+"settings.model_routing.edit.latency_tier" = "延迟等级";
+"settings.model_routing.edit.advanced" = "高级选项";
+"settings.model_routing.edit.max_context" = "最大上下文 (tokens)";
+"settings.model_routing.edit.max_context_hint" = "留空使用默认值。例如：200000";
+"settings.model_routing.edit.local" = "本地模型";
+"settings.model_routing.edit.local_hint" = "本地模型无需网络访问，适用于隐私敏感任务。";
+
+// 能力
+"settings.model_routing.capability.code_generation" = "代码生成";
+"settings.model_routing.capability.code_review" = "代码审查";
+"settings.model_routing.capability.text_analysis" = "文本分析";
+"settings.model_routing.capability.image_understanding" = "图像理解";
+"settings.model_routing.capability.video_understanding" = "视频理解";
+"settings.model_routing.capability.long_context" = "长上下文";
+"settings.model_routing.capability.reasoning" = "推理";
+"settings.model_routing.capability.local_privacy" = "本地隐私";
+"settings.model_routing.capability.fast_response" = "快速响应";
+"settings.model_routing.capability.simple_task" = "简单任务";
+"settings.model_routing.capability.long_document" = "长文档";
+
+// 成本等级
+"settings.model_routing.cost.free" = "免费";
+"settings.model_routing.cost.low" = "低";
+"settings.model_routing.cost.medium" = "中";
+"settings.model_routing.cost.high" = "高";
+
+// 延迟等级
+"settings.model_routing.latency.fast" = "快";
+"settings.model_routing.latency.medium" = "中";
+"settings.model_routing.latency.slow" = "慢";
+
+// 模型路由规则
+"settings.model_routing.routing.title" = "路由规则";
+"settings.model_routing.routing.configure" = "配置";
+"settings.model_routing.routing.cost_strategy" = "成本策略";
+"settings.model_routing.routing.cost_strategy_description" = "选择如何在路由任务时平衡成本和质量。";
+"settings.model_routing.routing.cost_strategy_picker" = "策略";
+"settings.model_routing.routing.default_model" = "默认模型";
+"settings.model_routing.routing.default_model_description" = "当没有匹配的路由规则时使用的模型。";
+"settings.model_routing.routing.default_model_picker" = "选择模型";
+"settings.model_routing.routing.none" = "无";
+"settings.model_routing.routing.auto" = "自动";
+"settings.model_routing.routing.pipelines" = "多模型管道";
+"settings.model_routing.routing.pipelines_description" = "允许在复杂任务的不同阶段使用不同的模型。";
+"settings.model_routing.routing.pipelines_toggle" = "启用管道";
+"settings.model_routing.routing.task_mappings" = "任务类型映射";
+"settings.model_routing.routing.task_mappings_description" = "为不同类型的任务指定特定的模型。";
+
+// 成本策略描述
+"settings.model_routing.strategy.cheapest" = "最便宜";
+"settings.model_routing.strategy.balanced" = "平衡";
+"settings.model_routing.strategy.best_quality" = "最高质量";
+"settings.model_routing.strategy.cheapest_hint" = "始终使用能够处理任务的最便宜模型。";
+"settings.model_routing.strategy.balanced_hint" = "平衡成本和质量以获得最佳结果。";
+"settings.model_routing.strategy.best_quality_hint" = "始终使用最佳模型，不考虑成本。";
+
+// 任务类型
+"settings.model_routing.task.code_generation" = "代码生成";
+"settings.model_routing.task.code_review" = "代码审查";
+"settings.model_routing.task.image_analysis" = "图像分析";
+"settings.model_routing.task.video_understanding" = "视频理解";
+"settings.model_routing.task.long_document" = "长文档";
+"settings.model_routing.task.quick_tasks" = "快速任务";
+"settings.model_routing.task.privacy_sensitive" = "隐私敏感";
+"settings.model_routing.task.reasoning" = "推理";

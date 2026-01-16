@@ -61,6 +61,10 @@ struct CoworkSettingsView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
 
+    // Model routing sheets
+    @State private var isShowingModelProfiles = false
+    @State private var isShowingModelRouting = false
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
@@ -68,6 +72,10 @@ struct CoworkSettingsView: View {
                 confirmationSection
                 parallelismSection
                 dryRunSection
+
+                // Model Routing Section
+                modelRoutingSectionHeader
+                modelRoutingSection
 
                 // File Operations Section
                 fileOpsSectionHeader
@@ -113,6 +121,12 @@ struct CoworkSettingsView: View {
         .onChange(of: fileOpsConfirmWrite) { _, _ in updateSaveBarState() }
         .onChange(of: fileOpsConfirmDelete) { _, _ in updateSaveBarState() }
         .onChange(of: isSaving) { _, _ in updateSaveBarState() }
+        .sheet(isPresented: $isShowingModelProfiles) {
+            ModelProfilesSettingsView(core: core, isPresented: $isShowingModelProfiles)
+        }
+        .sheet(isPresented: $isShowingModelRouting) {
+            ModelRoutingSettingsView(core: core, isPresented: $isShowingModelRouting)
+        }
     }
 
     // MARK: - View Components
@@ -230,6 +244,78 @@ struct CoworkSettingsView: View {
         .padding(DesignTokens.Spacing.md)
         .background(DesignTokens.Colors.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
+        .opacity(enabled ? 1.0 : 0.6)
+    }
+
+    // MARK: - Model Routing Sections
+
+    private var modelRoutingSectionHeader: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
+            Divider()
+                .padding(.vertical, DesignTokens.Spacing.md)
+
+            Label(L("settings.model_routing.title"), systemImage: "cpu")
+                .font(DesignTokens.Typography.title)
+                .foregroundColor(DesignTokens.Colors.textPrimary)
+
+            Text(L("settings.model_routing.description"))
+                .font(DesignTokens.Typography.caption)
+                .foregroundColor(DesignTokens.Colors.textSecondary)
+        }
+    }
+
+    private var modelRoutingSection: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            // Model Profiles Button
+            Button {
+                isShowingModelProfiles = true
+            } label: {
+                HStack {
+                    Label(L("settings.model_routing.profiles.title"), systemImage: "list.bullet")
+                        .font(DesignTokens.Typography.body)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                    Spacer()
+
+                    Text(L("settings.model_routing.profiles.manage"))
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+                .padding(DesignTokens.Spacing.md)
+                .background(DesignTokens.Colors.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(!enabled)
+
+            // Routing Rules Button
+            Button {
+                isShowingModelRouting = true
+            } label: {
+                HStack {
+                    Label(L("settings.model_routing.routing.title"), systemImage: "arrow.triangle.branch")
+                        .font(DesignTokens.Typography.body)
+                        .foregroundColor(DesignTokens.Colors.textPrimary)
+
+                    Spacer()
+
+                    Text(L("settings.model_routing.routing.configure"))
+                        .font(DesignTokens.Typography.caption)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                }
+                .padding(DesignTokens.Spacing.md)
+                .background(DesignTokens.Colors.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(!enabled)
+        }
         .opacity(enabled ? 1.0 : 0.6)
     }
 

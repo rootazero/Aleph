@@ -429,6 +429,312 @@ Test categories:
 - `cowork_ffi` - UniFFI binding tests
 - `config::types::cowork` - Configuration tests
 
+## Multi-Model Router (Phase 4)
+
+Cowork includes a sophisticated Multi-Model Router that intelligently routes tasks to the most appropriate AI model based on task type, required capabilities, and cost optimization strategy.
+
+### Overview
+
+The Model Router enables:
+- **Task-Specific Routing**: Route code generation to Opus, quick tasks to Haiku
+- **Capability Matching**: Find models with specific capabilities (vision, long context, local privacy)
+- **Cost Optimization**: Balance between quality and cost with configurable strategies
+- **Multi-Model Pipelines**: Execute complex workflows across multiple models
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Model Router                             │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐   │
+│  │ ModelMatcher │  │ PipelineExec │  │  ContextManager      │   │
+│  │ (routing)    │  │ (orchestrate)│  │  (cross-model)       │   │
+│  └──────────────┘  └──────────────┘  └──────────────────────┘   │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐   │
+│  │ ModelProfile │  │ RoutingRules │  │  CostStrategy        │   │
+│  │ (definition) │  │ (mappings)   │  │  (optimization)      │   │
+│  └──────────────┘  └──────────────┘  └──────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Core Components
+
+#### 1. Model Profiles (`model_router/profiles.rs`)
+
+Define AI model characteristics:
+
+```rust
+pub struct ModelProfile {
+    pub id: String,                    // Unique identifier
+    pub provider: String,              // anthropic, openai, google, ollama
+    pub model: String,                 // Model name for API
+    pub capabilities: Vec<Capability>, // What the model can do
+    pub cost_tier: CostTier,           // free, low, medium, high
+    pub latency_tier: LatencyTier,     // fast, medium, slow
+    pub max_context: Option<u32>,      // Max context window
+    pub local: bool,                   // Local model (no API calls)
+}
+```
+
+**Capabilities**:
+- `CodeGeneration` - Code writing and generation
+- `CodeReview` - Code analysis and review
+- `TextAnalysis` - Text understanding
+- `ImageUnderstanding` - Vision/image analysis
+- `VideoUnderstanding` - Video analysis
+- `LongContext` - Large context windows (100K+)
+- `Reasoning` - Complex reasoning tasks
+- `LocalPrivacy` - Local/private processing
+- `FastResponse` - Quick response times
+- `SimpleTask` - Simple/lightweight tasks
+- `LongDocument` - Document processing
+
+**Cost Tiers**: `Free` (0.0x), `Low` (0.5x), `Medium` (1.0x), `High` (2.0x)
+
+**Latency Tiers**: `Fast` (<1s), `Medium` (1-5s), `Slow` (>5s)
+
+#### 2. Model Matcher (`model_router/matcher.rs`)
+
+Intelligent model selection:
+
+```rust
+impl ModelMatcher {
+    // Find best model for a task type
+    pub fn route_by_task_type(&self, task_type: &str) -> Option<&ModelProfile>;
+
+    // Find models with specific capability
+    pub fn find_by_capability(&self, cap: Capability) -> Vec<&ModelProfile>;
+
+    // Cost-optimized selection
+    pub fn find_cheapest_with_capability(&self, cap: Capability) -> Option<&ModelProfile>;
+    pub fn find_best_for_capability(&self, cap: Capability) -> Option<&ModelProfile>;
+
+    // Full routing with strategy
+    pub fn route(&self, requirements: &TaskRequirements) -> Option<&ModelProfile>;
+}
+```
+
+**Routing Priority**:
+1. Explicit task type mapping (code_generation → claude-opus)
+2. Required capability matching
+3. Cost strategy application (cheapest/balanced/best_quality)
+4. Default model fallback
+
+#### 3. Cost Strategy (`model_router/rules.rs`)
+
+Three optimization strategies:
+
+| Strategy | Description | Use Case |
+|----------|-------------|----------|
+| `Cheapest` | Minimize cost | Development, high volume |
+| `Balanced` | Cost/quality balance | Production default |
+| `BestQuality` | Maximize quality | Critical tasks |
+
+#### 4. Pipeline Executor (`model_router/pipeline.rs`)
+
+Execute multi-stage workflows:
+
+```rust
+pub struct PipelineStage {
+    pub id: String,
+    pub name: String,
+    pub model_requirement: ModelRequirement,
+    pub dependencies: Vec<String>,
+    pub priority: u32,
+}
+
+pub struct PipelineExecutor {
+    // Execute stages respecting dependencies
+    pub async fn execute(&self, pipeline: Pipeline) -> PipelineResult;
+}
+```
+
+**Features**:
+- DAG-based stage execution
+- Parallel execution where dependencies allow
+- Cross-stage context passing
+- Progress events and monitoring
+
+#### 5. Context Manager (`model_router/context.rs`)
+
+Manages context across pipeline stages:
+
+```rust
+impl ContextManager {
+    // Store result from completed stage
+    pub fn store_result(&self, stage_id: &str, result: StageResult);
+
+    // Get context for dependent stage
+    pub fn get_context(&self, stage_id: &str, dependencies: &[String]) -> TaskContext;
+
+    // Build combined context from multiple results
+    pub fn build_combined_context(&self, stage_ids: &[String]) -> String;
+}
+```
+
+### Configuration
+
+#### Model Profiles
+
+```toml
+[cowork.model_profiles.claude-opus]
+provider = "anthropic"
+model = "claude-opus-4"
+capabilities = ["reasoning", "code_generation", "long_context"]
+cost_tier = "high"
+latency_tier = "slow"
+max_context = 200000
+
+[cowork.model_profiles.claude-sonnet]
+provider = "anthropic"
+model = "claude-sonnet-4"
+capabilities = ["code_generation", "code_review", "text_analysis"]
+cost_tier = "medium"
+latency_tier = "medium"
+max_context = 200000
+
+[cowork.model_profiles.claude-haiku]
+provider = "anthropic"
+model = "claude-haiku-3.5"
+capabilities = ["fast_response", "simple_task"]
+cost_tier = "low"
+latency_tier = "fast"
+max_context = 200000
+
+[cowork.model_profiles.gpt-4o]
+provider = "openai"
+model = "gpt-4o"
+capabilities = ["image_understanding", "code_generation"]
+cost_tier = "medium"
+latency_tier = "medium"
+
+[cowork.model_profiles.ollama-llama]
+provider = "ollama"
+model = "llama3.2"
+capabilities = ["local_privacy", "fast_response"]
+cost_tier = "free"
+latency_tier = "fast"
+local = true
+```
+
+#### Routing Rules
+
+```toml
+[cowork.model_routing]
+# Task type to model mappings
+code_generation = "claude-opus"
+code_review = "claude-sonnet"
+image_analysis = "gpt-4o"
+video_understanding = "gemini-pro"
+long_document = "gemini-pro"
+quick_tasks = "claude-haiku"
+privacy_sensitive = "ollama-llama"
+reasoning = "claude-opus"
+
+# Cost optimization strategy: cheapest | balanced | best_quality
+cost_strategy = "balanced"
+
+# Enable multi-model pipeline execution
+enable_pipelines = true
+
+# Default model when no specific rule matches
+default_model = "claude-sonnet"
+```
+
+### Swift Integration
+
+#### UniFFI API
+
+```swift
+// Get all model profiles
+let profiles = core.coworkGetModelProfiles()
+
+// Get routing rules
+let rules = core.coworkGetRoutingRules()
+
+// Update model profile
+let profile = ModelProfileFfi(
+    id: "claude-opus",
+    provider: "anthropic",
+    model: "claude-opus-4",
+    capabilities: [.codeGeneration, .reasoning, .longContext],
+    costTier: .high,
+    latencyTier: .slow,
+    maxContext: 200000,
+    local: false
+)
+try core.coworkUpdateModelProfile(profile: profile)
+
+// Delete model profile
+try core.coworkDeleteModelProfile(profileId: "old-profile")
+
+// Update routing rule
+try core.coworkUpdateRoutingRule(taskType: "code_generation", modelId: "claude-opus")
+
+// Delete routing rule
+try core.coworkDeleteRoutingRule(taskType: "code_generation")
+
+// Update cost strategy
+try core.coworkUpdateCostStrategy(strategy: .balanced)
+
+// Update default model
+try core.coworkUpdateDefaultModel(modelId: "claude-sonnet")
+```
+
+#### Settings UI
+
+Access via: **Settings → Cowork → Model Routing**
+
+**Model Profiles View** (`ModelProfilesSettingsView.swift`):
+- List all configured model profiles
+- View capabilities, cost/latency tiers
+- Add, edit, and delete profiles
+
+**Routing Settings View** (`ModelRoutingSettingsView.swift`):
+- Configure cost strategy (Cheapest/Balanced/Best Quality)
+- Set default model
+- Enable/disable pipelines
+- Map task types to specific models
+
+### Example Workflow
+
+```
+User: "Review this PR and write unit tests for the changes"
+
+1. Task Decomposition:
+   - Task 1: Read PR files (FileOperation)
+   - Task 2: Review code (AiInference, type: code_review)
+   - Task 3: Generate tests (AiInference, type: code_generation)
+
+2. Model Routing:
+   - Task 2 → claude-sonnet (code_review mapping)
+   - Task 3 → claude-opus (code_generation mapping)
+
+3. Pipeline Execution:
+   - Stage 1: claude-sonnet reviews code, outputs findings
+   - Stage 2: claude-opus generates tests using review context
+
+4. Context Flow:
+   - Review results passed to test generation stage
+   - Context manager tracks cross-stage dependencies
+```
+
+### Testing
+
+```bash
+# Run all model router tests
+cargo test model_router
+
+# Test categories (71 tests total):
+# - profiles: ModelProfile, Capability, CostTier tests
+# - rules: RoutingRules, CostStrategy tests
+# - matcher: ModelMatcher routing tests
+# - pipeline: PipelineExecutor, PipelineStage tests
+# - context: ContextManager, TaskContext tests
+```
+
+---
+
 ## Future Enhancements
 
 ### Phase 2 - File Operations (Complete)
@@ -441,9 +747,8 @@ Test categories:
 - ✅ Configuration types (FileOpsConfigToml)
 - ✅ Integration with CoworkEngine
 
-### Phase 3 - Code Execution (In Progress)
+### Phase 3 - Code Execution (Complete)
 
-**Completed:**
 - ✅ CodeExecutor implementation (Shell, Python, Node.js)
 - ✅ RuntimeInfo for detecting available runtimes
 - ✅ CommandChecker for blocking dangerous commands
@@ -452,15 +757,22 @@ Test categories:
 - ✅ Output capture with size limits (10MB stdout, 1MB stderr)
 - ✅ Configuration types (CodeExecConfigToml)
 - ✅ Integration with CoworkEngine
+- ✅ Swift UI settings for code_exec
 - ✅ 73 tests passing
 
-**Remaining:**
-- [ ] Swift UI settings for code_exec
-- [ ] Runtime availability caching
-- [ ] Sandbox integration tests
-- [ ] AppleScript automation executor
+### Phase 4 - Multi-Model Router (Complete)
 
-### Phase 4 (Planned)
+- ✅ ModelProfile data structures with capabilities
+- ✅ ModelMatcher for intelligent routing
+- ✅ CostStrategy optimization (cheapest/balanced/best_quality)
+- ✅ PipelineExecutor for multi-model workflows
+- ✅ ContextManager for cross-stage context
+- ✅ Configuration types (ModelProfileConfigToml, ModelRoutingConfigToml)
+- ✅ UniFFI exports for Swift integration
+- ✅ Settings UI (ModelProfilesSettingsView, ModelRoutingSettingsView)
+- ✅ 71 tests passing
+
+### Phase 5 (Planned)
 - Visual DAG editor in UI
 - Custom task type definitions
 - Workflow templates
@@ -482,8 +794,17 @@ Test categories:
 | `core/src/cowork/executor/permission.rs` | Path permission checking |
 | `core/src/cowork/monitor/` | Progress events and tracking |
 | `core/src/cowork/engine.rs` | CoworkEngine unified API |
+| `core/src/cowork/model_router/` | Multi-model router module |
+| `core/src/cowork/model_router/profiles.rs` | ModelProfile, Capability, CostTier |
+| `core/src/cowork/model_router/rules.rs` | RoutingRules, CostStrategy |
+| `core/src/cowork/model_router/matcher.rs` | ModelMatcher routing logic |
+| `core/src/cowork/model_router/pipeline.rs` | PipelineExecutor, PipelineStage |
+| `core/src/cowork/model_router/context.rs` | ContextManager, TaskContext |
 | `core/src/cowork_ffi.rs` | UniFFI type conversions |
-| `core/src/config/types/cowork.rs` | Configuration types (FileOpsConfigToml, CodeExecConfigToml) |
+| `core/src/config/types/cowork.rs` | Configuration types |
 | `Sources/CoworkSettingsView.swift` | Settings UI |
+| `Sources/ModelProfilesSettingsView.swift` | Model profiles settings |
+| `Sources/ModelProfileEditSheet.swift` | Model profile edit form |
+| `Sources/ModelRoutingSettingsView.swift` | Routing rules settings |
 | `Sources/Components/CoworkConfirmationView.swift` | Confirmation UI |
 | `Sources/Components/CoworkProgressView.swift` | Progress UI |

@@ -7,10 +7,13 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 use super::executor::{ExecutionContext, ExecutorRegistry, NoopExecutor};
+use super::model_router::{
+    ModelMatcher, ModelProfile, ModelRouter, ModelRoutingRules, TaskContextManager,
+};
 use super::monitor::{ProgressMonitor, ProgressSubscriber, TaskMonitor};
 use super::planner::{LlmTaskPlanner, TaskPlanner};
 use super::scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
-use super::types::{ExecutionSummary, TaskGraph, TaskStatus};
+use super::types::{ExecutionSummary, Task, TaskGraph, TaskResult, TaskStatus, TaskType};
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
 
@@ -28,6 +31,15 @@ pub struct CoworkConfig {
 
     /// Whether to run in dry-run mode (no actual execution)
     pub dry_run: bool,
+
+    /// Whether multi-model pipelines are enabled
+    pub enable_pipelines: bool,
+
+    /// Model profiles for multi-model routing
+    pub model_profiles: Vec<ModelProfile>,
+
+    /// Model routing rules
+    pub routing_rules: Option<ModelRoutingRules>,
 }
 
 impl Default for CoworkConfig {
@@ -37,7 +49,24 @@ impl Default for CoworkConfig {
             require_confirmation: true,
             max_parallelism: 4,
             dry_run: false,
+            enable_pipelines: false,
+            model_profiles: Vec::new(),
+            routing_rules: None,
         }
+    }
+}
+
+impl CoworkConfig {
+    /// Create config with model routing enabled
+    pub fn with_model_routing(
+        mut self,
+        profiles: Vec<ModelProfile>,
+        rules: ModelRoutingRules,
+    ) -> Self {
+        self.model_profiles = profiles;
+        self.routing_rules = Some(rules);
+        self.enable_pipelines = true;
+        self
     }
 }
 
@@ -72,6 +101,10 @@ pub struct CoworkEngine {
     state: RwLock<ExecutionState>,
     paused: AtomicBool,
     cancelled: AtomicBool,
+    /// Model matcher for multi-model routing
+    model_matcher: Option<Arc<ModelMatcher>>,
+    /// AI provider for model execution
+    provider: Option<Arc<dyn AiProvider>>,
 }
 
 impl CoworkEngine {
@@ -85,15 +118,25 @@ impl CoworkEngine {
         // Register the NoopExecutor for testing
         executors.register("noop", Arc::new(NoopExecutor::new()));
 
+        // Initialize model matcher if pipelines are enabled
+        let model_matcher = if config.enable_pipelines && !config.model_profiles.is_empty() {
+            let rules = config.routing_rules.clone().unwrap_or_default();
+            Some(Arc::new(ModelMatcher::new(config.model_profiles.clone(), rules)))
+        } else {
+            None
+        };
+
         Self {
             config,
-            planner: Arc::new(LlmTaskPlanner::new(provider)),
+            planner: Arc::new(LlmTaskPlanner::new(provider.clone())),
             scheduler: RwLock::new(DagScheduler::with_config(scheduler_config)),
             executors,
             monitor: Arc::new(ProgressMonitor::new()),
             state: RwLock::new(ExecutionState::Idle),
             paused: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
+            model_matcher,
+            provider: Some(provider),
         }
     }
 
@@ -109,6 +152,14 @@ impl CoworkEngine {
         let mut executors = ExecutorRegistry::new();
         executors.register("noop", Arc::new(NoopExecutor::new()));
 
+        // Initialize model matcher if pipelines are enabled
+        let model_matcher = if config.enable_pipelines && !config.model_profiles.is_empty() {
+            let rules = config.routing_rules.clone().unwrap_or_default();
+            Some(Arc::new(ModelMatcher::new(config.model_profiles.clone(), rules)))
+        } else {
+            None
+        };
+
         Self {
             config,
             planner,
@@ -118,6 +169,43 @@ impl CoworkEngine {
             state: RwLock::new(ExecutionState::Idle),
             paused: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
+            model_matcher,
+            provider: None,
+        }
+    }
+
+    /// Create a CoworkEngine with a custom planner and provider
+    pub fn with_planner_and_provider(
+        config: CoworkConfig,
+        planner: Arc<dyn TaskPlanner>,
+        provider: Arc<dyn AiProvider>,
+    ) -> Self {
+        let scheduler_config = SchedulerConfig {
+            max_parallelism: config.max_parallelism,
+        };
+
+        let mut executors = ExecutorRegistry::new();
+        executors.register("noop", Arc::new(NoopExecutor::new()));
+
+        // Initialize model matcher if pipelines are enabled
+        let model_matcher = if config.enable_pipelines && !config.model_profiles.is_empty() {
+            let rules = config.routing_rules.clone().unwrap_or_default();
+            Some(Arc::new(ModelMatcher::new(config.model_profiles.clone(), rules)))
+        } else {
+            None
+        };
+
+        Self {
+            config,
+            planner,
+            scheduler: RwLock::new(DagScheduler::with_config(scheduler_config)),
+            executors,
+            monitor: Arc::new(ProgressMonitor::new()),
+            state: RwLock::new(ExecutionState::Idle),
+            paused: AtomicBool::new(false),
+            cancelled: AtomicBool::new(false),
+            model_matcher,
+            provider: Some(provider),
         }
     }
 
@@ -410,6 +498,309 @@ impl CoworkEngine {
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
     }
+
+    // =========================================================================
+    // Model Routing Methods
+    // =========================================================================
+
+    /// Get the model matcher (if available)
+    pub fn model_matcher(&self) -> Option<&Arc<ModelMatcher>> {
+        self.model_matcher.as_ref()
+    }
+
+    /// Check if model routing is enabled
+    pub fn has_model_routing(&self) -> bool {
+        self.model_matcher.is_some()
+    }
+
+    /// Route a task to the optimal model
+    ///
+    /// Returns the selected ModelProfile, or an error if routing fails.
+    pub fn route_task(&self, task: &Task) -> Result<ModelProfile> {
+        let matcher = self.model_matcher.as_ref().ok_or_else(|| {
+            AetherError::config("Model routing is not enabled")
+        })?;
+
+        matcher.route(task).map_err(|e| AetherError::config(e.to_string()))
+    }
+
+    /// Execute a task graph with model routing
+    ///
+    /// This method routes AI tasks to optimal models based on task characteristics
+    /// and executes them using the appropriate provider.
+    ///
+    /// # Arguments
+    ///
+    /// * `graph` - The task graph to execute
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(ExecutionSummary)` - Summary with model routing information
+    /// * `Err` - If execution fails
+    pub async fn execute_with_routing(&self, mut graph: TaskGraph) -> Result<ExecutionSummary> {
+        if !self.config.enabled {
+            return Err(AetherError::config("Cowork is disabled"));
+        }
+
+        // If model routing is not enabled, fall back to regular execution
+        if !self.has_model_routing() {
+            info!("Model routing not enabled, using standard execution");
+            return self.execute(graph).await;
+        }
+
+        info!("Executing task graph with model routing: {} ({})", graph.metadata.title, graph.id);
+        *self.state.write().await = ExecutionState::Executing;
+
+        // Reset state
+        self.paused.store(false, Ordering::SeqCst);
+        self.cancelled.store(false, Ordering::SeqCst);
+        self.scheduler.write().await.reset();
+
+        let start_time = Instant::now();
+        let ctx = ExecutionContext::new(&graph.id).with_dry_run(self.config.dry_run);
+
+        // Create context manager for tracking results
+        let context_manager = TaskContextManager::new(&graph.id);
+
+        // Main execution loop
+        loop {
+            // Check for cancellation
+            if self.cancelled.load(Ordering::SeqCst) {
+                warn!("Execution cancelled");
+                *self.state.write().await = ExecutionState::Cancelled;
+                break;
+            }
+
+            // Check for pause
+            while self.paused.load(Ordering::SeqCst) {
+                *self.state.write().await = ExecutionState::Paused;
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                if self.cancelled.load(Ordering::SeqCst) {
+                    break;
+                }
+            }
+
+            if self.cancelled.load(Ordering::SeqCst) {
+                break;
+            }
+
+            *self.state.write().await = ExecutionState::Executing;
+
+            // Get ready tasks
+            let ready_tasks: Vec<String> = {
+                let scheduler = self.scheduler.read().await;
+                scheduler
+                    .next_ready(&graph)
+                    .iter()
+                    .map(|t| t.id.clone())
+                    .collect()
+            };
+
+            if ready_tasks.is_empty() {
+                // Check if we're done
+                let scheduler = self.scheduler.read().await;
+                if scheduler.is_complete(&graph) {
+                    break;
+                }
+
+                // Wait for running tasks to complete
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                continue;
+            }
+
+            // Execute ready tasks
+            for task_id in ready_tasks {
+                let task = match graph.get_task(&task_id) {
+                    Some(t) => t.clone(),
+                    None => continue,
+                };
+
+                // Mark as running
+                {
+                    let mut scheduler = self.scheduler.write().await;
+                    scheduler.mark_running(&task_id);
+                }
+
+                if let Some(graph_task) = graph.get_task_mut(&task_id) {
+                    graph_task.status = TaskStatus::running(0.0);
+                }
+
+                self.monitor.on_task_start(&task);
+
+                // Route AI tasks to optimal model
+                let (result, model_used) = if matches!(task.task_type, TaskType::AiInference(_)) {
+                    self.execute_ai_task_with_routing(&task, &ctx, &context_manager).await
+                } else {
+                    // Non-AI tasks use standard execution
+                    let result = self.executors.execute(&task, &ctx).await;
+                    (result, None)
+                };
+
+                match result {
+                    Ok(task_result) => {
+                        debug!(
+                            "Task {} completed successfully{}",
+                            task_id,
+                            model_used.as_ref().map(|m| format!(" (model: {})", m)).unwrap_or_default()
+                        );
+
+                        // Store result in context manager
+                        let _ = context_manager
+                            .store_result(
+                                &task,
+                                task_result.clone(),
+                                model_used.as_deref(),
+                                None,
+                                0,
+                            )
+                            .await;
+
+                        {
+                            let mut scheduler = self.scheduler.write().await;
+                            scheduler.mark_completed(&task_id);
+                        }
+
+                        if let Some(graph_task) = graph.get_task_mut(&task_id) {
+                            graph_task.status = TaskStatus::completed(task_result.clone());
+                        }
+
+                        self.monitor.on_task_complete(&task, &task_result);
+                    }
+                    Err(e) => {
+                        error!("Task {} failed: {}", task_id, e);
+
+                        let error_msg = e.to_string();
+                        {
+                            let mut scheduler = self.scheduler.write().await;
+                            scheduler.mark_failed(&task_id, &error_msg);
+                        }
+
+                        if let Some(graph_task) = graph.get_task_mut(&task_id) {
+                            graph_task.status = TaskStatus::failed(&error_msg);
+                        }
+
+                        self.monitor.on_task_failed(&task, &error_msg);
+                    }
+                }
+            }
+
+            // Update graph progress
+            self.monitor.update_graph_progress(&graph);
+        }
+
+        // Build summary
+        let counts = graph.count_by_status();
+        let context_summary = context_manager.summary().await;
+
+        let summary = ExecutionSummary {
+            graph_id: graph.id.clone(),
+            total_tasks: counts.total(),
+            completed_tasks: counts.completed,
+            failed_tasks: counts.failed,
+            cancelled_tasks: counts.cancelled,
+            total_duration: start_time.elapsed(),
+            artifacts: Vec::new(),
+            errors: graph
+                .tasks
+                .iter()
+                .filter_map(|t| {
+                    if let TaskStatus::Failed { error, .. } = &t.status {
+                        Some(format!("{}: {}", t.name, error))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        };
+
+        *self.state.write().await = ExecutionState::Completed;
+        self.monitor.on_graph_complete(&graph);
+
+        info!(
+            "Execution with routing completed: {} tasks, {} completed, {} failed, {} tokens",
+            summary.total_tasks,
+            summary.completed_tasks,
+            summary.failed_tasks,
+            context_summary.total_tokens
+        );
+
+        Ok(summary)
+    }
+
+    /// Execute an AI task with model routing
+    async fn execute_ai_task_with_routing(
+        &self,
+        task: &Task,
+        _ctx: &ExecutionContext,
+        _context_manager: &TaskContextManager,
+    ) -> (Result<TaskResult>, Option<String>) {
+        // Route task to optimal model
+        let profile = match self.route_task(task) {
+            Ok(p) => p,
+            Err(e) => {
+                return (Err(e), None);
+            }
+        };
+
+        let model_id = profile.id.clone();
+        debug!(
+            "Routed task '{}' to model '{}' (provider: {})",
+            task.name, model_id, profile.provider
+        );
+
+        // Execute with provider (if available)
+        if let Some(provider) = &self.provider {
+            // Extract prompt from AI task
+            let prompt = if let TaskType::AiInference(ai_task) = &task.task_type {
+                ai_task.prompt.clone()
+            } else {
+                return (
+                    Err(AetherError::config("Task is not an AI inference task")),
+                    Some(model_id),
+                );
+            };
+
+            // Execute with provider
+            match provider.process(&prompt, None).await {
+                Ok(response) => {
+                    let result = TaskResult {
+                        output: serde_json::json!({
+                            "response": response,
+                            "model_used": model_id,
+                            "provider": profile.provider,
+                        }),
+                        artifacts: Vec::new(),
+                        duration: std::time::Duration::ZERO, // TODO: track actual duration
+                        summary: Some(format!("Completed with model {}", model_id)),
+                    };
+                    (Ok(result), Some(model_id))
+                }
+                Err(e) => (Err(e), Some(model_id)),
+            }
+        } else {
+            // No provider available, return placeholder result
+            let result = TaskResult {
+                output: serde_json::json!({
+                    "model_routed": model_id,
+                    "provider": profile.provider,
+                    "note": "No provider available for execution",
+                }),
+                artifacts: Vec::new(),
+                duration: std::time::Duration::ZERO,
+                summary: Some(format!("Routed to model {} (not executed)", model_id)),
+            };
+            (Ok(result), Some(model_id))
+        }
+    }
+
+    /// Get model profiles
+    pub fn model_profiles(&self) -> Vec<ModelProfile> {
+        self.model_matcher
+            .as_ref()
+            .map(|m| m.profiles().to_vec())
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
@@ -451,6 +842,7 @@ mod tests {
             require_confirmation: false,
             max_parallelism: 2,
             dry_run: false,
+            ..Default::default()
         };
 
         // Create engine with mock planner
@@ -532,5 +924,99 @@ mod tests {
         fn name(&self) -> &str {
             "MockPlanner"
         }
+    }
+
+    // =========================================================================
+    // Model Routing Tests
+    // =========================================================================
+
+    use crate::cowork::model_router::{Capability, CostTier, LatencyTier};
+    use crate::cowork::types::AiTask;
+
+    fn create_test_profiles() -> Vec<ModelProfile> {
+        vec![
+            ModelProfile::new("claude-opus", "anthropic", "claude-opus-4")
+                .with_capabilities(vec![Capability::Reasoning, Capability::CodeGeneration])
+                .with_cost_tier(CostTier::High)
+                .with_latency_tier(LatencyTier::Slow),
+            ModelProfile::new("claude-sonnet", "anthropic", "claude-sonnet-4")
+                .with_capabilities(vec![Capability::TextAnalysis, Capability::CodeGeneration])
+                .with_cost_tier(CostTier::Medium)
+                .with_latency_tier(LatencyTier::Medium),
+            ModelProfile::new("claude-haiku", "anthropic", "claude-haiku-3")
+                .with_capabilities(vec![Capability::TextAnalysis])
+                .with_cost_tier(CostTier::Low)
+                .with_latency_tier(LatencyTier::Fast),
+        ]
+    }
+
+    fn create_routing_config() -> CoworkConfig {
+        let profiles = create_test_profiles();
+        let rules = ModelRoutingRules::new("claude-sonnet")
+            .with_task_type("code_generation", "claude-opus")
+            .with_task_type("quick_tasks", "claude-haiku");
+
+        CoworkConfig::default().with_model_routing(profiles, rules)
+    }
+
+    #[test]
+    fn test_engine_model_routing_enabled() {
+        let config = create_routing_config();
+        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+
+        assert!(engine.has_model_routing());
+        assert!(engine.model_matcher().is_some());
+    }
+
+    #[test]
+    fn test_engine_model_routing_disabled() {
+        let config = CoworkConfig::default();
+        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+
+        assert!(!engine.has_model_routing());
+        assert!(engine.model_matcher().is_none());
+    }
+
+    #[test]
+    fn test_engine_route_task() {
+        let config = create_routing_config();
+        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+
+        let task = Task::new(
+            "t1",
+            "Test Task",
+            TaskType::AiInference(AiTask {
+                prompt: "Test prompt".to_string(),
+                requires_privacy: false,
+                has_images: false,
+                output_format: None,
+            }),
+        );
+
+        let profile = engine.route_task(&task).unwrap();
+        // Should route to default model (claude-sonnet)
+        assert_eq!(profile.id, "claude-sonnet");
+    }
+
+    #[test]
+    fn test_engine_model_profiles() {
+        let config = create_routing_config();
+        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+
+        let profiles = engine.model_profiles();
+        assert_eq!(profiles.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_engine_execute_with_routing_fallback() {
+        // When model routing is disabled, execute_with_routing should fall back to execute
+        let config = CoworkConfig::default();
+        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
+
+        let graph = create_test_graph();
+        let summary = engine.execute_with_routing(graph).await.unwrap();
+
+        assert_eq!(summary.total_tasks, 2);
+        assert_eq!(summary.completed_tasks, 2);
     }
 }

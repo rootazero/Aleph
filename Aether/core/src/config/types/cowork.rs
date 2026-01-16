@@ -886,6 +886,9 @@ impl CoworkConfigToml {
             require_confirmation: self.require_confirmation,
             max_parallelism: self.max_parallelism,
             dry_run: self.dry_run,
+            enable_pipelines: self.model_routing.enable_pipelines,
+            model_profiles: self.get_model_profiles(),
+            routing_rules: Some(self.get_routing_rules()),
         }
     }
 

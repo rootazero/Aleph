@@ -590,6 +590,10 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func coworkCancel() 
     
+    func coworkDeleteModelProfile(profileId: String) throws 
+    
+    func coworkDeleteRoutingRule(taskType: String) throws 
+    
     func coworkExecute(graph: CoworkTaskGraphFfi) throws  -> CoworkExecutionSummaryFfi
     
     func coworkGetCodeExecConfig()  -> CodeExecConfigFfi
@@ -597,6 +601,10 @@ public protocol AetherCoreProtocol : AnyObject {
     func coworkGetConfig()  -> CoworkConfigFfi
     
     func coworkGetFileOpsConfig()  -> FileOpsConfigFfi
+    
+    func coworkGetModelProfiles()  -> [ModelProfileFfi]
+    
+    func coworkGetRoutingRules()  -> ModelRoutingRulesFfi
     
     func coworkGetState()  -> CoworkExecutionState
     
@@ -616,7 +624,15 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func coworkUpdateConfig(config: CoworkConfigFfi) throws 
     
+    func coworkUpdateCostStrategy(strategy: ModelCostStrategyFfi) throws 
+    
+    func coworkUpdateDefaultModel(modelId: String) throws 
+    
     func coworkUpdateFileOpsConfig(config: FileOpsConfigFfi) throws 
+    
+    func coworkUpdateModelProfile(profile: ModelProfileFfi) throws 
+    
+    func coworkUpdateRoutingRule(taskType: String, modelId: String) throws 
     
     func deleteMcpServer(id: String) throws 
     
@@ -815,6 +831,20 @@ open func coworkCancel() {try! rustCall() {
 }
 }
     
+open func coworkDeleteModelProfile(profileId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_cowork_delete_model_profile(self.uniffiClonePointer(),
+        FfiConverterString.lower(profileId),$0
+    )
+}
+}
+    
+open func coworkDeleteRoutingRule(taskType: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_cowork_delete_routing_rule(self.uniffiClonePointer(),
+        FfiConverterString.lower(taskType),$0
+    )
+}
+}
+    
 open func coworkExecute(graph: CoworkTaskGraphFfi)throws  -> CoworkExecutionSummaryFfi {
     return try  FfiConverterTypeCoworkExecutionSummaryFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
     uniffi_aethecore_fn_method_aethercore_cowork_execute(self.uniffiClonePointer(),
@@ -840,6 +870,20 @@ open func coworkGetConfig() -> CoworkConfigFfi {
 open func coworkGetFileOpsConfig() -> FileOpsConfigFfi {
     return try!  FfiConverterTypeFileOpsConfigFFI.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_cowork_get_file_ops_config(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func coworkGetModelProfiles() -> [ModelProfileFfi] {
+    return try!  FfiConverterSequenceTypeModelProfileFFI.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_get_model_profiles(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func coworkGetRoutingRules() -> ModelRoutingRulesFfi {
+    return try!  FfiConverterTypeModelRoutingRulesFFI.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_cowork_get_routing_rules(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -906,9 +950,38 @@ open func coworkUpdateConfig(config: CoworkConfigFfi)throws  {try rustCallWithEr
 }
 }
     
+open func coworkUpdateCostStrategy(strategy: ModelCostStrategyFfi)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_cowork_update_cost_strategy(self.uniffiClonePointer(),
+        FfiConverterTypeModelCostStrategyFFI.lower(strategy),$0
+    )
+}
+}
+    
+open func coworkUpdateDefaultModel(modelId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_cowork_update_default_model(self.uniffiClonePointer(),
+        FfiConverterString.lower(modelId),$0
+    )
+}
+}
+    
 open func coworkUpdateFileOpsConfig(config: FileOpsConfigFfi)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
     uniffi_aethecore_fn_method_aethercore_cowork_update_file_ops_config(self.uniffiClonePointer(),
         FfiConverterTypeFileOpsConfigFFI.lower(config),$0
+    )
+}
+}
+    
+open func coworkUpdateModelProfile(profile: ModelProfileFfi)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_cowork_update_model_profile(self.uniffiClonePointer(),
+        FfiConverterTypeModelProfileFFI.lower(profile),$0
+    )
+}
+}
+    
+open func coworkUpdateRoutingRule(taskType: String, modelId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_cowork_update_routing_rule(self.uniffiClonePointer(),
+        FfiConverterString.lower(taskType),
+        FfiConverterString.lower(modelId),$0
     )
 }
 }
@@ -1480,6 +1553,72 @@ public func FfiConverterTypeBehaviorConfig_lift(_ buf: RustBuffer) throws -> Beh
 #endif
 public func FfiConverterTypeBehaviorConfig_lower(_ value: BehaviorConfig) -> RustBuffer {
     return FfiConverterTypeBehaviorConfig.lower(value)
+}
+
+
+public struct CapabilityMappingFfi {
+    public var capability: ModelCapabilityFfi
+    public var modelId: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(capability: ModelCapabilityFfi, modelId: String) {
+        self.capability = capability
+        self.modelId = modelId
+    }
+}
+
+
+
+extension CapabilityMappingFfi: Equatable, Hashable {
+    public static func ==(lhs: CapabilityMappingFfi, rhs: CapabilityMappingFfi) -> Bool {
+        if lhs.capability != rhs.capability {
+            return false
+        }
+        if lhs.modelId != rhs.modelId {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(capability)
+        hasher.combine(modelId)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCapabilityMappingFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CapabilityMappingFfi {
+        return
+            try CapabilityMappingFfi(
+                capability: FfiConverterTypeModelCapabilityFFI.read(from: &buf), 
+                modelId: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CapabilityMappingFfi, into buf: inout [UInt8]) {
+        FfiConverterTypeModelCapabilityFFI.write(value.capability, into: &buf)
+        FfiConverterString.write(value.modelId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCapabilityMappingFFI_lift(_ buf: RustBuffer) throws -> CapabilityMappingFfi {
+    return try FfiConverterTypeCapabilityMappingFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCapabilityMappingFFI_lower(_ value: CapabilityMappingFfi) -> RustBuffer {
+    return FfiConverterTypeCapabilityMappingFFI.lower(value)
 }
 
 
@@ -4783,6 +4922,210 @@ public func FfiConverterTypeMemoryStats_lower(_ value: MemoryStats) -> RustBuffe
 }
 
 
+public struct ModelProfileFfi {
+    public var id: String
+    public var provider: String
+    public var model: String
+    public var capabilities: [ModelCapabilityFfi]
+    public var costTier: ModelCostTierFfi
+    public var latencyTier: ModelLatencyTierFfi
+    public var maxContext: UInt32?
+    public var local: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, provider: String, model: String, capabilities: [ModelCapabilityFfi], costTier: ModelCostTierFfi, latencyTier: ModelLatencyTierFfi, maxContext: UInt32?, local: Bool) {
+        self.id = id
+        self.provider = provider
+        self.model = model
+        self.capabilities = capabilities
+        self.costTier = costTier
+        self.latencyTier = latencyTier
+        self.maxContext = maxContext
+        self.local = local
+    }
+}
+
+
+
+extension ModelProfileFfi: Equatable, Hashable {
+    public static func ==(lhs: ModelProfileFfi, rhs: ModelProfileFfi) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.provider != rhs.provider {
+            return false
+        }
+        if lhs.model != rhs.model {
+            return false
+        }
+        if lhs.capabilities != rhs.capabilities {
+            return false
+        }
+        if lhs.costTier != rhs.costTier {
+            return false
+        }
+        if lhs.latencyTier != rhs.latencyTier {
+            return false
+        }
+        if lhs.maxContext != rhs.maxContext {
+            return false
+        }
+        if lhs.local != rhs.local {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(provider)
+        hasher.combine(model)
+        hasher.combine(capabilities)
+        hasher.combine(costTier)
+        hasher.combine(latencyTier)
+        hasher.combine(maxContext)
+        hasher.combine(local)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeModelProfileFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ModelProfileFfi {
+        return
+            try ModelProfileFfi(
+                id: FfiConverterString.read(from: &buf), 
+                provider: FfiConverterString.read(from: &buf), 
+                model: FfiConverterString.read(from: &buf), 
+                capabilities: FfiConverterSequenceTypeModelCapabilityFFI.read(from: &buf), 
+                costTier: FfiConverterTypeModelCostTierFFI.read(from: &buf), 
+                latencyTier: FfiConverterTypeModelLatencyTierFFI.read(from: &buf), 
+                maxContext: FfiConverterOptionUInt32.read(from: &buf), 
+                local: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ModelProfileFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.provider, into: &buf)
+        FfiConverterString.write(value.model, into: &buf)
+        FfiConverterSequenceTypeModelCapabilityFFI.write(value.capabilities, into: &buf)
+        FfiConverterTypeModelCostTierFFI.write(value.costTier, into: &buf)
+        FfiConverterTypeModelLatencyTierFFI.write(value.latencyTier, into: &buf)
+        FfiConverterOptionUInt32.write(value.maxContext, into: &buf)
+        FfiConverterBool.write(value.local, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelProfileFFI_lift(_ buf: RustBuffer) throws -> ModelProfileFfi {
+    return try FfiConverterTypeModelProfileFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelProfileFFI_lower(_ value: ModelProfileFfi) -> RustBuffer {
+    return FfiConverterTypeModelProfileFFI.lower(value)
+}
+
+
+public struct ModelRoutingRulesFfi {
+    public var taskTypeMappings: [TaskTypeMappingFfi]
+    public var capabilityMappings: [CapabilityMappingFfi]
+    public var costStrategy: ModelCostStrategyFfi
+    public var defaultModel: String?
+    public var enablePipelines: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(taskTypeMappings: [TaskTypeMappingFfi], capabilityMappings: [CapabilityMappingFfi], costStrategy: ModelCostStrategyFfi, defaultModel: String?, enablePipelines: Bool) {
+        self.taskTypeMappings = taskTypeMappings
+        self.capabilityMappings = capabilityMappings
+        self.costStrategy = costStrategy
+        self.defaultModel = defaultModel
+        self.enablePipelines = enablePipelines
+    }
+}
+
+
+
+extension ModelRoutingRulesFfi: Equatable, Hashable {
+    public static func ==(lhs: ModelRoutingRulesFfi, rhs: ModelRoutingRulesFfi) -> Bool {
+        if lhs.taskTypeMappings != rhs.taskTypeMappings {
+            return false
+        }
+        if lhs.capabilityMappings != rhs.capabilityMappings {
+            return false
+        }
+        if lhs.costStrategy != rhs.costStrategy {
+            return false
+        }
+        if lhs.defaultModel != rhs.defaultModel {
+            return false
+        }
+        if lhs.enablePipelines != rhs.enablePipelines {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(taskTypeMappings)
+        hasher.combine(capabilityMappings)
+        hasher.combine(costStrategy)
+        hasher.combine(defaultModel)
+        hasher.combine(enablePipelines)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeModelRoutingRulesFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ModelRoutingRulesFfi {
+        return
+            try ModelRoutingRulesFfi(
+                taskTypeMappings: FfiConverterSequenceTypeTaskTypeMappingFFI.read(from: &buf), 
+                capabilityMappings: FfiConverterSequenceTypeCapabilityMappingFFI.read(from: &buf), 
+                costStrategy: FfiConverterTypeModelCostStrategyFFI.read(from: &buf), 
+                defaultModel: FfiConverterOptionString.read(from: &buf), 
+                enablePipelines: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ModelRoutingRulesFfi, into buf: inout [UInt8]) {
+        FfiConverterSequenceTypeTaskTypeMappingFFI.write(value.taskTypeMappings, into: &buf)
+        FfiConverterSequenceTypeCapabilityMappingFFI.write(value.capabilityMappings, into: &buf)
+        FfiConverterTypeModelCostStrategyFFI.write(value.costStrategy, into: &buf)
+        FfiConverterOptionString.write(value.defaultModel, into: &buf)
+        FfiConverterBool.write(value.enablePipelines, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelRoutingRulesFFI_lift(_ buf: RustBuffer) throws -> ModelRoutingRulesFfi {
+    return try FfiConverterTypeModelRoutingRulesFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelRoutingRulesFFI_lower(_ value: ModelRoutingRulesFfi) -> RustBuffer {
+    return FfiConverterTypeModelRoutingRulesFFI.lower(value)
+}
+
+
 public struct PiiConfig {
     public var enabled: Bool
     public var scrubEmail: Bool
@@ -6290,6 +6633,186 @@ public func FfiConverterTypeSmartMatchingConfig_lift(_ buf: RustBuffer) throws -
 #endif
 public func FfiConverterTypeSmartMatchingConfig_lower(_ value: SmartMatchingConfig) -> RustBuffer {
     return FfiConverterTypeSmartMatchingConfig.lower(value)
+}
+
+
+public struct StageResultFfi {
+    public var stageId: String
+    public var modelUsed: String
+    public var provider: String
+    public var outputJson: String
+    public var tokensUsed: UInt32
+    public var durationMs: UInt64
+    public var success: Bool
+    public var error: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(stageId: String, modelUsed: String, provider: String, outputJson: String, tokensUsed: UInt32, durationMs: UInt64, success: Bool, error: String?) {
+        self.stageId = stageId
+        self.modelUsed = modelUsed
+        self.provider = provider
+        self.outputJson = outputJson
+        self.tokensUsed = tokensUsed
+        self.durationMs = durationMs
+        self.success = success
+        self.error = error
+    }
+}
+
+
+
+extension StageResultFfi: Equatable, Hashable {
+    public static func ==(lhs: StageResultFfi, rhs: StageResultFfi) -> Bool {
+        if lhs.stageId != rhs.stageId {
+            return false
+        }
+        if lhs.modelUsed != rhs.modelUsed {
+            return false
+        }
+        if lhs.provider != rhs.provider {
+            return false
+        }
+        if lhs.outputJson != rhs.outputJson {
+            return false
+        }
+        if lhs.tokensUsed != rhs.tokensUsed {
+            return false
+        }
+        if lhs.durationMs != rhs.durationMs {
+            return false
+        }
+        if lhs.success != rhs.success {
+            return false
+        }
+        if lhs.error != rhs.error {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(stageId)
+        hasher.combine(modelUsed)
+        hasher.combine(provider)
+        hasher.combine(outputJson)
+        hasher.combine(tokensUsed)
+        hasher.combine(durationMs)
+        hasher.combine(success)
+        hasher.combine(error)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeStageResultFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> StageResultFfi {
+        return
+            try StageResultFfi(
+                stageId: FfiConverterString.read(from: &buf), 
+                modelUsed: FfiConverterString.read(from: &buf), 
+                provider: FfiConverterString.read(from: &buf), 
+                outputJson: FfiConverterString.read(from: &buf), 
+                tokensUsed: FfiConverterUInt32.read(from: &buf), 
+                durationMs: FfiConverterUInt64.read(from: &buf), 
+                success: FfiConverterBool.read(from: &buf), 
+                error: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: StageResultFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.stageId, into: &buf)
+        FfiConverterString.write(value.modelUsed, into: &buf)
+        FfiConverterString.write(value.provider, into: &buf)
+        FfiConverterString.write(value.outputJson, into: &buf)
+        FfiConverterUInt32.write(value.tokensUsed, into: &buf)
+        FfiConverterUInt64.write(value.durationMs, into: &buf)
+        FfiConverterBool.write(value.success, into: &buf)
+        FfiConverterOptionString.write(value.error, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeStageResultFFI_lift(_ buf: RustBuffer) throws -> StageResultFfi {
+    return try FfiConverterTypeStageResultFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeStageResultFFI_lower(_ value: StageResultFfi) -> RustBuffer {
+    return FfiConverterTypeStageResultFFI.lower(value)
+}
+
+
+public struct TaskTypeMappingFfi {
+    public var taskType: String
+    public var modelId: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(taskType: String, modelId: String) {
+        self.taskType = taskType
+        self.modelId = modelId
+    }
+}
+
+
+
+extension TaskTypeMappingFfi: Equatable, Hashable {
+    public static func ==(lhs: TaskTypeMappingFfi, rhs: TaskTypeMappingFfi) -> Bool {
+        if lhs.taskType != rhs.taskType {
+            return false
+        }
+        if lhs.modelId != rhs.modelId {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(taskType)
+        hasher.combine(modelId)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTaskTypeMappingFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TaskTypeMappingFfi {
+        return
+            try TaskTypeMappingFfi(
+                taskType: FfiConverterString.read(from: &buf), 
+                modelId: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TaskTypeMappingFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.taskType, into: &buf)
+        FfiConverterString.write(value.modelId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTaskTypeMappingFFI_lift(_ buf: RustBuffer) throws -> TaskTypeMappingFfi {
+    return try FfiConverterTypeTaskTypeMappingFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTaskTypeMappingFFI_lower(_ value: TaskTypeMappingFfi) -> RustBuffer {
+    return FfiConverterTypeTaskTypeMappingFFI.lower(value)
 }
 
 
@@ -7965,6 +8488,353 @@ extension McpServerType: Equatable, Hashable {}
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum ModelCapabilityFfi {
+    
+    case codeGeneration
+    case codeReview
+    case textAnalysis
+    case imageUnderstanding
+    case videoUnderstanding
+    case longContext
+    case reasoning
+    case localPrivacy
+    case fastResponse
+    case simpleTask
+    case longDocument
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeModelCapabilityFFI: FfiConverterRustBuffer {
+    typealias SwiftType = ModelCapabilityFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ModelCapabilityFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .codeGeneration
+        
+        case 2: return .codeReview
+        
+        case 3: return .textAnalysis
+        
+        case 4: return .imageUnderstanding
+        
+        case 5: return .videoUnderstanding
+        
+        case 6: return .longContext
+        
+        case 7: return .reasoning
+        
+        case 8: return .localPrivacy
+        
+        case 9: return .fastResponse
+        
+        case 10: return .simpleTask
+        
+        case 11: return .longDocument
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ModelCapabilityFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .codeGeneration:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .codeReview:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .textAnalysis:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .imageUnderstanding:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .videoUnderstanding:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .longContext:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .reasoning:
+            writeInt(&buf, Int32(7))
+        
+        
+        case .localPrivacy:
+            writeInt(&buf, Int32(8))
+        
+        
+        case .fastResponse:
+            writeInt(&buf, Int32(9))
+        
+        
+        case .simpleTask:
+            writeInt(&buf, Int32(10))
+        
+        
+        case .longDocument:
+            writeInt(&buf, Int32(11))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelCapabilityFFI_lift(_ buf: RustBuffer) throws -> ModelCapabilityFfi {
+    return try FfiConverterTypeModelCapabilityFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelCapabilityFFI_lower(_ value: ModelCapabilityFfi) -> RustBuffer {
+    return FfiConverterTypeModelCapabilityFFI.lower(value)
+}
+
+
+
+extension ModelCapabilityFfi: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum ModelCostStrategyFfi {
+    
+    case cheapest
+    case balanced
+    case bestQuality
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeModelCostStrategyFFI: FfiConverterRustBuffer {
+    typealias SwiftType = ModelCostStrategyFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ModelCostStrategyFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .cheapest
+        
+        case 2: return .balanced
+        
+        case 3: return .bestQuality
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ModelCostStrategyFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .cheapest:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .balanced:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .bestQuality:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelCostStrategyFFI_lift(_ buf: RustBuffer) throws -> ModelCostStrategyFfi {
+    return try FfiConverterTypeModelCostStrategyFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelCostStrategyFFI_lower(_ value: ModelCostStrategyFfi) -> RustBuffer {
+    return FfiConverterTypeModelCostStrategyFFI.lower(value)
+}
+
+
+
+extension ModelCostStrategyFfi: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum ModelCostTierFfi {
+    
+    case free
+    case low
+    case medium
+    case high
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeModelCostTierFFI: FfiConverterRustBuffer {
+    typealias SwiftType = ModelCostTierFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ModelCostTierFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .free
+        
+        case 2: return .low
+        
+        case 3: return .medium
+        
+        case 4: return .high
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ModelCostTierFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .free:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .low:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .medium:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .high:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelCostTierFFI_lift(_ buf: RustBuffer) throws -> ModelCostTierFfi {
+    return try FfiConverterTypeModelCostTierFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelCostTierFFI_lower(_ value: ModelCostTierFfi) -> RustBuffer {
+    return FfiConverterTypeModelCostTierFFI.lower(value)
+}
+
+
+
+extension ModelCostTierFfi: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum ModelLatencyTierFfi {
+    
+    case fast
+    case medium
+    case slow
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeModelLatencyTierFFI: FfiConverterRustBuffer {
+    typealias SwiftType = ModelLatencyTierFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ModelLatencyTierFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .fast
+        
+        case 2: return .medium
+        
+        case 3: return .slow
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ModelLatencyTierFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .fast:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .medium:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .slow:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelLatencyTierFFI_lift(_ buf: RustBuffer) throws -> ModelLatencyTierFfi {
+    return try FfiConverterTypeModelLatencyTierFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeModelLatencyTierFFI_lower(_ value: ModelLatencyTierFfi) -> RustBuffer {
+    return FfiConverterTypeModelLatencyTierFFI.lower(value)
+}
+
+
+
+extension ModelLatencyTierFfi: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum ProcessingState {
     
     case idle
@@ -9346,6 +10216,31 @@ fileprivate struct FfiConverterSequenceTypeAppMemoryInfo: FfiConverterRustBuffer
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeCapabilityMappingFFI: FfiConverterRustBuffer {
+    typealias SwiftType = [CapabilityMappingFfi]
+
+    public static func write(_ value: [CapabilityMappingFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeCapabilityMappingFFI.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [CapabilityMappingFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [CapabilityMappingFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeCapabilityMappingFFI.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeClarificationOption: FfiConverterRustBuffer {
     typealias SwiftType = [ClarificationOption]
 
@@ -9646,6 +10541,31 @@ fileprivate struct FfiConverterSequenceTypeMemoryItem: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeModelProfileFFI: FfiConverterRustBuffer {
+    typealias SwiftType = [ModelProfileFfi]
+
+    public static func write(_ value: [ModelProfileFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeModelProfileFFI.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ModelProfileFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ModelProfileFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeModelProfileFFI.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeProviderConfigEntry: FfiConverterRustBuffer {
     typealias SwiftType = [ProviderConfigEntry]
 
@@ -9746,6 +10666,31 @@ fileprivate struct FfiConverterSequenceTypeSkillInfo: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeTaskTypeMappingFFI: FfiConverterRustBuffer {
+    typealias SwiftType = [TaskTypeMappingFfi]
+
+    public static func write(_ value: [TaskTypeMappingFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeTaskTypeMappingFFI.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [TaskTypeMappingFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [TaskTypeMappingFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeTaskTypeMappingFFI.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeToolInfoFFI: FfiConverterRustBuffer {
     typealias SwiftType = [ToolInfoFfi]
 
@@ -9788,6 +10733,31 @@ fileprivate struct FfiConverterSequenceTypeUnifiedToolInfo: FfiConverterRustBuff
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeUnifiedToolInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeModelCapabilityFFI: FfiConverterRustBuffer {
+    typealias SwiftType = [ModelCapabilityFfi]
+
+    public static func write(_ value: [ModelCapabilityFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeModelCapabilityFFI.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ModelCapabilityFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ModelCapabilityFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeModelCapabilityFFI.read(from: &buf))
         }
         return seq
     }
@@ -9927,6 +10897,12 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_cowork_cancel() != 36328) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_delete_model_profile() != 44921) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_delete_routing_rule() != 34696) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_cowork_execute() != 42847) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -9937,6 +10913,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_cowork_get_file_ops_config() != 14218) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_get_model_profiles() != 55034) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_get_routing_rules() != 7162) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_cowork_get_state() != 15480) {
@@ -9966,7 +10948,19 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_cowork_update_config() != 43915) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_update_cost_strategy() != 30667) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_update_default_model() != 39138) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_cowork_update_file_ops_config() != 59295) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_update_model_profile() != 58189) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_cowork_update_routing_rule() != 55243) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_delete_mcp_server() != 52792) {

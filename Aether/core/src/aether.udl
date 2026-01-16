@@ -957,6 +957,38 @@ interface AetherCore {
     // Update file operations configuration
     [Throws=AetherFfiError]
     void cowork_update_file_ops_config(FileOpsConfigFFI config);
+
+    // ===== MODEL ROUTER =====
+
+    // Get all configured model profiles
+    sequence<ModelProfileFFI> cowork_get_model_profiles();
+
+    // Get model routing rules
+    ModelRoutingRulesFFI cowork_get_routing_rules();
+
+    // Update a model profile (add or modify)
+    [Throws=AetherFfiError]
+    void cowork_update_model_profile(ModelProfileFFI profile);
+
+    // Delete a model profile by ID
+    [Throws=AetherFfiError]
+    void cowork_delete_model_profile(string profile_id);
+
+    // Update a task type to model mapping
+    [Throws=AetherFfiError]
+    void cowork_update_routing_rule(string task_type, string model_id);
+
+    // Delete a task type mapping
+    [Throws=AetherFfiError]
+    void cowork_delete_routing_rule(string task_type);
+
+    // Update cost strategy
+    [Throws=AetherFfiError]
+    void cowork_update_cost_strategy(ModelCostStrategyFFI strategy);
+
+    // Update default model
+    [Throws=AetherFfiError]
+    void cowork_update_default_model(string model_id);
 };
 
 dictionary ProcessOptions {
@@ -979,6 +1011,90 @@ dictionary MemoryItem {
     string assistant_response;
     i64 timestamp;
     string? app_context;
+};
+
+// ===== MODEL ROUTER TYPES (add-cowork-model-router) =====
+
+// Model capability tags for characterizing model strengths
+enum ModelCapabilityFFI {
+  "CodeGeneration",      // Code creation and completion
+  "CodeReview",          // Code analysis and review
+  "TextAnalysis",        // Text understanding and summarization
+  "ImageUnderstanding",  // Vision/image analysis
+  "VideoUnderstanding",  // Video analysis
+  "LongContext",         // Large context window support (>100k tokens)
+  "Reasoning",           // Complex reasoning tasks
+  "LocalPrivacy",        // Local execution for privacy-sensitive data
+  "FastResponse",        // Low latency response (<2s)
+  "SimpleTask",          // Simple task handling (Q&A, classification)
+  "LongDocument",        // Long document processing
+};
+
+// Cost tier for cost-aware routing decisions
+enum ModelCostTierFFI {
+  "Free",    // Free tier (local models)
+  "Low",     // Low cost tier (~$0.25/1M tokens)
+  "Medium",  // Medium cost tier (~$3/1M tokens)
+  "High",    // High cost tier (~$15/1M tokens)
+};
+
+// Latency tier for latency-sensitive task routing
+enum ModelLatencyTierFFI {
+  "Fast",    // Fast response (<2s typical)
+  "Medium",  // Medium latency (2-10s typical)
+  "Slow",    // Slow response (>10s typical)
+};
+
+// Cost optimization strategy for model selection
+enum ModelCostStrategyFFI {
+  "Cheapest",     // Always choose the cheapest model that can handle the task
+  "Balanced",     // Balance cost and quality (default)
+  "BestQuality",  // Always choose the best quality model regardless of cost
+};
+
+// Model profile describing an AI model's characteristics
+dictionary ModelProfileFFI {
+  string id;                                  // Unique identifier (e.g., "claude-opus", "gpt-4o")
+  string provider;                            // Provider name (anthropic, openai, google, ollama)
+  string model;                               // Model name for API calls
+  sequence<ModelCapabilityFFI> capabilities;  // Capability tags
+  ModelCostTierFFI cost_tier;                 // Cost tier for cost-aware routing
+  ModelLatencyTierFFI latency_tier;           // Latency tier for latency-sensitive tasks
+  u32? max_context;                           // Maximum context window in tokens
+  boolean local;                              // Whether this is a local model (no network calls)
+};
+
+// Task type to model mapping entry
+dictionary TaskTypeMappingFFI {
+  string task_type;  // Task type string (e.g., "code_generation")
+  string model_id;   // Model profile ID (e.g., "claude-opus")
+};
+
+// Capability to model mapping entry
+dictionary CapabilityMappingFFI {
+  ModelCapabilityFFI capability;  // Capability enum value
+  string model_id;                // Model profile ID
+};
+
+// Model routing rules configuration
+dictionary ModelRoutingRulesFFI {
+  sequence<TaskTypeMappingFFI> task_type_mappings;    // Task type to model mappings
+  sequence<CapabilityMappingFFI> capability_mappings; // Capability to model mappings
+  ModelCostStrategyFFI cost_strategy;                 // Cost optimization strategy
+  string? default_model;                              // Default model profile ID
+  boolean enable_pipelines;                           // Enable multi-model pipeline execution
+};
+
+// Result of executing a single pipeline stage
+dictionary StageResultFFI {
+  string stage_id;       // ID of the stage
+  string model_used;     // Model profile ID used
+  string provider;       // Provider name
+  string output_json;    // Output as JSON string
+  u32 tokens_used;       // Number of tokens used
+  u64 duration_ms;       // Execution duration in milliseconds
+  boolean success;       // Whether the stage completed successfully
+  string? error;         // Error message if failed
 };
 
 // ===== COWORK TASK ORCHESTRATION (add-cowork-task-orchestration) =====

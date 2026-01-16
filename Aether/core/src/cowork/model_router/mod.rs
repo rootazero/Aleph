@@ -37,10 +37,21 @@
 //! let profile = matcher.route(&task)?;
 //! ```
 
+mod context;
 mod matcher;
+mod pipeline;
 mod profiles;
 mod rules;
 
+pub use context::{
+    ContextError, ContextSummary, StoredTaskResult, TaskContext, TaskContextManager,
+    TaskResultMetadata,
+};
 pub use matcher::{ModelMatcher, ModelRouter, RoutingError};
+pub use pipeline::{
+    ExecutionResult, PipelineContext, PipelineError, PipelineEvent, PipelineExecutor,
+    PipelineProgressHandler, PipelineStage, PipelineState, PipelineSummary, ProviderAdapter,
+    StageResult,
+};
 pub use profiles::{Capability, CostTier, LatencyTier, ModelProfile};
 pub use rules::{CostStrategy, ModelRoutingRules};

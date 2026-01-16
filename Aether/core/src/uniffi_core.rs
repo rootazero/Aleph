@@ -2034,6 +2034,216 @@ impl AetherCore {
         info!("File operations configuration updated");
         Ok(())
     }
+
+    // ===== MODEL ROUTER =====
+
+    /// Get all configured model profiles
+    pub fn cowork_get_model_profiles(&self) -> Vec<crate::cowork_ffi::ModelProfileFFI> {
+        // Load from config file or return empty
+        match crate::config::Config::load() {
+            Ok(cfg) => cfg.cowork.get_model_profiles()
+                .into_iter()
+                .map(crate::cowork_ffi::ModelProfileFFI::from)
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Get model routing rules
+    pub fn cowork_get_routing_rules(&self) -> crate::cowork_ffi::ModelRoutingRulesFFI {
+        // Load from config file or return defaults
+        match crate::config::Config::load() {
+            Ok(cfg) => crate::cowork_ffi::ModelRoutingRulesFFI::from(cfg.cowork.get_routing_rules()),
+            Err(_) => crate::cowork_ffi::ModelRoutingRulesFFI::from(
+                crate::cowork::ModelRoutingRules::default()
+            ),
+        }
+    }
+
+    /// Update a model profile (add or modify)
+    pub fn cowork_update_model_profile(
+        &self,
+        profile: crate::cowork_ffi::ModelProfileFFI,
+    ) -> Result<(), AetherFfiError> {
+        let profile = crate::cowork::ModelProfile::from(profile);
+        let profile_id = profile.id.clone();
+
+        // Load current config
+        let mut full_config = crate::config::Config::load()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to load config: {}", e)))?;
+
+        // Insert or update the profile in HashMap (key = profile_id)
+        let config_profile = crate::config::types::cowork::ModelProfileConfigToml {
+            provider: profile.provider,
+            model: profile.model,
+            capabilities: profile.capabilities,
+            cost_tier: profile.cost_tier,
+            latency_tier: profile.latency_tier,
+            max_context: profile.max_context,
+            local: profile.local,
+            parameters: profile.parameters,
+        };
+
+        full_config.cowork.model_profiles.insert(profile_id.clone(), config_profile);
+
+        // Save to file
+        full_config
+            .save()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to save config: {}", e)))?;
+
+        info!(profile_id = %profile_id, "Model profile updated");
+        Ok(())
+    }
+
+    /// Delete a model profile by ID
+    pub fn cowork_delete_model_profile(
+        &self,
+        profile_id: String,
+    ) -> Result<(), AetherFfiError> {
+        // Load current config
+        let mut full_config = crate::config::Config::load()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to load config: {}", e)))?;
+
+        // Remove the profile from HashMap
+        if full_config.cowork.model_profiles.remove(&profile_id).is_none() {
+            return Err(AetherFfiError::Config(format!(
+                "Model profile '{}' not found",
+                profile_id
+            )));
+        }
+
+        // Save to file
+        full_config
+            .save()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to save config: {}", e)))?;
+
+        info!(profile_id = %profile_id, "Model profile deleted");
+        Ok(())
+    }
+
+    /// Update a task type to model mapping
+    pub fn cowork_update_routing_rule(
+        &self,
+        task_type: String,
+        model_id: String,
+    ) -> Result<(), AetherFfiError> {
+        // Load current config
+        let mut full_config = crate::config::Config::load()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to load config: {}", e)))?;
+
+        // Update built-in task type fields or use overrides for custom types
+        match task_type.as_str() {
+            "code_generation" => full_config.cowork.model_routing.code_generation = Some(model_id.clone()),
+            "code_review" => full_config.cowork.model_routing.code_review = Some(model_id.clone()),
+            "image_analysis" => full_config.cowork.model_routing.image_analysis = Some(model_id.clone()),
+            "video_understanding" => full_config.cowork.model_routing.video_understanding = Some(model_id.clone()),
+            "long_document" => full_config.cowork.model_routing.long_document = Some(model_id.clone()),
+            "quick_tasks" => full_config.cowork.model_routing.quick_tasks = Some(model_id.clone()),
+            "privacy_sensitive" => full_config.cowork.model_routing.privacy_sensitive = Some(model_id.clone()),
+            "reasoning" => full_config.cowork.model_routing.reasoning = Some(model_id.clone()),
+            _ => {
+                // Use overrides for custom task types
+                full_config.cowork.model_routing.overrides.insert(task_type.clone(), model_id.clone());
+            }
+        }
+
+        // Save to file
+        full_config
+            .save()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to save config: {}", e)))?;
+
+        info!(task_type = %task_type, model_id = %model_id, "Routing rule updated");
+        Ok(())
+    }
+
+    /// Delete a task type mapping
+    pub fn cowork_delete_routing_rule(
+        &self,
+        task_type: String,
+    ) -> Result<(), AetherFfiError> {
+        // Load current config
+        let mut full_config = crate::config::Config::load()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to load config: {}", e)))?;
+
+        // Clear built-in task type fields or remove from overrides
+        let removed = match task_type.as_str() {
+            "code_generation" => full_config.cowork.model_routing.code_generation.take().is_some(),
+            "code_review" => full_config.cowork.model_routing.code_review.take().is_some(),
+            "image_analysis" => full_config.cowork.model_routing.image_analysis.take().is_some(),
+            "video_understanding" => full_config.cowork.model_routing.video_understanding.take().is_some(),
+            "long_document" => full_config.cowork.model_routing.long_document.take().is_some(),
+            "quick_tasks" => full_config.cowork.model_routing.quick_tasks.take().is_some(),
+            "privacy_sensitive" => full_config.cowork.model_routing.privacy_sensitive.take().is_some(),
+            "reasoning" => full_config.cowork.model_routing.reasoning.take().is_some(),
+            _ => full_config.cowork.model_routing.overrides.remove(&task_type).is_some(),
+        };
+
+        if !removed {
+            return Err(AetherFfiError::Config(format!(
+                "Task type mapping '{}' not found",
+                task_type
+            )));
+        }
+
+        // Save to file
+        full_config
+            .save()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to save config: {}", e)))?;
+
+        info!(task_type = %task_type, "Routing rule deleted");
+        Ok(())
+    }
+
+    /// Update cost strategy
+    pub fn cowork_update_cost_strategy(
+        &self,
+        strategy: crate::cowork_ffi::ModelCostStrategyFFI,
+    ) -> Result<(), AetherFfiError> {
+        // Load current config
+        let mut full_config = crate::config::Config::load()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to load config: {}", e)))?;
+
+        // Convert FFI strategy to internal CostStrategy enum
+        let cost_strategy = crate::cowork::CostStrategy::from(strategy);
+        full_config.cowork.model_routing.cost_strategy = cost_strategy;
+
+        // Save to file
+        full_config
+            .save()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to save config: {}", e)))?;
+
+        info!(strategy = ?cost_strategy, "Cost strategy updated");
+        Ok(())
+    }
+
+    /// Update default model
+    pub fn cowork_update_default_model(
+        &self,
+        model_id: String,
+    ) -> Result<(), AetherFfiError> {
+        // Load current config
+        let mut full_config = crate::config::Config::load()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to load config: {}", e)))?;
+
+        // Validate that the model exists in HashMap
+        if !full_config.cowork.model_profiles.contains_key(&model_id) {
+            return Err(AetherFfiError::Config(format!(
+                "Model profile '{}' not found",
+                model_id
+            )));
+        }
+
+        // Update default model
+        full_config.cowork.model_routing.default_model = Some(model_id.clone());
+
+        // Save to file
+        full_config
+            .save()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to save config: {}", e)))?;
+
+        info!(model_id = %model_id, "Default model updated");
+        Ok(())
+    }
 }
 
 /// Initialize AetherCore

@@ -351,7 +351,7 @@ impl ModelRouter for ModelMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cowork::types::{CodeExec, FileOp, Language};
+    use crate::cowork::types::{AiTask, CodeExec, FileOp, Language};
     use std::path::PathBuf;
 
     fn create_test_profiles() -> Vec<ModelProfile> {

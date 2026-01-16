@@ -76,6 +76,37 @@ sandbox_enabled = true             # Sandbox code execution tasks
 allowed_categories = []            # Empty = all allowed
 blocked_categories = []            # Empty = none blocked
 
+[cowork.model_profiles.claude-opus]
+provider = "anthropic"
+model = "claude-opus-4"
+capabilities = ["reasoning", "code_generation", "long_context"]
+cost_tier = "high"
+latency_tier = "slow"
+max_context = 200000
+
+[cowork.model_profiles.claude-sonnet]
+provider = "anthropic"
+model = "claude-sonnet-4"
+capabilities = ["code_generation", "code_review", "text_analysis"]
+cost_tier = "medium"
+latency_tier = "medium"
+
+[cowork.model_profiles.claude-haiku]
+provider = "anthropic"
+model = "claude-haiku-3.5"
+capabilities = ["fast_response", "simple_task"]
+cost_tier = "low"
+latency_tier = "fast"
+
+[cowork.model_routing]
+code_generation = "claude-opus"
+code_review = "claude-sonnet"
+quick_tasks = "claude-haiku"
+reasoning = "claude-opus"
+cost_strategy = "balanced"
+enable_pipelines = true
+default_model = "claude-sonnet"
+
 [routing.pipeline]
 enabled = true
 
@@ -227,6 +258,85 @@ capabilities = ["memory"]          # Enable memory for all requests
 
 See [COWORK.md](./COWORK.md) for detailed documentation.
 
+### [cowork.model_profiles.*]
+
+Define AI model profiles for intelligent task routing.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `provider` | String | Required | Provider name (anthropic, openai, google, ollama) |
+| `model` | String | Required | Model name for API calls |
+| `capabilities` | Array | `[]` | Model capabilities |
+| `cost_tier` | String | `"medium"` | Cost tier: free, low, medium, high |
+| `latency_tier` | String | `"medium"` | Latency tier: fast, medium, slow |
+| `max_context` | Integer | `null` | Maximum context window in tokens |
+| `local` | Boolean | `false` | Whether this is a local model |
+
+**Valid Capabilities**: `code_generation`, `code_review`, `text_analysis`, `image_understanding`, `video_understanding`, `long_context`, `reasoning`, `local_privacy`, `fast_response`, `simple_task`, `long_document`
+
+**Example**:
+```toml
+[cowork.model_profiles.claude-opus]
+provider = "anthropic"
+model = "claude-opus-4"
+capabilities = ["reasoning", "code_generation", "long_context"]
+cost_tier = "high"
+latency_tier = "slow"
+max_context = 200000
+
+[cowork.model_profiles.claude-haiku]
+provider = "anthropic"
+model = "claude-haiku-3.5"
+capabilities = ["fast_response", "simple_task"]
+cost_tier = "low"
+latency_tier = "fast"
+
+[cowork.model_profiles.ollama-llama]
+provider = "ollama"
+model = "llama3.2"
+capabilities = ["local_privacy", "fast_response"]
+cost_tier = "free"
+latency_tier = "fast"
+local = true
+```
+
+### [cowork.model_routing]
+
+Configure task-to-model routing rules.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `code_generation` | String | `null` | Model for code generation tasks |
+| `code_review` | String | `null` | Model for code review tasks |
+| `image_analysis` | String | `null` | Model for image analysis tasks |
+| `video_understanding` | String | `null` | Model for video understanding tasks |
+| `long_document` | String | `null` | Model for long document processing |
+| `quick_tasks` | String | `null` | Model for quick/simple tasks |
+| `privacy_sensitive` | String | `null` | Model for privacy-sensitive tasks |
+| `reasoning` | String | `null` | Model for complex reasoning tasks |
+| `cost_strategy` | String | `"balanced"` | Cost strategy: cheapest, balanced, best_quality |
+| `enable_pipelines` | Boolean | `true` | Enable multi-model pipeline execution |
+| `default_model` | String | `null` | Default model when no rule matches |
+
+**Cost Strategies**:
+- `cheapest` - Always select the lowest cost model with required capabilities
+- `balanced` - Balance between cost and quality (default)
+- `best_quality` - Always select the highest quality model
+
+**Example**:
+```toml
+[cowork.model_routing]
+code_generation = "claude-opus"
+code_review = "claude-sonnet"
+image_analysis = "gpt-4o"
+quick_tasks = "claude-haiku"
+privacy_sensitive = "ollama-llama"
+reasoning = "claude-opus"
+cost_strategy = "balanced"
+enable_pipelines = true
+default_model = "claude-sonnet"
+```
+
 ### [providers.*]
 
 | Field | Type | Default | Description |
@@ -310,4 +420,4 @@ final_system_prompt = slash_command_prompt + keyword_rule1_prompt + keyword_rule
 
 ---
 
-**Last Updated**: 2026-01-15
+**Last Updated**: 2026-01-16
