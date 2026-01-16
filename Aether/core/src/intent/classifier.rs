@@ -62,7 +62,8 @@ static KEYWORD_SETS: &[KeywordSet] = &[
     KeywordSet {
         verbs: &["整理", "归类", "分类", "分", "organize", "sort", "classify"],
         nouns: &[
-            "文件", "文件夹", "目录", "下载", "files", "folder", "directory", "downloads",
+            "文件", "文件夹", "目录", "下载", "照片", "图片",
+            "files", "folder", "directory", "downloads", "photos", "pictures",
         ],
         category: TaskCategory::FileOrganize,
     },
