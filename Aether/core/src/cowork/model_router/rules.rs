@@ -210,6 +210,10 @@ pub enum ValidationError {
 }
 
 /// Standard task type names used in routing
+///
+/// These constants are provided as reference values for configuration.
+/// Use these when configuring `[cowork.model_routing]` in config.toml.
+#[allow(unused)]
 pub mod task_types {
     pub const CODE_GENERATION: &str = "code_generation";
     pub const CODE_REVIEW: &str = "code_review";
