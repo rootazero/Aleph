@@ -64,8 +64,8 @@ pub use integration::{
 };
 pub use registry::ToolRegistry;
 pub use types::{
-    ConflictInfo, ConflictResolution, RoutingLayer, ToolPriority, ToolSafetyLevel, ToolSource,
-    ToolSourceType, UnifiedTool, UnifiedToolInfo,
+    ConflictInfo, ConflictResolution, RoutingLayer, ToolCategory, ToolDefinition, ToolPriority,
+    ToolResult, ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo,
 };
 
 #[cfg(test)]

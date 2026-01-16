@@ -82,7 +82,6 @@ pub mod ffi; // FFI module - split AetherCore implementation
 pub mod uniffi_core; // UniFFI core bindings - re-exports from ffi module
 pub mod dispatcher; // NEW: Intelligent tool routing (Dispatcher Layer)
 mod title_generator; // Title generation for conversation topics
-pub mod tools; // Tool type definitions (ToolCategory, ToolDefinition, ToolResult)
 pub mod vision; // NEW: Vision capability (screen OCR, image understanding)
 pub mod cowork; // NEW: Cowork task orchestration (Phase 1)
 pub mod cowork_ffi; // NEW: Cowork FFI bindings
@@ -141,10 +140,10 @@ pub use crate::dispatcher::{
     AsyncConfirmationConfig, AsyncConfirmationHandler, ConfirmationAction, ConfirmationConfig,
     ConfirmationDecision, ConfirmationState, DispatcherAction, DispatcherConfig,
     DispatcherIntegration, DispatcherResult, PendingConfirmation, PendingConfirmationInfo,
-    PendingConfirmationStore, ToolConfirmation, ToolRegistry, ToolSafetyLevel, ToolSource,
-    ToolSourceType, UnifiedTool, UnifiedToolInfo, UserConfirmationDecision,
+    PendingConfirmationStore, ToolCategory, ToolConfirmation, ToolDefinition, ToolRegistry,
+    ToolResult, ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo,
+    UserConfirmationDecision,
 };
-pub use crate::tools::{ToolCategory, ToolDefinition, ToolResult};
 pub use crate::utils::pii;
 pub use crate::vision::{
     CaptureMode, VisionConfig, VisionRequest, VisionResult, VisionService, VisionTask,
