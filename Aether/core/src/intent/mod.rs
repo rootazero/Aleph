@@ -25,8 +25,10 @@
 
 pub mod ai_detector;
 pub mod classifier;
+pub mod parameters;
 pub mod task_category;
 
 pub use ai_detector::{AiIntentDetector, AiIntentResult};
 pub use classifier::{ExecutableTask, ExecutionIntent, IntentClassifier};
+pub use parameters::{ConflictResolution, OrganizeMethod, ParameterSource, TaskParameters};
 pub use task_category::TaskCategory;
