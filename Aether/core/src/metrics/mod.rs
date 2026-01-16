@@ -20,6 +20,7 @@
 ///     .with_meta("model", "gpt-4");
 /// // ... do work
 /// ```
+use crate::config::MetricsPolicy;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -28,11 +29,44 @@ use std::time::Instant;
 /// These values represent the expected maximum latency for each operation
 /// under normal conditions. Operations exceeding 2x these targets will
 /// trigger warnings in the logs.
+///
+/// These constants are kept for backward compatibility.
+/// For configurable values, use MetricsPolicy from config.
 pub const TARGET_HOTKEY_TO_CLIPBOARD_MS: u64 = 50;
 pub const TARGET_CLIPBOARD_TO_MEMORY_MS: u64 = 100;
 pub const TARGET_MEMORY_TO_AI_MS: u64 = 500;
 pub const TARGET_AI_TO_PASTE_MS: u64 = 50;
 pub const TARGET_PASTE_TO_COMPLETE_MS: u64 = 100;
+
+/// Default warning multiplier (hardcoded, for backward compatibility)
+pub const DEFAULT_WARNING_MULTIPLIER: f64 = 2.0;
+
+/// Get target latencies from policy or use defaults
+pub fn get_targets_from_policy(policy: Option<&MetricsPolicy>) -> (u64, u64, u64, u64, u64) {
+    match policy {
+        Some(p) => (
+            p.target_hotkey_to_clipboard_ms,
+            p.target_clipboard_to_memory_ms,
+            p.target_memory_to_ai_ms,
+            p.target_ai_to_paste_ms,
+            p.target_paste_to_complete_ms,
+        ),
+        None => (
+            TARGET_HOTKEY_TO_CLIPBOARD_MS,
+            TARGET_CLIPBOARD_TO_MEMORY_MS,
+            TARGET_MEMORY_TO_AI_MS,
+            TARGET_AI_TO_PASTE_MS,
+            TARGET_PASTE_TO_COMPLETE_MS,
+        ),
+    }
+}
+
+/// Get warning multiplier from policy or use default
+pub fn get_warning_multiplier(policy: Option<&MetricsPolicy>) -> f64 {
+    policy
+        .map(|p| p.warning_multiplier)
+        .unwrap_or(DEFAULT_WARNING_MULTIPLIER)
+}
 
 /// A timer for measuring the duration of a specific stage in the pipeline
 ///
@@ -55,6 +89,12 @@ pub struct StageTimer {
     start: Instant,
     metadata: HashMap<String, String>,
     target_ms: Option<u64>,
+    /// Warning multiplier (default: 2.0, can be set from policy)
+    warning_multiplier: f64,
+    /// Whether logging is enabled (from policy)
+    enable_logging: bool,
+    /// Whether warnings are enabled (from policy)
+    enable_warnings: bool,
 }
 
 impl StageTimer {
@@ -75,6 +115,24 @@ impl StageTimer {
             start: Instant::now(),
             metadata: HashMap::new(),
             target_ms: None,
+            warning_multiplier: DEFAULT_WARNING_MULTIPLIER,
+            enable_logging: true,
+            enable_warnings: true,
+        }
+    }
+
+    /// Create a StageTimer with policy configuration
+    ///
+    /// Uses the policy's warning multiplier and logging settings.
+    pub fn start_with_policy(name: &str, policy: &MetricsPolicy) -> Self {
+        Self {
+            name: name.to_string(),
+            start: Instant::now(),
+            metadata: HashMap::new(),
+            target_ms: None,
+            warning_multiplier: policy.warning_multiplier,
+            enable_logging: policy.enable_logging,
+            enable_warnings: policy.enable_warnings,
         }
     }
 
@@ -143,22 +201,28 @@ impl Drop for StageTimer {
     fn drop(&mut self) {
         let elapsed_ms = self.start.elapsed().as_millis() as u64;
 
-        // Check if we exceeded the target (if set)
+        // Check if we exceeded the target (if set) and warnings are enabled
         if let Some(target_ms) = self.target_ms {
-            if elapsed_ms > target_ms * 2 {
+            let threshold_ms = (target_ms as f64 * self.warning_multiplier) as u64;
+            if elapsed_ms > threshold_ms && self.enable_warnings {
                 tracing::warn!(
                     stage = %self.name,
                     actual_ms = %elapsed_ms,
                     target_ms = %target_ms,
+                    threshold_ms = %threshold_ms,
                     ratio = %(elapsed_ms as f64 / target_ms as f64),
                     metadata = ?self.metadata,
-                    "Slow operation detected (>2x target)"
+                    "Slow operation detected (exceeds threshold)"
                 );
                 return;
             }
         }
 
-        // Normal timing log (debug level)
+        // Normal timing log (debug level) if logging is enabled
+        if !self.enable_logging {
+            return;
+        }
+
         if self.metadata.is_empty() {
             tracing::debug!(
                 stage = %self.name,
@@ -216,6 +280,9 @@ mod tests {
         assert_eq!(timer.name, "test_stage");
         assert!(timer.metadata.is_empty());
         assert!(timer.target_ms.is_none());
+        assert_eq!(timer.warning_multiplier, DEFAULT_WARNING_MULTIPLIER);
+        assert!(timer.enable_logging);
+        assert!(timer.enable_warnings);
     }
 
     #[test]

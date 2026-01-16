@@ -91,6 +91,10 @@ pub struct Config {
     /// Cowork task orchestration configuration
     #[serde(default)]
     pub cowork: CoworkConfigToml,
+    /// Policies configuration (mechanism-policy separation)
+    /// Contains configurable behavioral parameters extracted from mechanism code
+    #[serde(default)]
+    pub policies: PoliciesConfig,
 }
 
 // =============================================================================
@@ -172,6 +176,7 @@ impl Default for Config {
             smart_matching: SmartMatchingConfig::default(),
             dispatcher: DispatcherConfigToml::default(),
             cowork: CoworkConfigToml::default(),
+            policies: PoliciesConfig::default(),
         }
     }
 }

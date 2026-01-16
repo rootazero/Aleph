@@ -2,39 +2,45 @@
 ///
 /// This module provides utilities for retrying failed requests with
 /// exponential backoff strategy.
+use crate::config::RetryPolicy;
 use crate::error::{AetherError, Result};
 use std::future::Future;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-/// Maximum number of retry attempts
+/// Maximum number of retry attempts (default, used when no policy provided)
 const MAX_RETRIES: u32 = 3;
 
-/// Initial backoff duration (1 second)
+/// Initial backoff duration (1 second) (default, used when no policy provided)
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 
-/// Determines if an error is retryable
+/// Determines if an error is retryable using default policy.
+fn is_retryable(error: &AetherError) -> bool {
+    let default_policy = RetryPolicy::default();
+    is_retryable_with_policy(error, &default_policy)
+}
+
+/// Determines if an error is retryable using provided policy.
 ///
 /// Retryable errors:
-/// - Network errors
-/// - Server errors (5xx)
-/// - Timeout errors
+/// - Network errors (if retry_on_network_error is true)
+/// - Timeout errors (if retry_on_timeout is true)
+/// - Server errors (matching status codes in policy)
 ///
 /// Non-retryable errors:
 /// - Authentication errors (401)
 /// - Rate limit errors (429)
 /// - Invalid configuration
-/// - Provider-specific errors
-fn is_retryable(error: &AetherError) -> bool {
+/// - Provider-specific errors not matching policy
+fn is_retryable_with_policy(error: &AetherError, policy: &RetryPolicy) -> bool {
     match error {
-        AetherError::NetworkError { .. } => true,
-        AetherError::Timeout { .. } => true,
+        AetherError::NetworkError { .. } => policy.retry_on_network_error,
+        AetherError::Timeout { .. } => policy.retry_on_timeout,
         AetherError::ProviderError { message, .. } => {
-            // Retry on server errors (5xx)
-            message.contains("500")
-                || message.contains("502")
-                || message.contains("503")
-                || message.contains("504")
+            // Check if message contains any retryable status code
+            policy.retryable_status_codes.iter().any(|code| {
+                message.contains(&code.to_string())
+            })
         }
         // Don't retry these errors
         AetherError::AuthenticationError { .. } => false,
@@ -119,6 +125,81 @@ where
                     error = ?error,
                     backoff_ms = backoff.as_millis(),
                     "Attempt failed, retrying with backoff"
+                );
+
+                // Wait before retrying
+                tokio::time::sleep(backoff).await;
+
+                last_error = Some(error);
+            }
+        }
+    }
+}
+
+/// Retry a future with exponential backoff using policy configuration.
+///
+/// This version uses the provided `RetryPolicy` for all retry behavior,
+/// including max retries, backoff timing, and error classification.
+///
+/// # Arguments
+/// * `operation` - The async operation to retry
+/// * `policy` - The retry policy configuration
+///
+/// # Returns
+/// * `Ok(T)` - If operation succeeds
+/// * `Err(AetherError)` - If all retry attempts fail
+pub async fn retry_with_policy<F, Fut, T>(mut operation: F, policy: &RetryPolicy) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    let max_retries = policy.max_retries;
+    let initial_backoff = Duration::from_millis(policy.initial_backoff_ms);
+    let multiplier = policy.backoff_multiplier;
+
+    let mut attempt = 0;
+    let mut last_error = None;
+
+    loop {
+        attempt += 1;
+
+        match operation().await {
+            Ok(result) => {
+                if attempt > 1 {
+                    info!(attempts = attempt, "Operation succeeded after retry");
+                }
+                return Ok(result);
+            }
+            Err(error) => {
+                // Check if we should retry using policy
+                if !is_retryable_with_policy(&error, policy) {
+                    debug!(
+                        error = ?error,
+                        "Error is not retryable per policy, failing immediately"
+                    );
+                    return Err(error);
+                }
+
+                // Check if we've exhausted retries
+                if attempt >= max_retries {
+                    warn!(
+                        max_retries,
+                        attempt,
+                        error = ?error,
+                        "Max retries exceeded per policy, giving up"
+                    );
+                    return Err(last_error.unwrap_or(error));
+                }
+
+                // Calculate backoff duration using policy multiplier
+                let backoff_secs = initial_backoff.as_secs_f64() * multiplier.powi(attempt as i32 - 1);
+                let backoff = Duration::from_secs_f64(backoff_secs);
+
+                warn!(
+                    attempt,
+                    error = ?error,
+                    backoff_ms = backoff.as_millis(),
+                    "Attempt failed, retrying with policy-based backoff"
                 );
 
                 // Wait before retrying

@@ -5,6 +5,7 @@
 //! - Accumulated conversation turns
 //! - Background schedule interval
 
+use crate::config::CompressionPolicy;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -43,6 +44,17 @@ impl Default for SchedulerConfig {
             idle_timeout_seconds: 300,
             turn_threshold: 20,
             background_interval_seconds: 3600,
+        }
+    }
+}
+
+impl SchedulerConfig {
+    /// Create a SchedulerConfig from policy configuration
+    pub fn from_policy(policy: &CompressionPolicy) -> Self {
+        Self {
+            idle_timeout_seconds: policy.idle_timeout_seconds,
+            turn_threshold: policy.turn_threshold,
+            background_interval_seconds: policy.background_interval_seconds,
         }
     }
 }

@@ -16,6 +16,7 @@
 //! [5] Return selected memories for prompt augmentation
 //! ```
 
+use crate::config::AiRetrievalPolicy;
 use crate::error::{AetherError, Result};
 use crate::memory::context::MemoryEntry;
 use crate::providers::AiProvider;
@@ -83,16 +84,25 @@ pub struct AiMemoryRetriever {
     max_candidates: u32,
     /// Fallback count if AI selection fails
     fallback_count: u32,
+    /// Content truncation length for candidates
+    content_truncate_length: usize,
 }
 
 impl AiMemoryRetriever {
-    /// Create a new AI memory retriever.
+    /// Create a new AI memory retriever with default settings.
     pub fn new(provider: Arc<dyn AiProvider>) -> Self {
+        let default_policy = AiRetrievalPolicy::default();
+        Self::with_policy(provider, &default_policy)
+    }
+
+    /// Create a new AI memory retriever with policy configuration.
+    pub fn with_policy(provider: Arc<dyn AiProvider>, policy: &AiRetrievalPolicy) -> Self {
         Self {
             provider,
-            timeout: Duration::from_millis(3000),
-            max_candidates: 20,
-            fallback_count: 3,
+            timeout: policy.timeout_duration(),
+            max_candidates: policy.max_candidates,
+            fallback_count: policy.fallback_count,
+            content_truncate_length: policy.content_truncate_length,
         }
     }
 
@@ -112,6 +122,24 @@ impl AiMemoryRetriever {
     pub fn with_fallback_count(mut self, fallback_count: u32) -> Self {
         self.fallback_count = fallback_count;
         self
+    }
+
+    /// Set content truncation length.
+    pub fn with_content_truncate_length(mut self, length: usize) -> Self {
+        self.content_truncate_length = length;
+        self
+    }
+
+    /// Convert a MemoryEntry to MemoryCandidate with configurable truncation.
+    fn entry_to_candidate(&self, entry: &MemoryEntry) -> MemoryCandidate {
+        MemoryCandidate {
+            id: entry.id.clone(),
+            user_input: entry.user_input.clone(),
+            // Truncate AI output using configured length
+            ai_output: entry.ai_output.chars().take(self.content_truncate_length).collect(),
+            timestamp: entry.context.timestamp,
+            app_bundle_id: entry.context.app_bundle_id.clone(),
+        }
     }
 
     /// Select relevant memories using AI.
@@ -141,9 +169,9 @@ impl AiMemoryRetriever {
             .take(self.max_candidates as usize)
             .collect();
 
-        // Convert to candidate format for AI
+        // Convert to candidate format for AI (using configurable truncation)
         let ai_candidates: Vec<MemoryCandidate> =
-            limited_candidates.iter().map(MemoryCandidate::from).collect();
+            limited_candidates.iter().map(|e| self.entry_to_candidate(e)).collect();
 
         let request = AiMemoryRequest {
             query: query.to_string(),

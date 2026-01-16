@@ -2,6 +2,7 @@
 //!
 //! Implements rig's Tool trait for AI agent integration.
 
+use crate::config::WebFetchPolicy;
 use reqwest::Client;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
@@ -34,6 +35,12 @@ pub struct WebFetchResult {
 /// Web fetch tool for retrieving and extracting content from web pages
 pub struct WebFetchTool {
     client: Client,
+    /// Maximum content length in characters (from policy)
+    max_content_length: usize,
+    /// Minimum content length to accept a selector match (from policy)
+    min_content_length: usize,
+    /// User agent string (from policy)
+    user_agent: String,
 }
 
 impl WebFetchTool {
@@ -44,26 +51,46 @@ impl WebFetchTool {
     pub const DESCRIPTION: &'static str =
         "Fetch and extract text content from a web page URL.";
 
-    /// Maximum content length in characters
-    const MAX_CONTENT_LENGTH: usize = 10000;
+    /// Default maximum content length (used when no policy provided)
+    const DEFAULT_MAX_CONTENT_LENGTH: usize = 10000;
 
-    /// Minimum content length to accept a selector match
-    const MIN_CONTENT_LENGTH: usize = 100;
+    /// Default minimum content length (used when no policy provided)
+    const DEFAULT_MIN_CONTENT_LENGTH: usize = 100;
 
-    /// User agent string
-    const USER_AGENT: &'static str = "Aether/1.0";
+    /// Default user agent string (used when no policy provided)
+    const DEFAULT_USER_AGENT: &'static str = "Aether/1.0";
 
-    /// Request timeout in seconds
-    const TIMEOUT_SECS: u64 = 30;
+    /// Default request timeout in seconds (used when no policy provided)
+    const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
-    /// Create a new WebFetchTool with configured HTTP client
+    /// Create a new WebFetchTool with default settings
     pub fn new() -> Self {
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(Self::TIMEOUT_SECS))
+            .timeout(std::time::Duration::from_secs(Self::DEFAULT_TIMEOUT_SECS))
             .build()
             .unwrap_or_else(|_| Client::new());
 
-        Self { client }
+        Self {
+            client,
+            max_content_length: Self::DEFAULT_MAX_CONTENT_LENGTH,
+            min_content_length: Self::DEFAULT_MIN_CONTENT_LENGTH,
+            user_agent: Self::DEFAULT_USER_AGENT.to_string(),
+        }
+    }
+
+    /// Create a new WebFetchTool with policy configuration
+    pub fn with_policy(policy: &WebFetchPolicy) -> Self {
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(policy.timeout_seconds))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+
+        Self {
+            client,
+            max_content_length: policy.max_content_length,
+            min_content_length: policy.min_content_length,
+            user_agent: policy.user_agent.clone(),
+        }
     }
 
     /// Fetch and extract content from a URL
@@ -82,7 +109,7 @@ impl WebFetchTool {
         let response = self
             .client
             .get(&args.url)
-            .header("User-Agent", Self::USER_AGENT)
+            .header("User-Agent", &self.user_agent)
             .send()
             .await
             .map_err(|e| ToolError::Network(format!("Failed to fetch URL: {}", e)))?;
@@ -152,7 +179,7 @@ impl WebFetchTool {
                     .map(|el| self.clean_text(&el.text().collect::<String>()))
                     .unwrap_or_default();
 
-                if content.len() > Self::MIN_CONTENT_LENGTH {
+                if content.len() > self.min_content_length {
                     debug!(
                         "Using selector '{}' with {} chars",
                         selector_str,
@@ -183,11 +210,11 @@ impl WebFetchTool {
 
     /// Truncate content to maximum length
     fn truncate_content(&self, content: String) -> String {
-        if content.len() <= Self::MAX_CONTENT_LENGTH {
+        if content.len() <= self.max_content_length {
             content
         } else {
             // Truncate at character boundary
-            let truncated: String = content.chars().take(Self::MAX_CONTENT_LENGTH).collect();
+            let truncated: String = content.chars().take(self.max_content_length).collect();
             format!("{}...", truncated)
         }
     }
@@ -201,7 +228,19 @@ impl Default for WebFetchTool {
 
 impl Clone for WebFetchTool {
     fn clone(&self) -> Self {
-        Self::new()
+        // Rebuild client with same settings is tricky, use default timeout for now
+        // The policy values are preserved
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(Self::DEFAULT_TIMEOUT_SECS))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+
+        Self {
+            client,
+            max_content_length: self.max_content_length,
+            min_content_length: self.min_content_length,
+            user_agent: self.user_agent.clone(),
+        }
     }
 }
 
@@ -323,7 +362,7 @@ mod tests {
         // Long content should be truncated
         let long = "a".repeat(15000);
         let truncated = tool.truncate_content(long);
-        assert!(truncated.len() <= WebFetchTool::MAX_CONTENT_LENGTH + 3); // +3 for "..."
+        assert!(truncated.len() <= WebFetchTool::DEFAULT_MAX_CONTENT_LENGTH + 3); // +3 for "..."
         assert!(truncated.ends_with("..."));
     }
 }

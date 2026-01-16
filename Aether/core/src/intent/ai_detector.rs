@@ -25,6 +25,7 @@
 //! // result.params["location"] == "Madrid"
 //! ```
 
+use crate::config::IntentDetectionPolicy;
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
 use serde::{Deserialize, Serialize};
@@ -67,15 +68,27 @@ pub struct AiIntentDetector {
     confidence_threshold: f64,
     /// Timeout for intent detection
     timeout: Duration,
+    /// Minimum input length for intent detection
+    min_input_length: usize,
+    /// Video URL patterns for quick detection
+    video_url_patterns: Vec<String>,
 }
 
 impl AiIntentDetector {
-    /// Create a new AI intent detector.
+    /// Create a new AI intent detector with default settings.
     pub fn new(provider: Arc<dyn AiProvider>) -> Self {
+        let default_policy = IntentDetectionPolicy::default();
+        Self::with_policy(provider, &default_policy)
+    }
+
+    /// Create a new AI intent detector with policy configuration.
+    pub fn with_policy(provider: Arc<dyn AiProvider>, policy: &IntentDetectionPolicy) -> Self {
         AiIntentDetector {
             provider,
-            confidence_threshold: 0.7,
-            timeout: Duration::from_millis(3000),
+            confidence_threshold: policy.confidence_threshold,
+            timeout: policy.timeout_duration(),
+            min_input_length: policy.min_input_length,
+            video_url_patterns: policy.video_url_patterns.clone(),
         }
     }
 
@@ -91,14 +104,26 @@ impl AiIntentDetector {
         self
     }
 
+    /// Set the minimum input length.
+    pub fn with_min_input_length(mut self, length: usize) -> Self {
+        self.min_input_length = length;
+        self
+    }
+
+    /// Set the video URL patterns.
+    pub fn with_video_url_patterns(mut self, patterns: Vec<String>) -> Self {
+        self.video_url_patterns = patterns;
+        self
+    }
+
     /// Detect intent from user input using AI.
     ///
     /// Returns `Ok(Some(result))` if intent was detected with sufficient confidence,
     /// `Ok(None)` if no specific intent was detected (general chat),
     /// `Err` if detection failed.
     pub async fn detect(&self, input: &str) -> Result<Option<AiIntentResult>> {
-        // Quick pre-check: skip very short inputs
-        if input.trim().len() < 3 {
+        // Quick pre-check: skip very short inputs (configurable via policy)
+        if input.trim().len() < self.min_input_length {
             return Ok(None);
         }
 
@@ -170,16 +195,10 @@ impl AiIntentDetector {
         }
     }
 
-    /// Check if input contains a video URL (YouTube, Bilibili).
+    /// Check if input contains a video URL (YouTube, Bilibili, etc.).
+    /// Uses configurable URL patterns from policy.
     fn contains_video_url(&self, input: &str) -> bool {
-        let patterns = [
-            "youtube.com/watch",
-            "youtu.be/",
-            "youtube.com/shorts",
-            "bilibili.com/video",
-            "b23.tv/",
-        ];
-        patterns.iter().any(|p| input.contains(p))
+        self.video_url_patterns.iter().any(|p| input.contains(p))
     }
 
     /// Extract URL from input.

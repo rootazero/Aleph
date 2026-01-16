@@ -378,6 +378,128 @@ default_model = "claude-sonnet"
 | `preferred_model` | String | `null` | Model profile ID to override automatic Model Router selection |
 | `context_format` | String | `"markdown"` | Context format: markdown, xml, json |
 
+### [policies]
+
+The `[policies]` section enables fine-tuning of system behavior without modifying code. All policy values have sensible defaults and can be partially overridden.
+
+#### [policies.tool_safety]
+
+Configure tool safety classification keywords.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `high_risk_keywords` | Array | `["delete", "remove", "drop", ...]` | Keywords indicating high-risk (irreversible) operations |
+| `low_risk_keywords` | Array | `["send", "notify", "post", ...]` | Keywords indicating low-risk operations |
+| `reversible_keywords` | Array | `["create", "copy", "update", ...]` | Keywords indicating reversible operations |
+| `readonly_keywords` | Array | `["search", "query", "read", ...]` | Keywords indicating read-only operations |
+| `builtin_fallback` | String | `"readonly"` | Default safety level for builtin tools |
+| `native_fallback` | String | `"reversible"` | Default safety level for native tools |
+| `mcp_fallback` | String | `"irreversible_low_risk"` | Default safety level for MCP tools |
+| `skill_fallback` | String | `"irreversible_low_risk"` | Default safety level for skills |
+| `custom_fallback` | String | `"irreversible_low_risk"` | Default safety level for custom tools |
+
+#### [policies.intent]
+
+Configure AI intent detection behavior.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `confidence_threshold` | Float | `0.7` | Minimum confidence to accept detected intent |
+| `timeout_ms` | Integer | `3000` | Timeout for intent detection requests |
+| `min_input_length` | Integer | `3` | Minimum input length for intent detection |
+| `video_url_patterns` | Array | `["youtube.com/watch", ...]` | URL patterns for video intent detection |
+
+#### [policies.memory]
+
+Configure memory subsystem behavior.
+
+**[policies.memory.compression]**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `idle_timeout_seconds` | Integer | `300` | Idle time before triggering compression |
+| `turn_threshold` | Integer | `20` | Conversation turns before compression |
+| `background_interval_seconds` | Integer | `3600` | Background compression interval |
+
+**[policies.memory.ai_retrieval]**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `timeout_ms` | Integer | `3000` | AI retrieval request timeout |
+| `max_candidates` | Integer | `20` | Max candidates for AI re-ranking |
+| `fallback_count` | Integer | `3` | Fallback count if AI re-ranking fails |
+| `content_truncate_length` | Integer | `500` | Max content length per entry |
+
+#### [policies.retry]
+
+Configure retry behavior for AI provider requests.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_retries` | Integer | `3` | Maximum retry attempts |
+| `initial_backoff_ms` | Integer | `1000` | Initial backoff duration |
+| `backoff_multiplier` | Float | `2.0` | Exponential backoff multiplier |
+| `retryable_status_codes` | Array | `[500, 502, 503, 504]` | HTTP status codes to retry |
+| `retry_on_timeout` | Boolean | `true` | Retry on timeout errors |
+| `retry_on_network_error` | Boolean | `true` | Retry on network errors |
+
+#### [policies.web_fetch]
+
+Configure web fetching behavior.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_content_length` | Integer | `10000` | Max extracted content length |
+| `min_content_length` | Integer | `100` | Min content to accept selector match |
+| `user_agent` | String | `"Aether/1.0"` | User agent string |
+| `timeout_seconds` | Integer | `30` | Request timeout |
+
+#### [policies.text]
+
+Configure text formatting behavior.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `default_truncate_length` | Integer | `200` | Default text truncation length |
+| `search_snippet_length` | Integer | `300` | Search result snippet length |
+| `mcp_result_length` | Integer | `2000` | MCP tool result truncation length |
+
+#### [policies.metrics]
+
+Configure performance monitoring.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `target_hotkey_to_clipboard_ms` | Integer | `50` | Target: hotkey to clipboard |
+| `target_clipboard_to_memory_ms` | Integer | `100` | Target: clipboard to memory |
+| `target_memory_to_ai_ms` | Integer | `500` | Target: memory to AI request |
+| `target_ai_to_paste_ms` | Integer | `50` | Target: AI response to paste |
+| `target_paste_to_complete_ms` | Integer | `100` | Target: paste to completion |
+| `warning_multiplier` | Float | `2.0` | Multiplier for warning threshold |
+| `enable_logging` | Boolean | `true` | Enable performance logging |
+| `enable_warnings` | Boolean | `true` | Enable performance warnings |
+
+**Example Policies Configuration**:
+
+```toml
+[policies.intent]
+confidence_threshold = 0.75
+timeout_ms = 2500
+
+[policies.memory.compression]
+idle_timeout_seconds = 180
+turn_threshold = 15
+
+[policies.retry]
+max_retries = 5
+initial_backoff_ms = 500
+
+[policies.metrics]
+warning_multiplier = 1.5
+```
+
+---
+
 **Model Router Integration**:
 
 When `preferred_model` is set, it overrides the Model Router's automatic model selection based on `intent_type`. This is useful for:
