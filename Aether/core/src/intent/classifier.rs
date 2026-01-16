@@ -50,6 +50,44 @@ static PATH_PATTERN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"['"]?([/~][A-Za-z0-9_./-]+|[A-Za-z]:\\[A-Za-z0-9_.\\/]+)['"]?"#).unwrap()
 });
 
+/// Keyword sets for L2 classification
+struct KeywordSet {
+    verbs: &'static [&'static str],
+    nouns: &'static [&'static str],
+    category: TaskCategory,
+}
+
+/// Static keyword sets for L2 matching
+static KEYWORD_SETS: &[KeywordSet] = &[
+    KeywordSet {
+        verbs: &["整理", "归类", "分类", "分", "organize", "sort", "classify"],
+        nouns: &[
+            "文件", "文件夹", "目录", "下载", "files", "folder", "directory", "downloads",
+        ],
+        category: TaskCategory::FileOrganize,
+    },
+    KeywordSet {
+        verbs: &["移动", "复制", "拷贝", "转移", "move", "copy", "transfer"],
+        nouns: &["文件", "文件夹", "到", "files", "folder", "to"],
+        category: TaskCategory::FileTransfer,
+    },
+    KeywordSet {
+        verbs: &["删除", "清理", "清空", "移除", "delete", "remove", "clean", "clear"],
+        nouns: &["文件", "缓存", "垃圾", "files", "cache", "trash"],
+        category: TaskCategory::FileCleanup,
+    },
+    KeywordSet {
+        verbs: &["运行", "执行", "跑", "run", "execute"],
+        nouns: &["脚本", "代码", "程序", "script", "code", "program"],
+        category: TaskCategory::CodeExecution,
+    },
+    KeywordSet {
+        verbs: &["生成", "创建", "导出", "写", "generate", "create", "export", "write"],
+        nouns: &["文档", "报告", "document", "report", "pdf"],
+        category: TaskCategory::DocumentGenerate,
+    },
+];
+
 /// Result of intent classification
 #[derive(Debug, Clone)]
 pub enum ExecutionIntent {
@@ -128,6 +166,27 @@ impl IntentClassifier {
     /// Extract file path from input
     fn extract_path(&self, input: &str) -> Option<String> {
         PATH_PATTERN.captures(input).map(|c| c[1].to_string())
+    }
+
+    /// L2: Keyword + rule matching (<20ms)
+    pub fn match_keywords(&self, input: &str) -> Option<ExecutableTask> {
+        let input_lower = input.to_lowercase();
+
+        for set in KEYWORD_SETS {
+            let has_verb = set.verbs.iter().any(|v| input_lower.contains(v));
+            let has_noun = set.nouns.iter().any(|n| input_lower.contains(n));
+
+            if has_verb && has_noun {
+                let target = self.extract_path(input);
+                return Some(ExecutableTask {
+                    category: set.category,
+                    action: input.to_string(),
+                    target,
+                    confidence: 0.85, // Keyword match = good confidence
+                });
+            }
+        }
+        None
     }
 }
 
@@ -222,6 +281,42 @@ mod tests {
     fn test_l1_regex_english() {
         let classifier = IntentClassifier::new();
         let result = classifier.match_regex("organize files in this folder");
+        assert!(result.is_some());
+        let task = result.unwrap();
+        assert_eq!(task.category, TaskCategory::FileOrganize);
+    }
+
+    #[test]
+    fn test_l2_keywords_file_organize() {
+        let classifier = IntentClassifier::new();
+        // This input doesn't match L1 regex exactly but has keywords
+        let result = classifier.match_keywords("能不能帮忙把下载里的东西按类型分一下");
+        assert!(result.is_some());
+        let task = result.unwrap();
+        assert_eq!(task.category, TaskCategory::FileOrganize);
+        assert!(task.confidence < 1.0); // Lower confidence than regex
+    }
+
+    #[test]
+    fn test_l2_keywords_file_cleanup() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.match_keywords("帮我清理一下缓存");
+        assert!(result.is_some());
+        let task = result.unwrap();
+        assert_eq!(task.category, TaskCategory::FileCleanup);
+    }
+
+    #[test]
+    fn test_l2_keywords_no_match() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.match_keywords("你好，请问你是谁");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_l2_keywords_english() {
+        let classifier = IntentClassifier::new();
+        let result = classifier.match_keywords("can you sort my folder contents");
         assert!(result.is_some());
         let task = result.unwrap();
         assert_eq!(task.category, TaskCategory::FileOrganize);
