@@ -4,7 +4,7 @@
 
 use super::{AetherCore, AetherFfiError};
 use crate::agent::RigAgentManager;
-use crate::intent::{ExecutionIntent, IntentClassifier};
+use crate::intent::{AgentModePrompt, ExecutionIntent, IntentClassifier};
 use crate::memory::{ContextAnchor, EmbeddingModel, MemoryIngestion, VectorDatabase};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -125,7 +125,8 @@ impl AetherCore {
             debug!(intent = ?intent, "Intent classification result");
 
             // Notify UI if executable task detected (agent mode)
-            if let ExecutionIntent::Executable(ref task) = intent {
+            // Also inject agent mode prompt to guide AI behavior
+            let processed_input = if let ExecutionIntent::Executable(ref task) = intent {
                 info!(
                     category = ?task.category,
                     action = %task.action,
@@ -133,7 +134,13 @@ impl AetherCore {
                     "Agent execution mode detected"
                 );
                 handler.on_agent_mode_detected(task.into());
-            }
+
+                // Inject agent mode prompt to guide AI into execution mode
+                let agent_prompt = AgentModePrompt::new().generate();
+                format!("{}\n\n---\n\n用户请求: {}", agent_prompt, input)
+            } else {
+                input.clone()
+            };
 
             // Create manager with shared ToolServerHandle (all tools persist across calls)
             let manager = RigAgentManager::with_shared_handle(config, tool_server_handle, registered_tools);
@@ -148,7 +155,7 @@ impl AetherCore {
                     }
 
                     // Process the request with multimodal support
-                    result = manager.process_with_attachments(&input, attachments.as_deref()) => {
+                    result = manager.process_with_attachments(&processed_input, attachments.as_deref()) => {
                         result
                     }
                 }
