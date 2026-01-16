@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 /// # Example
 ///
 /// ```rust
-/// use aethecore::cowork::model_router::TaskIntent;
+/// use aethecore::cowork::model_router::{TaskIntent, Capability};
 ///
 /// let intent = TaskIntent::from_string("code_generation");
 /// assert_eq!(intent.required_capability(), Some(Capability::CodeGeneration));
