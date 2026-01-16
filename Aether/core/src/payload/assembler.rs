@@ -1103,10 +1103,10 @@ mod tests {
         // Should contain base prompt
         assert!(prompt.contains("Base prompt."));
 
-        // Should contain agent mode prompt
+        // Should contain agent mode prompt (simplified version - rig-core handles tool definitions)
         assert!(prompt.contains("Agent执行模式"));
-        assert!(prompt.contains("禁止询问选项"));
-        assert!(prompt.contains("__agent_plan__"));
+        assert!(prompt.contains("使用工具来完成用户请求"));
+        assert!(prompt.contains("行为规则"));
     }
 
     #[test]

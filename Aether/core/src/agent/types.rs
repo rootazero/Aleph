@@ -32,7 +32,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             system_prompt: None,
-            max_turns: 10,
+            max_turns: 50, // Allows complex multi-step tasks
             turn_timeout_ms: 30_000,
             stop_on_error: false,
             include_tool_results: true,
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn test_agent_config_default() {
         let config = AgentConfig::default();
-        assert_eq!(config.max_turns, 10);
+        assert_eq!(config.max_turns, 50); // 50 turns for complex tasks
         assert_eq!(config.turn_timeout_ms, 30_000);
         assert!(!config.stop_on_error);
     }

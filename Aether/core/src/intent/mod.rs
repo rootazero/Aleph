@@ -32,7 +32,7 @@ pub mod parameters;
 pub mod presets;
 pub mod task_category;
 
-pub use agent_prompt::AgentModePrompt;
+pub use agent_prompt::{AgentModePrompt, ToolDescription};
 pub use ai_detector::{AiIntentDetector, AiIntentResult};
 pub use classifier::{ExecutableTask, ExecutionIntent, IntentClassifier};
 pub use defaults::DefaultsResolver;

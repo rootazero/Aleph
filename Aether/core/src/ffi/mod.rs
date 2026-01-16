@@ -22,7 +22,9 @@ mod tools;
 use crate::agent::{RigAgentConfig, RigAgentManager};
 use crate::config::Config;
 use crate::memory::MemoryEntry;
+use rig::completion::Message;
 use rig::tool::server::ToolServerHandle;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -188,6 +190,8 @@ pub struct AetherCore {
     pub(crate) registered_tools: Arc<RwLock<Vec<String>>>,
     /// Cowork engine for task orchestration (lazily initialized)
     pub(crate) cowork_engine: Arc<RwLock<Option<Arc<crate::cowork::CoworkEngine>>>>,
+    /// Conversation histories keyed by topic_id for multi-turn support
+    pub(crate) conversation_histories: Arc<RwLock<HashMap<String, Vec<Message>>>>,
 }
 
 impl AetherCore {
@@ -294,7 +298,7 @@ pub fn init_core(
         model,
         temperature: temperature.unwrap_or(0.7),
         max_tokens: max_tokens.unwrap_or(4096),
-        max_turns: 10, // Default to 10 turns for tool calling loop
+        max_turns: 50, // Default to 50 turns for complex multi-step tasks
         system_prompt: system_prompt.unwrap_or_else(|| "You are Aether, an intelligent assistant.".to_string()),
         api_key,
         base_url,
@@ -367,5 +371,6 @@ pub fn init_core(
         tool_server_handle,
         registered_tools,
         cowork_engine: Arc::new(RwLock::new(None)),  // Lazily initialized
+        conversation_histories: Arc::new(RwLock::new(HashMap::new())),  // Multi-turn support
     }))
 }

@@ -4,7 +4,7 @@
 
 use super::{AetherCore, AetherFfiError};
 use crate::agent::RigAgentManager;
-use crate::intent::{AgentModePrompt, ExecutionIntent, IntentClassifier};
+use crate::intent::{AgentModePrompt, ExecutionIntent, IntentClassifier, ToolDescription};
 use crate::memory::{ContextAnchor, EmbeddingModel, MemoryIngestion, VectorDatabase};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -82,8 +82,8 @@ impl AetherCore {
         options: Option<ProcessOptions>,
     ) -> Result<(), AetherFfiError> {
         let options = options.unwrap_or_default();
-        // Extract attachments for multimodal support
-        let attachments = options.attachments.clone();
+        // Extract attachments for multimodal support (currently unused with history-based processing)
+        let _attachments = options.attachments.clone();
         // Extract context for memory storage
         let app_context = options.app_context.clone();
         let window_title = options.window_title.clone();
@@ -104,6 +104,9 @@ impl AetherCore {
         };
         let memory_path = self.memory_path.clone();
         let input_for_memory = input.clone();
+
+        // Clone conversation histories for multi-turn support
+        let conversation_histories = Arc::clone(&self.conversation_histories);
 
         // Create a fresh token for this operation
         // This resets cancellation state, allowing new operations after previous cancellations
@@ -132,10 +135,13 @@ impl AetherCore {
                 (false, input.clone())
             };
 
+            // Get tool descriptions for agent prompt
+            let tool_descriptions = get_builtin_tool_descriptions();
+
             // Determine agent mode: explicit command OR automatic classification
             let processed_input = if is_explicit_agent {
-                // Explicit /agent command - always inject agent prompt
-                let agent_prompt = AgentModePrompt::new().generate();
+                // Explicit /agent command - always inject agent prompt with tools
+                let agent_prompt = AgentModePrompt::with_tools(tool_descriptions).generate();
 
                 // Create a synthetic ExecutableTask for UI notification
                 let task = crate::intent::ExecutableTask {
@@ -162,8 +168,8 @@ impl AetherCore {
                     );
                     handler.on_agent_mode_detected(task.into());
 
-                    // Inject agent mode prompt to guide AI into execution mode
-                    let agent_prompt = AgentModePrompt::new().generate();
+                    // Inject agent mode prompt with tools to guide AI into execution mode
+                    let agent_prompt = AgentModePrompt::with_tools(tool_descriptions).generate();
                     format!("{}\n\n---\n\n用户请求: {}", agent_prompt, task_input)
                 } else {
                     task_input.clone()
@@ -172,6 +178,14 @@ impl AetherCore {
 
             // Create manager with shared ToolServerHandle (all tools persist across calls)
             let manager = RigAgentManager::with_shared_handle(config, tool_server_handle, registered_tools);
+
+            // Get or create conversation history for this topic
+            let topic_key = topic_id.clone().unwrap_or_else(|| "single-turn".to_string());
+            let mut history = {
+                let histories = conversation_histories.read().unwrap();
+                histories.get(&topic_key).cloned().unwrap_or_default()
+            };
+            let history_len_before = history.len();
 
             let result = runtime.block_on(async {
                 tokio::select! {
@@ -182,12 +196,20 @@ impl AetherCore {
                         Err(crate::error::AetherError::cancelled())
                     }
 
-                    // Process the request with multimodal support
-                    result = manager.process_with_attachments(&processed_input, attachments.as_deref()) => {
+                    // Process with conversation history for multi-turn support
+                    result = manager.process_with_history(&processed_input, &mut history) => {
                         result
                     }
                 }
             });
+
+            // Update conversation history after processing
+            // rig-core's with_history() mutates the history to add the current exchange
+            if history.len() > history_len_before {
+                let mut histories = conversation_histories.write().unwrap();
+                histories.insert(topic_key.clone(), history);
+                debug!(topic_id = %topic_key, "Conversation history updated");
+            }
 
             match result {
                 Ok(response) => {
@@ -414,4 +436,28 @@ pub(crate) async fn store_memory_after_response(
 
     // Store memory
     ingestion.store_memory(context, user_input, ai_output).await
+}
+
+/// Get descriptions for built-in tools
+///
+/// Returns tool descriptions for the agent prompt so AI knows what tools are available.
+fn get_builtin_tool_descriptions() -> Vec<ToolDescription> {
+    vec![
+        ToolDescription::new(
+            "file_ops",
+            "文件系统操作 - 支持 list(列出目录)、read、write、move、copy、delete、mkdir、search、**organize**(一键按类型整理到 Images/Documents/Videos/Audio/Archives/Code/Others)、**batch_move**(批量移动匹配文件)"
+        ),
+        ToolDescription::new(
+            "search",
+            "网络搜索 - 搜索互联网获取最新信息"
+        ),
+        ToolDescription::new(
+            "web_fetch",
+            "获取网页内容 - 读取指定URL的网页内容"
+        ),
+        ToolDescription::new(
+            "youtube",
+            "YouTube视频信息 - 获取YouTube视频的标题、描述、字幕等信息"
+        ),
+    ]
 }

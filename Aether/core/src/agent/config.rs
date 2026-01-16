@@ -38,7 +38,7 @@ fn default_max_tokens() -> u32 {
 }
 
 fn default_max_turns() -> usize {
-    10
+    50 // Allows complex multi-step tasks like file organization
 }
 
 impl Default for RigAgentConfig {

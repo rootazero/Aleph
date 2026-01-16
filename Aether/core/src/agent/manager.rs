@@ -13,7 +13,7 @@
 use super::config::RigAgentConfig;
 use crate::core::MediaAttachment;
 use crate::error::{AetherError, Result};
-use crate::rig_tools::{SearchTool, WebFetchTool, YouTubeTool};
+use crate::rig_tools::{FileOpsTool, SearchTool, WebFetchTool, YouTubeTool};
 use rig::client::CompletionClient;
 use rig::completion::message::{DocumentSourceKind, Image, ImageMediaType, Text, UserContent};
 use rig::completion::{Message, Prompt};
@@ -66,7 +66,7 @@ pub struct RigAgentManager {
 }
 
 /// Built-in tool names
-const BUILTIN_TOOLS: &[&str] = &["search", "web_fetch", "youtube"];
+const BUILTIN_TOOLS: &[&str] = &["search", "web_fetch", "youtube", "file_ops"];
 
 /// Create a tool server with built-in tools
 fn create_builtin_tool_server() -> ToolServer {
@@ -74,6 +74,7 @@ fn create_builtin_tool_server() -> ToolServer {
         .tool(SearchTool::new())
         .tool(WebFetchTool::new())
         .tool(YouTubeTool::new())
+        .tool(FileOpsTool::new())
 }
 
 /// Create initial registered tools list
@@ -277,9 +278,13 @@ impl RigAgentManager {
             }
             _ => {
                 // For unknown providers, use OpenAI-compatible client with custom base_url
+                // Use completions_api() for legacy /chat/completions endpoint
+                // (most OpenAI-compatible proxies don't support the new /responses endpoint)
                 let client = self.create_custom_client()?;
                 let agent = client
-                    .agent(&self.config.model)
+                    .completion_model(&self.config.model)
+                    .completions_api()
+                    .into_agent_builder()
                     .preamble(&self.config.system_prompt)
                     .temperature(self.config.temperature as f64)
                     .max_tokens(self.config.max_tokens as u64)
@@ -294,6 +299,93 @@ impl RigAgentManager {
         };
 
         info!(response_len = response.len(), "Response received");
+        Ok(AgentResponse::simple(response))
+    }
+
+    /// Process an input with conversation history
+    ///
+    /// Uses rig-core's `.chat()` or `.with_history()` to maintain multi-turn conversation.
+    /// The history is passed in and the response is returned for the caller to store.
+    ///
+    /// # Arguments
+    /// * `input` - Current user input
+    /// * `history` - Previous conversation messages (will be mutated to add current exchange)
+    ///
+    /// # Returns
+    /// * `Ok(AgentResponse)` - Response with the assistant's message
+    pub async fn process_with_history(
+        &self,
+        input: &str,
+        history: &mut Vec<Message>,
+    ) -> Result<AgentResponse> {
+        info!(
+            input_len = input.len(),
+            history_len = history.len(),
+            "Processing input with history"
+        );
+        debug!(
+            provider = %self.config.provider,
+            model = %self.config.model,
+            "Using config with tool server and history"
+        );
+
+        // Build agent and process with history
+        let response = match self.config.provider.as_str() {
+            "openai" | "gpt" => {
+                let client = self.create_openai_client()?;
+                let agent = client
+                    .agent(&self.config.model)
+                    .preamble(&self.config.system_prompt)
+                    .temperature(self.config.temperature as f64)
+                    .max_tokens(self.config.max_tokens as u64)
+                    .tool_server_handle(self.tool_server_handle.clone())
+                    .build();
+                agent
+                    .prompt(input)
+                    .with_history(history)
+                    .multi_turn(self.config.max_turns)
+                    .await
+                    .map_err(|e| AetherError::provider(format!("OpenAI error: {}", e)))?
+            }
+            "anthropic" | "claude" => {
+                let client = self.create_anthropic_client()?;
+                let agent = client
+                    .agent(&self.config.model)
+                    .preamble(&self.config.system_prompt)
+                    .temperature(self.config.temperature as f64)
+                    .max_tokens(self.config.max_tokens as u64)
+                    .tool_server_handle(self.tool_server_handle.clone())
+                    .build();
+                agent
+                    .prompt(input)
+                    .with_history(history)
+                    .multi_turn(self.config.max_turns)
+                    .await
+                    .map_err(|e| AetherError::provider(format!("Anthropic error: {}", e)))?
+            }
+            _ => {
+                // For unknown providers, use OpenAI-compatible client with custom base_url
+                // Use completions_api() for legacy /chat/completions endpoint
+                let client = self.create_custom_client()?;
+                let agent = client
+                    .completion_model(&self.config.model)
+                    .completions_api()
+                    .into_agent_builder()
+                    .preamble(&self.config.system_prompt)
+                    .temperature(self.config.temperature as f64)
+                    .max_tokens(self.config.max_tokens as u64)
+                    .tool_server_handle(self.tool_server_handle.clone())
+                    .build();
+                agent
+                    .prompt(input)
+                    .with_history(history)
+                    .multi_turn(self.config.max_turns)
+                    .await
+                    .map_err(|e| AetherError::provider(format!("Provider error: {}", e)))?
+            }
+        };
+
+        info!(response_len = response.len(), "Response with history received");
         Ok(AgentResponse::simple(response))
     }
 
@@ -361,9 +453,12 @@ impl RigAgentManager {
             }
             _ => {
                 // For unknown providers, use OpenAI-compatible client with custom base_url
+                // Use completions_api() for legacy /chat/completions endpoint
                 let client = self.create_custom_client()?;
                 let agent = client
-                    .agent(&self.config.model)
+                    .completion_model(&self.config.model)
+                    .completions_api()
+                    .into_agent_builder()
                     .preamble(&self.config.system_prompt)
                     .temperature(self.config.temperature as f64)
                     .max_tokens(self.config.max_tokens as u64)

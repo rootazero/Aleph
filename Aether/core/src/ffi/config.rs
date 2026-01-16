@@ -64,7 +64,7 @@ impl AetherCore {
             model,
             temperature: temperature.unwrap_or(0.7),
             max_tokens: max_tokens.unwrap_or(4096),
-            max_turns: 10, // Default to 10 turns for tool calling loop
+            max_turns: 50, // Default to 50 turns for complex multi-step tasks
             system_prompt: system_prompt.unwrap_or_else(|| "You are Aether, an intelligent assistant.".to_string()),
             api_key,
             base_url,
