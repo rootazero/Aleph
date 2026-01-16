@@ -40,5 +40,5 @@ mod types;
 
 pub use config::RigAgentConfig;
 pub use conversation::{ChatMessage, ConversationHistory, MessageRole};
-pub use manager::{AgentResponse, RigAgentManager};
+pub use manager::{AgentResponse, BuiltinToolConfig, RigAgentManager};
 pub use types::{AgentConfig, AgentResult, ToolCallInfo, ToolCallResult};

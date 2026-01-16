@@ -19,7 +19,7 @@ mod processing;
 mod skills;
 mod tools;
 
-use crate::agent::{RigAgentConfig, RigAgentManager};
+use crate::agent::{BuiltinToolConfig, RigAgentConfig, RigAgentManager};
 use crate::config::Config;
 use crate::memory::MemoryEntry;
 use rig::completion::Message;
@@ -331,28 +331,36 @@ pub fn init_core(
     // Each operation will get a fresh token via reset_cancel_token()
     let current_op_token = Arc::new(RwLock::new(CancellationToken::new()));
 
-    // Set up search tool environment variables from config BEFORE creating ToolServer
-    // This bridges the config file settings to the rig tools which read from env vars
-    if let Some(ref search_config) = full_config.search {
+    // Extract search tool configuration from config file
+    let builtin_tool_config = if let Some(ref search_config) = full_config.search {
         if search_config.enabled {
-            // Set Tavily API key if configured
-            if let Some(tavily_backend) = search_config.backends.get("tavily") {
-                if let Some(ref api_key) = tavily_backend.api_key {
-                    if !api_key.is_empty() {
-                        std::env::set_var("TAVILY_API_KEY", api_key);
-                        info!("Set TAVILY_API_KEY from config file");
-                    }
-                }
+            // Get Tavily API key if configured
+            let tavily_api_key = search_config
+                .backends
+                .get("tavily")
+                .and_then(|backend| backend.api_key.clone())
+                .filter(|key| !key.is_empty());
+
+            if tavily_api_key.is_some() {
+                info!("Tavily API key found in config file");
             }
+
+            BuiltinToolConfig {
+                tavily_api_key,
+            }
+        } else {
+            BuiltinToolConfig::default()
         }
-    }
+    } else {
+        BuiltinToolConfig::default()
+    };
 
     // Create shared ToolServerHandle with built-in tools for hot-reload support
     // NOTE: ToolServer::run() requires a tokio runtime context (uses tokio::spawn)
     // We use runtime.enter() to set the current runtime context before creating the handle
     let (tool_server_handle, registered_tools) = {
         let _guard = runtime.enter();  // Enter runtime context for tokio::spawn
-        RigAgentManager::create_shared_handle()
+        RigAgentManager::create_shared_handle_with_config(builtin_tool_config)
     };
     info!(
         tools = ?registered_tools.read().unwrap(),

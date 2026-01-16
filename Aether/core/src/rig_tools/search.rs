@@ -84,6 +84,22 @@ impl SearchTool {
         }
     }
 
+    /// Create a new SearchTool instance with explicit API key
+    ///
+    /// Falls back to TAVILY_API_KEY environment variable if api_key is None
+    pub fn with_api_key(api_key: Option<String>) -> Self {
+        let resolved_key = api_key.or_else(|| env::var("TAVILY_API_KEY").ok());
+        if resolved_key.is_none() {
+            warn!("TAVILY_API_KEY not set (neither config nor env) - search tool will not function");
+        } else {
+            info!("SearchTool initialized with API key");
+        }
+        Self {
+            client: Client::new(),
+            api_key: resolved_key,
+        }
+    }
+
     /// Execute a web search using Tavily API
     ///
     /// # Arguments

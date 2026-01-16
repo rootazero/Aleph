@@ -68,10 +68,23 @@ pub struct RigAgentManager {
 /// Built-in tool names
 const BUILTIN_TOOLS: &[&str] = &["search", "web_fetch", "youtube", "file_ops"];
 
+/// Configuration for built-in tools
+#[derive(Debug, Clone, Default)]
+pub struct BuiltinToolConfig {
+    /// Tavily API key for search tool
+    pub tavily_api_key: Option<String>,
+}
+
 /// Create a tool server with built-in tools
-fn create_builtin_tool_server() -> ToolServer {
+fn create_builtin_tool_server(config: Option<&BuiltinToolConfig>) -> ToolServer {
+    let search_tool = if let Some(cfg) = config {
+        SearchTool::with_api_key(cfg.tavily_api_key.clone())
+    } else {
+        SearchTool::new()
+    };
+
     ToolServer::new()
-        .tool(SearchTool::new())
+        .tool(search_tool)
         .tool(WebFetchTool::new())
         .tool(YouTubeTool::new())
         .tool(FileOpsTool::new())
@@ -87,7 +100,21 @@ impl RigAgentManager {
     ///
     /// Built-in tools (search, web_fetch, youtube) are registered automatically.
     pub fn new(config: RigAgentConfig) -> Self {
-        let tool_server_handle = create_builtin_tool_server().run();
+        let tool_server_handle = create_builtin_tool_server(None).run();
+        let registered_tools = Arc::new(RwLock::new(create_builtin_tools_list()));
+
+        Self {
+            config,
+            tool_server_handle,
+            registered_tools,
+        }
+    }
+
+    /// Create a new RigAgentManager with built-in tools and custom tool configuration
+    ///
+    /// Built-in tools are configured with the provided BuiltinToolConfig.
+    pub fn new_with_tool_config(config: RigAgentConfig, tool_config: BuiltinToolConfig) -> Self {
+        let tool_server_handle = create_builtin_tool_server(Some(&tool_config)).run();
         let registered_tools = Arc::new(RwLock::new(create_builtin_tools_list()));
 
         Self {
@@ -125,7 +152,21 @@ impl RigAgentManager {
     /// Use this to create a shared handle that can be passed to multiple
     /// RigAgentManager instances via `with_shared_handle()`.
     pub fn create_shared_handle() -> (ToolServerHandle, Arc<RwLock<Vec<String>>>) {
-        let tool_server_handle = create_builtin_tool_server().run();
+        let tool_server_handle = create_builtin_tool_server(None).run();
+        let registered_tools = Arc::new(RwLock::new(create_builtin_tools_list()));
+        (tool_server_handle, registered_tools)
+    }
+
+    /// Create a shared ToolServerHandle with built-in tools and custom configuration
+    ///
+    /// This method creates a ToolServer with configured built-in tools and returns
+    /// the handle along with the list of registered tool names.
+    /// Use this to create a shared handle that can be passed to multiple
+    /// RigAgentManager instances via `with_shared_handle()`.
+    pub fn create_shared_handle_with_config(
+        tool_config: BuiltinToolConfig,
+    ) -> (ToolServerHandle, Arc<RwLock<Vec<String>>>) {
+        let tool_server_handle = create_builtin_tool_server(Some(&tool_config)).run();
         let registered_tools = Arc::new(RwLock::new(create_builtin_tools_list()));
         (tool_server_handle, registered_tools)
     }
