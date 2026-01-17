@@ -156,9 +156,9 @@ enum GenerationPresetProviders {
             name: "Google Veo",
             iconName: "film",
             color: "#4285F4",
-            providerType: "google",
+            providerType: "google_veo",
             supportedTypes: [.video],
-            defaultModel: "veo-3",
+            defaultModel: "veo-2.0-generate-001",
             description: "Google's Veo video generation",
             baseUrl: nil,
             category: .video

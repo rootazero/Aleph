@@ -9,6 +9,8 @@
 //! - `OpenAiTtsProvider` - OpenAI Text-to-Speech
 //! - `OpenAiCompatProvider` - Generic OpenAI-compatible API for third-party proxies
 //! - `StabilityImageProvider` - Stability AI (Stable Diffusion XL) image generation
+//! - `GoogleImagenProvider` - Google Imagen 3 image generation
+//! - `GoogleVeoProvider` - Google Veo 2/3 video generation
 //! - `ReplicateProvider` - Replicate API for Flux, SDXL, MusicGen, and more
 //! - `ElevenLabsProvider` - ElevenLabs high-quality Text-to-Speech
 //!
@@ -32,6 +34,7 @@
 
 pub mod elevenlabs;
 pub mod google_imagen;
+pub mod google_veo;
 pub mod openai_compat;
 pub mod openai_image;
 pub mod openai_tts;
@@ -40,6 +43,7 @@ pub mod stability;
 
 pub use elevenlabs::ElevenLabsProvider;
 pub use google_imagen::GoogleImagenProvider;
+pub use google_veo::GoogleVeoProvider;
 pub use openai_compat::{OpenAiCompatProvider, OpenAiCompatProviderBuilder};
 pub use openai_image::OpenAiImageProvider;
 pub use openai_tts::OpenAiTtsProvider;
@@ -68,6 +72,8 @@ use std::sync::Arc;
 /// - `"openai_tts"` or `"tts"` - OpenAI Text-to-Speech
 /// - `"openai_compat"` - Generic OpenAI-compatible API
 /// - `"stability"` or `"stability_image"` or `"sdxl"` - Stability AI image generation
+/// - `"google"` or `"google_imagen"` or `"imagen"` - Google Imagen image generation
+/// - `"google_veo"` or `"veo"` - Google Veo video generation
 /// - `"replicate"` - Replicate API for various models
 /// - `"elevenlabs"` - ElevenLabs Text-to-Speech
 ///
@@ -164,6 +170,11 @@ pub fn create_provider(
             config.base_url.clone(),
             config.model.clone(),
         )),
+        "google_veo" | "veo" => Arc::new(GoogleVeoProvider::new(
+            api_key,
+            config.base_url.clone(),
+            config.model.clone(),
+        )),
         "replicate" => {
             let mut builder = ReplicateProvider::builder(&api_key);
 
@@ -192,7 +203,7 @@ pub fn create_provider(
         other => {
             return Err(GenerationError::invalid_parameters(
                 format!(
-                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, replicate, elevenlabs",
+                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs",
                     other
                 ),
                 Some("provider_type".to_string()),
@@ -608,5 +619,97 @@ mod tests {
         let provider = create_provider("elevenlabs", &config).unwrap();
 
         assert_eq!(provider.name(), "elevenlabs");
+    }
+
+    // === Google Imagen provider tests ===
+
+    #[test]
+    fn test_create_google_imagen_provider() {
+        let config = GenerationProviderConfig {
+            provider_type: "google_imagen".to_string(),
+            api_key: Some("google-api-key".to_string()),
+            model: Some("imagen-3.0-generate-002".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("google-imagen", &config).unwrap();
+
+        assert_eq!(provider.name(), "google-imagen");
+        assert!(provider.supports(GenerationType::Image));
+        assert_eq!(provider.default_model(), Some("imagen-3.0-generate-002"));
+    }
+
+    #[test]
+    fn test_create_google_imagen_provider_with_imagen_type() {
+        let config = GenerationProviderConfig {
+            provider_type: "imagen".to_string(),
+            api_key: Some("test-key".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("imagen", &config).unwrap();
+
+        assert_eq!(provider.name(), "google-imagen");
+        assert!(provider.supports(GenerationType::Image));
+    }
+
+    #[test]
+    fn test_create_google_imagen_provider_with_google_type() {
+        let config = GenerationProviderConfig {
+            provider_type: "google".to_string(),
+            api_key: Some("test-key".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("google", &config).unwrap();
+
+        assert_eq!(provider.name(), "google-imagen");
+    }
+
+    // === Google Veo provider tests ===
+
+    #[test]
+    fn test_create_google_veo_provider() {
+        let config = GenerationProviderConfig {
+            provider_type: "google_veo".to_string(),
+            api_key: Some("google-api-key".to_string()),
+            model: Some("veo-2.0-generate-001".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("google-veo", &config).unwrap();
+
+        assert_eq!(provider.name(), "google-veo");
+        assert!(provider.supports(GenerationType::Video));
+        assert_eq!(provider.default_model(), Some("veo-2.0-generate-001"));
+    }
+
+    #[test]
+    fn test_create_google_veo_provider_with_veo_type() {
+        let config = GenerationProviderConfig {
+            provider_type: "veo".to_string(),
+            api_key: Some("test-key".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("veo", &config).unwrap();
+
+        assert_eq!(provider.name(), "google-veo");
+        assert!(provider.supports(GenerationType::Video));
+    }
+
+    #[test]
+    fn test_create_google_veo_provider_veo3() {
+        let config = GenerationProviderConfig {
+            provider_type: "google_veo".to_string(),
+            api_key: Some("test-key".to_string()),
+            model: Some("veo-3.1-generate-preview".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("veo3", &config).unwrap();
+
+        assert_eq!(provider.name(), "google-veo");
+        assert_eq!(provider.default_model(), Some("veo-3.1-generate-preview"));
     }
 }
