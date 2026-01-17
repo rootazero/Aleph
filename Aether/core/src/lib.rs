@@ -133,11 +133,24 @@ pub use crate::clarification::{
 };
 pub use crate::conversation::{ConversationManager, ConversationSession, ConversationTurn};
 pub use crate::intent::{
+    // Core classifier types
     AgentModePrompt, AiIntentDetector, AiIntentResult, AmbiguousTaskFFI, ConflictResolution,
     ConflictResolutionFFI, DefaultsResolver, ExecutableTask, ExecutableTaskFFI, ExecutionIntent,
     ExecutionIntentTypeFFI, IntentClassifier, OrganizeMethod, OrganizeMethodFFI, ParameterSource,
     ParameterSourceFFI, PresetRegistry, ScenarioPreset, TaskCategory, TaskCategoryFFI,
     TaskParameters, TaskParametersFFI,
+    // Aggregator types
+    AggregatedIntent, AggregatorConfig, IntentAction, IntentAggregator, MissingParameter,
+    // Cache types
+    CacheConfig, CacheMetrics, CachedIntent, IntentCache,
+    // Calibrator types
+    CalibratedSignal, CalibrationHistory, CalibratorConfig, ConfidenceCalibrator, IntentSignal,
+    RoutingLayer,
+    // Context types
+    AppContext, ConversationContext, InputFeatures, MatchingContext, MatchingContextBuilder,
+    PendingParam, TimeContext,
+    // Rollback types
+    RollbackCapable, RollbackConfig, RollbackEntry, RollbackManager, RollbackResult,
 };
 pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
 pub use crate::skills::{Skill, SkillInfo, SkillsInstaller, SkillsRegistry};

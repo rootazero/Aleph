@@ -6,10 +6,15 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use std::sync::Arc;
 
+use super::aggregator::{AggregatedIntent, AggregatorConfig, IntentAggregator};
 use super::ai_detector::{AiIntentDetector, AiIntentResult};
+use super::cache::{CachedIntent, IntentCache};
+use super::calibrator::{CalibratedSignal, ConfidenceCalibrator, IntentSignal, RoutingLayer};
+use super::context::MatchingContext;
 use super::keyword::{KeywordIndex, KeywordMatchMode, KeywordRule};
 use super::task_category::TaskCategory;
 use crate::config::{KeywordPolicy, PolicyKeywordRule};
+use crate::error::Result;
 use crate::providers::AiProvider;
 
 /// Regex patterns for L1 classification (Chinese + English)
@@ -164,6 +169,10 @@ pub struct IntentClassifier {
     keyword_index: KeywordIndex,
     /// Optional AI detector for L3 classification
     ai_detector: Option<Arc<AiIntentDetector>>,
+    /// Optional confidence calibrator for signal adjustment
+    calibrator: Option<ConfidenceCalibrator>,
+    /// Optional intent cache for fast-path routing
+    cache: Option<Arc<IntentCache>>,
 }
 
 impl IntentClassifier {
@@ -173,6 +182,8 @@ impl IntentClassifier {
             confidence_threshold: 0.7,
             keyword_index: KeywordIndex::new(),
             ai_detector: None,
+            calibrator: None,
+            cache: None,
         }
     }
 
@@ -214,6 +225,28 @@ impl IntentClassifier {
     pub fn with_ai_detector(mut self, detector: Arc<AiIntentDetector>) -> Self {
         self.ai_detector = Some(detector);
         self
+    }
+
+    /// Set confidence calibrator for signal adjustment
+    pub fn with_calibrator(mut self, calibrator: ConfidenceCalibrator) -> Self {
+        self.calibrator = Some(calibrator);
+        self
+    }
+
+    /// Set intent cache for fast-path routing
+    pub fn with_cache(mut self, cache: Arc<IntentCache>) -> Self {
+        self.cache = Some(cache);
+        self
+    }
+
+    /// Get a reference to the calibrator (if set)
+    pub fn calibrator(&self) -> Option<&ConfidenceCalibrator> {
+        self.calibrator.as_ref()
+    }
+
+    /// Get a reference to the cache (if set)
+    pub fn cache(&self) -> Option<&Arc<IntentCache>> {
+        self.cache.as_ref()
     }
 
     /// Convert AiIntentResult to ExecutableTask
@@ -363,6 +396,181 @@ impl IntentClassifier {
         }
 
         ExecutionIntent::Conversational
+    }
+
+    /// Classify with full context and return AggregatedIntent
+    ///
+    /// This method provides a more comprehensive classification using the full
+    /// MatchingContext and returning an AggregatedIntent that includes:
+    /// - Calibrated confidence scores
+    /// - Action recommendations (Execute, Confirm, Clarify, GeneralChat)
+    /// - Alternative signals
+    /// - Conflict detection
+    ///
+    /// # Arguments
+    ///
+    /// * `input` - The user input text
+    /// * `context` - Full matching context with conversation, app, and time info
+    ///
+    /// # Returns
+    ///
+    /// `AggregatedIntent` with calibrated signals and action recommendation
+    #[allow(unused_variables)]
+    pub async fn classify_with_context(
+        &self,
+        input: &str,
+        context: &MatchingContext,
+    ) -> Result<AggregatedIntent> {
+        // 1. Check cache first (if enabled)
+        if let Some(ref cache) = self.cache {
+            if let Some(cached) = cache.get(input).await {
+                // Create signal from cached intent
+                let signal = IntentSignal::with_tool(
+                    &cached.intent_type,
+                    &cached.tool_name,
+                    cached.confidence,
+                );
+                let calibrated = CalibratedSignal::from_signal(
+                    &signal,
+                    cached.confidence,
+                    RoutingLayer::L2Keyword, // Cached entries assumed to be L2-level
+                );
+                let aggregator = IntentAggregator::new(AggregatorConfig::default());
+                return Ok(aggregator.from_single(calibrated));
+            }
+        }
+
+        // 2. Try L1 regex matching (highest confidence)
+        if let Some(task) = self.match_regex(input) {
+            let category_str = format!("{:?}", task.category);
+            let signal = IntentSignal::with_tool(
+                category_str.clone(),
+                category_str,
+                task.confidence,
+            );
+            let calibrated = CalibratedSignal::from_signal(
+                &signal,
+                task.confidence,
+                RoutingLayer::L1Regex,
+            );
+            let aggregator = IntentAggregator::new(AggregatorConfig::default());
+            return Ok(aggregator.from_single(calibrated));
+        }
+
+        // 3. Try L2 keyword matching
+        let l2_result = self.match_keywords_enhanced(input)
+            .or_else(|| self.match_keywords(input));
+
+        if let Some(task) = l2_result {
+            let mut confidence = task.confidence;
+            let category_str = format!("{:?}", task.category);
+
+            // Apply calibration if calibrator is available
+            if let Some(ref calibrator) = self.calibrator {
+                let signal = IntentSignal::with_tool(
+                    category_str.clone(),
+                    category_str.clone(),
+                    task.confidence,
+                );
+                // Get recent tools from conversation context for context boost
+                let recent_tools = context.conversation.recent_intents.to_vec();
+
+                let calibrated = calibrator.calibrate(signal, RoutingLayer::L2Keyword, &recent_tools);
+                confidence = calibrated.calibrated_confidence;
+            }
+
+            let signal = IntentSignal::with_tool(
+                category_str.clone(),
+                category_str,
+                task.confidence,
+            );
+            let calibrated = CalibratedSignal::from_signal(
+                &signal,
+                confidence,
+                RoutingLayer::L2Keyword,
+            );
+            let aggregator = IntentAggregator::new(AggregatorConfig::default());
+            return Ok(aggregator.from_single(calibrated));
+        }
+
+        // 4. Try L3 AI detection (optional)
+        if let Some(ref detector) = self.ai_detector {
+            if let Ok(Some(ai_result)) = detector.detect(input).await {
+                if let Some(task) = self.convert_ai_result(&ai_result, input) {
+                    let mut confidence = task.confidence;
+
+                    // Apply calibration if calibrator is available
+                    if let Some(ref calibrator) = self.calibrator {
+                        let signal = IntentSignal::with_tool(
+                            ai_result.intent.clone(),
+                            ai_result.intent.clone(),
+                            task.confidence,
+                        );
+                        let recent_tools = context.conversation.recent_intents.to_vec();
+
+                        let calibrated = calibrator.calibrate(signal, RoutingLayer::L3Ai, &recent_tools);
+                        confidence = calibrated.calibrated_confidence;
+                    }
+
+                    let signal = IntentSignal::with_tool(
+                        ai_result.intent.clone(),
+                        ai_result.intent,
+                        task.confidence,
+                    );
+                    let calibrated = CalibratedSignal::from_signal(
+                        &signal,
+                        confidence,
+                        RoutingLayer::L3Ai,
+                    );
+                    let aggregator = IntentAggregator::new(AggregatorConfig::default());
+                    return Ok(aggregator.from_single(calibrated));
+                }
+            }
+        }
+
+        // 5. No match - return general chat
+        Ok(AggregatedIntent::general_chat())
+    }
+
+    /// Cache an intent result for future fast-path routing
+    ///
+    /// This should be called after successful tool execution to improve
+    /// future classification speed.
+    pub async fn cache_intent(
+        &self,
+        input: &str,
+        tool_name: &str,
+        intent_type: &str,
+        confidence: f32,
+    ) {
+        if let Some(ref cache) = self.cache {
+            let cached = CachedIntent::new(input, tool_name, intent_type, confidence);
+            cache.put(input, cached).await;
+        }
+    }
+
+    /// Record a successful tool execution for learning
+    ///
+    /// Updates both cache and calibrator history if available.
+    pub async fn record_success(&self, input: &str, tool_name: &str) {
+        if let Some(ref cache) = self.cache {
+            cache.record_success(input).await;
+        }
+        if let Some(ref calibrator) = self.calibrator {
+            calibrator.record_success(tool_name, input).await;
+        }
+    }
+
+    /// Record a failed/cancelled tool execution for learning
+    ///
+    /// Updates both cache and calibrator history if available.
+    pub async fn record_failure(&self, input: &str, tool_name: &str) {
+        if let Some(ref cache) = self.cache {
+            cache.record_failure(input).await;
+        }
+        if let Some(ref calibrator) = self.calibrator {
+            calibrator.record_failure(tool_name, input).await;
+        }
     }
 }
 
