@@ -268,6 +268,7 @@ impl IntentCache {
             // Check if should evict due to failures
             if entry.should_evict() {
                 cache.pop(&hash);
+                // Merge all metrics updates into single lock scope
                 let mut metrics = self.metrics.write().await;
                 metrics.evictions += 1;
                 metrics.misses += 1;
@@ -279,6 +280,7 @@ impl IntentCache {
 
             // Check minimum confidence threshold
             if adjusted < self.config.min_confidence {
+                // Merge all metrics updates into single lock scope
                 let mut metrics = self.metrics.write().await;
                 metrics.misses += 1;
                 return None;
@@ -288,12 +290,13 @@ impl IntentCache {
             entry.confidence = adjusted;
             entry.hit_count += 1;
 
-            // Record hit
+            // Merge all metrics updates into single lock scope
             let mut metrics = self.metrics.write().await;
             metrics.hits += 1;
 
             Some(entry.clone())
         } else {
+            // Merge all metrics updates into single lock scope
             let mut metrics = self.metrics.write().await;
             metrics.misses += 1;
             None
@@ -323,6 +326,7 @@ impl IntentCache {
     /// Record a successful tool execution for the given input.
     ///
     /// Increments the success_count of the cached entry if it exists.
+    /// Uses saturating arithmetic to prevent integer overflow at u32::MAX.
     pub async fn record_success(&self, input: &str) {
         if !self.config.enabled {
             return;
@@ -332,7 +336,7 @@ impl IntentCache {
         let mut cache = self.cache.write().await;
 
         if let Some(entry) = cache.get_mut(&hash) {
-            entry.success_count += 1;
+            entry.success_count = entry.success_count.saturating_add(1);
         }
     }
 
@@ -340,6 +344,7 @@ impl IntentCache {
     ///
     /// Increments the failure_count. If the entry should be evicted
     /// (too many failures with no successes), it will be removed.
+    /// Uses saturating arithmetic to prevent integer overflow at u32::MAX.
     pub async fn record_failure(&self, input: &str) {
         if !self.config.enabled {
             return;
@@ -349,7 +354,7 @@ impl IntentCache {
         let mut cache = self.cache.write().await;
 
         if let Some(entry) = cache.get_mut(&hash) {
-            entry.failure_count += 1;
+            entry.failure_count = entry.failure_count.saturating_add(1);
 
             // Evict if too many failures
             if entry.should_evict() {
