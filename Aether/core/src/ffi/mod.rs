@@ -88,6 +88,21 @@ pub trait AetherEventHandler: Send + Sync {
     /// This callback notifies the UI that the input has been classified
     /// as an executable task and agent mode will be activated.
     fn on_agent_mode_detected(&self, task: crate::intent::ExecutableTaskFFI);
+
+    // ========================================================================
+    // HOT-RELOAD CALLBACKS
+    // ========================================================================
+
+    /// Called when tool registry is updated (MCP server added/removed, skill installed/deleted)
+    ///
+    /// This callback notifies the UI that the tool list has changed and may need refreshing.
+    /// The tool_count parameter indicates the new total number of registered tools.
+    fn on_tools_changed(&self, tool_count: u32);
+
+    /// Called when MCP servers have finished starting
+    ///
+    /// This callback provides a report of which servers started successfully and which failed.
+    fn on_mcp_startup_complete(&self, report: crate::event_handler::McpStartupReportFFI);
 }
 
 /// Tool information for UI display
@@ -202,6 +217,32 @@ impl AetherCore {
             warn!("Mutex poisoned in full_config, recovering");
             e.into_inner()
         })
+    }
+
+    // ========================================================================
+    // HOT-RELOAD SUPPORT
+    // ========================================================================
+
+    /// Notify UI that tool registry has changed
+    ///
+    /// This should be called after any operation that modifies the tool registry:
+    /// - MCP server add/update/delete
+    /// - Skill install/delete
+    /// - Custom command changes
+    pub(crate) fn notify_tools_changed(&self) {
+        let tool_count = self.registered_tools.read()
+            .map(|tools| tools.len() as u32)
+            .unwrap_or(0);
+
+        info!(tool_count = tool_count, "Notifying UI of tool registry change");
+        self.handler.on_tools_changed(tool_count);
+    }
+
+    /// Get current tool count
+    pub fn get_tool_count(&self) -> u32 {
+        self.registered_tools.read()
+            .map(|tools| tools.len() as u32)
+            .unwrap_or(0)
     }
 }
 

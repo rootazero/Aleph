@@ -37,7 +37,13 @@ impl AetherCore {
         config.tools.shell_timeout_seconds = new_config.shell_timeout_seconds;
 
         config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        drop(config); // Release lock before notifying
+
         info!("MCP configuration updated");
+
+        // Notify UI of tool registry change (hot-reload)
+        self.notify_tools_changed();
+
         Ok(())
     }
 
@@ -150,8 +156,13 @@ impl AetherCore {
 
         cfg.mcp.external_servers.push(external_config);
         cfg.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        drop(cfg); // Release lock before notifying
 
         info!(server_id = %config.id, "MCP server added");
+
+        // Notify UI of tool registry change (hot-reload)
+        self.notify_tools_changed();
+
         Ok(())
     }
 
@@ -192,7 +203,13 @@ impl AetherCore {
         }
 
         cfg.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        drop(cfg); // Release lock before notifying
+
         info!(server_id = %config.id, "MCP server updated");
+
+        // Notify UI of tool registry change (hot-reload)
+        self.notify_tools_changed();
+
         Ok(())
     }
 
@@ -211,7 +228,13 @@ impl AetherCore {
         }
 
         cfg.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        drop(cfg); // Release lock before notifying
+
         info!(server_id = %id, "MCP server deleted");
+
+        // Notify UI of tool registry change (hot-reload)
+        self.notify_tools_changed();
+
         Ok(())
     }
 
@@ -313,7 +336,13 @@ impl AetherCore {
         }
 
         cfg.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        drop(cfg); // Release lock before notifying
+
         info!("MCP configuration imported");
+
+        // Notify UI of tool registry change (hot-reload)
+        self.notify_tools_changed();
+
         Ok(())
     }
 }

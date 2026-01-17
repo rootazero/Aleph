@@ -3855,6 +3855,80 @@ public func FfiConverterTypeIntentDetectionPolicy_lower(_ value: IntentDetection
 }
 
 
+public struct KeywordPolicy {
+    public var enabled: Bool
+    public var globalMinScore: Float
+    public var rules: [PolicyKeywordRule]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(enabled: Bool, globalMinScore: Float, rules: [PolicyKeywordRule]) {
+        self.enabled = enabled
+        self.globalMinScore = globalMinScore
+        self.rules = rules
+    }
+}
+
+
+
+extension KeywordPolicy: Equatable, Hashable {
+    public static func ==(lhs: KeywordPolicy, rhs: KeywordPolicy) -> Bool {
+        if lhs.enabled != rhs.enabled {
+            return false
+        }
+        if lhs.globalMinScore != rhs.globalMinScore {
+            return false
+        }
+        if lhs.rules != rhs.rules {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(enabled)
+        hasher.combine(globalMinScore)
+        hasher.combine(rules)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeKeywordPolicy: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> KeywordPolicy {
+        return
+            try KeywordPolicy(
+                enabled: FfiConverterBool.read(from: &buf), 
+                globalMinScore: FfiConverterFloat.read(from: &buf), 
+                rules: FfiConverterSequenceTypePolicyKeywordRule.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: KeywordPolicy, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterFloat.write(value.globalMinScore, into: &buf)
+        FfiConverterSequenceTypePolicyKeywordRule.write(value.rules, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKeywordPolicy_lift(_ buf: RustBuffer) throws -> KeywordPolicy {
+    return try FfiConverterTypeKeywordPolicy.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKeywordPolicy_lower(_ value: KeywordPolicy) -> RustBuffer {
+    return FfiConverterTypeKeywordPolicy.lower(value)
+}
+
+
 public struct KeywordRuleConfig {
     public var id: String
     public var name: String?
@@ -5945,10 +6019,11 @@ public struct PoliciesConfig {
     public var webFetch: WebFetchPolicy
     public var text: TextFormatPolicy
     public var metrics: MetricsPolicy
+    public var keyword: KeywordPolicy
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(toolSafety: ToolSafetyPolicy, intent: IntentDetectionPolicy, memory: MemoryPolicies, retry: RetryPolicy, webFetch: WebFetchPolicy, text: TextFormatPolicy, metrics: MetricsPolicy) {
+    public init(toolSafety: ToolSafetyPolicy, intent: IntentDetectionPolicy, memory: MemoryPolicies, retry: RetryPolicy, webFetch: WebFetchPolicy, text: TextFormatPolicy, metrics: MetricsPolicy, keyword: KeywordPolicy) {
         self.toolSafety = toolSafety
         self.intent = intent
         self.memory = memory
@@ -5956,6 +6031,7 @@ public struct PoliciesConfig {
         self.webFetch = webFetch
         self.text = text
         self.metrics = metrics
+        self.keyword = keyword
     }
 }
 
@@ -5984,6 +6060,9 @@ extension PoliciesConfig: Equatable, Hashable {
         if lhs.metrics != rhs.metrics {
             return false
         }
+        if lhs.keyword != rhs.keyword {
+            return false
+        }
         return true
     }
 
@@ -5995,6 +6074,7 @@ extension PoliciesConfig: Equatable, Hashable {
         hasher.combine(webFetch)
         hasher.combine(text)
         hasher.combine(metrics)
+        hasher.combine(keyword)
     }
 }
 
@@ -6012,7 +6092,8 @@ public struct FfiConverterTypePoliciesConfig: FfiConverterRustBuffer {
                 retry: FfiConverterTypeRetryPolicy.read(from: &buf), 
                 webFetch: FfiConverterTypeWebFetchPolicy.read(from: &buf), 
                 text: FfiConverterTypeTextFormatPolicy.read(from: &buf), 
-                metrics: FfiConverterTypeMetricsPolicy.read(from: &buf)
+                metrics: FfiConverterTypeMetricsPolicy.read(from: &buf), 
+                keyword: FfiConverterTypeKeywordPolicy.read(from: &buf)
         )
     }
 
@@ -6024,6 +6105,7 @@ public struct FfiConverterTypePoliciesConfig: FfiConverterRustBuffer {
         FfiConverterTypeWebFetchPolicy.write(value.webFetch, into: &buf)
         FfiConverterTypeTextFormatPolicy.write(value.text, into: &buf)
         FfiConverterTypeMetricsPolicy.write(value.metrics, into: &buf)
+        FfiConverterTypeKeywordPolicy.write(value.keyword, into: &buf)
     }
 }
 
@@ -6040,6 +6122,162 @@ public func FfiConverterTypePoliciesConfig_lift(_ buf: RustBuffer) throws -> Pol
 #endif
 public func FfiConverterTypePoliciesConfig_lower(_ value: PoliciesConfig) -> RustBuffer {
     return FfiConverterTypePoliciesConfig.lower(value)
+}
+
+
+public struct PolicyKeywordRule {
+    public var id: String
+    public var intentType: String
+    public var keywords: [PolicyWeightedKeyword]
+    public var matchMode: String
+    public var minScore: Float
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, intentType: String, keywords: [PolicyWeightedKeyword], matchMode: String, minScore: Float) {
+        self.id = id
+        self.intentType = intentType
+        self.keywords = keywords
+        self.matchMode = matchMode
+        self.minScore = minScore
+    }
+}
+
+
+
+extension PolicyKeywordRule: Equatable, Hashable {
+    public static func ==(lhs: PolicyKeywordRule, rhs: PolicyKeywordRule) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.intentType != rhs.intentType {
+            return false
+        }
+        if lhs.keywords != rhs.keywords {
+            return false
+        }
+        if lhs.matchMode != rhs.matchMode {
+            return false
+        }
+        if lhs.minScore != rhs.minScore {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(intentType)
+        hasher.combine(keywords)
+        hasher.combine(matchMode)
+        hasher.combine(minScore)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePolicyKeywordRule: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PolicyKeywordRule {
+        return
+            try PolicyKeywordRule(
+                id: FfiConverterString.read(from: &buf), 
+                intentType: FfiConverterString.read(from: &buf), 
+                keywords: FfiConverterSequenceTypePolicyWeightedKeyword.read(from: &buf), 
+                matchMode: FfiConverterString.read(from: &buf), 
+                minScore: FfiConverterFloat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PolicyKeywordRule, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.intentType, into: &buf)
+        FfiConverterSequenceTypePolicyWeightedKeyword.write(value.keywords, into: &buf)
+        FfiConverterString.write(value.matchMode, into: &buf)
+        FfiConverterFloat.write(value.minScore, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePolicyKeywordRule_lift(_ buf: RustBuffer) throws -> PolicyKeywordRule {
+    return try FfiConverterTypePolicyKeywordRule.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePolicyKeywordRule_lower(_ value: PolicyKeywordRule) -> RustBuffer {
+    return FfiConverterTypePolicyKeywordRule.lower(value)
+}
+
+
+public struct PolicyWeightedKeyword {
+    public var word: String
+    public var weight: Float
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(word: String, weight: Float) {
+        self.word = word
+        self.weight = weight
+    }
+}
+
+
+
+extension PolicyWeightedKeyword: Equatable, Hashable {
+    public static func ==(lhs: PolicyWeightedKeyword, rhs: PolicyWeightedKeyword) -> Bool {
+        if lhs.word != rhs.word {
+            return false
+        }
+        if lhs.weight != rhs.weight {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(word)
+        hasher.combine(weight)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePolicyWeightedKeyword: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PolicyWeightedKeyword {
+        return
+            try PolicyWeightedKeyword(
+                word: FfiConverterString.read(from: &buf), 
+                weight: FfiConverterFloat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PolicyWeightedKeyword, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.word, into: &buf)
+        FfiConverterFloat.write(value.weight, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePolicyWeightedKeyword_lift(_ buf: RustBuffer) throws -> PolicyWeightedKeyword {
+    return try FfiConverterTypePolicyWeightedKeyword.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePolicyWeightedKeyword_lower(_ value: PolicyWeightedKeyword) -> RustBuffer {
+    return FfiConverterTypePolicyWeightedKeyword.lower(value)
 }
 
 
@@ -10802,6 +11040,10 @@ public protocol AetherEventHandler : AnyObject {
     
     func onAgentModeDetected(task: ExecutableTaskFfi) 
     
+    func onToolsChanged(toolCount: UInt32) 
+    
+    func onMcpStartupComplete(report: McpStartupReportFfi) 
+    
 }
 
 // Magic number for the Rust proxy to call using the same mechanism as every other method,
@@ -10997,6 +11239,54 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
                 }
                 return uniffiObj.onAgentModeDetected(
                      task: try FfiConverterTypeExecutableTaskFFI.lift(task)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onToolsChanged: { (
+            uniffiHandle: UInt64,
+            toolCount: UInt32,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onToolsChanged(
+                     toolCount: try FfiConverterUInt32.lift(toolCount)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onMcpStartupComplete: { (
+            uniffiHandle: UInt64,
+            report: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onMcpStartupComplete(
+                     report: try FfiConverterTypeMcpStartupReportFFI.lift(report)
                 )
             }
 
@@ -12233,6 +12523,56 @@ fileprivate struct FfiConverterSequenceTypeModelProfileFFI: FfiConverterRustBuff
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypePolicyKeywordRule: FfiConverterRustBuffer {
+    typealias SwiftType = [PolicyKeywordRule]
+
+    public static func write(_ value: [PolicyKeywordRule], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypePolicyKeywordRule.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [PolicyKeywordRule] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [PolicyKeywordRule]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypePolicyKeywordRule.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypePolicyWeightedKeyword: FfiConverterRustBuffer {
+    typealias SwiftType = [PolicyWeightedKeyword]
+
+    public static func write(_ value: [PolicyWeightedKeyword], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypePolicyWeightedKeyword.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [PolicyWeightedKeyword] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [PolicyWeightedKeyword]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypePolicyWeightedKeyword.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeProviderConfigEntry: FfiConverterRustBuffer {
     typealias SwiftType = [ProviderConfigEntry]
 
@@ -12811,6 +13151,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_agent_mode_detected() != 15957) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tools_changed() != 46377) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_mcp_startup_complete() != 1232) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_coworkprogresshandler_on_progress_event() != 54161) {

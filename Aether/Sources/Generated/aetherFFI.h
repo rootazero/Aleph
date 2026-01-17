@@ -307,6 +307,20 @@ typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod7)(uint64_t, RustB
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD8
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD8
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod8)(uint64_t, uint32_t, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD9
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD9
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod9)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_COWORK_PROGRESS_HANDLER_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_COWORK_PROGRESS_HANDLER_METHOD0
 typedef void (*UniffiCallbackInterfaceCoworkProgressHandlerMethod0)(uint64_t, RustBuffer, void* _Nonnull, 
@@ -367,6 +381,8 @@ typedef struct UniffiVTableCallbackInterfaceAetherEventHandler {
     UniffiCallbackInterfaceAetherEventHandlerMethod5 _Nonnull onError;
     UniffiCallbackInterfaceAetherEventHandlerMethod6 _Nonnull onMemoryStored;
     UniffiCallbackInterfaceAetherEventHandlerMethod7 _Nonnull onAgentModeDetected;
+    UniffiCallbackInterfaceAetherEventHandlerMethod8 _Nonnull onToolsChanged;
+    UniffiCallbackInterfaceAetherEventHandlerMethod9 _Nonnull onMcpStartupComplete;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceAetherEventHandler;
 
@@ -1725,6 +1741,18 @@ uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_memory_stored(vo
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_AGENT_MODE_DETECTED
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_AGENT_MODE_DETECTED
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_agent_mode_detected(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOLS_CHANGED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_TOOLS_CHANGED
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_tools_changed(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_MCP_STARTUP_COMPLETE
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_MCP_STARTUP_COMPLETE
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_mcp_startup_complete(void
     
 );
 #endif

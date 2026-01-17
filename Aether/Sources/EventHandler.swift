@@ -246,6 +246,44 @@ class EventHandler: AetherEventHandler {
         }
     }
 
+    // MARK: - Hot-Reload Callbacks
+
+    /// Called when tool registry is updated (MCP server added/removed, skill installed/deleted)
+    /// - Parameter toolCount: The new total number of registered tools
+    func onToolsChanged(toolCount: UInt32) {
+        print("[EventHandler] Tools changed: \(toolCount) tools registered")
+
+        DispatchQueue.mainAsync(weakRef: self) { _ in
+            // Post notification for any UI that needs to refresh tool lists
+            NotificationCenter.default.post(
+                name: Notification.Name("ToolsDidChange"),
+                object: nil,
+                userInfo: ["toolCount": toolCount]
+            )
+        }
+    }
+
+    /// Called when MCP servers have finished starting
+    /// - Parameter report: Report containing succeeded and failed servers
+    func onMcpStartupComplete(report: McpStartupReportFfi) {
+        print("[EventHandler] MCP startup complete: \(report.succeededServers.count) succeeded, \(report.failedServers.count) failed")
+
+        DispatchQueue.mainAsync(weakRef: self) { _ in
+            // Post notification with startup report
+            NotificationCenter.default.post(
+                name: Notification.Name("McpStartupComplete"),
+                object: nil,
+                userInfo: ["report": report]
+            )
+
+            // If there are failed servers, show a toast notification
+            if !report.failedServers.isEmpty {
+                let failedNames = report.failedServers.map { $0.serverName }.joined(separator: ", ")
+                print("[EventHandler] MCP servers failed to start: \(failedNames)")
+            }
+        }
+    }
+
     // MARK: - Error Notification
 
     private func showErrorNotification(message: String) {

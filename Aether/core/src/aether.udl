@@ -854,6 +854,12 @@ callback interface AetherEventHandler {
     void on_memory_stored();
     // Agent execution mode notification
     void on_agent_mode_detected(ExecutableTaskFFI task);
+
+    // Hot-reload callbacks for MCP/Skills/Custom tools
+    // Called when tool registry is updated (MCP server added/removed, skill installed/deleted)
+    void on_tools_changed(u32 tool_count);
+    // Called when MCP servers have finished starting (with startup report)
+    void on_mcp_startup_complete(McpStartupReportFFI report);
 };
 
 interface AetherCore {

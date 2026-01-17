@@ -483,4 +483,6 @@ class PreviewEventHandler: AetherEventHandler {
     func onError(message: String) {}
     func onMemoryStored() {}
     func onAgentModeDetected(task: ExecutableTaskFfi) {}
+    func onToolsChanged(toolCount: UInt32) {}
+    func onMcpStartupComplete(report: McpStartupReportFfi) {}
 }
