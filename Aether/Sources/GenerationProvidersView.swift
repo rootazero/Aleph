@@ -140,7 +140,7 @@ enum GenerationPresetProviders {
             color: "#FF6B35",
             providerType: "openai_compat",
             supportedTypes: [.image],
-            defaultModel: "dall-e-3",
+            defaultModel: "nano-banana-2",
             description: "OpenAI-compatible image generation (DALL-E, Midjourney, etc.)",
             baseUrl: "https://ai.t8star.cn",
             category: .image
@@ -225,13 +225,13 @@ enum GenerationPresetProviders {
         ),
         GenerationPresetProvider(
             id: "t8star-video",
-            name: "T8Star",
+            name: "T8Star Veo",
             iconName: "sparkles.rectangle.stack",
             color: "#FF6B35",
             providerType: "openai_compat",
             supportedTypes: [.video],
-            defaultModel: "runway-gen3",
-            description: "OpenAI-compatible video generation (Runway, Pika, etc.)",
+            defaultModel: "veo3.1-fast",
+            description: "Google Veo video generation via T8Star API",
             baseUrl: "https://ai.t8star.cn",
             category: .video
         ),
