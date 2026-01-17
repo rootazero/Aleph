@@ -200,6 +200,22 @@ impl AetherCore {
         Ok(())
     }
 
+    /// Get a single generation provider configuration by name
+    ///
+    /// Returns the configuration for a specific generation provider,
+    /// or None if the provider doesn't exist in the config.
+    pub fn get_generation_provider_config(
+        &self,
+        name: String,
+    ) -> Option<crate::ffi::generation::GenerationProviderConfigFFI> {
+        let config = self.lock_config();
+        config
+            .generation
+            .providers
+            .get(&name)
+            .map(|provider_config| provider_config.clone().into())
+    }
+
     /// Delete generation provider configuration
     ///
     /// Removes a generation provider from both the config file and the in-memory registry.

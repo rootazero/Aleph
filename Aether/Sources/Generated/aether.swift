@@ -690,6 +690,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func getEnabledProviders()  -> [String]
     
+    func getGenerationProviderConfig(name: String)  -> GenerationProviderConfigFfi?
+    
     func getLogDirectory() throws  -> String
     
     func getLogLevel()  -> LogLevel
@@ -1194,6 +1196,14 @@ open func getDefaultProvider() -> String? {
 open func getEnabledProviders() -> [String] {
     return try!  FfiConverterSequenceString.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_get_enabled_providers(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getGenerationProviderConfig(name: String) -> GenerationProviderConfigFfi? {
+    return try!  FfiConverterOptionTypeGenerationProviderConfigFFI.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_generation_provider_config(self.uniffiClonePointer(),
+        FfiConverterString.lower(name),$0
     )
 })
 }
@@ -12983,6 +12993,30 @@ fileprivate struct FfiConverterOptionTypeGenerationParamsFFI: FfiConverterRustBu
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeGenerationProviderConfigFFI: FfiConverterRustBuffer {
+    typealias SwiftType = GenerationProviderConfigFfi?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeGenerationProviderConfigFFI.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeGenerationProviderConfigFFI.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeMcpServerConfig: FfiConverterRustBuffer {
     typealias SwiftType = McpServerConfig?
 
@@ -14301,6 +14335,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_get_enabled_providers() != 10573) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_generation_provider_config() != 51025) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_get_log_directory() != 43485) {
