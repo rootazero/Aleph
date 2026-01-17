@@ -94,7 +94,7 @@ enum GenerationPresetProviders {
             supportedTypes: [.image],
             defaultModel: "dall-e-3",
             description: "OpenAI's DALL-E image generation models",
-            baseUrl: "https://api.openai.com/v1",
+            baseUrl: "https://api.openai.com",
             category: .image
         ),
         GenerationPresetProvider(
@@ -106,7 +106,7 @@ enum GenerationPresetProviders {
             supportedTypes: [.image],
             defaultModel: "stable-diffusion-xl-1024-v1-0",
             description: "Stable Diffusion models via Stability AI",
-            baseUrl: "https://api.stability.ai/v1",
+            baseUrl: "https://api.stability.ai",
             category: .image
         ),
         GenerationPresetProvider(
@@ -130,7 +130,7 @@ enum GenerationPresetProviders {
             supportedTypes: [.image],
             defaultModel: "black-forest-labs/flux-schnell",
             description: "Run open-source models on Replicate",
-            baseUrl: "https://api.replicate.com/v1",
+            baseUrl: "https://api.replicate.com",
             category: .image
         ),
         GenerationPresetProvider(
@@ -226,7 +226,7 @@ enum GenerationPresetProviders {
             supportedTypes: [.speech],
             defaultModel: "tts-1-hd",
             description: "OpenAI text-to-speech models",
-            baseUrl: "https://api.openai.com/v1",
+            baseUrl: "https://api.openai.com",
             category: .audio
         ),
         GenerationPresetProvider(
@@ -238,7 +238,7 @@ enum GenerationPresetProviders {
             supportedTypes: [.speech, .audio],
             defaultModel: "eleven_multilingual_v2",
             description: "ElevenLabs voice synthesis",
-            baseUrl: "https://api.elevenlabs.io/v1",
+            baseUrl: "https://api.elevenlabs.io",
             category: .audio
         ),
         GenerationPresetProvider(
