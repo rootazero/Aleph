@@ -18,6 +18,7 @@ use thiserror::Error;
 ///
 /// ```rust
 /// use aethecore::generation::GenerationError;
+/// use std::time::Duration;
 ///
 /// let error = GenerationError::rate_limit("Too many requests", Some(Duration::from_secs(60)));
 ///

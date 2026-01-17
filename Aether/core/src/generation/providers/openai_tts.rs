@@ -85,6 +85,7 @@ pub const AVAILABLE_FORMATS: [&str; 4] = ["mp3", "opus", "aac", "flac"];
 ///
 /// ```rust
 /// use aethecore::generation::providers::OpenAiTtsProvider;
+/// use aethecore::generation::GenerationProvider;
 ///
 /// let provider = OpenAiTtsProvider::new(
 ///     "sk-your-api-key",

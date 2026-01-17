@@ -106,8 +106,8 @@ impl OpenAiImageProvider {
     /// // Custom endpoint (e.g., for Azure OpenAI)
     /// let azure_provider = OpenAiImageProvider::new(
     ///     "api-key",
-    ///     Some("https://my-resource.openai.azure.com"),
-    ///     Some("dall-e-3"),
+    ///     Some("https://my-resource.openai.azure.com".to_string()),
+    ///     Some("dall-e-3".to_string()),
     /// );
     /// ```
     pub fn new<S: Into<String>>(

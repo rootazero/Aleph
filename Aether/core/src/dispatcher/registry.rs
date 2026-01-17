@@ -68,14 +68,42 @@ impl ToolRegistry {
     // Registration Methods
     // =========================================================================
 
-    /// Register builtin tools (deprecated - AI-first architecture)
+    /// Register builtin tools
     ///
-    /// In AI-first architecture, there are no builtin commands.
-    /// All tool selection is handled by the AI through MCP capability.
-    /// This method is kept for API compatibility but does nothing.
+    /// Registers system builtin tools including generation capabilities.
+    /// These tools have the highest priority in conflict resolution.
     pub async fn register_builtin_tools(&self) {
-        // No-op in AI-first architecture
-        debug!("register_builtin_tools called (no-op in AI-first mode)");
+        debug!("Registering builtin tools");
+
+        // Image generation tool
+        let image_generate = UnifiedTool::new(
+            "builtin:generate_image",
+            "generate_image",
+            "Generate images from text descriptions using AI models like DALL-E 3",
+            ToolSource::Builtin,
+        )
+        .with_icon("photo.badge.plus")
+        .with_usage("/generate_image A beautiful sunset over mountains")
+        .with_localization_key("tool.generate_image")
+        .with_sort_order(60);
+
+        self.register_with_conflict_resolution(image_generate).await;
+
+        // Speech generation tool
+        let speech_generate = UnifiedTool::new(
+            "builtin:generate_speech",
+            "generate_speech",
+            "Convert text to speech using AI voices",
+            ToolSource::Builtin,
+        )
+        .with_icon("speaker.wave.3")
+        .with_usage("/generate_speech Hello, how are you?")
+        .with_localization_key("tool.generate_speech")
+        .with_sort_order(61);
+
+        self.register_with_conflict_resolution(speech_generate).await;
+
+        info!("Registered 2 builtin generation tools");
     }
 
     /// Register MCP tools from tool info list (Flat Namespace Mode)
@@ -990,16 +1018,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_builtin_tools() {
-        // AI-first architecture: no builtin tools
         let registry = ToolRegistry::new();
         registry.register_builtin_tools().await;
 
-        // Should register 0 tools (AI-first mode)
-        assert_eq!(registry.count().await, 0);
+        // Should register 2 generation tools
+        assert_eq!(registry.count().await, 2);
 
-        // No builtins should exist
+        // Builtins should include generation tools
         let builtins = registry.list_builtin_tools().await;
-        assert_eq!(builtins.len(), 0);
+        assert_eq!(builtins.len(), 2);
+
+        // Verify tool names
+        let names: Vec<_> = builtins.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"generate_image"));
+        assert!(names.contains(&"generate_speech"));
     }
 
     #[tokio::test]
@@ -1016,9 +1048,13 @@ mod tests {
         registry.register_custom_commands(&rules).await;
 
         let roots = registry.list_root_commands().await;
-        // AI-first: 0 builtins + 1 custom = 1
-        assert_eq!(roots.len(), 1);
-        assert_eq!(roots[0].name, "en");
+        // 2 builtin generation tools + 1 custom = 3
+        assert_eq!(roots.len(), 3);
+
+        // First should be builtins (sorted by priority)
+        assert!(roots.iter().any(|t| t.name == "generate_image"));
+        assert!(roots.iter().any(|t| t.name == "generate_speech"));
+        assert!(roots.iter().any(|t| t.name == "en"));
     }
 
     #[tokio::test]
@@ -1090,7 +1126,8 @@ mod tests {
     #[tokio::test]
     async fn test_list_by_source_type() {
         let registry = ToolRegistry::new();
-        // AI-first: no builtin tools
+        registry.register_builtin_tools().await;
+
         let skills = vec![SkillInfo {
             id: "test".to_string(),
             name: "Test".to_string(),
@@ -1100,7 +1137,7 @@ mod tests {
         registry.register_skills(&skills).await;
 
         let builtin = registry.list_by_source_type("Builtin").await;
-        assert_eq!(builtin.len(), 0); // AI-first: no builtins
+        assert_eq!(builtin.len(), 2); // 2 generation tools
 
         let skill = registry.list_by_source_type("Skill").await;
         assert_eq!(skill.len(), 1);

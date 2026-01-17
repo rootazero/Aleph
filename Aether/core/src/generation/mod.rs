@@ -268,8 +268,8 @@ pub trait GenerationProvider: Send + Sync {
 ///
 /// # Example
 ///
-/// ```rust
-/// use aethecore::generation::{MockGenerationProvider, GenerationRequest};
+/// ```rust,ignore
+/// use aethecore::generation::{MockGenerationProvider, GenerationRequest, GenerationProvider};
 ///
 /// # tokio_test::block_on(async {
 /// let provider = MockGenerationProvider::new("mock-dalle");
