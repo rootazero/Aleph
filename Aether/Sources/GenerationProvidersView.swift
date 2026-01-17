@@ -50,6 +50,7 @@ struct GenerationPresetProvider: Identifiable, Equatable {
     let baseUrl: String?
     let category: GenerationCategory
     let isCustom: Bool
+    let isUnsupported: Bool  // Provider without backend adapter
 
     init(
         id: String,
@@ -62,7 +63,8 @@ struct GenerationPresetProvider: Identifiable, Equatable {
         description: String,
         baseUrl: String?,
         category: GenerationCategory,
-        isCustom: Bool = false
+        isCustom: Bool = false,
+        isUnsupported: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -75,6 +77,7 @@ struct GenerationPresetProvider: Identifiable, Equatable {
         self.baseUrl = baseUrl
         self.category = category
         self.isCustom = isCustom
+        self.isUnsupported = isUnsupported
     }
 }
 
@@ -157,19 +160,6 @@ enum GenerationPresetProviders {
             baseUrl: "https://ai.t8star.cn",
             category: .image
         ),
-        GenerationPresetProvider(
-            id: "custom-image",
-            name: "Custom Image",
-            iconName: "puzzlepiece.extension.fill",
-            color: "#5E5CE6",
-            providerType: "openai_compat",
-            supportedTypes: [.image],
-            defaultModel: "",
-            description: "OpenAI-compatible image generation API",
-            baseUrl: nil,
-            category: .image,
-            isCustom: true
-        ),
     ]
 
     // MARK: - Video Providers
@@ -197,7 +187,8 @@ enum GenerationPresetProviders {
             defaultModel: "gen-3",
             description: "Runway Gen-3 video generation",
             baseUrl: "https://api.runwayml.com/v1",
-            category: .video
+            category: .video,
+            isUnsupported: true
         ),
         GenerationPresetProvider(
             id: "pika",
@@ -209,7 +200,8 @@ enum GenerationPresetProviders {
             defaultModel: "pika-1.0",
             description: "Pika video generation",
             baseUrl: "https://api.pika.art/v1",
-            category: .video
+            category: .video,
+            isUnsupported: true
         ),
         GenerationPresetProvider(
             id: "luma",
@@ -221,7 +213,8 @@ enum GenerationPresetProviders {
             defaultModel: "dream-machine",
             description: "Luma Dream Machine video generation",
             baseUrl: "https://api.lumalabs.ai/v1",
-            category: .video
+            category: .video,
+            isUnsupported: true
         ),
         GenerationPresetProvider(
             id: "t8star-video",
@@ -234,19 +227,6 @@ enum GenerationPresetProviders {
             description: "Google Veo video generation via T8Star API",
             baseUrl: "https://ai.t8star.cn",
             category: .video
-        ),
-        GenerationPresetProvider(
-            id: "custom-video",
-            name: "Custom Video",
-            iconName: "puzzlepiece.extension.fill",
-            color: "#5E5CE6",
-            providerType: "openai_compat",
-            supportedTypes: [.video],
-            defaultModel: "",
-            description: "OpenAI-compatible video generation API",
-            baseUrl: nil,
-            category: .video,
-            isCustom: true
         ),
     ]
 
@@ -287,7 +267,8 @@ enum GenerationPresetProviders {
             defaultModel: "en-US-Neural2-A",
             description: "Google Cloud Text-to-Speech",
             baseUrl: nil,
-            category: .audio
+            category: .audio,
+            isUnsupported: true
         ),
         GenerationPresetProvider(
             id: "azure-tts",
@@ -299,7 +280,8 @@ enum GenerationPresetProviders {
             defaultModel: "en-US-JennyNeural",
             description: "Azure Cognitive Services TTS",
             baseUrl: nil,
-            category: .audio
+            category: .audio,
+            isUnsupported: true
         ),
         GenerationPresetProvider(
             id: "t8star-audio",
@@ -313,20 +295,51 @@ enum GenerationPresetProviders {
             baseUrl: "https://ai.t8star.cn",
             category: .audio
         ),
-        GenerationPresetProvider(
-            id: "custom-audio",
-            name: "Custom Audio",
-            iconName: "puzzlepiece.extension.fill",
-            color: "#5E5CE6",
-            providerType: "openai_compat",
-            supportedTypes: [.speech, .audio],
-            defaultModel: "",
-            description: "OpenAI-compatible audio/speech API",
-            baseUrl: nil,
-            category: .audio,
-            isCustom: true
-        ),
     ]
+
+    // MARK: - Custom Presets (not shown in list, used when adding custom providers)
+
+    static let customImage = GenerationPresetProvider(
+        id: "custom-image",
+        name: "Custom Image",
+        iconName: "puzzlepiece.extension.fill",
+        color: "#5E5CE6",
+        providerType: "openai_compat",
+        supportedTypes: [.image],
+        defaultModel: "",
+        description: "OpenAI-compatible image generation API",
+        baseUrl: nil,
+        category: .image,
+        isCustom: true
+    )
+
+    static let customVideo = GenerationPresetProvider(
+        id: "custom-video",
+        name: "Custom Video",
+        iconName: "puzzlepiece.extension.fill",
+        color: "#5E5CE6",
+        providerType: "openai_compat",
+        supportedTypes: [.video],
+        defaultModel: "",
+        description: "OpenAI-compatible video generation API",
+        baseUrl: nil,
+        category: .video,
+        isCustom: true
+    )
+
+    static let customAudio = GenerationPresetProvider(
+        id: "custom-audio",
+        name: "Custom Audio",
+        iconName: "puzzlepiece.extension.fill",
+        color: "#5E5CE6",
+        providerType: "openai_compat",
+        supportedTypes: [.speech, .audio],
+        defaultModel: "",
+        description: "OpenAI-compatible audio/speech API",
+        baseUrl: nil,
+        category: .audio,
+        isCustom: true
+    )
 
     // MARK: - Accessors
 
@@ -342,8 +355,22 @@ enum GenerationPresetProviders {
         }
     }
 
+    /// Find preset by ID, including custom presets
     static func find(byId id: String) -> GenerationPresetProvider? {
+        // Check custom presets first
+        if id == "custom-image" { return customImage }
+        if id == "custom-video" { return customVideo }
+        if id == "custom-audio" { return customAudio }
         return all.first { $0.id == id }
+    }
+
+    /// Get the custom preset for a category
+    static func customPreset(for category: GenerationCategory) -> GenerationPresetProvider {
+        switch category {
+        case .image: return customImage
+        case .video: return customVideo
+        case .audio: return customAudio
+        }
     }
 }
 
@@ -458,6 +485,10 @@ struct GenerationProvidersView: View {
                 selectProvider(first)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .aetherConfigSavedInternally)) { _ in
+            // Reload providers after config is saved to reflect changes
+            loadProviders()
+        }
     }
 
     // MARK: - View Builders
@@ -528,9 +559,13 @@ struct GenerationProvidersView: View {
         ScrollView {
             VStack(spacing: DesignTokens.Spacing.xs) {
                 ForEach(currentCategoryPresets) { preset in
+                    let providerState = getProviderState(for: preset)
                     GenerationProviderCard(
                         preset: preset,
+                        isConfigured: providerState.isConfigured,
+                        isActive: providerState.isActive,
                         isSelected: selectedProviderId == preset.id,
+                        isDefault: providerState.isDefault,
                         onTap: { selectProvider(preset) },
                         isTesting: testingProviders.contains(preset.id),
                         testResult: testResults[preset.id]
@@ -539,6 +574,21 @@ struct GenerationProvidersView: View {
             }
             .padding(DesignTokens.Spacing.md)
         }
+    }
+
+    /// Get provider state (configured, active, default) for a preset
+    private func getProviderState(for preset: GenerationPresetProvider) -> (isConfigured: Bool, isActive: Bool, isDefault: Bool) {
+        // Find matching provider in configured providers list
+        let matchingProvider = providers.first { $0.name == preset.id }
+
+        let isConfigured = matchingProvider != nil
+        let isActive = matchingProvider?.enabled ?? false
+
+        // For generation providers, we don't have a default concept like chat providers
+        // So we just mark the first active provider as default for now
+        let isDefault = false
+
+        return (isConfigured, isActive, isDefault)
     }
 
     // MARK: - Actions
@@ -556,19 +606,11 @@ struct GenerationProvidersView: View {
     }
 
     private func addCustomProvider() {
-        // Find custom provider for current category
-        let customId =
-            switch selectedCategory {
-            case .image: "custom-image"
-            case .video: "custom-video"
-            case .audio: "custom-audio"
-            }
-
-        if let customPreset = GenerationPresetProviders.find(byId: customId) {
-            selectedPreset = customPreset
-            selectedProviderId = customPreset.id
-            isAddingNew = true
-        }
+        // Get custom preset for current category
+        let customPreset = GenerationPresetProviders.customPreset(for: selectedCategory)
+        selectedPreset = customPreset
+        selectedProviderId = customPreset.id
+        isAddingNew = true
     }
 
     private func testConnection() {
@@ -610,9 +652,13 @@ struct CategoryTab: View {
 
 // MARK: - Generation Provider Card
 
+/// Provider card matching SimpleProviderCard style with status indicators
 struct GenerationProviderCard: View {
     let preset: GenerationPresetProvider
+    let isConfigured: Bool
+    let isActive: Bool
     let isSelected: Bool
+    let isDefault: Bool
     let onTap: () -> Void
     let isTesting: Bool
     let testResult: GenerationProvidersView.TestResult?
@@ -620,19 +666,35 @@ struct GenerationProviderCard: View {
     @State private var isHovered = false
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: DesignTokens.Spacing.sm) {
-                // Icon
+        VStack(alignment: .leading, spacing: 4) {
+            // Main card content
+            HStack(spacing: 10) {
+                // Provider icon
                 Image(systemName: preset.iconName)
                     .font(.system(size: 16))
-                    .foregroundColor(Color(hex: preset.color) ?? .accentColor)
-                    .frame(width: 24, height: 24)
+                    .foregroundColor(preset.isUnsupported ? DesignTokens.Colors.textSecondary : (Color(hex: preset.color) ?? .accentColor))
+                    .frame(width: 28, height: 28)
 
-                // Name and supported types
+                // Provider name
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(preset.name)
-                        .font(DesignTokens.Typography.body)
-                        .foregroundColor(DesignTokens.Colors.textPrimary)
+                    HStack(spacing: 4) {
+                        Text(preset.name)
+                            .font(DesignTokens.Typography.body)
+                            .foregroundColor(preset.isUnsupported ? DesignTokens.Colors.textSecondary : DesignTokens.Colors.textPrimary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+
+                        // Unsupported badge
+                        if preset.isUnsupported {
+                            Text(L("settings.generation.unsupported"))
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(DesignTokens.Colors.textSecondary)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 2)
+                                .background(DesignTokens.Colors.textSecondary.opacity(0.1))
+                                .cornerRadius(4)
+                        }
+                    }
 
                     if preset.isCustom {
                         Text(L("settings.generation.custom_provider"))
@@ -643,45 +705,100 @@ struct GenerationProviderCard: View {
 
                 Spacer()
 
-                // Test status indicator
-                if isTesting {
-                    ProgressView()
-                        .scaleEffect(0.6)
-                        .frame(width: 16, height: 16)
-                } else if let result = testResult {
-                    switch result {
-                    case .success:
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                            .font(.system(size: 14))
-                    case .failure:
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.red)
-                            .font(.system(size: 14))
-                    }
+                // Status indicator (visual only, matching SimpleProviderCard)
+                // Red dot = Default (also implies active)
+                // Blue dot = Active (but not default)
+                // Gray dot = Inactive/Unconfigured
+                if !preset.isUnsupported {
+                    Circle()
+                        .fill(statusIndicatorColor)
+                        .frame(width: 8, height: 8)
+                        .help(statusIndicatorTooltip)
                 }
             }
-            .padding(.horizontal, DesignTokens.Spacing.sm)
-            .padding(.vertical, DesignTokens.Spacing.sm)
+            .padding(.horizontal, 12)
+            .padding(.vertical, DesignTokens.Spacing.sm + 2)
             .background(
-                RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.small)
-                    .fill(backgroundColor)
+                RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                    .fill(isSelected ? DesignTokens.Colors.accentBlue.opacity(0.12) : DesignTokens.Colors.textSecondary.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                    .stroke(
+                        isSelected ? DesignTokens.Colors.accentBlue : DesignTokens.Colors.textSecondary.opacity(0.15),
+                        lineWidth: isSelected ? 2 : 1
+                    )
             )
             .contentShape(Rectangle())
+            .onTapGesture(perform: onTap)
+
+            // Inline test result (if present)
+            if let result = testResult {
+                testResultView(result)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 4)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
-        .buttonStyle(.plain)
+        .animation(DesignTokens.Animation.quick, value: isSelected)
+        .animation(.easeInOut(duration: 0.15), value: testResult != nil)
         .onHover { hovering in
             isHovered = hovering
         }
     }
 
-    private var backgroundColor: Color {
-        if isSelected {
-            return Color.accentColor.opacity(0.15)
-        } else if isHovered {
-            return DesignTokens.Colors.textSecondary.opacity(0.05)
+    // MARK: - Computed Properties
+
+    /// Status indicator color based on provider state
+    private var statusIndicatorColor: Color {
+        if isDefault && isConfigured {
+            // Red dot for default provider (must be active)
+            return Color(hex: "#FF3B30") ?? .red
+        } else if isConfigured && isActive {
+            // Blue dot for active (but not default)
+            return Color(hex: "#007AFF") ?? .blue
         } else {
-            return .clear
+            // Gray dot for inactive/unconfigured
+            return Color(hex: "#8E8E93") ?? .gray
+        }
+    }
+
+    /// Tooltip text for status indicator
+    private var statusIndicatorTooltip: String {
+        if isDefault && isConfigured {
+            return L("settings.providers.status.default_tooltip")
+        } else if isConfigured && isActive {
+            return L("settings.providers.status.active_tooltip")
+        } else {
+            return L("settings.providers.status.inactive_tooltip")
+        }
+    }
+
+    // MARK: - Test Result View
+
+    @ViewBuilder
+    private func testResultView(_ result: GenerationProvidersView.TestResult) -> some View {
+        HStack(spacing: 6) {
+            switch result {
+            case .success(let message):
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(.green)
+                Text(message)
+                    .font(.system(size: 10))
+                    .foregroundColor(.green)
+                    .lineLimit(1)
+
+            case .failure(let message):
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(.red)
+                Text(message)
+                    .font(.system(size: 10))
+                    .foregroundColor(.red)
+                    .lineLimit(1)
+                    .help(message) // Full error in tooltip
+            }
         }
     }
 }
@@ -1044,16 +1161,27 @@ struct GenerationProviderEditPanel: View {
     private func loadPresetDefaults(_ preset: GenerationPresetProvider?) {
         guard let preset = preset else { return }
 
-        if preset.isCustom {
-            providerName = ""
-            model = ""
-            baseURL = ""
+        // Try to load saved configuration first
+        let providerKey = preset.isCustom ? providerName : preset.id
+        if !providerKey.isEmpty, let savedConfig = core.getGenerationProviderConfig(name: providerKey) {
+            // Use saved configuration values
+            providerName = preset.isCustom ? providerKey : preset.name
+            apiKey = savedConfig.apiKey ?? ""
+            model = savedConfig.model ?? preset.defaultModel
+            baseURL = savedConfig.baseUrl ?? preset.baseUrl ?? ""
         } else {
-            providerName = preset.name
-            model = preset.defaultModel
-            baseURL = preset.baseUrl ?? ""
+            // No saved config, use preset defaults
+            if preset.isCustom {
+                providerName = ""
+                model = ""
+                baseURL = ""
+            } else {
+                providerName = preset.name
+                model = preset.defaultModel
+                baseURL = preset.baseUrl ?? ""
+            }
+            apiKey = ""
         }
-        apiKey = ""
         localTestResult = nil
     }
 

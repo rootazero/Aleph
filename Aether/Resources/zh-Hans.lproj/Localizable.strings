@@ -97,6 +97,7 @@
 "settings.generation.tab.video" = "视频";
 "settings.generation.tab.audio" = "音频";
 "settings.generation.custom_provider" = "自定义";
+"settings.generation.unsupported" = "待支持";
 
 // MARK: - Generation Provider Help
 "provider.help.generation_base_url" = "覆盖默认的 API 端点。留空使用官方 URL。";
