@@ -72,6 +72,7 @@
 
 pub mod agent_prompt;
 pub mod ai_detector;
+pub mod cache;
 pub mod classifier;
 pub mod context;
 pub mod defaults;
@@ -93,6 +94,7 @@ pub use ffi::{
 pub use parameters::{ConflictResolution, OrganizeMethod, ParameterSource, TaskParameters};
 pub use presets::{PresetRegistry, ScenarioPreset};
 pub use task_category::TaskCategory;
+pub use cache::{CacheConfig, CacheMetrics, CachedIntent, IntentCache};
 pub use context::{
     AppContext, ConversationContext, InputFeatures, MatchingContext, MatchingContextBuilder,
     PendingParam, TimeContext,
