@@ -160,10 +160,7 @@ impl OpenAiImageProvider {
     }
 
     /// Parse API error response and convert to GenerationError
-    fn parse_error_response(
-        status: reqwest::StatusCode,
-        body: &str,
-    ) -> GenerationError {
+    fn parse_error_response(status: reqwest::StatusCode, body: &str) -> GenerationError {
         // Try to parse as OpenAI error format
         if let Ok(error_response) = serde_json::from_str::<OpenAiErrorResponse>(body) {
             let message = error_response.error.message;
@@ -184,10 +181,9 @@ impl OpenAiImageProvider {
 
         // Handle based on status code
         match status.as_u16() {
-            401 => GenerationError::authentication(
-                "Invalid API key or unauthorized",
-                "openai-image",
-            ),
+            401 => {
+                GenerationError::authentication("Invalid API key or unauthorized", "openai-image")
+            }
             429 => {
                 // Try to extract retry-after from response
                 GenerationError::rate_limit("Rate limit exceeded", None)
@@ -344,8 +340,8 @@ impl GenerationProvider for OpenAiImageProvider {
             }
 
             // Parse successful response
-            let api_response: ImageGenerationResponse =
-                serde_json::from_str(&response_text).map_err(|e| {
+            let api_response: ImageGenerationResponse = serde_json::from_str(&response_text)
+                .map_err(|e| {
                     error!(
                         error = %e,
                         body = %response_text,
@@ -483,11 +479,7 @@ mod tests {
 
     #[test]
     fn test_new_with_custom_model() {
-        let provider = OpenAiImageProvider::new(
-            "sk-test-key",
-            None,
-            Some("dall-e-2".to_string()),
-        );
+        let provider = OpenAiImageProvider::new("sk-test-key", None, Some("dall-e-2".to_string()));
 
         assert_eq!(provider.model, "dall-e-2");
     }
@@ -549,11 +541,8 @@ mod tests {
         let provider = OpenAiImageProvider::new("sk-test-key", None, None);
         assert_eq!(provider.default_model(), Some("dall-e-3"));
 
-        let custom_provider = OpenAiImageProvider::new(
-            "sk-test-key",
-            None,
-            Some("dall-e-2".to_string()),
-        );
+        let custom_provider =
+            OpenAiImageProvider::new("sk-test-key", None, Some("dall-e-2".to_string()));
         assert_eq!(custom_provider.default_model(), Some("dall-e-2"));
     }
 
@@ -645,12 +634,13 @@ mod tests {
             }
         }"#;
 
-        let error = OpenAiImageProvider::parse_error_response(
-            reqwest::StatusCode::BAD_REQUEST,
-            body,
-        );
+        let error =
+            OpenAiImageProvider::parse_error_response(reqwest::StatusCode::BAD_REQUEST, body);
 
-        assert!(matches!(error, GenerationError::ContentFilteredError { .. }));
+        assert!(matches!(
+            error,
+            GenerationError::ContentFilteredError { .. }
+        ));
     }
 
     #[test]
@@ -664,12 +654,13 @@ mod tests {
             }
         }"#;
 
-        let error = OpenAiImageProvider::parse_error_response(
-            reqwest::StatusCode::BAD_REQUEST,
-            body,
-        );
+        let error =
+            OpenAiImageProvider::parse_error_response(reqwest::StatusCode::BAD_REQUEST, body);
 
-        assert!(matches!(error, GenerationError::InvalidParametersError { .. }));
+        assert!(matches!(
+            error,
+            GenerationError::InvalidParametersError { .. }
+        ));
     }
 
     #[test]
@@ -679,7 +670,13 @@ mod tests {
             "Internal server error",
         );
 
-        assert!(matches!(error, GenerationError::ProviderError { status_code: Some(500), .. }));
+        assert!(matches!(
+            error,
+            GenerationError::ProviderError {
+                status_code: Some(500),
+                ..
+            }
+        ));
     }
 
     // === Response parsing tests ===

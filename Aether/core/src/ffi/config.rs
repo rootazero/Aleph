@@ -4,7 +4,9 @@
 
 use super::{AetherCore, AetherFfiError, AgentConfigHolder};
 use crate::agent::RigAgentConfig;
-use crate::config::{Config, FullConfig, GeneralConfig, ProviderConfig, RoutingRuleConfig, TestConnectionResult};
+use crate::config::{
+    Config, FullConfig, GeneralConfig, ProviderConfig, RoutingRuleConfig, TestConnectionResult,
+};
 use std::path::Path;
 use tracing::info;
 
@@ -29,7 +31,10 @@ impl AetherCore {
             if path.exists() {
                 Config::load_from_file(path).map_err(|e| AetherFfiError::Config(e.to_string()))?
             } else {
-                return Err(AetherFfiError::Config(format!("Config file not found: {}", self.config_path)));
+                return Err(AetherFfiError::Config(format!(
+                    "Config file not found: {}",
+                    self.config_path
+                )));
             }
         };
 
@@ -50,11 +55,27 @@ impl AetherCore {
                     )
                 } else {
                     info!(provider = %name, "Default provider config not found, using defaults");
-                    ("openai".to_string(), "gpt-4o".to_string(), None, None, None, None, None)
+                    (
+                        "openai".to_string(),
+                        "gpt-4o".to_string(),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
                 }
             } else {
                 info!("No default provider configured, using openai defaults");
-                ("openai".to_string(), "gpt-4o".to_string(), None, None, None, None, None)
+                (
+                    "openai".to_string(),
+                    "gpt-4o".to_string(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
             }
         };
 
@@ -65,7 +86,8 @@ impl AetherCore {
             temperature: temperature.unwrap_or(0.7),
             max_tokens: max_tokens.unwrap_or(4096),
             max_turns: 50, // Default to 50 turns for complex multi-step tasks
-            system_prompt: system_prompt.unwrap_or_else(|| "You are Aether, an intelligent assistant.".to_string()),
+            system_prompt: system_prompt
+                .unwrap_or_else(|| "You are Aether, an intelligent assistant.".to_string()),
             api_key,
             base_url,
         };
@@ -101,7 +123,9 @@ impl AetherCore {
     ) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
         config.providers.insert(name, provider);
-        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        config
+            .save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
         Ok(())
     }
 
@@ -109,7 +133,9 @@ impl AetherCore {
     pub fn delete_provider(&self, name: String) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
         config.providers.remove(&name);
-        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        config
+            .save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
         Ok(())
     }
 
@@ -144,36 +170,55 @@ impl AetherCore {
         );
 
         config.rules = merged_rules;
-        config.validate().map_err(|e| AetherFfiError::Config(e.to_string()))?;
-        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        config
+            .validate()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        config
+            .save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
 
         info!("Routing rules updated");
         Ok(())
     }
 
     /// Update shortcuts configuration
-    pub fn update_shortcuts(&self, shortcuts: crate::config::ShortcutsConfig) -> Result<(), AetherFfiError> {
+    pub fn update_shortcuts(
+        &self,
+        shortcuts: crate::config::ShortcutsConfig,
+    ) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
         config.shortcuts = Some(shortcuts);
-        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        config
+            .save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!("Shortcuts configuration updated");
         Ok(())
     }
 
     /// Update behavior configuration
-    pub fn update_behavior(&self, behavior: crate::config::BehaviorConfig) -> Result<(), AetherFfiError> {
+    pub fn update_behavior(
+        &self,
+        behavior: crate::config::BehaviorConfig,
+    ) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
         config.behavior = Some(behavior);
-        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        config
+            .save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!("Behavior configuration updated");
         Ok(())
     }
 
     /// Update trigger configuration
-    pub fn update_trigger_config(&self, trigger: crate::config::TriggerConfig) -> Result<(), AetherFfiError> {
+    pub fn update_trigger_config(
+        &self,
+        trigger: crate::config::TriggerConfig,
+    ) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
         config.trigger = Some(trigger);
-        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        config
+            .save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!("Trigger configuration updated");
         Ok(())
     }
@@ -182,27 +227,39 @@ impl AetherCore {
     pub fn update_general_config(&self, new_config: GeneralConfig) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
         config.general = new_config;
-        config.save().map_err(|e| AetherFfiError::Config(format!("Failed to save general config: {}", e)))?;
+        config
+            .save()
+            .map_err(|e| AetherFfiError::Config(format!("Failed to save general config: {}", e)))?;
         Ok(())
     }
 
     /// Update search configuration
-    pub fn update_search_config(&self, search: crate::config::SearchConfig) -> Result<(), AetherFfiError> {
+    pub fn update_search_config(
+        &self,
+        search: crate::config::SearchConfig,
+    ) -> Result<(), AetherFfiError> {
         // Convert UniFFI SearchConfig to internal SearchConfigInternal
         let search_internal: crate::config::SearchConfigInternal = search.into();
 
         let mut config = self.lock_config();
         config.search = Some(search_internal);
-        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        config
+            .save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!("Search configuration updated");
         Ok(())
     }
 
     /// Update policies configuration
-    pub fn update_policies(&self, policies: crate::config::PoliciesConfig) -> Result<(), AetherFfiError> {
+    pub fn update_policies(
+        &self,
+        policies: crate::config::PoliciesConfig,
+    ) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
         config.policies = policies;
-        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        config
+            .save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!("Policies configuration updated");
         Ok(())
     }
@@ -300,7 +357,10 @@ impl AetherCore {
         };
 
         let start = Instant::now();
-        match self.runtime.block_on(provider.search("test", &test_options)) {
+        match self
+            .runtime
+            .block_on(provider.search("test", &test_options))
+        {
             Ok(_) => {
                 let latency = start.elapsed().as_millis() as u32;
                 Ok(ProviderTestResult {
@@ -313,9 +373,15 @@ impl AetherCore {
             Err(e) => {
                 let latency = start.elapsed().as_millis() as u32;
                 let error_str = e.to_string();
-                let error_type = if error_str.contains("auth") || error_str.contains("401") || error_str.contains("403") {
+                let error_type = if error_str.contains("auth")
+                    || error_str.contains("401")
+                    || error_str.contains("403")
+                {
                     "auth"
-                } else if error_str.contains("network") || error_str.contains("timeout") || error_str.contains("connection") {
+                } else if error_str.contains("network")
+                    || error_str.contains("timeout")
+                    || error_str.contains("connection")
+                {
                     "network"
                 } else {
                     "config"
@@ -363,7 +429,10 @@ impl AetherCore {
         // Send test request
         let test_prompt = "Say 'OK' if you can read this.";
         let result = self.runtime.block_on(async {
-            provider.process(test_prompt, None).await.map_err(|e| format!("{}", e))
+            provider
+                .process(test_prompt, None)
+                .await
+                .map_err(|e| format!("{}", e))
         });
 
         match result {
@@ -390,9 +459,12 @@ impl AetherCore {
     /// Set the default provider (validates that provider exists and is enabled)
     pub fn set_default_provider(&self, provider_name: String) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
-        config.set_default_provider(&provider_name)
+        config
+            .set_default_provider(&provider_name)
             .map_err(|e| AetherFfiError::Config(e.to_string()))?;
-        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        config
+            .save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!(provider = %provider_name, "Default provider updated");
         Ok(())
     }

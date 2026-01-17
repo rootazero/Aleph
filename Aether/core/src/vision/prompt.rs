@@ -11,9 +11,7 @@ pub fn build_prompt(task: &VisionTask, config: &VisionConfig, user_prompt: Optio
         VisionTask::Describe => config.describe_prompt.clone(),
         VisionTask::OcrWithContext => {
             let prompt = user_prompt.unwrap_or("Please describe the content of this image");
-            config
-                .ocr_with_context_prompt
-                .replace("{prompt}", prompt)
+            config.ocr_with_context_prompt.replace("{prompt}", prompt)
         }
     }
 }

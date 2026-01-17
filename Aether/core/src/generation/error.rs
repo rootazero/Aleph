@@ -29,10 +29,7 @@ use thiserror::Error;
 pub enum GenerationError {
     /// Invalid or missing API key
     #[error("Authentication failed: {message}")]
-    AuthenticationError {
-        message: String,
-        provider: String,
-    },
+    AuthenticationError { message: String, provider: String },
 
     /// Rate limit exceeded
     #[error("Rate limit exceeded: {message}")]
@@ -52,15 +49,11 @@ pub enum GenerationError {
 
     /// Request timed out
     #[error("Generation timed out after {duration:?}")]
-    TimeoutError {
-        duration: Duration,
-    },
+    TimeoutError { duration: Duration },
 
     /// Network connectivity error
     #[error("Network error: {message}")]
-    NetworkError {
-        message: String,
-    },
+    NetworkError { message: String },
 
     /// Invalid request parameters
     #[error("Invalid parameters: {message}")]
@@ -104,16 +97,11 @@ pub enum GenerationError {
 
     /// Internal processing error
     #[error("Internal error: {message}")]
-    InternalError {
-        message: String,
-    },
+    InternalError { message: String },
 
     /// Model not found or not available
     #[error("Model not found: {model}")]
-    ModelNotFoundError {
-        model: String,
-        provider: String,
-    },
+    ModelNotFoundError { model: String, provider: String },
 
     /// Generation type not supported by provider
     #[error("Generation type {generation_type} not supported by {provider}")]
@@ -154,9 +142,7 @@ pub enum GenerationError {
 
     /// Serialization/deserialization error
     #[error("Serialization error: {message}")]
-    SerializationError {
-        message: String,
-    },
+    SerializationError { message: String },
 }
 
 impl GenerationError {
@@ -335,8 +321,14 @@ impl GenerationError {
             GenerationError::RateLimitError { .. }
                 | GenerationError::TimeoutError { .. }
                 | GenerationError::NetworkError { .. }
-                | GenerationError::ProviderError { status_code: Some(500..=599), .. }
-                | GenerationError::ProviderError { status_code: Some(429), .. }
+                | GenerationError::ProviderError {
+                    status_code: Some(500..=599),
+                    ..
+                }
+                | GenerationError::ProviderError {
+                    status_code: Some(429),
+                    ..
+                }
                 | GenerationError::DownloadError { .. }
         )
     }
@@ -480,9 +472,15 @@ impl GenerationError {
             }
             GenerationError::InvalidParametersError { parameter, message } => {
                 if let Some(param) = parameter {
-                    format!("Invalid parameter '{}': {}. Please adjust your settings.", param, message)
+                    format!(
+                        "Invalid parameter '{}': {}. Please adjust your settings.",
+                        param, message
+                    )
                 } else {
-                    format!("Invalid parameters: {}. Please check your request.", message)
+                    format!(
+                        "Invalid parameters: {}. Please check your request.",
+                        message
+                    )
                 }
             }
             GenerationError::ContentFilteredError { category, .. } => {
@@ -495,22 +493,26 @@ impl GenerationError {
                     "Content was filtered by safety systems. Please modify your prompt.".to_string()
                 }
             }
-            GenerationError::UnsupportedFeatureError { feature, provider, .. } => {
+            GenerationError::UnsupportedFeatureError {
+                feature, provider, ..
+            } => {
                 format!(
                     "The feature '{}' is not supported by {}. Try a different provider.",
                     feature, provider
                 )
             }
-            GenerationError::ProviderError { message, status_code, provider } => {
+            GenerationError::ProviderError {
+                message,
+                status_code,
+                provider,
+            } => {
                 if let Some(code) = status_code {
                     format!("{} returned error {}: {}", provider, code, message)
                 } else {
                     format!("{} error: {}", provider, message)
                 }
             }
-            GenerationError::Cancelled => {
-                "Generation was cancelled.".to_string()
-            }
+            GenerationError::Cancelled => "Generation was cancelled.".to_string(),
             GenerationError::InternalError { message } => {
                 format!("Internal error: {}. Please try again.", message)
             }
@@ -520,7 +522,10 @@ impl GenerationError {
                     model, provider
                 )
             }
-            GenerationError::UnsupportedGenerationTypeError { generation_type, provider } => {
+            GenerationError::UnsupportedGenerationTypeError {
+                generation_type,
+                provider,
+            } => {
                 format!(
                     "{} does not support {} generation. Try a different provider.",
                     provider, generation_type
@@ -568,23 +573,17 @@ impl From<GenerationError> for AetherError {
             GenerationError::AuthenticationError { message, provider } => {
                 AetherError::authentication(provider, message)
             }
-            GenerationError::RateLimitError { message, .. } => {
-                AetherError::rate_limit(message)
-            }
+            GenerationError::RateLimitError { message, .. } => AetherError::rate_limit(message),
             GenerationError::QuotaExceededError { message, .. } => {
                 AetherError::rate_limit(format!("Quota exceeded: {}", message))
             }
-            GenerationError::TimeoutError { duration } => {
-                AetherError::Timeout {
-                    suggestion: Some(format!(
-                        "Generation timed out after {} seconds. Try a simpler request.",
-                        duration.as_secs()
-                    )),
-                }
-            }
-            GenerationError::NetworkError { message } => {
-                AetherError::network(message)
-            }
+            GenerationError::TimeoutError { duration } => AetherError::Timeout {
+                suggestion: Some(format!(
+                    "Generation timed out after {} seconds. Try a simpler request.",
+                    duration.as_secs()
+                )),
+            },
+            GenerationError::NetworkError { message } => AetherError::network(message),
             GenerationError::InvalidParametersError { message, .. } => {
                 AetherError::invalid_config(message)
             }
@@ -594,42 +593,28 @@ impl From<GenerationError> for AetherError {
             GenerationError::UnsupportedFeatureError { message, .. } => {
                 AetherError::provider(message)
             }
-            GenerationError::ProviderError { message, .. } => {
-                AetherError::provider(message)
-            }
-            GenerationError::Cancelled => {
-                AetherError::cancelled()
-            }
-            GenerationError::InternalError { message } => {
-                AetherError::other(message)
-            }
+            GenerationError::ProviderError { message, .. } => AetherError::provider(message),
+            GenerationError::Cancelled => AetherError::cancelled(),
+            GenerationError::InternalError { message } => AetherError::other(message),
             GenerationError::ModelNotFoundError { model, provider } => {
-                AetherError::invalid_config(format!(
-                    "Model '{}' not found on {}",
-                    model, provider
-                ))
+                AetherError::invalid_config(format!("Model '{}' not found on {}", model, provider))
             }
-            GenerationError::UnsupportedGenerationTypeError { generation_type, provider } => {
-                AetherError::provider(format!(
-                    "{} does not support {} generation",
-                    provider, generation_type
-                ))
-            }
+            GenerationError::UnsupportedGenerationTypeError {
+                generation_type,
+                provider,
+            } => AetherError::provider(format!(
+                "{} does not support {} generation",
+                provider, generation_type
+            )),
             GenerationError::UnsupportedFormatError { format, .. } => {
                 AetherError::invalid_config(format!("Unsupported format: {}", format))
             }
             GenerationError::UnsupportedDimensionError { message, .. } => {
                 AetherError::invalid_config(message)
             }
-            GenerationError::JobFailedError { message, .. } => {
-                AetherError::provider(message)
-            }
-            GenerationError::DownloadError { message, .. } => {
-                AetherError::network(message)
-            }
-            GenerationError::SerializationError { message } => {
-                AetherError::IoError(message)
-            }
+            GenerationError::JobFailedError { message, .. } => AetherError::provider(message),
+            GenerationError::DownloadError { message, .. } => AetherError::network(message),
+            GenerationError::SerializationError { message } => AetherError::IoError(message),
         }
     }
 }
@@ -694,17 +679,16 @@ mod tests {
             "dall-e-3",
         );
 
-        assert!(matches!(err, GenerationError::UnsupportedFeatureError { .. }));
+        assert!(matches!(
+            err,
+            GenerationError::UnsupportedFeatureError { .. }
+        ));
         assert_eq!(err.provider_name(), Some("dall-e-3"));
     }
 
     #[test]
     fn test_provider_error() {
-        let err = GenerationError::provider(
-            "Internal server error",
-            Some(500),
-            "openai",
-        );
+        let err = GenerationError::provider("Internal server error", Some(500), "openai");
 
         assert!(matches!(err, GenerationError::ProviderError { .. }));
         assert_eq!(err.provider_name(), Some("openai"));
@@ -720,12 +704,13 @@ mod tests {
 
     #[test]
     fn test_unsupported_format_error() {
-        let err = GenerationError::unsupported_format(
-            "gif",
-            vec!["png".to_string(), "webp".to_string()],
-        );
+        let err =
+            GenerationError::unsupported_format("gif", vec!["png".to_string(), "webp".to_string()]);
 
-        assert!(matches!(err, GenerationError::UnsupportedFormatError { .. }));
+        assert!(matches!(
+            err,
+            GenerationError::UnsupportedFormatError { .. }
+        ));
     }
 
     // === Classification tests ===
@@ -807,7 +792,10 @@ mod tests {
 
         // No provider
         assert_eq!(GenerationError::network("test").provider_name(), None);
-        assert_eq!(GenerationError::timeout(Duration::from_secs(1)).provider_name(), None);
+        assert_eq!(
+            GenerationError::timeout(Duration::from_secs(1)).provider_name(),
+            None
+        );
     }
 
     // === User-friendly message tests ===
@@ -849,10 +837,8 @@ mod tests {
 
     #[test]
     fn test_user_friendly_message_unsupported_format() {
-        let err = GenerationError::unsupported_format(
-            "gif",
-            vec!["png".to_string(), "webp".to_string()],
-        );
+        let err =
+            GenerationError::unsupported_format("gif", vec!["png".to_string(), "webp".to_string()]);
         let msg = err.user_friendly_message();
 
         assert!(msg.contains("gif"));
@@ -866,7 +852,10 @@ mod tests {
         let gen_err = GenerationError::authentication("Invalid key", "openai");
         let aether_err: AetherError = gen_err.into();
 
-        assert!(matches!(aether_err, AetherError::AuthenticationError { .. }));
+        assert!(matches!(
+            aether_err,
+            AetherError::AuthenticationError { .. }
+        ));
     }
 
     #[test]

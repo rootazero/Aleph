@@ -44,7 +44,10 @@ impl AetherEventHandler for MockEventHandler {
     fn on_agent_mode_detected(&self, _task: ExecutableTaskFFI) {}
 
     fn on_tools_changed(&self, tool_count: u32) {
-        println!("[MockEventHandler] on_tools_changed called with {} tools", tool_count);
+        println!(
+            "[MockEventHandler] on_tools_changed called with {} tools",
+            tool_count
+        );
         self.tools_changed_count.fetch_add(1, Ordering::SeqCst);
         self.last_tool_count.store(tool_count, Ordering::SeqCst);
     }

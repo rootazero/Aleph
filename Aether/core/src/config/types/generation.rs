@@ -146,7 +146,10 @@ impl GenerationConfig {
     }
 
     /// Get providers that support a specific generation type
-    pub fn get_providers_for_type(&self, gen_type: GenerationType) -> Vec<(&str, &GenerationProviderConfig)> {
+    pub fn get_providers_for_type(
+        &self,
+        gen_type: GenerationType,
+    ) -> Vec<(&str, &GenerationProviderConfig)> {
         self.providers
             .iter()
             .filter(|(_, config)| config.enabled && config.capabilities.contains(&gen_type))
@@ -665,8 +668,14 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(config.get_default_provider(GenerationType::Image), Some("dalle"));
-        assert_eq!(config.get_default_provider(GenerationType::Speech), Some("elevenlabs"));
+        assert_eq!(
+            config.get_default_provider(GenerationType::Image),
+            Some("dalle")
+        );
+        assert_eq!(
+            config.get_default_provider(GenerationType::Speech),
+            Some("elevenlabs")
+        );
         assert_eq!(config.get_default_provider(GenerationType::Video), None);
         assert_eq!(config.get_default_provider(GenerationType::Audio), None);
     }
@@ -793,13 +802,18 @@ mod tests {
     fn test_provider_config_resolve_model() {
         let mut config = GenerationProviderConfig::new("openai");
         config.model = Some("dall-e-3".to_string());
-        config.models.insert("fast".to_string(), "dall-e-2".to_string());
+        config
+            .models
+            .insert("fast".to_string(), "dall-e-2".to_string());
 
         // Use default model
         assert_eq!(config.resolve_model(None), Some("dall-e-3"));
 
         // Use explicit model
-        assert_eq!(config.resolve_model(Some("gpt-image-1")), Some("gpt-image-1"));
+        assert_eq!(
+            config.resolve_model(Some("gpt-image-1")),
+            Some("gpt-image-1")
+        );
 
         // Use alias
         assert_eq!(config.resolve_model(Some("fast")), Some("dall-e-2"));

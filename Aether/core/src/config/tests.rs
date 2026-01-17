@@ -502,16 +502,16 @@ fn test_config_toml_round_trip() {
         deserialized.shortcuts.as_ref().unwrap().summon,
         "Command+Shift+A"
     );
-    assert_eq!(deserialized.behavior.as_ref().unwrap().output_mode, "instant");
+    assert_eq!(
+        deserialized.behavior.as_ref().unwrap().output_mode,
+        "instant"
+    );
     assert_eq!(deserialized.behavior.as_ref().unwrap().typing_speed, 100);
     assert_eq!(deserialized.providers.len(), 1);
     // AI-first mode: no builtin rules, only the 1 custom rule we added
     assert_eq!(deserialized.rules.len(), 1);
     // Verify custom rule is present
-    assert!(deserialized
-        .rules
-        .iter()
-        .any(|r| r.regex.contains("code")));
+    assert!(deserialized.rules.iter().any(|r| r.regex.contains("code")));
     assert!(deserialized.validate().is_ok());
 }
 
@@ -582,7 +582,9 @@ fn test_dispatcher_config_validation_threshold_negative() {
     };
     let result = config.validate();
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("confirmation_threshold must be >= 0.0"));
+    assert!(result
+        .unwrap_err()
+        .contains("confirmation_threshold must be >= 0.0"));
 }
 
 #[test]
@@ -604,7 +606,9 @@ fn test_dispatcher_config_validation_confirmation_timeout_zero() {
     };
     let result = config.validate();
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("confirmation_timeout_ms must be > 0"));
+    assert!(result
+        .unwrap_err()
+        .contains("confirmation_timeout_ms must be > 0"));
 }
 
 #[test]
@@ -854,7 +858,10 @@ args = ["~/.mcp/github/index.js"]
 
     // MCP servers
     assert_eq!(unified.mcp.len(), 1);
-    let github = unified.mcp.get("github").expect("Should have github server");
+    let github = unified
+        .mcp
+        .get("github")
+        .expect("Should have github server");
     assert_eq!(github.command, "node");
     assert_eq!(github.args, vec!["~/.mcp/github/index.js"]);
 }
@@ -949,8 +956,7 @@ fn test_unified_tools_config_serialization_round_trip() {
     let toml_str = toml::to_string_pretty(&config).expect("Should serialize");
 
     // Deserialize back
-    let deserialized: UnifiedToolsConfig =
-        toml::from_str(&toml_str).expect("Should deserialize");
+    let deserialized: UnifiedToolsConfig = toml::from_str(&toml_str).expect("Should deserialize");
 
     // Verify round-trip
     assert_eq!(deserialized.enabled, config.enabled);
@@ -971,8 +977,8 @@ fn test_unified_tools_config_serialization_round_trip() {
 
 #[test]
 fn test_save_incremental_preserves_other_sections() {
-    use tempfile::TempDir;
     use std::fs;
+    use tempfile::TempDir;
 
     // Create temp directory for test
     let temp_dir = TempDir::new().unwrap();
@@ -1073,8 +1079,8 @@ max_context_items = 10
 
 #[test]
 fn test_save_incremental_nested_section() {
-    use tempfile::TempDir;
     use std::fs;
+    use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
     let config_path = temp_dir.path().join("config.toml");
@@ -1135,8 +1141,8 @@ timeout_seconds = 10
 #[test]
 fn test_migration_does_not_overwrite_providers() {
     // This test verifies that the migration logic preserves user providers
-    use tempfile::TempDir;
     use std::fs;
+    use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
     let config_path = temp_dir.path().join("config.toml");

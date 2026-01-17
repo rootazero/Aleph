@@ -73,7 +73,6 @@ pub struct AiMemoryResult {
     pub reasoning: Option<String>,
 }
 
-
 /// AI-powered memory retriever.
 pub struct AiMemoryRetriever {
     /// AI provider for memory evaluation
@@ -136,7 +135,11 @@ impl AiMemoryRetriever {
             id: entry.id.clone(),
             user_input: entry.user_input.clone(),
             // Truncate AI output using configured length
-            ai_output: entry.ai_output.chars().take(self.content_truncate_length).collect(),
+            ai_output: entry
+                .ai_output
+                .chars()
+                .take(self.content_truncate_length)
+                .collect(),
             timestamp: entry.context.timestamp,
             app_bundle_id: entry.context.app_bundle_id.clone(),
         }
@@ -170,8 +173,10 @@ impl AiMemoryRetriever {
             .collect();
 
         // Convert to candidate format for AI (using configurable truncation)
-        let ai_candidates: Vec<MemoryCandidate> =
-            limited_candidates.iter().map(|e| self.entry_to_candidate(e)).collect();
+        let ai_candidates: Vec<MemoryCandidate> = limited_candidates
+            .iter()
+            .map(|e| self.entry_to_candidate(e))
+            .collect();
 
         let request = AiMemoryRequest {
             query: query.to_string(),

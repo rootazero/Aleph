@@ -28,26 +28,25 @@ static EXECUTABLE_PATTERNS: Lazy<Vec<(Regex, TaskCategory)>> = Lazy::new(|| {
         ),
         // FileTransfer: move/copy/transfer + to
         (
-            Regex::new(r"(?i)(移动|复制|拷贝|转移|move|copy|transfer).*(到|to)")
-                .unwrap(),
+            Regex::new(r"(?i)(移动|复制|拷贝|转移|move|copy|transfer).*(到|to)").unwrap(),
             TaskCategory::FileTransfer,
         ),
         // FileCleanup: delete/remove/clean
         (
-            Regex::new(r"(?i)(删除|清理|清空|清除|delete|remove|clean)")
-                .unwrap(),
+            Regex::new(r"(?i)(删除|清理|清空|清除|delete|remove|clean)").unwrap(),
             TaskCategory::FileCleanup,
         ),
         // CodeExecution: run/execute + script/code
         (
-            Regex::new(r"(?i)(运行|执行|跑一下|run|execute).*(脚本|代码|script|code)")
-                .unwrap(),
+            Regex::new(r"(?i)(运行|执行|跑一下|run|execute).*(脚本|代码|script|code)").unwrap(),
             TaskCategory::CodeExecution,
         ),
         // DocumentGenerate: generate/create/export + document/report
         (
-            Regex::new(r"(?i)(生成|创建|导出|写|generate|create|export).*(文档|报告|document|report)")
-                .unwrap(),
+            Regex::new(
+                r"(?i)(生成|创建|导出|写|generate|create|export).*(文档|报告|document|report)",
+            )
+            .unwrap(),
             TaskCategory::DocumentGenerate,
         ),
     ]
@@ -71,16 +70,52 @@ struct KeywordSet {
 /// These are non-executable verbs that indicate analysis/understanding rather than action
 static EXCLUSION_VERBS: &[&str] = &[
     // Chinese analysis/understanding verbs
-    "分析", "理解", "解释", "描述", "识别", "检测", "看看", "看一下", "看下",
-    "告诉我", "说说", "讲讲", "什么是", "是什么", "怎么样",
+    "分析",
+    "理解",
+    "解释",
+    "描述",
+    "识别",
+    "检测",
+    "看看",
+    "看一下",
+    "看下",
+    "告诉我",
+    "说说",
+    "讲讲",
+    "什么是",
+    "是什么",
+    "怎么样",
     // Chinese summarization verbs
-    "总结", "摘要", "概括", "归纳", "提炼", "概述", "梳理", "提取要点",
+    "总结",
+    "摘要",
+    "概括",
+    "归纳",
+    "提炼",
+    "概述",
+    "梳理",
+    "提取要点",
     // English analysis verbs
-    "analyze", "analyse", "understand", "explain", "describe", "identify",
-    "detect", "recognize", "what is", "tell me", "look at",
+    "analyze",
+    "analyse",
+    "understand",
+    "explain",
+    "describe",
+    "identify",
+    "detect",
+    "recognize",
+    "what is",
+    "tell me",
+    "look at",
     // English summarization verbs
-    "summarize", "summarise", "summary", "abstract", "recap", "outline",
-    "extract", "highlight", "key points",
+    "summarize",
+    "summarise",
+    "summary",
+    "abstract",
+    "recap",
+    "outline",
+    "extract",
+    "highlight",
+    "key points",
 ];
 
 /// Static keyword sets for L2 matching
@@ -89,8 +124,18 @@ static KEYWORD_SETS: &[KeywordSet] = &[
         // Removed "分" - too short, causes false matches (e.g., "分析" contains "分")
         verbs: &["整理", "归类", "分类", "organize", "sort", "classify"],
         nouns: &[
-            "文件", "文件夹", "目录", "下载", "照片", "图片",
-            "files", "folder", "directory", "downloads", "photos", "pictures",
+            "文件",
+            "文件夹",
+            "目录",
+            "下载",
+            "照片",
+            "图片",
+            "files",
+            "folder",
+            "directory",
+            "downloads",
+            "photos",
+            "pictures",
         ],
         category: TaskCategory::FileOrganize,
     },
@@ -100,7 +145,9 @@ static KEYWORD_SETS: &[KeywordSet] = &[
         category: TaskCategory::FileTransfer,
     },
     KeywordSet {
-        verbs: &["删除", "清理", "清空", "移除", "delete", "remove", "clean", "clear"],
+        verbs: &[
+            "删除", "清理", "清空", "移除", "delete", "remove", "clean", "clear",
+        ],
         nouns: &["文件", "缓存", "垃圾", "files", "cache", "trash"],
         category: TaskCategory::FileCleanup,
     },
@@ -110,7 +157,9 @@ static KEYWORD_SETS: &[KeywordSet] = &[
         category: TaskCategory::CodeExecution,
     },
     KeywordSet {
-        verbs: &["生成", "创建", "导出", "写", "generate", "create", "export", "write"],
+        verbs: &[
+            "生成", "创建", "导出", "写", "generate", "create", "export", "write",
+        ],
         nouns: &["文档", "报告", "document", "report", "pdf"],
         category: TaskCategory::DocumentGenerate,
     },
@@ -209,7 +258,9 @@ impl IntentClassifier {
             for kw in &rule_config.keywords {
                 rule = rule.with_keyword(&kw.word, kw.weight);
             }
-            rule = rule.with_match_mode(mode).with_min_score(rule_config.min_score);
+            rule = rule
+                .with_match_mode(mode)
+                .with_min_score(rule_config.min_score);
 
             self.keyword_index.add_rule(rule);
         }
@@ -443,22 +494,17 @@ impl IntentClassifier {
         // 2. Try L1 regex matching (highest confidence)
         if let Some(task) = self.match_regex(input) {
             let category_str = format!("{:?}", task.category);
-            let signal = IntentSignal::with_tool(
-                category_str.clone(),
-                category_str,
-                task.confidence,
-            );
-            let calibrated = CalibratedSignal::from_signal(
-                &signal,
-                task.confidence,
-                RoutingLayer::L1Regex,
-            );
+            let signal =
+                IntentSignal::with_tool(category_str.clone(), category_str, task.confidence);
+            let calibrated =
+                CalibratedSignal::from_signal(&signal, task.confidence, RoutingLayer::L1Regex);
             let aggregator = IntentAggregator::new(AggregatorConfig::default());
             return Ok(aggregator.from_single(calibrated));
         }
 
         // 3. Try L2 keyword matching
-        let l2_result = self.match_keywords_enhanced(input)
+        let l2_result = self
+            .match_keywords_enhanced(input)
             .or_else(|| self.match_keywords(input));
 
         if let Some(task) = l2_result {
@@ -475,20 +521,15 @@ impl IntentClassifier {
                 // Get recent tools from conversation context for context boost
                 let recent_tools = context.conversation.recent_intents.to_vec();
 
-                let calibrated = calibrator.calibrate(signal, RoutingLayer::L2Keyword, &recent_tools);
+                let calibrated =
+                    calibrator.calibrate(signal, RoutingLayer::L2Keyword, &recent_tools);
                 confidence = calibrated.calibrated_confidence;
             }
 
-            let signal = IntentSignal::with_tool(
-                category_str.clone(),
-                category_str,
-                task.confidence,
-            );
-            let calibrated = CalibratedSignal::from_signal(
-                &signal,
-                confidence,
-                RoutingLayer::L2Keyword,
-            );
+            let signal =
+                IntentSignal::with_tool(category_str.clone(), category_str, task.confidence);
+            let calibrated =
+                CalibratedSignal::from_signal(&signal, confidence, RoutingLayer::L2Keyword);
             let aggregator = IntentAggregator::new(AggregatorConfig::default());
             return Ok(aggregator.from_single(calibrated));
         }
@@ -508,7 +549,8 @@ impl IntentClassifier {
                         );
                         let recent_tools = context.conversation.recent_intents.to_vec();
 
-                        let calibrated = calibrator.calibrate(signal, RoutingLayer::L3Ai, &recent_tools);
+                        let calibrated =
+                            calibrator.calibrate(signal, RoutingLayer::L3Ai, &recent_tools);
                         confidence = calibrated.calibrated_confidence;
                     }
 
@@ -517,11 +559,8 @@ impl IntentClassifier {
                         ai_result.intent,
                         task.confidence,
                     );
-                    let calibrated = CalibratedSignal::from_signal(
-                        &signal,
-                        confidence,
-                        RoutingLayer::L3Ai,
-                    );
+                    let calibrated =
+                        CalibratedSignal::from_signal(&signal, confidence, RoutingLayer::L3Ai);
                     let aggregator = IntentAggregator::new(AggregatorConfig::default());
                     return Ok(aggregator.from_single(calibrated));
                 }
@@ -723,9 +762,7 @@ mod tests {
     async fn test_classify_executable_l2() {
         let classifier = IntentClassifier::new();
         // Use clearer expression with "整理" instead of ambiguous "分"
-        let result = classifier
-            .classify("能不能帮忙整理一下下载里的东西")
-            .await;
+        let result = classifier.classify("能不能帮忙整理一下下载里的东西").await;
         assert!(matches!(result, ExecutionIntent::Executable(_)));
         if let ExecutionIntent::Executable(task) = result {
             assert_eq!(task.category, TaskCategory::FileOrganize);
@@ -754,77 +791,110 @@ mod tests {
         let classifier = IntentClassifier::new();
         // "分析图片" should be conversational (analysis), not file operation
         let result = classifier.match_keywords("分析这幅图片");
-        assert!(result.is_none(), "Analysis requests should not trigger agent mode");
+        assert!(
+            result.is_none(),
+            "Analysis requests should not trigger agent mode"
+        );
     }
 
     #[test]
     fn test_exclusion_analyze_image_english() {
         let classifier = IntentClassifier::new();
         let result = classifier.match_keywords("analyze this picture");
-        assert!(result.is_none(), "Analysis requests should not trigger agent mode");
+        assert!(
+            result.is_none(),
+            "Analysis requests should not trigger agent mode"
+        );
     }
 
     #[test]
     fn test_exclusion_describe_photo() {
         let classifier = IntentClassifier::new();
         let result = classifier.match_keywords("描述一下这张照片");
-        assert!(result.is_none(), "Description requests should not trigger agent mode");
+        assert!(
+            result.is_none(),
+            "Description requests should not trigger agent mode"
+        );
     }
 
     #[test]
     fn test_exclusion_explain_file() {
         let classifier = IntentClassifier::new();
         let result = classifier.match_keywords("解释这个文件的内容");
-        assert!(result.is_none(), "Explanation requests should not trigger agent mode");
+        assert!(
+            result.is_none(),
+            "Explanation requests should not trigger agent mode"
+        );
     }
 
     #[test]
     fn test_exclusion_what_is_image() {
         let classifier = IntentClassifier::new();
         let result = classifier.match_keywords("这张图片是什么");
-        assert!(result.is_none(), "Question about content should not trigger agent mode");
+        assert!(
+            result.is_none(),
+            "Question about content should not trigger agent mode"
+        );
     }
 
     #[test]
     fn test_exclusion_look_at_photo() {
         let classifier = IntentClassifier::new();
         let result = classifier.match_keywords("看看这张照片");
-        assert!(result.is_none(), "Look at requests should not trigger agent mode");
+        assert!(
+            result.is_none(),
+            "Look at requests should not trigger agent mode"
+        );
     }
 
     #[test]
     fn test_exclusion_summarize_document_chinese() {
         let classifier = IntentClassifier::new();
         let result = classifier.match_keywords("总结这个文档");
-        assert!(result.is_none(), "Summarization requests should not trigger agent mode");
+        assert!(
+            result.is_none(),
+            "Summarization requests should not trigger agent mode"
+        );
     }
 
     #[test]
     fn test_exclusion_summarize_webpage() {
         let classifier = IntentClassifier::new();
         let result = classifier.match_keywords("帮我总结一下这个网页");
-        assert!(result.is_none(), "Webpage summarization should not trigger agent mode");
+        assert!(
+            result.is_none(),
+            "Webpage summarization should not trigger agent mode"
+        );
     }
 
     #[test]
     fn test_exclusion_abstract_file() {
         let classifier = IntentClassifier::new();
         let result = classifier.match_keywords("给这个文件写个摘要");
-        assert!(result.is_none(), "Abstract requests should not trigger agent mode");
+        assert!(
+            result.is_none(),
+            "Abstract requests should not trigger agent mode"
+        );
     }
 
     #[test]
     fn test_exclusion_summarize_english() {
         let classifier = IntentClassifier::new();
         let result = classifier.match_keywords("summarize this document");
-        assert!(result.is_none(), "English summarization should not trigger agent mode");
+        assert!(
+            result.is_none(),
+            "English summarization should not trigger agent mode"
+        );
     }
 
     #[test]
     fn test_exclusion_outline_file() {
         let classifier = IntentClassifier::new();
         let result = classifier.match_keywords("概括一下这个文件的内容");
-        assert!(result.is_none(), "Outline requests should not trigger agent mode");
+        assert!(
+            result.is_none(),
+            "Outline requests should not trigger agent mode"
+        );
     }
 
     #[tokio::test]
@@ -854,7 +924,10 @@ mod tests {
         let classifier = IntentClassifier::new();
         // Clear file organize request should still work
         let result = classifier.match_keywords("帮我整理下载文件夹");
-        assert!(result.is_some(), "Clear file organize requests should still work");
+        assert!(
+            result.is_some(),
+            "Clear file organize requests should still work"
+        );
         assert_eq!(result.unwrap().category, TaskCategory::FileOrganize);
     }
 
@@ -862,7 +935,10 @@ mod tests {
     fn test_real_file_cleanup_still_works() {
         let classifier = IntentClassifier::new();
         let result = classifier.match_keywords("清理一下缓存文件");
-        assert!(result.is_some(), "Clear file cleanup requests should still work");
+        assert!(
+            result.is_some(),
+            "Clear file cleanup requests should still work"
+        );
         assert_eq!(result.unwrap().category, TaskCategory::FileCleanup);
     }
 

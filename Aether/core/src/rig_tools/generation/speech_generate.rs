@@ -89,9 +89,7 @@ impl SpeechGenerateTool {
     fn validate_args(args: &SpeechGenerateArgs) -> Result<(), ToolError> {
         // Validate text is not empty
         if args.text.trim().is_empty() {
-            return Err(ToolError::InvalidArgs(
-                "Text cannot be empty".to_string(),
-            ));
+            return Err(ToolError::InvalidArgs("Text cannot be empty".to_string()));
         }
 
         // Validate speed range (0.25 to 4.0)
@@ -123,9 +121,10 @@ impl SpeechGenerateTool {
 
         // Find provider
         let (provider_name, provider) = if let Some(name) = &args.provider {
-            let provider = self.registry.get(name).ok_or_else(|| {
-                ToolError::InvalidArgs(format!("Provider '{}' not found", name))
-            })?;
+            let provider = self
+                .registry
+                .get(name)
+                .ok_or_else(|| ToolError::InvalidArgs(format!("Provider '{}' not found", name)))?;
 
             // Check if provider supports speech generation
             if !provider.supports(GenerationType::Speech) {
@@ -141,9 +140,7 @@ impl SpeechGenerateTool {
             self.registry
                 .first_for_type(GenerationType::Speech)
                 .ok_or_else(|| {
-                    ToolError::InvalidArgs(
-                        "No speech generation provider available".to_string(),
-                    )
+                    ToolError::InvalidArgs("No speech generation provider available".to_string())
                 })?
         };
 
@@ -180,8 +177,7 @@ impl SpeechGenerateTool {
             crate::generation::GenerationData::Bytes(bytes) => {
                 // Convert bytes to base64 data URL
                 use base64::Engine;
-                let base64_data =
-                    base64::engine::general_purpose::STANDARD.encode(bytes);
+                let base64_data = base64::engine::general_purpose::STANDARD.encode(bytes);
                 let content_type = output
                     .metadata
                     .content_type

@@ -572,7 +572,9 @@ impl DispatcherIntegration {
         );
 
         let params = parameters.clone().unwrap_or_default();
-        let reason_str = reason.clone().unwrap_or_else(|| "Low confidence match".to_string());
+        let reason_str = reason
+            .clone()
+            .unwrap_or_else(|| "Low confidence match".to_string());
 
         // Create pending confirmation state
         let state = self.async_confirmation.create_pending(
@@ -629,7 +631,9 @@ impl DispatcherIntegration {
         decision: UserConfirmationDecision,
     ) -> Result<DispatcherResult> {
         // Process the decision via async confirmation handler
-        let state = self.async_confirmation.resume_with_decision(confirmation_id, decision);
+        let state = self
+            .async_confirmation
+            .resume_with_decision(confirmation_id, decision);
 
         match state {
             ConfirmationState::Confirmed {
@@ -639,23 +643,26 @@ impl DispatcherIntegration {
                 confidence,
             } => {
                 info!(tool = %tool.name, "User confirmed tool execution (async)");
-                Ok(DispatcherResult::execute(tool, parameters, routing_layer, confidence)
-                    .with_confirmation()
-                    .with_reason("User confirmed execution"))
+                Ok(
+                    DispatcherResult::execute(tool, parameters, routing_layer, confidence)
+                        .with_confirmation()
+                        .with_reason("User confirmed execution"),
+                )
             }
             ConfirmationState::Cancelled { reason } => {
                 info!(reason = %reason, "User cancelled tool execution (async)");
                 Ok(DispatcherResult::cancelled().with_reason(reason))
             }
-            ConfirmationState::TimedOut { confirmation_id: id } => {
+            ConfirmationState::TimedOut {
+                confirmation_id: id,
+            } => {
                 warn!(id = %id, "Confirmation timed out (async)");
                 Ok(DispatcherResult::error("Confirmation timed out"))
             }
             ConfirmationState::NotRequired => {
                 // This shouldn't happen if called correctly
                 warn!("resume_with_decision called but confirmation not found or not required");
-                Ok(DispatcherResult::general_chat()
-                    .with_reason("Confirmation not found"))
+                Ok(DispatcherResult::general_chat().with_reason("Confirmation not found"))
             }
             ConfirmationState::Pending(_) => {
                 // This shouldn't happen after resume_with_decision
@@ -666,7 +673,10 @@ impl DispatcherIntegration {
     }
 
     /// Get a pending confirmation by ID
-    pub fn get_pending_confirmation(&self, confirmation_id: &str) -> Option<PendingConfirmationInfo> {
+    pub fn get_pending_confirmation(
+        &self,
+        confirmation_id: &str,
+    ) -> Option<PendingConfirmationInfo> {
         self.async_confirmation
             .get_pending(confirmation_id)
             .map(|p| p.to_ffi())
@@ -674,7 +684,9 @@ impl DispatcherIntegration {
 
     /// Check if a confirmation is still pending
     pub fn is_confirmation_pending(&self, confirmation_id: &str) -> bool {
-        self.async_confirmation.get_pending(confirmation_id).is_some()
+        self.async_confirmation
+            .get_pending(confirmation_id)
+            .is_some()
     }
 
     /// Get the count of pending confirmations
@@ -685,10 +697,7 @@ impl DispatcherIntegration {
     /// Cleanup expired confirmations and notify via callback
     ///
     /// Returns the number of expired confirmations that were cleaned up
-    pub fn cleanup_expired_confirmations(
-        &self,
-        event_handler: &dyn InternalEventHandler,
-    ) -> usize {
+    pub fn cleanup_expired_confirmations(&self, event_handler: &dyn InternalEventHandler) -> usize {
         // Cleanup expired and get their IDs
         let expired_ids = self.async_confirmation.cleanup_expired();
         let count = expired_ids.len();
@@ -769,12 +778,8 @@ mod tests {
         let tool = create_test_tools().remove(0);
         let params = json!({"query": "test"});
 
-        let result = DispatcherResult::execute(
-            tool.clone(),
-            params,
-            RoutingLayer::L3Inference,
-            0.9,
-        );
+        let result =
+            DispatcherResult::execute(tool.clone(), params, RoutingLayer::L3Inference, 0.9);
 
         assert!(result.action.should_execute_tool());
         assert_eq!(result.tool.unwrap().name, "search");
@@ -812,8 +817,7 @@ mod tests {
 
     #[test]
     fn test_dispatcher_result_with_reason() {
-        let result = DispatcherResult::general_chat()
-            .with_reason("Custom reason");
+        let result = DispatcherResult::general_chat().with_reason("Custom reason");
 
         assert_eq!(result.reason, Some("Custom reason".to_string()));
     }
@@ -821,13 +825,8 @@ mod tests {
     #[test]
     fn test_dispatcher_result_with_confirmation() {
         let tool = create_test_tools().remove(0);
-        let result = DispatcherResult::execute(
-            tool,
-            json!({}),
-            RoutingLayer::L3Inference,
-            0.5,
-        )
-        .with_confirmation();
+        let result = DispatcherResult::execute(tool, json!({}), RoutingLayer::L3Inference, 0.5)
+            .with_confirmation();
 
         assert!(result.confirmation_shown);
     }
@@ -1101,7 +1100,8 @@ mod tests {
         let integration = DispatcherIntegration::default();
 
         // Try to resume with non-existent confirmation
-        let result = integration.resume_with_decision("non-existent-id", UserConfirmationDecision::Execute);
+        let result =
+            integration.resume_with_decision("non-existent-id", UserConfirmationDecision::Execute);
 
         assert!(result.is_ok());
         let dispatcher_result = result.unwrap();
@@ -1179,17 +1179,35 @@ mod tests {
     #[test]
     fn test_confidence_thresholds_classify_requires_confirmation() {
         let thresholds = ConfidenceThresholds::default();
-        assert_eq!(thresholds.classify(0.3), ConfidenceAction::RequiresConfirmation);
-        assert_eq!(thresholds.classify(0.5), ConfidenceAction::RequiresConfirmation);
-        assert_eq!(thresholds.classify(0.69), ConfidenceAction::RequiresConfirmation);
+        assert_eq!(
+            thresholds.classify(0.3),
+            ConfidenceAction::RequiresConfirmation
+        );
+        assert_eq!(
+            thresholds.classify(0.5),
+            ConfidenceAction::RequiresConfirmation
+        );
+        assert_eq!(
+            thresholds.classify(0.69),
+            ConfidenceAction::RequiresConfirmation
+        );
     }
 
     #[test]
     fn test_confidence_thresholds_classify_optional_confirmation() {
         let thresholds = ConfidenceThresholds::default();
-        assert_eq!(thresholds.classify(0.7), ConfidenceAction::OptionalConfirmation);
-        assert_eq!(thresholds.classify(0.8), ConfidenceAction::OptionalConfirmation);
-        assert_eq!(thresholds.classify(0.89), ConfidenceAction::OptionalConfirmation);
+        assert_eq!(
+            thresholds.classify(0.7),
+            ConfidenceAction::OptionalConfirmation
+        );
+        assert_eq!(
+            thresholds.classify(0.8),
+            ConfidenceAction::OptionalConfirmation
+        );
+        assert_eq!(
+            thresholds.classify(0.89),
+            ConfidenceAction::OptionalConfirmation
+        );
     }
 
     #[test]
@@ -1206,7 +1224,7 @@ mod tests {
 
         // When confirmation is enabled
         assert!(!thresholds.needs_confirmation(0.2, true)); // NoMatch - no confirmation
-        assert!(thresholds.needs_confirmation(0.5, true));  // RequiresConfirmation - yes
+        assert!(thresholds.needs_confirmation(0.5, true)); // RequiresConfirmation - yes
         assert!(!thresholds.needs_confirmation(0.8, true)); // OptionalConfirmation - no
         assert!(!thresholds.needs_confirmation(0.95, true)); // AutoExecute - no
 

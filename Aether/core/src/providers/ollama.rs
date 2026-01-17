@@ -476,7 +476,8 @@ impl AiProvider for OllamaProvider {
                         error!("Ollama multimodal request timed out");
                         AetherError::Timeout {
                             suggestion: Some(
-                                "Vision processing is slow. Try increasing the timeout.".to_string(),
+                                "Vision processing is slow. Try increasing the timeout."
+                                    .to_string(),
                             ),
                         }
                     } else if e.is_connect() {
@@ -571,10 +572,7 @@ mod tests {
     fn test_default_endpoint() {
         let config = create_test_config();
         let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
-        assert_eq!(
-            provider.endpoint,
-            "http://localhost:11434/api/generate"
-        );
+        assert_eq!(provider.endpoint, "http://localhost:11434/api/generate");
     }
 
     #[test]
@@ -582,10 +580,7 @@ mod tests {
         let mut config = create_test_config();
         config.base_url = Some("http://192.168.1.100:11434".to_string());
         let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
-        assert_eq!(
-            provider.endpoint,
-            "http://192.168.1.100:11434/api/generate"
-        );
+        assert_eq!(provider.endpoint, "http://192.168.1.100:11434/api/generate");
     }
 
     #[test]

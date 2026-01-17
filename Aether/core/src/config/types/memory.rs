@@ -51,7 +51,6 @@ pub struct MemoryConfig {
     // ========================================
     // Memory Compression Settings
     // ========================================
-
     /// Enable memory compression (LLM-based fact extraction)
     #[serde(default = "default_compression_enabled")]
     pub compression_enabled: bool,

@@ -400,11 +400,8 @@ mod tests {
 
     #[test]
     fn test_chat_message_with_tool_calls() {
-        let tool_call = ToolCallInfo::new(
-            "call_123",
-            "search",
-            serde_json::json!({"query": "test"}),
-        );
+        let tool_call =
+            ToolCallInfo::new("call_123", "search", serde_json::json!({"query": "test"}));
 
         let msg = ChatMessage::assistant_with_tool_calls(None, vec![tool_call]);
 
@@ -470,7 +467,10 @@ mod tests {
             serde_json::json!({"query": "weather"}),
         );
 
-        let msg = ChatMessage::assistant_with_tool_calls(Some("Let me search".to_string()), vec![tool_call]);
+        let msg = ChatMessage::assistant_with_tool_calls(
+            Some("Let me search".to_string()),
+            vec![tool_call],
+        );
         let json = msg.to_openai_format();
 
         assert_eq!(json["role"], "assistant");

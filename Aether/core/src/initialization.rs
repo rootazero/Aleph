@@ -564,10 +564,7 @@ pub fn initialize_builtin_skills(bundle_skills_dir: &PathBuf) -> Result<()> {
 
     // Iterate through bundled skills
     let entries = fs::read_dir(bundle_skills_dir).map_err(|e| {
-        AetherError::config(format!(
-            "Failed to read bundle skills directory: {}",
-            e
-        ))
+        AetherError::config(format!("Failed to read bundle skills directory: {}", e))
     })?;
 
     let mut copied_count = 0;
@@ -608,11 +605,7 @@ pub fn initialize_builtin_skills(bundle_skills_dir: &PathBuf) -> Result<()> {
 
                 let target_skill_md = target_dir.join("SKILL.md");
                 fs::copy(&skill_md, &target_skill_md).map_err(|e| {
-                    AetherError::config(format!(
-                        "Failed to copy SKILL.md for {}: {}",
-                        skill_id,
-                        e
-                    ))
+                    AetherError::config(format!("Failed to copy SKILL.md for {}: {}", skill_id, e))
                 })?;
 
                 info!(skill_id = %skill_id, "Installed built-in skill");
@@ -750,10 +743,7 @@ pub(crate) fn install_skills_from_zip(zip_path: String) -> Result<Vec<String>> {
 
     let installed = runtime.block_on(installer.install_from_zip(&zip_path))?;
 
-    info!(
-        count = installed.len(),
-        "Installed skills from ZIP"
-    );
+    info!(count = installed.len(), "Installed skills from ZIP");
 
     Ok(installed)
 }

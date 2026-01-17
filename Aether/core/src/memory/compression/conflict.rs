@@ -69,7 +69,11 @@ impl ConflictDetector {
         // Find similar existing facts
         let similar_facts = self
             .database
-            .find_similar_facts(embedding, self.config.similarity_threshold, Some(&new_fact.id))
+            .find_similar_facts(
+                embedding,
+                self.config.similarity_threshold,
+                Some(&new_fact.id),
+            )
             .await?;
 
         if similar_facts.is_empty() {

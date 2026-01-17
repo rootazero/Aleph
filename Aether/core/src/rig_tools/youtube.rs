@@ -180,10 +180,9 @@ mod tests {
 
     #[test]
     fn test_youtube_args_with_language() {
-        let args: YouTubeArgs = serde_json::from_str(
-            r#"{"url": "https://youtube.com/watch?v=xxx", "language": "zh"}"#,
-        )
-        .unwrap();
+        let args: YouTubeArgs =
+            serde_json::from_str(r#"{"url": "https://youtube.com/watch?v=xxx", "language": "zh"}"#)
+                .unwrap();
         assert_eq!(args.language, Some("zh".to_string()));
     }
 

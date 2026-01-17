@@ -16,8 +16,8 @@
 #![allow(deprecated)]
 
 use aethecore::{
-    AetherEventHandler, CapturedContext, Config, MemoryConfig,
-    ProviderConfig, RoutingRuleConfig, init_core,
+    init_core, AetherEventHandler, CapturedContext, Config, MemoryConfig, ProviderConfig,
+    RoutingRuleConfig,
 };
 use std::sync::Arc;
 

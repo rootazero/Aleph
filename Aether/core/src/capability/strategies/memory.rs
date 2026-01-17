@@ -214,14 +214,8 @@ impl CapabilityStrategy for MemoryStrategy {
 
         // Choose retrieval strategy
         let memories = if self.use_ai_retrieval {
-            self.execute_ai_retrieval(
-                db,
-                config,
-                &embedding_model,
-                &memory_anchor,
-                query,
-            )
-            .await?
+            self.execute_ai_retrieval(db, config, &embedding_model, &memory_anchor, query)
+                .await?
         } else {
             self.execute_embedding_retrieval(db, config, &embedding_model, &memory_anchor, query)
                 .await?
@@ -264,8 +258,11 @@ impl MemoryStrategy {
         info!("Using AI-based memory retrieval");
 
         // First, fetch candidate memories using embedding search
-        let retrieval =
-            MemoryRetrieval::new(Arc::clone(db), Arc::clone(embedding_model), Arc::clone(config));
+        let retrieval = MemoryRetrieval::new(
+            Arc::clone(db),
+            Arc::clone(embedding_model),
+            Arc::clone(config),
+        );
 
         // Get more candidates than needed for AI to select from
         let candidates = retrieval
@@ -306,8 +303,11 @@ impl MemoryStrategy {
         query: &str,
     ) -> Result<Vec<crate::memory::MemoryEntry>> {
         debug!("Using embedding-based memory retrieval");
-        let retrieval =
-            MemoryRetrieval::new(Arc::clone(db), Arc::clone(embedding_model), Arc::clone(config));
+        let retrieval = MemoryRetrieval::new(
+            Arc::clone(db),
+            Arc::clone(embedding_model),
+            Arc::clone(config),
+        );
         retrieval.retrieve_memories(anchor, query).await
     }
 }

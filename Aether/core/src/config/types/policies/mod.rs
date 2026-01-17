@@ -100,7 +100,10 @@ mod tests {
         assert_eq!(config.intent.confidence_threshold, 0.7);
         assert_eq!(config.retry.max_retries, 3);
         assert_eq!(config.memory.compression.idle_timeout_seconds, 300);
-        assert!(config.tool_safety.high_risk_keywords.contains(&"delete".to_string()));
+        assert!(config
+            .tool_safety
+            .high_risk_keywords
+            .contains(&"delete".to_string()));
     }
 
     #[test]
@@ -120,7 +123,10 @@ mod tests {
 
         // Defaults for unspecified policies
         assert_eq!(config.memory.compression.idle_timeout_seconds, 300);
-        assert!(config.tool_safety.high_risk_keywords.contains(&"delete".to_string()));
+        assert!(config
+            .tool_safety
+            .high_risk_keywords
+            .contains(&"delete".to_string()));
     }
 
     #[test]
@@ -162,8 +168,14 @@ mod tests {
         let config: PoliciesConfig = toml::from_str(toml).unwrap();
 
         // Verify all specified values
-        assert!(config.tool_safety.high_risk_keywords.contains(&"rm".to_string()));
-        assert!(!config.tool_safety.high_risk_keywords.contains(&"delete".to_string())); // Overridden
+        assert!(config
+            .tool_safety
+            .high_risk_keywords
+            .contains(&"rm".to_string()));
+        assert!(!config
+            .tool_safety
+            .high_risk_keywords
+            .contains(&"delete".to_string())); // Overridden
         assert_eq!(config.intent.confidence_threshold, 0.9);
         assert_eq!(config.memory.compression.idle_timeout_seconds, 600);
         assert_eq!(config.memory.ai_retrieval.max_candidates, 30);
@@ -179,7 +191,10 @@ mod tests {
         let toml_str = toml::to_string(&config).unwrap();
         let parsed: PoliciesConfig = toml::from_str(&toml_str).unwrap();
 
-        assert_eq!(config.intent.confidence_threshold, parsed.intent.confidence_threshold);
+        assert_eq!(
+            config.intent.confidence_threshold,
+            parsed.intent.confidence_threshold
+        );
         assert_eq!(config.retry.max_retries, parsed.retry.max_retries);
     }
 }

@@ -90,25 +90,25 @@ pub use aggregator::{
     AggregatedIntent, AggregatorConfig, IntentAction, IntentAggregator, MissingParameter,
 };
 pub use ai_detector::{AiIntentDetector, AiIntentResult};
-pub use classifier::{ExecutableTask, ExecutionIntent, IntentClassifier};
-pub use defaults::DefaultsResolver;
-pub use keyword::{KeywordIndex, KeywordMatch, KeywordMatchMode, KeywordRule};
-pub use ffi::{
-    AmbiguousTaskFFI, ConflictResolutionFFI, ExecutableTaskFFI, ExecutionIntentTypeFFI,
-    OrganizeMethodFFI, ParameterSourceFFI, TaskCategoryFFI, TaskParametersFFI,
-};
-pub use parameters::{ConflictResolution, OrganizeMethod, ParameterSource, TaskParameters};
-pub use presets::{PresetRegistry, ScenarioPreset};
-pub use task_category::TaskCategory;
 pub use cache::{CacheConfig, CacheMetrics, CachedIntent, IntentCache};
 pub use calibrator::{
-    CalibrationHistory, CalibratedSignal, CalibratorConfig, ConfidenceCalibrator, IntentSignal,
+    CalibratedSignal, CalibrationHistory, CalibratorConfig, ConfidenceCalibrator, IntentSignal,
     RoutingLayer,
 };
+pub use classifier::{ExecutableTask, ExecutionIntent, IntentClassifier};
 pub use context::{
     AppContext, ConversationContext, InputFeatures, MatchingContext, MatchingContextBuilder,
     PendingParam, TimeContext,
 };
+pub use defaults::DefaultsResolver;
+pub use ffi::{
+    AmbiguousTaskFFI, ConflictResolutionFFI, ExecutableTaskFFI, ExecutionIntentTypeFFI,
+    OrganizeMethodFFI, ParameterSourceFFI, TaskCategoryFFI, TaskParametersFFI,
+};
+pub use keyword::{KeywordIndex, KeywordMatch, KeywordMatchMode, KeywordRule};
+pub use parameters::{ConflictResolution, OrganizeMethod, ParameterSource, TaskParameters};
+pub use presets::{PresetRegistry, ScenarioPreset};
 pub use rollback::{
     RollbackCapable, RollbackConfig, RollbackEntry, RollbackManager, RollbackResult,
 };
+pub use task_category::TaskCategory;

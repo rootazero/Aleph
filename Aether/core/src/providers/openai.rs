@@ -239,7 +239,11 @@ impl OpenAiProvider {
 
     /// Build text content for image/multimodal requests.
     /// Handles prepend mode for system prompts and provides default description for images.
-    fn build_text_content(input: &str, system_prompt: Option<&str>, use_prepend_mode: bool) -> String {
+    fn build_text_content(
+        input: &str,
+        system_prompt: Option<&str>,
+        use_prepend_mode: bool,
+    ) -> String {
         const DEFAULT_IMAGE_DESC: &str = "Describe this image in detail.";
 
         match (use_prepend_mode, system_prompt, input.is_empty()) {
@@ -487,7 +491,12 @@ impl OpenAiProvider {
             ),
             429 => AetherError::rate_limit(format!("{} rate limit exceeded", self.name)),
             500..=599 => AetherError::provider(format!("{} server error: {}", self.name, status)),
-            _ => AetherError::provider(format!("{} API error ({}): {}", self.name, status, body_text.chars().take(200).collect::<String>())),
+            _ => AetherError::provider(format!(
+                "{} API error ({}): {}",
+                self.name,
+                status,
+                body_text.chars().take(200).collect::<String>()
+            )),
         }
     }
 }
@@ -858,17 +867,18 @@ impl AiProvider for OpenAiProvider {
                 )));
             }
 
-            let completion: ChatCompletionResponse = serde_json::from_str(&response_text).map_err(|e| {
-                error!(
-                    error = %e,
-                    response_preview = %response_text.chars().take(500).collect::<String>(),
-                    "Failed to parse OpenAI multimodal response"
-                );
-                AetherError::provider(format!(
-                    "Failed to parse response for model '{}': {}",
-                    self.config.model, e
-                ))
-            })?;
+            let completion: ChatCompletionResponse =
+                serde_json::from_str(&response_text).map_err(|e| {
+                    error!(
+                        error = %e,
+                        response_preview = %response_text.chars().take(500).collect::<String>(),
+                        "Failed to parse OpenAI multimodal response"
+                    );
+                    AetherError::provider(format!(
+                        "Failed to parse response for model '{}': {}",
+                        self.config.model, e
+                    ))
+                })?;
 
             // Extract message content
             let content = completion
@@ -909,11 +919,8 @@ impl AiProvider for OpenAiProvider {
         let system_prompt = system_prompt.map(|s| s.to_string());
 
         Box::pin(async move {
-            let request_body = self.build_request_with_mode(
-                &input,
-                system_prompt.as_deref(),
-                force_standard_mode,
-            );
+            let request_body =
+                self.build_request_with_mode(&input, system_prompt.as_deref(), force_standard_mode);
 
             let response = self
                 .client
@@ -943,9 +950,10 @@ impl AiProvider for OpenAiProvider {
                 return Err(self.handle_error(response).await);
             }
 
-            let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
-                AetherError::provider(format!("Failed to parse response: {}", e))
-            })?;
+            let completion: ChatCompletionResponse = response
+                .json()
+                .await
+                .map_err(|e| AetherError::provider(format!("Failed to parse response: {}", e)))?;
 
             completion
                 .choices
@@ -1084,7 +1092,8 @@ mod tests {
             size_bytes: 100,
         }];
 
-        let request = provider.build_multimodal_request("What's in this image?", &attachments, None);
+        let request =
+            provider.build_multimodal_request("What's in this image?", &attachments, None);
 
         // Serialize to JSON and verify format
         let json = serde_json::to_string_pretty(&request).unwrap();
@@ -1110,7 +1119,10 @@ mod tests {
 
         // Verify image_url block
         assert_eq!(content[1]["type"], "image_url");
-        assert!(content[1]["image_url"]["url"].as_str().unwrap().starts_with("data:image/png;base64,"));
+        assert!(content[1]["image_url"]["url"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
         assert_eq!(content[1]["image_url"]["detail"], "auto");
     }
 

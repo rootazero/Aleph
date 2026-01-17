@@ -149,9 +149,9 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
 
         // Canonicalize if exists, otherwise use as-is for new files
         let canonical = if expanded.exists() {
-            expanded.canonicalize().map_err(|e| {
-                ToolError::Execution(format!("Failed to resolve path: {}", e))
-            })?
+            expanded
+                .canonicalize()
+                .map_err(|e| ToolError::Execution(format!("Failed to resolve path: {}", e)))?
         } else {
             expanded
         };
@@ -201,16 +201,15 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
         }
 
         let mut files = Vec::new();
-        for entry in fs::read_dir(&canonical).map_err(|e| {
-            ToolError::Execution(format!("Failed to read directory: {}", e))
-        })? {
-            let entry = entry.map_err(|e| {
-                ToolError::Execution(format!("Failed to read entry: {}", e))
-            })?;
+        for entry in fs::read_dir(&canonical)
+            .map_err(|e| ToolError::Execution(format!("Failed to read directory: {}", e)))?
+        {
+            let entry =
+                entry.map_err(|e| ToolError::Execution(format!("Failed to read entry: {}", e)))?;
 
-            let metadata = entry.metadata().map_err(|e| {
-                ToolError::Execution(format!("Failed to get metadata: {}", e))
-            })?;
+            let metadata = entry
+                .metadata()
+                .map_err(|e| ToolError::Execution(format!("Failed to get metadata: {}", e)))?;
 
             let entry_path = entry.path();
             files.push(FileInfo {
@@ -218,17 +217,17 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
                 path: entry_path.to_string_lossy().to_string(),
                 is_dir: metadata.is_dir(),
                 size: metadata.len(),
-                extension: entry_path.extension().map(|e| e.to_string_lossy().to_string()),
+                extension: entry_path
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_string()),
             });
         }
 
         // Sort: directories first, then by name
-        files.sort_by(|a, b| {
-            match (a.is_dir, b.is_dir) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => a.name.cmp(&b.name),
-            }
+        files.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.cmp(&b.name),
         });
 
         let count = files.len();
@@ -263,9 +262,8 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
             )));
         }
 
-        let metadata = fs::metadata(&canonical).map_err(|e| {
-            ToolError::Execution(format!("Failed to get metadata: {}", e))
-        })?;
+        let metadata = fs::metadata(&canonical)
+            .map_err(|e| ToolError::Execution(format!("Failed to get metadata: {}", e)))?;
 
         if metadata.len() > self.max_read_size {
             return Err(ToolError::InvalidArgs(format!(
@@ -275,9 +273,8 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
             )));
         }
 
-        let content = fs::read_to_string(&canonical).map_err(|e| {
-            ToolError::Execution(format!("Failed to read file: {}", e))
-        })?;
+        let content = fs::read_to_string(&canonical)
+            .map_err(|e| ToolError::Execution(format!("Failed to read file: {}", e)))?;
 
         info!(path = %canonical.display(), size = metadata.len(), "Read file");
 
@@ -314,9 +311,8 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
         }
 
         let bytes = content.len() as u64;
-        fs::write(&canonical, content).map_err(|e| {
-            ToolError::Execution(format!("Failed to write file: {}", e))
-        })?;
+        fs::write(&canonical, content)
+            .map_err(|e| ToolError::Execution(format!("Failed to write file: {}", e)))?;
 
         info!(path = %canonical.display(), bytes, "Wrote file");
 
@@ -359,16 +355,19 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
             }
         }
 
-        fs::rename(&from_canonical, &to_canonical).map_err(|e| {
-            ToolError::Execution(format!("Failed to move: {}", e))
-        })?;
+        fs::rename(&from_canonical, &to_canonical)
+            .map_err(|e| ToolError::Execution(format!("Failed to move: {}", e)))?;
 
         info!(from = %from_canonical.display(), to = %to_canonical.display(), "Moved");
 
         Ok(FileOpsOutput {
             success: true,
             operation: "move".to_string(),
-            message: format!("Moved {} to {}", from_canonical.display(), to_canonical.display()),
+            message: format!(
+                "Moved {} to {}",
+                from_canonical.display(),
+                to_canonical.display()
+            ),
             files: None,
             content: None,
             bytes_written: None,
@@ -405,9 +404,8 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
         }
 
         let bytes = if from_canonical.is_file() {
-            fs::copy(&from_canonical, &to_canonical).map_err(|e| {
-                ToolError::Execution(format!("Failed to copy: {}", e))
-            })?
+            fs::copy(&from_canonical, &to_canonical)
+                .map_err(|e| ToolError::Execution(format!("Failed to copy: {}", e)))?
         } else {
             // Directory copy - recursive
             self.copy_dir_recursive(&from_canonical, &to_canonical)?
@@ -418,7 +416,12 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
         Ok(FileOpsOutput {
             success: true,
             operation: "copy".to_string(),
-            message: format!("Copied {} to {} ({} bytes)", from_canonical.display(), to_canonical.display(), bytes),
+            message: format!(
+                "Copied {} to {} ({} bytes)",
+                from_canonical.display(),
+                to_canonical.display(),
+                bytes
+            ),
             files: None,
             content: None,
             bytes_written: Some(bytes),
@@ -428,18 +431,16 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
 
     /// Recursively copy a directory
     fn copy_dir_recursive(&self, from: &Path, to: &Path) -> Result<u64, ToolError> {
-        fs::create_dir_all(to).map_err(|e| {
-            ToolError::Execution(format!("Failed to create directory: {}", e))
-        })?;
+        fs::create_dir_all(to)
+            .map_err(|e| ToolError::Execution(format!("Failed to create directory: {}", e)))?;
 
         let mut total_bytes = 0u64;
 
-        for entry in fs::read_dir(from).map_err(|e| {
-            ToolError::Execution(format!("Failed to read directory: {}", e))
-        })? {
-            let entry = entry.map_err(|e| {
-                ToolError::Execution(format!("Failed to read entry: {}", e))
-            })?;
+        for entry in fs::read_dir(from)
+            .map_err(|e| ToolError::Execution(format!("Failed to read directory: {}", e)))?
+        {
+            let entry =
+                entry.map_err(|e| ToolError::Execution(format!("Failed to read entry: {}", e)))?;
 
             let from_path = entry.path();
             let to_path = to.join(entry.file_name());
@@ -447,9 +448,8 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
             if from_path.is_dir() {
                 total_bytes += self.copy_dir_recursive(&from_path, &to_path)?;
             } else {
-                total_bytes += fs::copy(&from_path, &to_path).map_err(|e| {
-                    ToolError::Execution(format!("Failed to copy file: {}", e))
-                })?;
+                total_bytes += fs::copy(&from_path, &to_path)
+                    .map_err(|e| ToolError::Execution(format!("Failed to copy file: {}", e)))?;
             }
         }
 
@@ -471,15 +471,14 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
         let items_deleted = if is_dir {
             let count = fs::read_dir(&canonical)
                 .map(|entries| entries.count())
-                .unwrap_or(0) + 1;
-            fs::remove_dir_all(&canonical).map_err(|e| {
-                ToolError::Execution(format!("Failed to delete directory: {}", e))
-            })?;
+                .unwrap_or(0)
+                + 1;
+            fs::remove_dir_all(&canonical)
+                .map_err(|e| ToolError::Execution(format!("Failed to delete directory: {}", e)))?;
             count
         } else {
-            fs::remove_file(&canonical).map_err(|e| {
-                ToolError::Execution(format!("Failed to delete file: {}", e))
-            })?;
+            fs::remove_file(&canonical)
+                .map_err(|e| ToolError::Execution(format!("Failed to delete file: {}", e)))?;
             1
         };
 
@@ -497,7 +496,11 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
     }
 
     /// Execute a mkdir operation
-    async fn execute_mkdir(&self, path: &Path, create_parents: bool) -> Result<FileOpsOutput, ToolError> {
+    async fn execute_mkdir(
+        &self,
+        path: &Path,
+        create_parents: bool,
+    ) -> Result<FileOpsOutput, ToolError> {
         let canonical = self.check_path(path)?;
 
         if canonical.exists() {
@@ -524,9 +527,8 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
                 ToolError::Execution(format!("Failed to create directories: {}", e))
             })?;
         } else {
-            fs::create_dir(&canonical).map_err(|e| {
-                ToolError::Execution(format!("Failed to create directory: {}", e))
-            })?;
+            fs::create_dir(&canonical)
+                .map_err(|e| ToolError::Execution(format!("Failed to create directory: {}", e)))?;
         }
 
         info!(path = %canonical.display(), "Created directory");
@@ -565,14 +567,15 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
 
         let mut files = Vec::new();
 
-        for entry in glob::glob(&pattern_str).map_err(|e| {
-            ToolError::InvalidArgs(format!("Invalid glob pattern: {}", e))
-        })? {
+        for entry in glob::glob(&pattern_str)
+            .map_err(|e| ToolError::InvalidArgs(format!("Invalid glob pattern: {}", e)))?
+        {
             match entry {
                 Ok(path) => {
                     if let Ok(metadata) = fs::metadata(&path) {
                         files.push(FileInfo {
-                            name: path.file_name()
+                            name: path
+                                .file_name()
                                 .map(|n| n.to_string_lossy().to_string())
                                 .unwrap_or_default(),
                             path: path.to_string_lossy().to_string(),
@@ -594,7 +597,12 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
         Ok(FileOpsOutput {
             success: true,
             operation: "search".to_string(),
-            message: format!("Found {} files matching '{}' in {}", count, pattern, canonical.display()),
+            message: format!(
+                "Found {} files matching '{}' in {}",
+                count,
+                pattern,
+                canonical.display()
+            ),
             files: Some(files),
             content: None,
             bytes_written: None,
@@ -605,7 +613,13 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
     /// Execute a batch move operation
     ///
     /// Moves all files matching the pattern to the destination directory
-    async fn execute_batch_move(&self, dir: &Path, pattern: &str, dest: &Path, create_parents: bool) -> Result<FileOpsOutput, ToolError> {
+    async fn execute_batch_move(
+        &self,
+        dir: &Path,
+        pattern: &str,
+        dest: &Path,
+        create_parents: bool,
+    ) -> Result<FileOpsOutput, ToolError> {
         let canonical = self.check_path(dir)?;
         let dest_canonical = if dest.exists() {
             self.check_path(dest)?
@@ -635,9 +649,9 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
         let mut moved_files = Vec::new();
         let mut errors = Vec::new();
 
-        for entry in glob::glob(&pattern_str).map_err(|e| {
-            ToolError::InvalidArgs(format!("Invalid glob pattern: {}", e))
-        })? {
+        for entry in glob::glob(&pattern_str)
+            .map_err(|e| ToolError::InvalidArgs(format!("Invalid glob pattern: {}", e)))?
+        {
             match entry {
                 Ok(path) => {
                     if path.is_file() {
@@ -651,7 +665,9 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
                                     path: dest_path.to_string_lossy().to_string(),
                                     is_dir: false,
                                     size: 0,
-                                    extension: path.extension().map(|e| e.to_string_lossy().to_string()),
+                                    extension: path
+                                        .extension()
+                                        .map(|e| e.to_string_lossy().to_string()),
                                 });
                             }
                             Err(e) => {
@@ -668,12 +684,27 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
 
         let count = moved_files.len();
         let message = if errors.is_empty() {
-            format!("Moved {} files matching '{}' to {}", count, pattern, dest_canonical.display())
+            format!(
+                "Moved {} files matching '{}' to {}",
+                count,
+                pattern,
+                dest_canonical.display()
+            )
         } else {
-            format!("Moved {} files, {} errors: {}", count, errors.len(), errors.join("; "))
+            format!(
+                "Moved {} files, {} errors: {}",
+                count,
+                errors.len(),
+                errors.join("; ")
+            )
         };
 
-        info!(pattern, count, errors = errors.len(), "Batch move completed");
+        info!(
+            pattern,
+            count,
+            errors = errors.len(),
+            "Batch move completed"
+        );
 
         Ok(FileOpsOutput {
             success: errors.is_empty(),
@@ -689,7 +720,11 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
     /// Execute an organize operation
     ///
     /// Automatically organizes files by type into categorized folders
-    async fn execute_organize(&self, dir: &Path, create_parents: bool) -> Result<FileOpsOutput, ToolError> {
+    async fn execute_organize(
+        &self,
+        dir: &Path,
+        create_parents: bool,
+    ) -> Result<FileOpsOutput, ToolError> {
         let canonical = self.check_path(dir)?;
 
         if !canonical.is_dir() {
@@ -701,18 +736,54 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
 
         // Define file type categories
         let categories: Vec<(&str, Vec<&str>)> = vec![
-            ("Images", vec!["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "tiff", "heic", "heif"]),
-            ("Documents", vec!["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "odt", "ods", "odp", "pages", "numbers", "key", "md", "csv"]),
-            ("Videos", vec!["mp4", "avi", "mkv", "mov", "wmv", "flv", "webm", "m4v", "mpeg", "mpg", "3gp"]),
-            ("Audio", vec!["mp3", "wav", "flac", "aac", "ogg", "wma", "m4a", "aiff", "opus"]),
-            ("Archives", vec!["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "dmg", "iso"]),
-            ("Code", vec!["rs", "py", "js", "ts", "jsx", "tsx", "java", "c", "cpp", "h", "hpp", "go", "rb", "php", "swift", "kt", "scala", "html", "css", "scss", "json", "xml", "yaml", "yml", "toml", "sh", "bash", "sql"]),
-            ("Apps", vec!["app", "exe", "msi", "apk", "ipa", "deb", "rpm", "pkg"]),
+            (
+                "Images",
+                vec![
+                    "jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "tiff", "heic",
+                    "heif",
+                ],
+            ),
+            (
+                "Documents",
+                vec![
+                    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "odt", "ods",
+                    "odp", "pages", "numbers", "key", "md", "csv",
+                ],
+            ),
+            (
+                "Videos",
+                vec![
+                    "mp4", "avi", "mkv", "mov", "wmv", "flv", "webm", "m4v", "mpeg", "mpg", "3gp",
+                ],
+            ),
+            (
+                "Audio",
+                vec![
+                    "mp3", "wav", "flac", "aac", "ogg", "wma", "m4a", "aiff", "opus",
+                ],
+            ),
+            (
+                "Archives",
+                vec!["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "dmg", "iso"],
+            ),
+            (
+                "Code",
+                vec![
+                    "rs", "py", "js", "ts", "jsx", "tsx", "java", "c", "cpp", "h", "hpp", "go",
+                    "rb", "php", "swift", "kt", "scala", "html", "css", "scss", "json", "xml",
+                    "yaml", "yml", "toml", "sh", "bash", "sql",
+                ],
+            ),
+            (
+                "Apps",
+                vec!["app", "exe", "msi", "apk", "ipa", "deb", "rpm", "pkg"],
+            ),
         ];
 
         let mut moved_files = Vec::new();
         let mut errors = Vec::new();
-        let mut category_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut category_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
 
         // Read directory entries
         let entries: Vec<_> = fs::read_dir(&canonical)
@@ -729,13 +800,15 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
             }
 
             // Get file extension
-            let ext = path.extension()
+            let ext = path
+                .extension()
                 .and_then(|e| e.to_str())
                 .map(|e| e.to_lowercase())
                 .unwrap_or_default();
 
             // Find matching category
-            let category = categories.iter()
+            let category = categories
+                .iter()
                 .find(|(_, exts)| exts.contains(&ext.as_str()))
                 .map(|(name, _)| *name)
                 .unwrap_or("Others");
@@ -776,14 +849,24 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
         }
 
         let count = moved_files.len();
-        let summary: Vec<String> = category_counts.iter()
+        let summary: Vec<String> = category_counts
+            .iter()
             .map(|(cat, cnt)| format!("{}: {}", cat, cnt))
             .collect();
 
         let message = if errors.is_empty() {
-            format!("Organized {} files into categories: {}", count, summary.join(", "))
+            format!(
+                "Organized {} files into categories: {}",
+                count,
+                summary.join(", ")
+            )
         } else {
-            format!("Organized {} files ({}), {} errors", count, summary.join(", "), errors.len())
+            format!(
+                "Organized {} files ({}), {} errors",
+                count,
+                summary.join(", "),
+                errors.len()
+            )
         };
 
         info!(count, categories = ?category_counts, errors = errors.len(), "Organize completed");
@@ -817,19 +900,22 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
                 let content = args.content.ok_or_else(|| {
                     ToolError::InvalidArgs("Content required for write operation".to_string())
                 })?;
-                self.execute_write(path, &content, args.create_parents).await
+                self.execute_write(path, &content, args.create_parents)
+                    .await
             }
             FileOperation::Move => {
                 let dest = args.destination.ok_or_else(|| {
                     ToolError::InvalidArgs("Destination required for move operation".to_string())
                 })?;
-                self.execute_move(path, Path::new(&dest), args.create_parents).await
+                self.execute_move(path, Path::new(&dest), args.create_parents)
+                    .await
             }
             FileOperation::Copy => {
                 let dest = args.destination.ok_or_else(|| {
                     ToolError::InvalidArgs("Destination required for copy operation".to_string())
                 })?;
-                self.execute_copy(path, Path::new(&dest), args.create_parents).await
+                self.execute_copy(path, Path::new(&dest), args.create_parents)
+                    .await
             }
             FileOperation::Delete => self.execute_delete(path).await,
             FileOperation::Mkdir => self.execute_mkdir(path, args.create_parents).await,
@@ -841,16 +927,19 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
             }
             FileOperation::BatchMove => {
                 let pattern = args.pattern.ok_or_else(|| {
-                    ToolError::InvalidArgs("Pattern required for batch_move operation (e.g., '*.jpg')".to_string())
+                    ToolError::InvalidArgs(
+                        "Pattern required for batch_move operation (e.g., '*.jpg')".to_string(),
+                    )
                 })?;
                 let dest = args.destination.ok_or_else(|| {
-                    ToolError::InvalidArgs("Destination required for batch_move operation".to_string())
+                    ToolError::InvalidArgs(
+                        "Destination required for batch_move operation".to_string(),
+                    )
                 })?;
-                self.execute_batch_move(path, &pattern, Path::new(&dest), args.create_parents).await
+                self.execute_batch_move(path, &pattern, Path::new(&dest), args.create_parents)
+                    .await
             }
-            FileOperation::Organize => {
-                self.execute_organize(path, args.create_parents).await
-            }
+            FileOperation::Organize => self.execute_organize(path, args.create_parents).await,
         }
     }
 }

@@ -156,20 +156,21 @@ impl AiIntentDetector {
 
         // Call AI provider with timeout
         // Pass None for system_prompt since we've combined it into the user prompt
-        let response = tokio::time::timeout(
-            self.timeout,
-            self.provider.process(&combined_prompt, None),
-        )
-        .await
-        .map_err(|_| {
-            warn!("AI intent detection timed out after {}ms", self.timeout.as_millis());
-            AetherError::Timeout {
-                suggestion: Some(format!(
-                    "AI intent detection timed out after {}ms",
-                    self.timeout.as_millis()
-                )),
-            }
-        })??;
+        let response =
+            tokio::time::timeout(self.timeout, self.provider.process(&combined_prompt, None))
+                .await
+                .map_err(|_| {
+                    warn!(
+                        "AI intent detection timed out after {}ms",
+                        self.timeout.as_millis()
+                    );
+                    AetherError::Timeout {
+                        suggestion: Some(format!(
+                            "AI intent detection timed out after {}ms",
+                            self.timeout.as_millis()
+                        )),
+                    }
+                })??;
 
         info!(
             response_preview = %response.chars().take(200).collect::<String>(),
@@ -349,7 +350,8 @@ mod tests {
     #[test]
     fn test_extract_json_with_text() {
         let detector = AiIntentDetector::new(Arc::new(MockProvider));
-        let response = r#"Here is the result: {"intent":"general","confidence":1.0,"params":{},"missing":[]}"#;
+        let response =
+            r#"Here is the result: {"intent":"general","confidence":1.0,"params":{},"missing":[]}"#;
         let extracted = detector.extract_json(response);
         assert!(extracted.starts_with('{'));
         assert!(extracted.ends_with('}'));
@@ -367,7 +369,8 @@ mod tests {
     #[test]
     fn test_extract_url() {
         let detector = AiIntentDetector::new(Arc::new(MockProvider));
-        let params = detector.extract_url("Summarize https://youtube.com/watch?v=dQw4w9WgXcQ please");
+        let params =
+            detector.extract_url("Summarize https://youtube.com/watch?v=dQw4w9WgXcQ please");
         assert_eq!(
             params.get("url"),
             Some(&"https://youtube.com/watch?v=dQw4w9WgXcQ".to_string())
@@ -377,7 +380,8 @@ mod tests {
     #[test]
     fn test_parse_response_valid() {
         let detector = AiIntentDetector::new(Arc::new(MockProvider));
-        let response = r#"{"intent":"search","confidence":0.95,"params":{"location":"Tokyo"},"missing":[]}"#;
+        let response =
+            r#"{"intent":"search","confidence":0.95,"params":{"location":"Tokyo"},"missing":[]}"#;
         let result = detector.parse_response(response).unwrap();
         assert_eq!(result.intent, "search");
         assert_eq!(result.confidence, 0.95);
@@ -403,7 +407,9 @@ mod tests {
             _system_prompt: Option<&str>,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>>
         {
-            Box::pin(async { Ok(r#"{"intent":"general","confidence":1.0,"params":{},"missing":[]}"#.to_string()) })
+            Box::pin(async {
+                Ok(r#"{"intent":"general","confidence":1.0,"params":{},"missing":[]}"#.to_string())
+            })
         }
 
         fn name(&self) -> &str {

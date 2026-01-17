@@ -15,8 +15,7 @@
 
 use aethecore::providers::mock::MockProvider;
 use aethecore::{
-    AetherError, AetherEventHandler, AiProvider, Config, ProviderConfig, Router,
-    RoutingRuleConfig,
+    AetherError, AetherEventHandler, AiProvider, Config, ProviderConfig, Router, RoutingRuleConfig,
 };
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

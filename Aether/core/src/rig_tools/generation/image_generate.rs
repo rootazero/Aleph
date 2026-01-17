@@ -94,9 +94,10 @@ impl ImageGenerateTool {
 
         // Find provider
         let (provider_name, provider) = if let Some(name) = &args.provider {
-            let provider = self.registry.get(name).ok_or_else(|| {
-                ToolError::InvalidArgs(format!("Provider '{}' not found", name))
-            })?;
+            let provider = self
+                .registry
+                .get(name)
+                .ok_or_else(|| ToolError::InvalidArgs(format!("Provider '{}' not found", name)))?;
 
             // Check if provider supports image generation
             if !provider.supports(GenerationType::Image) {
@@ -112,9 +113,7 @@ impl ImageGenerateTool {
             self.registry
                 .first_for_type(GenerationType::Image)
                 .ok_or_else(|| {
-                    ToolError::InvalidArgs(
-                        "No image generation provider available".to_string(),
-                    )
+                    ToolError::InvalidArgs("No image generation provider available".to_string())
                 })?
         };
 
@@ -152,8 +151,7 @@ impl ImageGenerateTool {
             crate::generation::GenerationData::Bytes(bytes) => {
                 // Convert bytes to base64 data URL
                 use base64::Engine;
-                let base64_data =
-                    base64::engine::general_purpose::STANDARD.encode(bytes);
+                let base64_data = base64::engine::general_purpose::STANDARD.encode(bytes);
                 let content_type = output
                     .metadata
                     .content_type

@@ -9,8 +9,7 @@ use uuid::Uuid;
 use super::prompt::{build_user_prompt, PLANNING_SYSTEM_PROMPT};
 use super::TaskPlanner;
 use crate::cowork::types::{
-    AiTask, AppAuto, CodeExec, DocGen, FileOp, Language, Task, TaskDependency, TaskGraph,
-    TaskType,
+    AiTask, AppAuto, CodeExec, DocGen, FileOp, Language, Task, TaskDependency, TaskGraph, TaskType,
 };
 use crate::error::{AetherError, Result};
 use crate::providers::AiProvider;
@@ -36,7 +35,9 @@ impl LlmTaskPlanner {
             error!("Failed to parse LLM response as JSON: {}", e);
             AetherError::Other {
                 message: format!("Invalid task plan JSON: {}", e),
-                suggestion: Some("The AI response was not valid JSON. Try rephrasing your request.".to_string()),
+                suggestion: Some(
+                    "The AI response was not valid JSON. Try rephrasing your request.".to_string(),
+                ),
             }
         })?;
 
@@ -77,7 +78,9 @@ impl LlmTaskPlanner {
             error!("Generated task graph is invalid: {}", e);
             AetherError::Other {
                 message: format!("Invalid task graph: {}", e),
-                suggestion: Some("The generated task graph has issues. Try rephrasing your request.".to_string()),
+                suggestion: Some(
+                    "The generated task graph has issues. Try rephrasing your request.".to_string(),
+                ),
             }
         })?;
 
@@ -113,11 +116,7 @@ impl LlmTaskPlanner {
 
     fn parse_file_op(&self, def: &TaskTypeDef) -> Result<TaskType> {
         let op = def.op.as_deref().unwrap_or("list");
-        let path = def
-            .path
-            .clone()
-            .unwrap_or_else(|| ".".to_string())
-            .into();
+        let path = def.path.clone().unwrap_or_else(|| ".".to_string()).into();
 
         let file_op = match op {
             "read" => FileOp::Read { path },
@@ -289,7 +288,9 @@ fn extract_json(response: &str) -> Result<String> {
 
     Err(AetherError::Other {
         message: "Could not find JSON in response".to_string(),
-        suggestion: Some("The AI did not return a valid task plan. Try rephrasing your request.".to_string()),
+        suggestion: Some(
+            "The AI did not return a valid task plan. Try rephrasing your request.".to_string(),
+        ),
     })
 }
 

@@ -317,9 +317,8 @@ mod tests {
         use crate::providers::create_mock_provider;
 
         let provider = create_mock_provider();
-        let embedding_model = Arc::new(
-            EmbeddingModel::new(std::path::PathBuf::from("/tmp/test_models")).unwrap(),
-        );
+        let embedding_model =
+            Arc::new(EmbeddingModel::new(std::path::PathBuf::from("/tmp/test_models")).unwrap());
 
         FactExtractor::new(provider, embedding_model)
     }

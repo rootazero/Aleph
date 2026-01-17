@@ -434,7 +434,12 @@ mod tests {
     // Helper functions
     // -------------------------------------------------------------------------
 
-    fn make_signal(intent: &str, tool: Option<&str>, confidence: f32, layer: RoutingLayer) -> CalibratedSignal {
+    fn make_signal(
+        intent: &str,
+        tool: Option<&str>,
+        confidence: f32,
+        layer: RoutingLayer,
+    ) -> CalibratedSignal {
         let mut signal = IntentSignal::new(intent, confidence);
         if let Some(t) = tool {
             signal.tool_name = Some(t.to_string());
@@ -542,11 +547,15 @@ mod tests {
         assert!(intent.has_required_params());
 
         // Add optional missing param
-        intent.missing_params.push(MissingParameter::optional("limit", "How many?"));
+        intent
+            .missing_params
+            .push(MissingParameter::optional("limit", "How many?"));
         assert!(intent.has_required_params());
 
         // Add required missing param
-        intent.missing_params.push(MissingParameter::required("query", "What to search?"));
+        intent
+            .missing_params
+            .push(MissingParameter::required("query", "What to search?"));
         assert!(!intent.has_required_params());
     }
 
@@ -596,7 +605,10 @@ mod tests {
     fn test_aggregator_new() {
         let config = AggregatorConfig::default();
         let aggregator = IntentAggregator::new(config.clone());
-        assert_eq!(aggregator.config().execute_threshold, config.execute_threshold);
+        assert_eq!(
+            aggregator.config().execute_threshold,
+            config.execute_threshold
+        );
     }
 
     #[test]
@@ -661,8 +673,14 @@ mod tests {
 
         // Alternatives should be sorted
         assert_eq!(result.alternatives.len(), 2);
-        assert_eq!(result.alternatives[0].tool_name, Some("file_read".to_string()));
-        assert_eq!(result.alternatives[1].tool_name, Some("code_gen".to_string()));
+        assert_eq!(
+            result.alternatives[0].tool_name,
+            Some("file_read".to_string())
+        );
+        assert_eq!(
+            result.alternatives[1].tool_name,
+            Some("code_gen".to_string())
+        );
     }
 
     #[test]
@@ -779,7 +797,10 @@ mod tests {
 
         let result = aggregator.override_for_missing_params(intent.clone(), missing);
         match result.action {
-            IntentAction::RequestClarification { prompt, suggestions } => {
+            IntentAction::RequestClarification {
+                prompt,
+                suggestions,
+            } => {
                 assert_eq!(prompt, "What to search?");
                 assert_eq!(suggestions.len(), 2);
             }
@@ -855,7 +876,10 @@ mod tests {
             make_signal("file", Some("file_read"), 0.80, RoutingLayer::L2Keyword),
         ];
         let result = aggregator.aggregate(signals);
-        assert!(result.has_conflict, "Diff of 0.05 should be conflict (< 0.1)");
+        assert!(
+            result.has_conflict,
+            "Diff of 0.05 should be conflict (< 0.1)"
+        );
 
         // Medium gap (diff = 0.12) - not a conflict
         let signals = vec![
@@ -863,6 +887,9 @@ mod tests {
             make_signal("file", Some("file_read"), 0.80, RoutingLayer::L2Keyword),
         ];
         let result = aggregator.aggregate(signals);
-        assert!(!result.has_conflict, "Diff of 0.12 should NOT be conflict (> 0.1)");
+        assert!(
+            !result.has_conflict,
+            "Diff of 0.12 should NOT be conflict (> 0.1)"
+        );
     }
 }

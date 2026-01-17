@@ -253,12 +253,10 @@ impl ModelMatcher {
         }
 
         match self.rules.cost_strategy {
-            CostStrategy::Cheapest => {
-                candidates
-                    .iter()
-                    .min_by_key(|p| p.cost_tier)
-                    .map(|p| (*p).clone())
-            }
+            CostStrategy::Cheapest => candidates
+                .iter()
+                .min_by_key(|p| p.cost_tier)
+                .map(|p| (*p).clone()),
             CostStrategy::BestQuality => {
                 // Higher cost = better quality (in general)
                 candidates
@@ -415,7 +413,11 @@ impl ModelMatcher {
     /// Get the model profile for a specific provider/model combination
     ///
     /// This is useful for migrating from legacy `provider` field to Model Router.
-    pub fn find_by_provider_model(&self, provider: &str, model: Option<&str>) -> Option<ModelProfile> {
+    pub fn find_by_provider_model(
+        &self,
+        provider: &str,
+        model: Option<&str>,
+    ) -> Option<ModelProfile> {
         self.profiles_vec
             .iter()
             .find(|p| {
@@ -429,7 +431,7 @@ impl ModelMatcher {
 /// Compute a balance score for a profile (lower is better for balanced strategy)
 fn cost_balance_score(profile: &ModelProfile) -> u32 {
     let cost_score = match profile.cost_tier {
-        CostTier::Free => 2,   // Slightly penalize free (may have limitations)
+        CostTier::Free => 2, // Slightly penalize free (may have limitations)
         CostTier::Low => 1,
         CostTier::Medium => 0, // Preferred
         CostTier::High => 2,
@@ -835,7 +837,9 @@ mod tests {
         let matcher = create_matcher();
 
         // Find best for ImageUnderstanding
-        let profile = matcher.find_best_for(Capability::ImageUnderstanding).unwrap();
+        let profile = matcher
+            .find_best_for(Capability::ImageUnderstanding)
+            .unwrap();
         assert_eq!(profile.id, "gpt-4o");
 
         // Find best for LocalPrivacy
@@ -852,12 +856,16 @@ mod tests {
         let matcher = create_matcher();
 
         // Find cheapest with CodeGeneration
-        let profile = matcher.find_cheapest_with(Capability::CodeGeneration).unwrap();
+        let profile = matcher
+            .find_cheapest_with(Capability::CodeGeneration)
+            .unwrap();
         // claude-sonnet (Medium) is cheaper than claude-opus (High)
         assert_eq!(profile.id, "claude-sonnet");
 
         // Find cheapest with LocalPrivacy
-        let profile = matcher.find_cheapest_with(Capability::LocalPrivacy).unwrap();
+        let profile = matcher
+            .find_cheapest_with(Capability::LocalPrivacy)
+            .unwrap();
         assert_eq!(profile.id, "ollama-llama");
         assert_eq!(profile.cost_tier, CostTier::Free);
     }
@@ -868,7 +876,9 @@ mod tests {
 
         let profile = matcher.find_balanced().unwrap();
         // Should prefer Medium cost and Fast/Medium latency
-        assert!(profile.cost_tier <= CostTier::Medium || profile.latency_tier <= LatencyTier::Medium);
+        assert!(
+            profile.cost_tier <= CostTier::Medium || profile.latency_tier <= LatencyTier::Medium
+        );
     }
 
     // =========================================================================
@@ -878,8 +888,8 @@ mod tests {
     #[test]
     fn test_cost_strategy_cheapest() {
         let profiles = create_test_profiles();
-        let rules = ModelRoutingRules::new("claude-sonnet")
-            .with_cost_strategy(CostStrategy::Cheapest);
+        let rules =
+            ModelRoutingRules::new("claude-sonnet").with_cost_strategy(CostStrategy::Cheapest);
         let matcher = ModelMatcher::new(profiles, rules);
 
         let task = Task::new(
@@ -901,8 +911,8 @@ mod tests {
     #[test]
     fn test_cost_strategy_best_quality() {
         let profiles = create_test_profiles();
-        let rules = ModelRoutingRules::new("claude-sonnet")
-            .with_cost_strategy(CostStrategy::BestQuality);
+        let rules =
+            ModelRoutingRules::new("claude-sonnet").with_cost_strategy(CostStrategy::BestQuality);
         let matcher = ModelMatcher::new(profiles, rules);
 
         let profile = matcher.find_balanced().unwrap();
@@ -1040,7 +1050,9 @@ mod tests {
         let matcher = create_matcher();
 
         // CodeGeneration intent should route to claude-opus (per task_type mapping)
-        let profile = matcher.route_by_intent(&TaskIntent::CodeGeneration).unwrap();
+        let profile = matcher
+            .route_by_intent(&TaskIntent::CodeGeneration)
+            .unwrap();
         assert_eq!(profile.id, "claude-opus");
     }
 
@@ -1076,7 +1088,9 @@ mod tests {
         let matcher = create_matcher();
 
         // PrivacySensitive intent should route to ollama-llama (per task_type mapping)
-        let profile = matcher.route_by_intent(&TaskIntent::PrivacySensitive).unwrap();
+        let profile = matcher
+            .route_by_intent(&TaskIntent::PrivacySensitive)
+            .unwrap();
         assert_eq!(profile.id, "ollama-llama");
     }
 
@@ -1105,7 +1119,9 @@ mod tests {
         assert_eq!(profile.id, "gpt-4o");
 
         // PrivacySensitive requires LocalPrivacy capability
-        let profile = matcher.route_by_intent(&TaskIntent::PrivacySensitive).unwrap();
+        let profile = matcher
+            .route_by_intent(&TaskIntent::PrivacySensitive)
+            .unwrap();
         assert_eq!(profile.id, "ollama-llama");
     }
 
@@ -1284,8 +1300,8 @@ mod tests {
     #[test]
     fn test_matcher_with_fallback_provider_and_model() {
         let rules = ModelRoutingRules::default();
-        let matcher =
-            ModelMatcher::new(vec![], rules).with_fallback_provider_and_model("anthropic", "claude-opus-4");
+        let matcher = ModelMatcher::new(vec![], rules)
+            .with_fallback_provider_and_model("anthropic", "claude-opus-4");
 
         assert!(matcher.has_fallback());
     }
@@ -1347,8 +1363,7 @@ mod tests {
             .with_capabilities(vec![Capability::CodeGeneration, Capability::Reasoning]);
 
         let rules = ModelRoutingRules::default();
-        let matcher =
-            ModelMatcher::new(vec![opus], rules).with_fallback_provider("openai");
+        let matcher = ModelMatcher::new(vec![opus], rules).with_fallback_provider("openai");
 
         // Should use configured model, not fallback
         let profile = matcher
@@ -1379,9 +1394,7 @@ mod tests {
         assert!(matcher.has_fallback());
 
         // Test routing uses fallback
-        let profile = matcher
-            .route_by_intent(&TaskIntent::GeneralChat)
-            .unwrap();
+        let profile = matcher.route_by_intent(&TaskIntent::GeneralChat).unwrap();
         assert_eq!(profile.id, "fallback-google");
     }
 

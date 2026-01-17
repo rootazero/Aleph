@@ -304,7 +304,12 @@ impl UnifiedToolsConfig {
 
     /// Check if screen capture service is enabled
     pub fn is_screen_capture_enabled(&self) -> bool {
-        self.enabled && self.native.screen_capture.as_ref().is_none_or(|c| c.enabled)
+        self.enabled
+            && self
+                .native
+                .screen_capture
+                .as_ref()
+                .is_none_or(|c| c.enabled)
     }
 
     /// Get screen capture configuration

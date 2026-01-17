@@ -90,7 +90,9 @@ impl SearchTool {
     pub fn with_api_key(api_key: Option<String>) -> Self {
         let resolved_key = api_key.or_else(|| env::var("TAVILY_API_KEY").ok());
         if resolved_key.is_none() {
-            warn!("TAVILY_API_KEY not set (neither config nor env) - search tool will not function");
+            warn!(
+                "TAVILY_API_KEY not set (neither config nor env) - search tool will not function"
+            );
         } else {
             info!("SearchTool initialized with API key");
         }
@@ -109,9 +111,10 @@ impl SearchTool {
     /// * `Ok(SearchOutput)` - Search results with original query
     /// * `Err(ToolError)` - If API key missing or request fails
     pub async fn call(&self, args: SearchArgs) -> Result<SearchOutput, ToolError> {
-        let api_key = self.api_key.as_ref().ok_or_else(|| {
-            ToolError::InvalidArgs("TAVILY_API_KEY not set".to_string())
-        })?;
+        let api_key = self
+            .api_key
+            .as_ref()
+            .ok_or_else(|| ToolError::InvalidArgs("TAVILY_API_KEY not set".to_string()))?;
 
         info!(query = %args.query, limit = args.limit, "Executing Tavily search");
 

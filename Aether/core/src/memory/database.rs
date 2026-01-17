@@ -434,7 +434,10 @@ impl VectorDatabase {
     pub async fn delete_by_topic_id(&self, topic_id: &str) -> Result<u64, AetherError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let rows_affected = conn
-            .execute("DELETE FROM memories WHERE topic_id = ?1", params![topic_id])
+            .execute(
+                "DELETE FROM memories WHERE topic_id = ?1",
+                params![topic_id],
+            )
             .map_err(|e| {
                 AetherError::config(format!("Failed to delete memories by topic_id: {}", e))
             })?;
@@ -584,8 +587,9 @@ impl VectorDatabase {
                 .as_ref()
                 .map(|e| Self::serialize_embedding(e));
 
-            let source_ids_json = serde_json::to_string(&fact.source_memory_ids)
-                .map_err(|e| AetherError::config(format!("Failed to serialize source_ids: {}", e)))?;
+            let source_ids_json = serde_json::to_string(&fact.source_memory_ids).map_err(|e| {
+                AetherError::config(format!("Failed to serialize source_ids: {}", e))
+            })?;
 
             conn.execute(
                 r#"
@@ -954,8 +958,10 @@ impl VectorDatabase {
     ) -> Result<(), AetherError> {
         let source_ids_json = serde_json::to_string(&session.source_memory_ids)
             .map_err(|e| AetherError::config(format!("Failed to serialize source_ids: {}", e)))?;
-        let extracted_ids_json = serde_json::to_string(&session.extracted_fact_ids)
-            .map_err(|e| AetherError::config(format!("Failed to serialize extracted_ids: {}", e)))?;
+        let extracted_ids_json =
+            serde_json::to_string(&session.extracted_fact_ids).map_err(|e| {
+                AetherError::config(format!("Failed to serialize extracted_ids: {}", e))
+            })?;
 
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(

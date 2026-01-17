@@ -77,25 +77,33 @@ impl ToolSafetyPolicy {
     /// Check if name contains any high-risk keywords
     pub fn is_high_risk(&self, name: &str) -> bool {
         let name_lower = name.to_lowercase();
-        self.high_risk_keywords.iter().any(|k| name_lower.contains(k))
+        self.high_risk_keywords
+            .iter()
+            .any(|k| name_lower.contains(k))
     }
 
     /// Check if name contains any low-risk keywords
     pub fn is_low_risk(&self, name: &str) -> bool {
         let name_lower = name.to_lowercase();
-        self.low_risk_keywords.iter().any(|k| name_lower.contains(k))
+        self.low_risk_keywords
+            .iter()
+            .any(|k| name_lower.contains(k))
     }
 
     /// Check if name contains any reversible keywords
     pub fn is_reversible(&self, name: &str) -> bool {
         let name_lower = name.to_lowercase();
-        self.reversible_keywords.iter().any(|k| name_lower.contains(k))
+        self.reversible_keywords
+            .iter()
+            .any(|k| name_lower.contains(k))
     }
 
     /// Check if name contains any readonly keywords
     pub fn is_readonly(&self, name: &str) -> bool {
         let name_lower = name.to_lowercase();
-        self.readonly_keywords.iter().any(|k| name_lower.contains(k))
+        self.readonly_keywords
+            .iter()
+            .any(|k| name_lower.contains(k))
     }
 
     /// Parse a safety level string to enum-compatible value
@@ -137,8 +145,17 @@ impl ToolSafetyPolicy {
 
 fn default_high_risk_keywords() -> Vec<String> {
     vec![
-        "delete", "remove", "drop", "shell", "execute", "run_command",
-        "bash", "terminal", "destroy", "erase", "purge",
+        "delete",
+        "remove",
+        "drop",
+        "shell",
+        "execute",
+        "run_command",
+        "bash",
+        "terminal",
+        "destroy",
+        "erase",
+        "purge",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -146,16 +163,18 @@ fn default_high_risk_keywords() -> Vec<String> {
 }
 
 fn default_low_risk_keywords() -> Vec<String> {
-    vec!["send", "notify", "post", "publish", "email", "message", "commit", "push"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    vec![
+        "send", "notify", "post", "publish", "email", "message", "commit", "push",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 fn default_reversible_keywords() -> Vec<String> {
     vec![
-        "create", "copy", "move", "rename", "update", "write", "edit",
-        "modify", "set", "add", "insert",
+        "create", "copy", "move", "rename", "update", "write", "edit", "modify", "set", "add",
+        "insert",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -164,8 +183,19 @@ fn default_reversible_keywords() -> Vec<String> {
 
 fn default_readonly_keywords() -> Vec<String> {
     vec![
-        "search", "query", "get", "read", "list", "show", "view",
-        "find", "fetch", "browse", "summarize", "translate", "analyze",
+        "search",
+        "query",
+        "get",
+        "read",
+        "list",
+        "show",
+        "view",
+        "find",
+        "fetch",
+        "browse",
+        "summarize",
+        "translate",
+        "analyze",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -220,7 +250,9 @@ mod tests {
         "#;
         let policy: ToolSafetyPolicy = toml::from_str(toml).unwrap();
         // Custom keywords used
-        assert!(policy.high_risk_keywords.contains(&"custom_delete".to_string()));
+        assert!(policy
+            .high_risk_keywords
+            .contains(&"custom_delete".to_string()));
         assert!(policy.high_risk_keywords.contains(&"danger".to_string()));
         // Defaults NOT included when overridden
         assert!(!policy.high_risk_keywords.contains(&"delete".to_string()));

@@ -149,7 +149,12 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn create_test_skill(dir: &std::path::PathBuf, name: &str, description: &str, instructions: &str) {
+    fn create_test_skill(
+        dir: &std::path::PathBuf,
+        name: &str,
+        description: &str,
+        instructions: &str,
+    ) {
         let skill_dir = dir.join(name);
         fs::create_dir_all(&skill_dir).unwrap();
 
@@ -203,11 +208,7 @@ description: {}
 
         let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
         let payload = PayloadBuilder::new()
-            .meta(
-                Intent::Skills("refine-text".to_string()),
-                1000,
-                anchor,
-            )
+            .meta(Intent::Skills("refine-text".to_string()), 1000, anchor)
             .config(
                 "openai".to_string(),
                 vec![Capability::Skills],
@@ -302,11 +303,7 @@ description: {}
 
         let anchor = ContextAnchor::new("com.app".to_string(), "App".to_string(), None);
         let payload = PayloadBuilder::new()
-            .meta(
-                Intent::Skills("nonexistent".to_string()),
-                1000,
-                anchor,
-            )
+            .meta(Intent::Skills("nonexistent".to_string()), 1000, anchor)
             .config(
                 "openai".to_string(),
                 vec![Capability::Skills],

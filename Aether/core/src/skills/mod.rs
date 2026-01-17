@@ -93,9 +93,10 @@ impl Skill {
         let after_frontmatter = &rest[end_pos + 4..]; // Skip \n---
 
         // Parse YAML frontmatter
-        let frontmatter: SkillFrontmatter = serde_yaml::from_str(frontmatter_yaml).map_err(|e| {
-            AetherError::invalid_config(format!("Invalid SKILL.md frontmatter YAML: {}", e))
-        })?;
+        let frontmatter: SkillFrontmatter =
+            serde_yaml::from_str(frontmatter_yaml).map_err(|e| {
+                AetherError::invalid_config(format!("Invalid SKILL.md frontmatter YAML: {}", e))
+            })?;
 
         // Validate required fields
         if frontmatter.name.is_empty() {

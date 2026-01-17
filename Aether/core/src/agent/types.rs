@@ -254,11 +254,7 @@ mod tests {
 
     #[test]
     fn test_tool_call_info() {
-        let info = ToolCallInfo::new(
-            "call_123",
-            "search",
-            serde_json::json!({"query": "test"}),
-        );
+        let info = ToolCallInfo::new("call_123", "search", serde_json::json!({"query": "test"}));
 
         assert_eq!(info.id, "call_123");
         assert_eq!(info.name, "search");

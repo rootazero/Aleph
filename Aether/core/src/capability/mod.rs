@@ -16,7 +16,9 @@ pub mod strategy;
 pub mod system;
 
 // Re-exports for convenience
-pub use declaration::{CapabilityDeclaration, CapabilityParameter, CapabilityRegistry, McpToolInfo};
+pub use declaration::{
+    CapabilityDeclaration, CapabilityParameter, CapabilityRegistry, McpToolInfo,
+};
 pub use request::{AiResponse, CapabilityRequest, ClarificationInfo, ClarificationReason};
 pub use response_parser::ResponseParser;
 pub use strategies::{McpStrategy, MemoryStrategy, SkillsStrategy};
@@ -35,8 +37,8 @@ pub use system::{
 /// This module orchestrates the execution of different capabilities (Memory, Search, MCP, Video)
 /// in a fixed priority order, enriching the AgentPayload with context data.
 use crate::config::{McpConfig, MemoryConfig, SkillsConfig};
-use crate::mcp::McpClient;
 use crate::error::{AetherError, Result};
+use crate::mcp::McpClient;
 use crate::memory::{EmbeddingModel, FactRetrieval, FactRetrievalConfig, VectorDatabase};
 use crate::payload::{AgentPayload, Capability};
 use crate::skills::SkillsRegistry;
@@ -396,7 +398,11 @@ impl CapabilityExecutor {
     async fn execute_skills(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
         // Check if skills config is available and enabled
         let default_config = SkillsConfig::default();
-        let config = self.skills_config.as_ref().map(|c| c.as_ref()).unwrap_or(&default_config);
+        let config = self
+            .skills_config
+            .as_ref()
+            .map(|c| c.as_ref())
+            .unwrap_or(&default_config);
 
         if !config.enabled {
             debug!("Skills capability disabled in config");

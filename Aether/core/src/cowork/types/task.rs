@@ -220,7 +220,10 @@ pub enum DocGen {
     },
 
     /// Generate PDF document
-    Pdf { style: Option<String>, output: PathBuf },
+    Pdf {
+        style: Option<String>,
+        output: PathBuf,
+    },
 
     /// Generate Markdown document
     Markdown { output: PathBuf },

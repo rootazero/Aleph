@@ -217,14 +217,10 @@ pub enum ConfirmationState {
     },
 
     /// User cancelled - fall back to chat
-    Cancelled {
-        reason: String,
-    },
+    Cancelled { reason: String },
 
     /// Confirmation timed out
-    TimedOut {
-        confirmation_id: String,
-    },
+    TimedOut { confirmation_id: String },
 }
 
 impl ConfirmationState {
@@ -464,7 +460,10 @@ impl AsyncConfirmationHandler {
     }
 
     /// Create a new handler with shared store
-    pub fn with_store(store: Arc<PendingConfirmationStore>, config: AsyncConfirmationConfig) -> Self {
+    pub fn with_store(
+        store: Arc<PendingConfirmationStore>,
+        config: AsyncConfirmationConfig,
+    ) -> Self {
         Self { store, config }
     }
 
@@ -491,14 +490,8 @@ impl AsyncConfirmationHandler {
         routing_layer: RoutingLayer,
     ) -> ConfirmationState {
         let timeout = Duration::from_millis(self.config.timeout_ms);
-        let pending = PendingConfirmation::new(
-            tool,
-            parameters,
-            confidence,
-            reason,
-            routing_layer,
-            timeout,
-        );
+        let pending =
+            PendingConfirmation::new(tool, parameters, confidence, reason, routing_layer, timeout);
 
         if self.store.insert(pending.clone()) {
             ConfirmationState::pending(pending)
@@ -530,9 +523,7 @@ impl AsyncConfirmationHandler {
         // Apply decision
         match decision {
             UserConfirmationDecision::Execute => ConfirmationState::confirmed(&pending),
-            UserConfirmationDecision::Cancel => {
-                ConfirmationState::cancelled("User cancelled")
-            }
+            UserConfirmationDecision::Cancel => ConfirmationState::cancelled("User cancelled"),
             UserConfirmationDecision::EditParameters => {
                 // For now, treat as cancel (parameter editing not implemented)
                 ConfirmationState::cancelled("Parameter editing not yet implemented")

@@ -335,9 +335,7 @@ impl ClaudeProvider {
 
         // Add text if not empty
         if !full_input.is_empty() {
-            content_blocks.push(ClaudeContentBlock::Text {
-                text: full_input,
-            });
+            content_blocks.push(ClaudeContentBlock::Text { text: full_input });
         } else {
             // Default prompt for image-only requests
             content_blocks.push(ClaudeContentBlock::Text {

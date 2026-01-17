@@ -428,6 +428,16 @@ void uniffi_aethecore_fn_method_aethercore_add_mcp_server(void*_Nonnull ptr, Rus
 void uniffi_aethecore_fn_method_aethercore_cancel(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CANCEL_GENERATION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CANCEL_GENERATION
+void uniffi_aethecore_fn_method_aethercore_cancel_generation(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer job_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CHECK_GENERATION_PROGRESS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CHECK_GENERATION_PROGRESS
+RustBuffer uniffi_aethecore_fn_method_aethercore_check_generation_progress(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer job_id, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_FACTS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_FACTS
 uint64_t uniffi_aethecore_fn_method_aethercore_clear_facts(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -593,9 +603,34 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_export_mcp_config_json(void*_No
 RustBuffer uniffi_aethecore_fn_method_aethercore_extract_text(void*_Nonnull ptr, RustBuffer image_data, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE
+RustBuffer uniffi_aethecore_fn_method_aethercore_generate(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer generation_type, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_AUDIO
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_AUDIO
+RustBuffer uniffi_aethecore_fn_method_aethercore_generate_audio(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_IMAGE
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_IMAGE
+RustBuffer uniffi_aethecore_fn_method_aethercore_generate_image(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_SPEECH
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_SPEECH
+RustBuffer uniffi_aethecore_fn_method_aethercore_generate_speech(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer text, RustBuffer params, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_TOPIC_TITLE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_TOPIC_TITLE
 RustBuffer uniffi_aethecore_fn_method_aethercore_generate_topic_title(void*_Nonnull ptr, RustBuffer user_input, RustBuffer ai_response, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_VIDEO
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GENERATE_VIDEO
+RustBuffer uniffi_aethecore_fn_method_aethercore_generate_video(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_COMPRESSION_STATS
@@ -658,6 +693,11 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_config(void*_Nonnull
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_stats(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PROVIDERS_FOR_TYPE
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PROVIDERS_FOR_TYPE
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_providers_for_type(void*_Nonnull ptr, RustBuffer generation_type, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_ROOT_COMMANDS_FROM_REGISTRY
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_ROOT_COMMANDS_FROM_REGISTRY
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_root_commands_from_registry(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -691,6 +731,11 @@ int8_t uniffi_aethecore_fn_method_aethercore_is_cancelled(void*_Nonnull ptr, Rus
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_BUILTIN_TOOLS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_BUILTIN_TOOLS
 RustBuffer uniffi_aethecore_fn_method_aethercore_list_builtin_tools(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_GENERATION_PROVIDERS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_GENERATION_PROVIDERS
+RustBuffer uniffi_aethecore_fn_method_aethercore_list_generation_providers(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_MCP_SERVERS
@@ -1222,6 +1267,18 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_cancel(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CANCEL_GENERATION
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CANCEL_GENERATION
+uint16_t uniffi_aethecore_checksum_method_aethercore_cancel_generation(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CHECK_GENERATION_PROGRESS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CHECK_GENERATION_PROGRESS
+uint16_t uniffi_aethecore_checksum_method_aethercore_check_generation_progress(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEAR_FACTS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEAR_FACTS
 uint16_t uniffi_aethecore_checksum_method_aethercore_clear_facts(void
@@ -1420,9 +1477,39 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_extract_text(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE
+uint16_t uniffi_aethecore_checksum_method_aethercore_generate(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_AUDIO
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_AUDIO
+uint16_t uniffi_aethecore_checksum_method_aethercore_generate_audio(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_IMAGE
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_IMAGE
+uint16_t uniffi_aethecore_checksum_method_aethercore_generate_image(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_SPEECH
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_SPEECH
+uint16_t uniffi_aethecore_checksum_method_aethercore_generate_speech(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_TOPIC_TITLE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_TOPIC_TITLE
 uint16_t uniffi_aethecore_checksum_method_aethercore_generate_topic_title(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_VIDEO
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GENERATE_VIDEO
+uint16_t uniffi_aethecore_checksum_method_aethercore_generate_video(void
     
 );
 #endif
@@ -1498,6 +1585,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_get_memory_stats(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PROVIDERS_FOR_TYPE
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PROVIDERS_FOR_TYPE
+uint16_t uniffi_aethecore_checksum_method_aethercore_get_providers_for_type(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_ROOT_COMMANDS_FROM_REGISTRY
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_ROOT_COMMANDS_FROM_REGISTRY
 uint16_t uniffi_aethecore_checksum_method_aethercore_get_root_commands_from_registry(void
@@ -1537,6 +1630,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_is_cancelled(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_BUILTIN_TOOLS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_BUILTIN_TOOLS
 uint16_t uniffi_aethecore_checksum_method_aethercore_list_builtin_tools(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_GENERATION_PROVIDERS
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_GENERATION_PROVIDERS
+uint16_t uniffi_aethecore_checksum_method_aethercore_list_generation_providers(void
     
 );
 #endif

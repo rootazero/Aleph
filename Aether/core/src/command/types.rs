@@ -169,7 +169,10 @@ impl CommandNode {
 
     /// Check if this is a system builtin command
     pub fn is_system(&self) -> bool {
-        matches!(self.source_type, ToolSourceType::Builtin | ToolSourceType::Native)
+        matches!(
+            self.source_type,
+            ToolSourceType::Builtin | ToolSourceType::Native
+        )
     }
 
     /// Check if this is an MCP tool
@@ -246,7 +249,10 @@ mod tests {
     fn test_command_type_parse() {
         assert_eq!(CommandType::parse("action"), Some(CommandType::Action));
         assert_eq!(CommandType::parse("PROMPT"), Some(CommandType::Prompt));
-        assert_eq!(CommandType::parse("Namespace"), Some(CommandType::Namespace));
+        assert_eq!(
+            CommandType::parse("Namespace"),
+            Some(CommandType::Namespace)
+        );
         assert_eq!(CommandType::parse("invalid"), None);
     }
 

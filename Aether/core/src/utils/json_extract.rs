@@ -69,7 +69,10 @@ pub fn extract_json_robust(response: &str) -> Option<serde_json::Value> {
     // Strategy 3: Extract from generic ``` code block
     if let Some(json_str) = extract_from_generic_code_block(response) {
         if let Ok(v) = serde_json::from_str(&json_str) {
-            debug!(strategy = "generic_code_block", "JSON extraction successful");
+            debug!(
+                strategy = "generic_code_block",
+                "JSON extraction successful"
+            );
             return Some(v);
         }
     }
@@ -103,7 +106,11 @@ fn extract_from_json_code_block(response: &str) -> Option<String> {
             .unwrap_or(0);
 
         if let Some(end) = content[content_start..].find(end_marker) {
-            return Some(content[content_start..content_start + end].trim().to_string());
+            return Some(
+                content[content_start..content_start + end]
+                    .trim()
+                    .to_string(),
+            );
         }
     }
     None

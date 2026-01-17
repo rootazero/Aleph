@@ -16,12 +16,12 @@
 /// - "utf8": Plain text content (markdown, txt, extracted text)
 #[derive(Debug, Clone)]
 pub struct MediaAttachment {
-    pub media_type: String,   // "image", "document", "video", "file"
-    pub mime_type: String,    // "image/png", "text/markdown", "application/pdf", etc.
-    pub data: String,         // Content (format depends on `encoding` field)
-    pub encoding: String,     // "base64" | "utf8" - specifies data format
+    pub media_type: String,       // "image", "document", "video", "file"
+    pub mime_type: String,        // "image/png", "text/markdown", "application/pdf", etc.
+    pub data: String,             // Content (format depends on `encoding` field)
+    pub encoding: String,         // "base64" | "utf8" - specifies data format
     pub filename: Option<String>, // Optional original filename
-    pub size_bytes: u64,      // Original size in bytes for logging/validation
+    pub size_bytes: u64,          // Original size in bytes for logging/validation
 }
 
 /// Captured context from active application (Swift → Rust)
@@ -30,7 +30,7 @@ pub struct CapturedContext {
     pub app_bundle_id: String,
     pub window_title: Option<String>,
     pub attachments: Option<Vec<MediaAttachment>>, // Multimodal content support
-    pub topic_id: Option<String>, // Topic ID for multi-turn conversations
+    pub topic_id: Option<String>,                  // Topic ID for multi-turn conversations
 }
 
 /// Statistics about memory compression state

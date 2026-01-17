@@ -113,10 +113,7 @@ impl CompressionScheduler {
 
     /// Record new activity (resets idle timer)
     pub fn record_activity(&self) {
-        let mut last = self
-            .last_activity
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut last = self.last_activity.lock().unwrap_or_else(|e| e.into_inner());
         *last = Instant::now();
     }
 

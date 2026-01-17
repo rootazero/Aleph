@@ -74,13 +74,15 @@ impl SkillsInstaller {
         let skill_dir = self.skills_dir.join(id);
 
         if !skill_dir.exists() {
-            return Err(AetherError::invalid_config(format!("Skill '{}' not found", id)));
+            return Err(AetherError::invalid_config(format!(
+                "Skill '{}' not found",
+                id
+            )));
         }
 
         info!(skill_id = %id, "Deleting skill");
-        std::fs::remove_dir_all(&skill_dir).map_err(|e| {
-            AetherError::config(format!("Failed to delete skill '{}': {}", id, e))
-        })?;
+        std::fs::remove_dir_all(&skill_dir)
+            .map_err(|e| AetherError::config(format!("Failed to delete skill '{}': {}", id, e)))?;
 
         Ok(())
     }
@@ -104,10 +106,13 @@ impl SkillsInstaller {
         let url = url.trim();
 
         // Handle short format: user/repo
-        if !url.contains("://") && !url.starts_with("github.com")
-            && url.matches('/').count() == 1 && !url.contains(' ') {
-                return Ok(format!("https://github.com/{}", url));
-            }
+        if !url.contains("://")
+            && !url.starts_with("github.com")
+            && url.matches('/').count() == 1
+            && !url.contains(' ')
+        {
+            return Ok(format!("https://github.com/{}", url));
+        }
 
         // Handle github.com/user/repo
         if url.starts_with("github.com/") {
@@ -153,9 +158,9 @@ impl SkillsInstaller {
     async fn install_from_github_zip(&self, url: &str) -> Result<Vec<String>> {
         debug!(url = %url, "Downloading ZIP from GitHub");
 
-        let response = reqwest::get(url).await.map_err(|e| {
-            AetherError::network(format!("Failed to download from {}: {}", url, e))
-        })?;
+        let response = reqwest::get(url)
+            .await
+            .map_err(|e| AetherError::network(format!("Failed to download from {}: {}", url, e)))?;
 
         if !response.status().is_success() {
             return Err(AetherError::network(format!(
@@ -165,22 +170,21 @@ impl SkillsInstaller {
             )));
         }
 
-        let bytes = response.bytes().await.map_err(|e| {
-            AetherError::network(format!("Failed to read response body: {}", e))
-        })?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| AetherError::network(format!("Failed to read response body: {}", e)))?;
 
         // Save to temp file
         let temp_dir = std::env::temp_dir();
         let temp_zip = temp_dir.join(format!("aether-skill-{}.zip", uuid::Uuid::new_v4()));
 
-        std::fs::write(&temp_zip, &bytes).map_err(|e| {
-            AetherError::config(format!("Failed to write temp ZIP: {}", e))
-        })?;
+        std::fs::write(&temp_zip, &bytes)
+            .map_err(|e| AetherError::config(format!("Failed to write temp ZIP: {}", e)))?;
 
         // Extract and install
-        let file = std::fs::File::open(&temp_zip).map_err(|e| {
-            AetherError::config(format!("Failed to open temp ZIP: {}", e))
-        })?;
+        let file = std::fs::File::open(&temp_zip)
+            .map_err(|e| AetherError::config(format!("Failed to open temp ZIP: {}", e)))?;
 
         let result = self.extract_and_install_from_zip(file);
 
@@ -195,9 +199,8 @@ impl SkillsInstaller {
         &self,
         reader: R,
     ) -> Result<Vec<String>> {
-        let mut archive = zip::ZipArchive::new(reader).map_err(|e| {
-            AetherError::config(format!("Failed to read ZIP archive: {}", e))
-        })?;
+        let mut archive = zip::ZipArchive::new(reader)
+            .map_err(|e| AetherError::config(format!("Failed to read ZIP archive: {}", e)))?;
 
         let mut installed = Vec::new();
 
@@ -205,9 +208,9 @@ impl SkillsInstaller {
         let mut skill_files: Vec<(String, String)> = Vec::new();
 
         for i in 0..archive.len() {
-            let mut file = archive.by_index(i).map_err(|e| {
-                AetherError::config(format!("Failed to read ZIP entry: {}", e))
-            })?;
+            let mut file = archive
+                .by_index(i)
+                .map_err(|e| AetherError::config(format!("Failed to read ZIP entry: {}", e)))?;
 
             let name = file.name().to_string();
 
@@ -266,10 +269,7 @@ impl SkillsInstaller {
                     // Write SKILL.md
                     let skill_md_path = target_dir.join("SKILL.md");
                     std::fs::write(&skill_md_path, &content).map_err(|e| {
-                        AetherError::config(format!(
-                            "Failed to write SKILL.md: {}",
-                            e
-                        ))
+                        AetherError::config(format!("Failed to write SKILL.md: {}", e))
                     })?;
 
                     info!(
@@ -303,9 +303,8 @@ impl SkillsInstaller {
     /// Blocks the current thread to perform the async download.
     /// Returns the first successfully installed skill.
     pub fn install_from_url_sync(&self, url: &str) -> Result<Skill> {
-        let runtime = tokio::runtime::Runtime::new().map_err(|e| {
-            AetherError::config(format!("Failed to create async runtime: {}", e))
-        })?;
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|e| AetherError::config(format!("Failed to create async runtime: {}", e)))?;
 
         let installed = runtime.block_on(self.install_from_github(url))?;
 
@@ -320,9 +319,8 @@ impl SkillsInstaller {
         let skill_id = &installed[0];
         let skill_dir = self.skills_dir.join(skill_id);
         let skill_md = skill_dir.join("SKILL.md");
-        let content = std::fs::read_to_string(&skill_md).map_err(|e| {
-            AetherError::config(format!("Failed to read installed skill: {}", e))
-        })?;
+        let content = std::fs::read_to_string(&skill_md)
+            .map_err(|e| AetherError::config(format!("Failed to read installed skill: {}", e)))?;
 
         Skill::parse(skill_id, &content)
     }
@@ -350,7 +348,9 @@ mod tests {
         let installer = SkillsInstaller::new(PathBuf::from("/tmp"));
 
         assert_eq!(
-            installer.normalize_github_url("github.com/user/repo").unwrap(),
+            installer
+                .normalize_github_url("github.com/user/repo")
+                .unwrap(),
             "https://github.com/user/repo"
         );
     }
@@ -423,10 +423,7 @@ mod tests {
         );
 
         // Skip repo root
-        assert_eq!(
-            installer.extract_skill_dir_name("repo-main/SKILL.md"),
-            None
-        );
+        assert_eq!(installer.extract_skill_dir_name("repo-main/SKILL.md"), None);
     }
 
     #[test]
@@ -437,7 +434,11 @@ mod tests {
         // Create a skill
         let skill_dir = skills_dir.join("test-skill");
         fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(skill_dir.join("SKILL.md"), "---\nname: test\ndescription: test\n---\n").unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: test\ndescription: test\n---\n",
+        )
+        .unwrap();
 
         let installer = SkillsInstaller::new(skills_dir);
 

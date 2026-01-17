@@ -9,10 +9,7 @@ use crate::cowork::types::TaskResult;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProgressEvent {
     /// A task has started executing
-    TaskStarted {
-        task_id: String,
-        task_name: String,
-    },
+    TaskStarted { task_id: String, task_name: String },
 
     /// Task progress has been updated
     Progress {
@@ -36,10 +33,7 @@ pub enum ProgressEvent {
     },
 
     /// A task was cancelled
-    TaskCancelled {
-        task_id: String,
-        task_name: String,
-    },
+    TaskCancelled { task_id: String, task_name: String },
 
     /// The entire task graph has completed
     GraphCompleted {

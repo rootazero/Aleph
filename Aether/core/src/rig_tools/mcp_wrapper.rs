@@ -51,12 +51,7 @@ impl McpToolWrapper {
         let all_tools = client.list_tools().await;
         for tool in all_tools {
             // External tools have format "server_name:tool_name"
-            let server_name = tool
-                .name
-                .split(':')
-                .next()
-                .unwrap_or("unknown")
-                .to_string();
+            let server_name = tool.name.split(':').next().unwrap_or("unknown").to_string();
 
             wrappers.push(Self::new(tool, Arc::clone(&client), server_name));
         }

@@ -235,7 +235,11 @@ impl PromptAssembler {
             if !cap.parameters.is_empty() {
                 lines.push("- **Parameters**:".to_string());
                 for param in &cap.parameters {
-                    let required_str = if param.required { "required" } else { "optional" };
+                    let required_str = if param.required {
+                        "required"
+                    } else {
+                        "optional"
+                    };
                     lines.push(format!(
                         "  - `{}` ({}): {} [{}]",
                         param.name, param.param_type, param.description, required_str
@@ -263,10 +267,16 @@ impl PromptAssembler {
         lines.push("- Does it involve time-sensitive information? → SEARCH".to_string());
         lines.push("- Does it ask about specific real-world entities/events? → SEARCH".to_string());
         lines.push("- Would outdated information harm the user? → SEARCH".to_string());
-        lines.push("- Is it purely about concepts, code, or creative tasks? → RESPOND DIRECTLY".to_string());
+        lines.push(
+            "- Is it purely about concepts, code, or creative tasks? → RESPOND DIRECTLY"
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("**Step 2: When in doubt, SEARCH**".to_string());
-        lines.push("- It's better to search and provide accurate info than to guess and be wrong".to_string());
+        lines.push(
+            "- It's better to search and provide accurate info than to guess and be wrong"
+                .to_string(),
+        );
         lines.push("- Users expect you to use your search capability proactively".to_string());
         lines.push(String::new());
         lines.push("**Step 3: Multi-turn awareness**".to_string());
@@ -284,12 +294,17 @@ impl PromptAssembler {
         lines.push(r#"{"__capability_request__": true, "capability": "search", "parameters": {"query": "Apple company news 2024"}, "query": "苹果公司最近怎么样"}"#.to_string());
         lines.push("```".to_string());
         lines.push(String::new());
-        lines.push("User: \"帮我查一下北京到上海的高铁\" → SEARCH (user explicitly wants to look up)".to_string());
+        lines.push(
+            "User: \"帮我查一下北京到上海的高铁\" → SEARCH (user explicitly wants to look up)"
+                .to_string(),
+        );
         lines.push("```json".to_string());
         lines.push(r#"{"__capability_request__": true, "capability": "search", "parameters": {"query": "北京到上海高铁时刻表票价"}, "query": "帮我查一下北京到上海的高铁"}"#.to_string());
         lines.push("```".to_string());
         lines.push(String::new());
-        lines.push("User: \"What is the current Bitcoin price?\" → SEARCH (real-time price)".to_string());
+        lines.push(
+            "User: \"What is the current Bitcoin price?\" → SEARCH (real-time price)".to_string(),
+        );
         lines.push("```json".to_string());
         lines.push(r#"{"__capability_request__": true, "capability": "search", "parameters": {"query": "Bitcoin BTC price USD"}, "query": "What is the current Bitcoin price?"}"#.to_string());
         lines.push("```".to_string());
@@ -525,7 +540,10 @@ impl PromptAssembler {
     /// Format MCP tool result as Markdown
     fn format_mcp_tool_result_markdown(&self, result: &super::McpToolResult) -> String {
         let mut lines = vec![
-            format!("**MCP Tool Execution Result** (Tool: `{}`)", result.tool_name),
+            format!(
+                "**MCP Tool Execution Result** (Tool: `{}`)",
+                result.tool_name
+            ),
             String::new(),
         ];
 
@@ -643,9 +661,14 @@ impl PromptAssembler {
 
         // Metadata
         lines.push(String::new());
-        lines.push(format!("_Content length: {} bytes{}_",
+        lines.push(format!(
+            "_Content length: {} bytes{}_",
             content.content_length,
-            if content.was_truncated { " (truncated)" } else { "" }
+            if content.was_truncated {
+                " (truncated)"
+            } else {
+                ""
+            }
         ));
 
         lines.join("\n")
@@ -992,7 +1015,8 @@ mod tests {
 
         let capabilities = vec![CapabilityDeclaration::search()];
 
-        let prompt = assembler.build_capability_aware_prompt("You are helpful.", &capabilities, None);
+        let prompt =
+            assembler.build_capability_aware_prompt("You are helpful.", &capabilities, None);
 
         // Should contain base prompt
         assert!(prompt.starts_with("You are helpful."));
@@ -1075,7 +1099,8 @@ mod tests {
             skill_instructions: None,
         };
 
-        let prompt = assembler.build_capability_aware_prompt("Base prompt.", &capabilities, Some(&context));
+        let prompt =
+            assembler.build_capability_aware_prompt("Base prompt.", &capabilities, Some(&context));
 
         // Should contain base prompt, capabilities, AND memory context
         assert!(prompt.contains("Base prompt."));

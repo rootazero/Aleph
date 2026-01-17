@@ -108,7 +108,11 @@ impl PendingClarification {
     ///
     /// * `prompt` - The prompt text to display to user
     /// * `options` - Options for select-type clarification
-    pub fn to_request(&self, prompt: &str, options: Vec<ClarificationOption>) -> ClarificationRequest {
+    pub fn to_request(
+        &self,
+        prompt: &str,
+        options: Vec<ClarificationOption>,
+    ) -> ClarificationRequest {
         if options.is_empty() {
             ClarificationRequest::text(&self.session_id, prompt, None)
                 .with_source(&format!("intent:{}", self.intent_type))
@@ -275,7 +279,10 @@ impl ClarificationManager {
     }
 
     /// Find the oldest session by creation time
-    fn find_oldest_session(&self, sessions: &HashMap<String, PendingClarification>) -> Option<String> {
+    fn find_oldest_session(
+        &self,
+        sessions: &HashMap<String, PendingClarification>,
+    ) -> Option<String> {
         sessions
             .iter()
             .min_by_key(|(_, s)| s.created_at)
@@ -438,7 +445,12 @@ mod tests {
         let manager = ClarificationManager::new(config);
 
         let session = manager
-            .create_session("location", "weather_search", "weather_tool", "weather input")
+            .create_session(
+                "location",
+                "weather_search",
+                "weather_tool",
+                "weather input",
+            )
             .await;
 
         assert_eq!(session.param_name, "location");
@@ -587,7 +599,10 @@ mod tests {
 
         // Both should see the same session
         assert!(manager.get_session(&session.session_id).await.is_some());
-        assert!(manager_clone.get_session(&session.session_id).await.is_some());
+        assert!(manager_clone
+            .get_session(&session.session_id)
+            .await
+            .is_some());
 
         // Completing via clone should affect original
         manager_clone.complete_session(&session.session_id).await;

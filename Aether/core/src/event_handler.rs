@@ -318,7 +318,8 @@ pub struct MockEventHandler {
     pub clarification_response: std::sync::Arc<std::sync::Mutex<Option<ClarificationResult>>>, // Mock response to return
     // Multi-turn conversation tracking
     pub conversation_started: std::sync::Arc<std::sync::Mutex<Vec<String>>>, // Session IDs
-    pub conversation_turns: std::sync::Arc<std::sync::Mutex<Vec<crate::conversation::ConversationTurn>>>,
+    pub conversation_turns:
+        std::sync::Arc<std::sync::Mutex<Vec<crate::conversation::ConversationTurn>>>,
     pub conversation_continuation_ready_count: std::sync::Arc<std::sync::Mutex<u32>>,
     pub conversation_ended: std::sync::Arc<std::sync::Mutex<Vec<(String, u32)>>>, // (session_id, total_turns)
     // Async confirmation tracking
@@ -332,7 +333,8 @@ pub struct MockEventHandler {
     // Agent loop tracking
     pub agent_started: std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String)>>>, // (plan_id, total_steps, description)
     pub agent_tool_started: std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String, String)>>>, // (plan_id, step_index, tool_name, description)
-    pub agent_tool_completed: std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String, bool, String)>>>, // (plan_id, step_index, tool_name, success, result_preview)
+    pub agent_tool_completed:
+        std::sync::Arc<std::sync::Mutex<Vec<(String, u32, String, bool, String)>>>, // (plan_id, step_index, tool_name, success, result_preview)
     pub agent_completed: std::sync::Arc<std::sync::Mutex<Vec<(String, bool, u64, String)>>>, // (plan_id, success, duration_ms, response)
 }
 
@@ -777,7 +779,9 @@ mod tests {
 
     #[test]
     fn test_mock_handler_clarification() {
-        use crate::clarification::{ClarificationOption, ClarificationRequest, ClarificationResult};
+        use crate::clarification::{
+            ClarificationOption, ClarificationRequest, ClarificationResult,
+        };
 
         let handler = MockEventHandler::new();
 

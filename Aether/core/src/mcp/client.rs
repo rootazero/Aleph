@@ -94,7 +94,10 @@ impl McpClient {
     ///
     /// Returns a startup report with success/failure information for each server.
     /// This allows callers to handle partial failures appropriately.
-    pub async fn start_external_servers(&self, configs: Vec<ExternalServerConfig>) -> McpStartupReport {
+    pub async fn start_external_servers(
+        &self,
+        configs: Vec<ExternalServerConfig>,
+    ) -> McpStartupReport {
         // Pre-filter configs based on runtime availability (sync operation)
         let valid_configs: Vec<_> = configs
             .into_iter()
@@ -180,7 +183,10 @@ impl McpClient {
         {
             let mut map = self.tool_location_map.write().await;
             for tool in &tools {
-                map.insert(tool.name.clone(), ToolLocation::External(config.name.clone()));
+                map.insert(
+                    tool.name.clone(),
+                    ToolLocation::External(config.name.clone()),
+                );
             }
         }
 
@@ -227,11 +233,7 @@ impl McpClient {
     }
 
     /// Call a tool by name
-    pub async fn call_tool(
-        &self,
-        name: &str,
-        args: serde_json::Value,
-    ) -> Result<McpToolResult> {
+    pub async fn call_tool(&self, name: &str, args: serde_json::Value) -> Result<McpToolResult> {
         let servers = self.external_servers.read().await;
 
         // Check if tool name has server prefix (e.g., "server_name:tool_name")
@@ -393,7 +395,9 @@ mod tests {
     async fn test_tool_not_found() {
         let client = McpClient::new();
 
-        let result = client.call_tool("unknown_tool", serde_json::json!({})).await;
+        let result = client
+            .call_tool("unknown_tool", serde_json::json!({}))
+            .await;
         assert!(result.is_err());
 
         match result.unwrap_err() {
@@ -475,7 +479,10 @@ mod tests {
         let mut report = McpStartupReport::default();
         report.succeeded.push("server1".to_string());
         report.succeeded.push("server2".to_string());
-        report.failed.push(("failing-server".to_string(), "connection refused".to_string()));
+        report.failed.push((
+            "failing-server".to_string(),
+            "connection refused".to_string(),
+        ));
 
         assert_eq!(report.succeeded.len(), 2);
         assert_eq!(report.failed.len(), 1);

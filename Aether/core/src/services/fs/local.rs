@@ -84,9 +84,9 @@ impl FileOps for LocalFs {
             }
         }
 
-        fs::write(path, content).await.map_err(|e| {
-            AetherError::IoError(format!("Failed to write file {:?}: {}", path, e))
-        })
+        fs::write(path, content)
+            .await
+            .map_err(|e| AetherError::IoError(format!("Failed to write file {:?}: {}", path, e)))
     }
 
     async fn write_file_bytes(&self, path: &Path, content: &[u8]) -> Result<()> {
@@ -102,9 +102,9 @@ impl FileOps for LocalFs {
             }
         }
 
-        fs::write(path, content).await.map_err(|e| {
-            AetherError::IoError(format!("Failed to write file {:?}: {}", path, e))
-        })
+        fs::write(path, content)
+            .await
+            .map_err(|e| AetherError::IoError(format!("Failed to write file {:?}: {}", path, e)))
     }
 
     async fn list_dir(&self, path: &Path) -> Result<Vec<DirEntry>> {
@@ -117,9 +117,11 @@ impl FileOps for LocalFs {
             }
         })?;
 
-        while let Some(entry) = read_dir.next_entry().await.map_err(|e| {
-            AetherError::IoError(format!("Failed to read directory entry: {}", e))
-        })? {
+        while let Some(entry) = read_dir
+            .next_entry()
+            .await
+            .map_err(|e| AetherError::IoError(format!("Failed to read directory entry: {}", e)))?
+        {
             let entry_path = entry.path();
             match Self::path_to_entry(&entry_path).await {
                 Ok(dir_entry) => entries.push(dir_entry),
@@ -213,13 +215,11 @@ impl FileOps for LocalFs {
             }
 
             // Sort by modification time (newest first) then by name
-            results.sort_by(|a, b| {
-                match (b.modified, a.modified) {
-                    (Some(b_mod), Some(a_mod)) => b_mod.cmp(&a_mod),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => a.name.cmp(&b.name),
-                }
+            results.sort_by(|a, b| match (b.modified, a.modified) {
+                (Some(b_mod), Some(a_mod)) => b_mod.cmp(&a_mod),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.name.cmp(&b.name),
             });
 
             Ok(results)
@@ -272,7 +272,9 @@ mod tests {
         fs.write_file(&temp_dir.path().join("b.txt"), "b")
             .await
             .unwrap();
-        fs.create_dir(&temp_dir.path().join("subdir")).await.unwrap();
+        fs.create_dir(&temp_dir.path().join("subdir"))
+            .await
+            .unwrap();
 
         let entries = fs.list_dir(temp_dir.path()).await.unwrap();
         assert_eq!(entries.len(), 3);

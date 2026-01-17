@@ -257,7 +257,11 @@ pub struct CalibratedSignal {
 
 impl CalibratedSignal {
     /// Create from an intent signal with calibrated confidence
-    pub fn from_signal(signal: &IntentSignal, calibrated_confidence: f32, layer: RoutingLayer) -> Self {
+    pub fn from_signal(
+        signal: &IntentSignal,
+        calibrated_confidence: f32,
+        layer: RoutingLayer,
+    ) -> Self {
         Self {
             intent_type: signal.intent_type.clone(),
             tool_name: signal.tool_name.clone(),
@@ -467,7 +471,8 @@ impl ConfidenceCalibrator {
         if let Some(tool_name) = &signal.tool_name {
             // Try to get read lock without blocking
             if let Ok(history) = self.history.try_read() {
-                if let Some(success_rate) = history.get_success_rate(tool_name, &signal.intent_type) {
+                if let Some(success_rate) = history.get_success_rate(tool_name, &signal.intent_type)
+                {
                     if success_rate > 0.8 {
                         // Boost by up to 0.1, but don't exceed 1.0
                         let boost = (1.0 - confidence).min(0.1);

@@ -55,8 +55,8 @@ pub use async_confirmation::{
     PendingConfirmationInfo, PendingConfirmationStore, UserConfirmationDecision,
 };
 pub use confirmation::{
-    ConfirmationAction, ConfirmationConfig, ConfirmationDecision, ToolConfirmation,
-    OPTION_CANCEL, OPTION_EDIT, OPTION_EXECUTE,
+    ConfirmationAction, ConfirmationConfig, ConfirmationDecision, ToolConfirmation, OPTION_CANCEL,
+    OPTION_EDIT, OPTION_EXECUTE,
 };
 pub use integration::{
     ConfidenceAction, ConfidenceThresholds, DispatcherAction, DispatcherConfig,
@@ -76,7 +76,12 @@ mod tests {
     fn test_tool_source_display() {
         assert_eq!(format!("{:?}", ToolSource::Native), "Native");
         assert_eq!(
-            format!("{:?}", ToolSource::Mcp { server: "github".into() }),
+            format!(
+                "{:?}",
+                ToolSource::Mcp {
+                    server: "github".into()
+                }
+            ),
             "Mcp { server: \"github\" }"
         );
     }

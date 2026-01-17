@@ -170,8 +170,12 @@ mod tests {
             TranscriptSegment::new(0.0, 2.5, "Hello".to_string()),
             TranscriptSegment::new(2.5, 3.0, "World".to_string()),
         ];
-        let transcript =
-            VideoTranscript::new("abc123".to_string(), "Test Video".to_string(), "en".to_string(), segments);
+        let transcript = VideoTranscript::new(
+            "abc123".to_string(),
+            "Test Video".to_string(),
+            "en".to_string(),
+            segments,
+        );
 
         assert_eq!(transcript.video_id, "abc123");
         assert_eq!(transcript.title, "Test Video");
@@ -184,12 +188,16 @@ mod tests {
     #[test]
     fn test_total_chars() {
         let segments = vec![
-            TranscriptSegment::new(0.0, 2.5, "Hello".to_string()),      // 5 chars
-            TranscriptSegment::new(2.5, 3.0, "World".to_string()),      // 5 chars
-            TranscriptSegment::new(5.5, 2.0, "Test".to_string()),       // 4 chars
+            TranscriptSegment::new(0.0, 2.5, "Hello".to_string()), // 5 chars
+            TranscriptSegment::new(2.5, 3.0, "World".to_string()), // 5 chars
+            TranscriptSegment::new(5.5, 2.0, "Test".to_string()),  // 4 chars
         ];
-        let transcript =
-            VideoTranscript::new("id".to_string(), "Title".to_string(), "en".to_string(), segments);
+        let transcript = VideoTranscript::new(
+            "id".to_string(),
+            "Title".to_string(),
+            "en".to_string(),
+            segments,
+        );
 
         assert_eq!(transcript.total_chars(), 14);
     }
@@ -234,12 +242,16 @@ mod tests {
     #[test]
     fn test_truncate_to_chars() {
         let segments = vec![
-            TranscriptSegment::new(0.0, 2.0, "12345".to_string()),      // 5 chars
-            TranscriptSegment::new(2.0, 2.0, "67890".to_string()),      // 5 chars
-            TranscriptSegment::new(4.0, 2.0, "ABCDE".to_string()),      // 5 chars
+            TranscriptSegment::new(0.0, 2.0, "12345".to_string()), // 5 chars
+            TranscriptSegment::new(2.0, 2.0, "67890".to_string()), // 5 chars
+            TranscriptSegment::new(4.0, 2.0, "ABCDE".to_string()), // 5 chars
         ];
-        let mut transcript =
-            VideoTranscript::new("id".to_string(), "Title".to_string(), "en".to_string(), segments);
+        let mut transcript = VideoTranscript::new(
+            "id".to_string(),
+            "Title".to_string(),
+            "en".to_string(),
+            segments,
+        );
 
         // Truncate to 12 chars - should keep first 2 segments (10 chars)
         transcript.truncate_to_chars(12);
@@ -251,11 +263,13 @@ mod tests {
 
     #[test]
     fn test_truncate_no_change_when_under_limit() {
-        let segments = vec![
-            TranscriptSegment::new(0.0, 2.0, "Hello".to_string()),
-        ];
-        let mut transcript =
-            VideoTranscript::new("id".to_string(), "Title".to_string(), "en".to_string(), segments);
+        let segments = vec![TranscriptSegment::new(0.0, 2.0, "Hello".to_string())];
+        let mut transcript = VideoTranscript::new(
+            "id".to_string(),
+            "Title".to_string(),
+            "en".to_string(),
+            segments,
+        );
 
         transcript.truncate_to_chars(100);
 
@@ -265,11 +279,13 @@ mod tests {
 
     #[test]
     fn test_format_for_context_truncated() {
-        let segments = vec![
-            TranscriptSegment::new(0.0, 2.0, "Hello".to_string()),
-        ];
-        let mut transcript =
-            VideoTranscript::new("id".to_string(), "Title".to_string(), "en".to_string(), segments);
+        let segments = vec![TranscriptSegment::new(0.0, 2.0, "Hello".to_string())];
+        let mut transcript = VideoTranscript::new(
+            "id".to_string(),
+            "Title".to_string(),
+            "en".to_string(),
+            segments,
+        );
         transcript.was_truncated = true;
 
         let formatted = transcript.format_for_context();

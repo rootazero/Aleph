@@ -401,7 +401,8 @@ mod tests {
 
     #[test]
     fn test_response_error() {
-        let json = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#;
+        let json =
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#;
         let resp: JsonRpcResponse = serde_json::from_str(json).unwrap();
         assert!(resp.is_error());
         assert!(!resp.is_success());
@@ -477,10 +478,8 @@ mod tests {
 
     #[test]
     fn test_notification_with_params() {
-        let notif = JsonRpcNotification::with_params(
-            "tools/listChanged",
-            json!({"reason": "refresh"}),
-        );
+        let notif =
+            JsonRpcNotification::with_params("tools/listChanged", json!({"reason": "refresh"}));
         let json = serde_json::to_string(&notif).unwrap();
         assert!(json.contains("\"params\""));
         assert!(json.contains("\"reason\":\"refresh\""));

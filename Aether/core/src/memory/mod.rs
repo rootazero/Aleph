@@ -30,7 +30,9 @@ mod integration_tests;
 pub use ai_retrieval::{AiMemoryRequest, AiMemoryResult, AiMemoryRetriever, MemoryCandidate};
 pub use augmentation::PromptAugmenter;
 pub use cleanup::CleanupService;
-pub use compression::{CompressionScheduler, CompressionService, CompressionTrigger, FactExtractor};
+pub use compression::{
+    CompressionScheduler, CompressionService, CompressionTrigger, FactExtractor,
+};
 pub use context::{
     CompressionResult, CompressionSession, ContextAnchor, FactStats, FactType, MemoryEntry,
     MemoryFact,

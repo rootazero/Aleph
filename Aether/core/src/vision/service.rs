@@ -88,7 +88,10 @@ impl VisionService {
 
         debug!(
             original = format!("{}x{}", processed.original_width, processed.original_height),
-            processed = format!("{}x{}", processed.processed_width, processed.processed_height),
+            processed = format!(
+                "{}x{}",
+                processed.processed_width, processed.processed_height
+            ),
             data_size = processed.data.len(),
             "Image preprocessed"
         );
@@ -105,7 +108,8 @@ impl VisionService {
             .await?;
 
         // 7. Parse response based on task
-        let result = self.parse_response(&request.task, response, start.elapsed().as_millis() as u64);
+        let result =
+            self.parse_response(&request.task, response, start.elapsed().as_millis() as u64);
 
         info!(
             task = ?request.task,
@@ -145,17 +149,13 @@ impl VisionService {
         debug!("[OCR-Vision] get_vision_provider START");
 
         // Get default provider name from config
-        let default_provider_name = config
-            .general
-            .default_provider
-            .as_ref()
-            .ok_or_else(|| {
-                tracing::error!("[OCR-Vision] No default_provider in config.general");
-                AetherError::invalid_config(
-                    "No default provider configured. Please set a default provider in settings."
-                        .to_string(),
-                )
-            })?;
+        let default_provider_name = config.general.default_provider.as_ref().ok_or_else(|| {
+            tracing::error!("[OCR-Vision] No default_provider in config.general");
+            AetherError::invalid_config(
+                "No default provider configured. Please set a default provider in settings."
+                    .to_string(),
+            )
+        })?;
 
         debug!(
             provider = %default_provider_name,
@@ -163,21 +163,18 @@ impl VisionService {
         );
 
         // Get provider config
-        let provider_config = config
-            .providers
-            .get(default_provider_name)
-            .ok_or_else(|| {
-                tracing::error!(
-                    provider = %default_provider_name,
-                    available_providers = ?config.providers.keys().collect::<Vec<_>>(),
-                    "[OCR-Vision] Provider not found in config.providers"
-                );
-                AetherError::invalid_config(format!(
-                    "Default provider '{}' not found in configuration. Available: {:?}",
-                    default_provider_name,
-                    config.providers.keys().collect::<Vec<_>>()
-                ))
-            })?;
+        let provider_config = config.providers.get(default_provider_name).ok_or_else(|| {
+            tracing::error!(
+                provider = %default_provider_name,
+                available_providers = ?config.providers.keys().collect::<Vec<_>>(),
+                "[OCR-Vision] Provider not found in config.providers"
+            );
+            AetherError::invalid_config(format!(
+                "Default provider '{}' not found in configuration. Available: {:?}",
+                default_provider_name,
+                config.providers.keys().collect::<Vec<_>>()
+            ))
+        })?;
 
         debug!(
             provider = %default_provider_name,
@@ -224,9 +221,8 @@ impl VisionService {
     /// Preprocess image: resize if needed and convert to JPEG
     fn preprocess_image(&self, data: &[u8]) -> Result<ProcessedImage> {
         // Load image from memory
-        let img = image::load_from_memory(data).map_err(|e| {
-            AetherError::other(format!("Failed to load image: {}", e))
-        })?;
+        let img = image::load_from_memory(data)
+            .map_err(|e| AetherError::other(format!("Failed to load image: {}", e)))?;
 
         let original_width = img.width();
         let original_height = img.height();
@@ -283,7 +279,12 @@ impl VisionService {
     }
 
     /// Parse AI response based on task type
-    fn parse_response(&self, task: &VisionTask, response: String, processing_time_ms: u64) -> VisionResult {
+    fn parse_response(
+        &self,
+        task: &VisionTask,
+        response: String,
+        processing_time_ms: u64,
+    ) -> VisionResult {
         match task {
             VisionTask::OcrOnly => VisionResult {
                 extracted_text: response.trim().to_string(),
@@ -331,11 +332,8 @@ mod tests {
     #[test]
     fn test_parse_response_ocr_only() {
         let service = VisionService::with_defaults();
-        let result = service.parse_response(
-            &VisionTask::OcrOnly,
-            "  Hello World  ".to_string(),
-            100,
-        );
+        let result =
+            service.parse_response(&VisionTask::OcrOnly, "  Hello World  ".to_string(), 100);
         assert_eq!(result.extracted_text, "Hello World");
         assert!(result.description.is_none());
         assert!(result.ai_response.is_none());

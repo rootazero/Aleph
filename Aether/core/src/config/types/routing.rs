@@ -490,8 +490,6 @@ mod tests {
             ..Default::default()
         };
         let intent = rule.get_task_intent();
-        assert!(
-            matches!(intent, TaskIntent::Custom(ref s) if s == "my_custom_workflow")
-        );
+        assert!(matches!(intent, TaskIntent::Custom(ref s) if s == "my_custom_workflow"));
     }
 }

@@ -116,7 +116,10 @@ pub trait CapabilityStrategy: Send + Sync {
     /// Default implementation checks if the capability is in the payload's
     /// capability list.
     fn is_enabled_for(&self, payload: &AgentPayload) -> bool {
-        payload.config.capabilities.contains(&self.capability_type())
+        payload
+            .config
+            .capabilities
+            .contains(&self.capability_type())
     }
 
     /// Validate the strategy configuration
@@ -191,7 +194,10 @@ pub trait CapabilityStrategy: Send + Sync {
     /// Returns basic status with availability and capability type.
     fn status_info(&self) -> std::collections::HashMap<String, String> {
         let mut info = std::collections::HashMap::new();
-        info.insert("capability".to_string(), format!("{:?}", self.capability_type()));
+        info.insert(
+            "capability".to_string(),
+            format!("{:?}", self.capability_type()),
+        );
         info.insert("name".to_string(), self.name().to_string());
         info.insert("priority".to_string(), self.priority().to_string());
         info.insert("available".to_string(), self.is_available().to_string());
@@ -278,7 +284,9 @@ impl CompositeCapabilityExecutor {
 
     /// Check if a capability strategy is registered
     pub fn has_strategy(&self, capability: &Capability) -> bool {
-        self.strategies.iter().any(|s| &s.capability_type() == capability)
+        self.strategies
+            .iter()
+            .any(|s| &s.capability_type() == capability)
     }
 
     /// Get all registered strategies
@@ -471,7 +479,8 @@ impl CompositeCapabilityExecutor {
     /// `true` if a strategy was removed, `false` if not found
     pub fn unregister(&mut self, capability: &Capability) -> bool {
         let initial_len = self.strategies.len();
-        self.strategies.retain(|s| &s.capability_type() != capability);
+        self.strategies
+            .retain(|s| &s.capability_type() != capability);
         let removed = self.strategies.len() < initial_len;
         if removed {
             tracing::debug!(
@@ -565,7 +574,8 @@ mod tests {
         }
 
         async fn execute(&self, payload: AgentPayload) -> Result<AgentPayload> {
-            self.executed.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.executed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(payload)
         }
     }
@@ -593,7 +603,10 @@ mod tests {
             .with_strategy(Arc::new(MockStrategy::new(Capability::Memory, 0, true)));
 
         // Verify strategies are sorted by priority
-        assert_eq!(executor.strategies()[0].capability_type(), Capability::Memory);
+        assert_eq!(
+            executor.strategies()[0].capability_type(),
+            Capability::Memory
+        );
         assert_eq!(executor.strategies()[1].capability_type(), Capability::Mcp);
     }
 
@@ -658,10 +671,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_single() {
-        let executor = CompositeCapabilityExecutor::new()
-            .with_strategy(Arc::new(
-                MockStrategy::new(Capability::Memory, 0, true).with_config_valid(false),
-            ));
+        let executor = CompositeCapabilityExecutor::new().with_strategy(Arc::new(
+            MockStrategy::new(Capability::Memory, 0, true).with_config_valid(false),
+        ));
 
         assert!(executor.validate(&Capability::Memory).is_err());
         assert!(executor.validate(&Capability::Mcp).is_ok()); // Not registered
@@ -679,14 +691,20 @@ mod tests {
         assert_eq!(health.len(), 2);
 
         // Memory should be fully operational
-        let memory_health = health.iter().find(|h| h.capability == Capability::Memory).unwrap();
+        let memory_health = health
+            .iter()
+            .find(|h| h.capability == Capability::Memory)
+            .unwrap();
         assert!(memory_health.config_valid);
         assert!(memory_health.available);
         assert!(memory_health.healthy);
         assert!(memory_health.is_operational());
 
         // Search should be unhealthy
-        let search_health = health.iter().find(|h| h.capability == Capability::Mcp).unwrap();
+        let search_health = health
+            .iter()
+            .find(|h| h.capability == Capability::Mcp)
+            .unwrap();
         assert!(search_health.config_valid);
         assert!(search_health.available);
         assert!(!search_health.healthy);
@@ -765,11 +783,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_unavailable_strategy_not_health_checked() {
-        let executor = CompositeCapabilityExecutor::new()
-            .with_strategy(Arc::new(
-                MockStrategy::new(Capability::Memory, 0, false) // Not available
-                    .with_healthy(true),
-            ));
+        let executor = CompositeCapabilityExecutor::new().with_strategy(Arc::new(
+            MockStrategy::new(Capability::Memory, 0, false) // Not available
+                .with_healthy(true),
+        ));
 
         let health = executor.health_check(&Capability::Memory).await.unwrap();
 

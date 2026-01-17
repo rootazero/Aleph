@@ -169,9 +169,7 @@ impl SuggestionParser {
 
                 // Extract options based on method
                 let options = match pattern.extractor {
-                    ExtractionMethod::NumberedList => {
-                        self.extract_numbered_list(suggestion_text)
-                    }
+                    ExtractionMethod::NumberedList => self.extract_numbered_list(suggestion_text),
                     ExtractionMethod::BulletList => self.extract_bullet_list(suggestion_text),
                 };
 
@@ -243,7 +241,9 @@ impl SuggestionParser {
         }
 
         // Remove leading/trailing punctuation
-        cleaned = cleaned.trim_matches(|c: char| c.is_ascii_punctuation()).to_string();
+        cleaned = cleaned
+            .trim_matches(|c: char| c.is_ascii_punctuation())
+            .to_string();
 
         cleaned.trim().to_string()
     }

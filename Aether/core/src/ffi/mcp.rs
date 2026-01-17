@@ -23,7 +23,10 @@ impl AetherCore {
     }
 
     /// Update MCP configuration
-    pub fn update_mcp_config(&self, new_config: crate::mcp::McpSettingsConfig) -> Result<(), AetherFfiError> {
+    pub fn update_mcp_config(
+        &self,
+        new_config: crate::mcp::McpSettingsConfig,
+    ) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
 
         config.mcp.enabled = new_config.enabled;
@@ -36,7 +39,9 @@ impl AetherCore {
         config.tools.allowed_commands = new_config.allowed_commands;
         config.tools.shell_timeout_seconds = new_config.shell_timeout_seconds;
 
-        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        config
+            .save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
         drop(config); // Release lock before notifying
 
         info!("MCP configuration updated");
@@ -117,29 +122,31 @@ impl AetherCore {
     }
 
     /// Add an external MCP server
-    pub fn add_mcp_server(&self, config: crate::mcp::McpServerConfig) -> Result<(), AetherFfiError> {
+    pub fn add_mcp_server(
+        &self,
+        config: crate::mcp::McpServerConfig,
+    ) -> Result<(), AetherFfiError> {
         if config.server_type == crate::mcp::McpServerType::Builtin {
-            return Err(AetherFfiError::Config("Cannot add builtin servers".to_string()));
+            return Err(AetherFfiError::Config(
+                "Cannot add builtin servers".to_string(),
+            ));
         }
 
-        let command = config
-            .command
-            .as_ref()
-            .ok_or_else(|| AetherFfiError::Config("External server requires a command".to_string()))?;
+        let command = config.command.as_ref().ok_or_else(|| {
+            AetherFfiError::Config("External server requires a command".to_string())
+        })?;
 
         if config.id.is_empty() {
-            return Err(AetherFfiError::Config("Server ID cannot be empty".to_string()));
+            return Err(AetherFfiError::Config(
+                "Server ID cannot be empty".to_string(),
+            ));
         }
 
         let external_config = crate::config::McpExternalServerConfig {
             name: config.id.clone(),
             command: command.clone(),
             args: config.args.clone(),
-            env: config
-                .env
-                .into_iter()
-                .map(|e| (e.key, e.value))
-                .collect(),
+            env: config.env.into_iter().map(|e| (e.key, e.value)).collect(),
             cwd: config.working_directory,
             requires_runtime: None,
             timeout_seconds: 30,
@@ -155,7 +162,8 @@ impl AetherCore {
         }
 
         cfg.mcp.external_servers.push(external_config);
-        cfg.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        cfg.save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
         drop(cfg); // Release lock before notifying
 
         info!(server_id = %config.id, "MCP server added");
@@ -167,17 +175,19 @@ impl AetherCore {
     }
 
     /// Update an external MCP server configuration
-    pub fn update_mcp_server(&self, config: crate::mcp::McpServerConfig) -> Result<(), AetherFfiError> {
+    pub fn update_mcp_server(
+        &self,
+        config: crate::mcp::McpServerConfig,
+    ) -> Result<(), AetherFfiError> {
         if config.server_type == crate::mcp::McpServerType::Builtin {
             return Err(AetherFfiError::Config(
                 "Builtin servers cannot be updated via this method".to_string(),
             ));
         }
 
-        let command = config
-            .command
-            .as_ref()
-            .ok_or_else(|| AetherFfiError::Config("External server requires a command".to_string()))?;
+        let command = config.command.as_ref().ok_or_else(|| {
+            AetherFfiError::Config("External server requires a command".to_string())
+        })?;
 
         let mut cfg = self.lock_config();
 
@@ -202,7 +212,8 @@ impl AetherCore {
             }
         }
 
-        cfg.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        cfg.save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
         drop(cfg); // Release lock before notifying
 
         info!(server_id = %config.id, "MCP server updated");
@@ -227,7 +238,8 @@ impl AetherCore {
             )));
         }
 
-        cfg.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        cfg.save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
         drop(cfg); // Release lock before notifying
 
         info!(server_id = %id, "MCP server deleted");
@@ -315,7 +327,12 @@ impl AetherCore {
                 .and_then(|v| v.as_str())
                 .map(String::from);
 
-            if let Some(existing) = cfg.mcp.external_servers.iter_mut().find(|s| s.name == *name) {
+            if let Some(existing) = cfg
+                .mcp
+                .external_servers
+                .iter_mut()
+                .find(|s| s.name == *name)
+            {
                 existing.command = command.to_string();
                 existing.args = args;
                 existing.env = env;
@@ -335,7 +352,8 @@ impl AetherCore {
             }
         }
 
-        cfg.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        cfg.save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
         drop(cfg); // Release lock before notifying
 
         info!("MCP configuration imported");

@@ -37,9 +37,10 @@ impl SkillsRegistry {
     /// Scans subdirectories for SKILL.md files and parses them.
     /// Invalid skills are logged and skipped.
     pub fn load_all(&self) -> Result<()> {
-        let mut skills = self.skills.write().map_err(|_| {
-            AetherError::config("Failed to acquire write lock on skills registry")
-        })?;
+        let mut skills = self
+            .skills
+            .write()
+            .map_err(|_| AetherError::config("Failed to acquire write lock on skills registry"))?;
 
         skills.clear();
 
@@ -108,7 +109,11 @@ impl SkillsRegistry {
     /// Load a single skill from its SKILL.md file
     fn load_skill(&self, skill_id: &str, path: &PathBuf) -> Result<Skill> {
         let content = std::fs::read_to_string(path).map_err(|e| {
-            AetherError::config(format!("Failed to read SKILL.md at {}: {}", path.display(), e))
+            AetherError::config(format!(
+                "Failed to read SKILL.md at {}: {}",
+                path.display(),
+                e
+            ))
         })?;
 
         Skill::parse(skill_id, &content)

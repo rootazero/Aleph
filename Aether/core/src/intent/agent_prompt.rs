@@ -46,13 +46,16 @@ impl AgentModePrompt {
         let tools_section = if self.tools.is_empty() {
             String::new()
         } else {
-            let tool_list: Vec<String> = self.tools.iter()
+            let tool_list: Vec<String> = self
+                .tools
+                .iter()
                 .map(|t| format!("- **{}**: {}", t.name, t.description))
                 .collect();
             format!("\n\n### 可用工具\n\n{}", tool_list.join("\n"))
         };
 
-        format!(r#"## Agent执行模式
+        format!(
+            r#"## Agent执行模式
 
 你是一个能够执行任务的AI助手。你必须使用工具来完成用户请求。{}
 
@@ -74,7 +77,9 @@ impl AgentModePrompt {
 - 你可以直接访问用户的本地文件系统
 - **禁止未经确认直接执行文件移动/删除操作**
 - 必须先展示计划，等用户说"Y"或"确认"后才能执行
-- 如果用户说"N"或"取消"，则放弃操作"#, tools_section)
+- 如果用户说"N"或"取消"，则放弃操作"#,
+            tools_section
+        )
     }
 
     /// Generate a shorter version of the prompt for context-limited scenarios

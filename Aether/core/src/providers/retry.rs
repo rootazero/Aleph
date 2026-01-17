@@ -38,9 +38,10 @@ fn is_retryable_with_policy(error: &AetherError, policy: &RetryPolicy) -> bool {
         AetherError::Timeout { .. } => policy.retry_on_timeout,
         AetherError::ProviderError { message, .. } => {
             // Check if message contains any retryable status code
-            policy.retryable_status_codes.iter().any(|code| {
-                message.contains(&code.to_string())
-            })
+            policy
+                .retryable_status_codes
+                .iter()
+                .any(|code| message.contains(&code.to_string()))
         }
         // Don't retry these errors
         AetherError::AuthenticationError { .. } => false,
@@ -192,7 +193,8 @@ where
                 }
 
                 // Calculate backoff duration using policy multiplier
-                let backoff_secs = initial_backoff.as_secs_f64() * multiplier.powi(attempt as i32 - 1);
+                let backoff_secs =
+                    initial_backoff.as_secs_f64() * multiplier.powi(attempt as i32 - 1);
                 let backoff = Duration::from_secs_f64(backoff_secs);
 
                 warn!(

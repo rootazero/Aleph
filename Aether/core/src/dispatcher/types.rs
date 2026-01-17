@@ -528,7 +528,6 @@ pub struct UnifiedTool {
     // =========================================================================
     // UI Metadata Fields (for Settings UI and Command Completion)
     // =========================================================================
-
     /// SF Symbol icon name for UI display
     /// e.g., "magnifyingglass", "puzzlepiece.extension"
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -569,7 +568,6 @@ pub struct UnifiedTool {
     // =========================================================================
     // These fields are only populated for builtin tools and define how
     // requests matching this command are routed and processed.
-
     /// Regex pattern for L1 routing match
     /// e.g., "^/search\\s+" for /search command
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -601,7 +599,6 @@ pub struct UnifiedTool {
     // =========================================================================
     // Conflict Resolution Fields (Flat Namespace)
     // =========================================================================
-
     /// Original name before conflict resolution renaming
     ///
     /// If this tool was renamed due to a conflict, this field stores the
@@ -868,7 +865,12 @@ impl UnifiedTool {
             ToolCategory::Skills => {
                 let skill_id = service_name.unwrap_or(&def.name).to_string();
                 let id = format!("skill:{}", skill_id);
-                (ToolSource::Skill { id: skill_id.clone() }, id)
+                (
+                    ToolSource::Skill {
+                        id: skill_id.clone(),
+                    },
+                    id,
+                )
             }
             ToolCategory::Custom => {
                 let id = format!("custom:{}", def.name);
@@ -994,10 +996,7 @@ impl UnifiedTool {
                 if let Some(props) = schema.get("properties") {
                     let hints: Vec<String> = props
                         .as_object()
-                        .map(|obj| {
-                            obj.keys().cloned()
-                                .collect()
-                        })
+                        .map(|obj| obj.keys().cloned().collect())
                         .unwrap_or_default();
                     if !hints.is_empty() {
                         format!(" (args: {})", hints.join(", "))
@@ -1227,10 +1226,7 @@ mod tests {
             .label(),
             "MCP"
         );
-        assert_eq!(
-            ToolSource::Skill { id: "test".into() }.label(),
-            "Skill"
-        );
+        assert_eq!(ToolSource::Skill { id: "test".into() }.label(), "Skill");
         assert_eq!(ToolSource::Custom { rule_index: 0 }.label(), "Custom");
     }
 

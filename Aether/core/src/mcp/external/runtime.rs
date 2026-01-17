@@ -96,15 +96,11 @@ pub fn check_runtime(kind: RuntimeKind) -> RuntimeCheckResult {
     };
 
     // Check version
-    let version_output = Command::new(cmd)
-        .arg("--version")
-        .output();
+    let version_output = Command::new(cmd).arg("--version").output();
 
     match version_output {
         Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .to_string();
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
             // Try to get the path using 'which' or 'where'
             let path = get_runtime_path(cmd);

@@ -422,9 +422,7 @@ impl AetherError {
             AetherError::McpToolNotFound(tool) => {
                 format!("MCP tool '{}' not found", tool)
             }
-            AetherError::McpTimeout => {
-                "MCP request timed out. Please try again.".to_string()
-            }
+            AetherError::McpTimeout => "MCP request timed out. Please try again.".to_string(),
             AetherError::ToolNotFound { name, suggestion } => {
                 if let Some(sug) = suggestion {
                     format!("Tool '{}' not found. {}", name, sug)
@@ -432,9 +430,7 @@ impl AetherError {
                     format!("Tool '{}' not found", name)
                 }
             }
-            AetherError::Cancelled => {
-                "Operation cancelled.".to_string()
-            }
+            AetherError::Cancelled => "Operation cancelled.".to_string(),
         }
     }
 
@@ -455,7 +451,10 @@ impl AetherError {
     }
 
     /// Create a tool not found error with suggestion
-    pub fn tool_not_found_with_suggestion<S: Into<String>, T: Into<String>>(name: S, suggestion: T) -> Self {
+    pub fn tool_not_found_with_suggestion<S: Into<String>, T: Into<String>>(
+        name: S,
+        suggestion: T,
+    ) -> Self {
         AetherError::ToolNotFound {
             name: name.into(),
             suggestion: Some(suggestion.into()),

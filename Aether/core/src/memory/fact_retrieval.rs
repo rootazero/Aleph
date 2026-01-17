@@ -124,7 +124,10 @@ impl FactRetrieval {
             Vec::new()
         };
 
-        Ok(RetrievalResult { facts, raw_memories })
+        Ok(RetrievalResult {
+            facts,
+            raw_memories,
+        })
     }
 
     /// Retrieve with custom limits
@@ -162,7 +165,10 @@ impl FactRetrieval {
             Vec::new()
         };
 
-        Ok(RetrievalResult { facts, raw_memories })
+        Ok(RetrievalResult {
+            facts,
+            raw_memories,
+        })
     }
 
     /// Format retrieval result as context for LLM

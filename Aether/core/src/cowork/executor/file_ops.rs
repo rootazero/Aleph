@@ -166,15 +166,15 @@ impl FileOpsExecutor {
         }
 
         // Check file size
-        let metadata = fs::metadata(&canonical_path)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+        let metadata =
+            fs::metadata(&canonical_path).map_err(|e| AetherError::IoError(e.to_string()))?;
         self.permission_checker
             .check_file_size(metadata.len())
             .map_err(|e| AetherError::IoError(e.to_string()))?;
 
         // Read file
-        let mut file = File::open(&canonical_path)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+        let mut file =
+            File::open(&canonical_path).map_err(|e| AetherError::IoError(e.to_string()))?;
         let mut content = String::new();
         file.read_to_string(&mut content)
             .map_err(|e| AetherError::IoError(e.to_string()))?;
@@ -186,11 +186,18 @@ impl FileOpsExecutor {
             encoding: "utf-8".to_string(),
         };
 
-        info!("Read file: {:?} ({} bytes)", canonical_path, result.metadata.size);
+        info!(
+            "Read file: {:?} ({} bytes)",
+            canonical_path, result.metadata.size
+        );
 
         Ok(TaskResult::with_output(serde_json::to_value(result)?)
             .with_duration(start.elapsed())
-            .with_summary(format!("Read {} bytes from {:?}", metadata.len(), canonical_path)))
+            .with_summary(format!(
+                "Read {} bytes from {:?}",
+                metadata.len(),
+                canonical_path
+            )))
     }
 
     /// Execute a write operation
@@ -220,8 +227,7 @@ impl FileOpsExecutor {
         // Create parent directories if needed
         if let Some(parent) = canonical_path.parent() {
             if !parent.exists() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| AetherError::IoError(e.to_string()))?;
+                fs::create_dir_all(parent).map_err(|e| AetherError::IoError(e.to_string()))?;
                 debug!("Created parent directories: {:?}", parent);
             }
         }
@@ -292,15 +298,14 @@ impl FileOpsExecutor {
         }
 
         // Get file size before move
-        let metadata = fs::metadata(&from_canonical)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+        let metadata =
+            fs::metadata(&from_canonical).map_err(|e| AetherError::IoError(e.to_string()))?;
         let bytes = metadata.len();
 
         // Create parent directories if needed
         if let Some(parent) = to_canonical.parent() {
             if !parent.exists() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| AetherError::IoError(e.to_string()))?;
+                fs::create_dir_all(parent).map_err(|e| AetherError::IoError(e.to_string()))?;
             }
         }
 
@@ -319,10 +324,7 @@ impl FileOpsExecutor {
         Ok(TaskResult::with_output(serde_json::to_value(result)?)
             .add_artifact(to_canonical.clone())
             .with_duration(start.elapsed())
-            .with_summary(format!(
-                "Moved {:?} to {:?}",
-                from_canonical, to_canonical
-            )))
+            .with_summary(format!("Moved {:?} to {:?}", from_canonical, to_canonical)))
     }
 
     /// Execute a copy operation
@@ -357,8 +359,7 @@ impl FileOpsExecutor {
         // Create parent directories if needed
         if let Some(parent) = to_canonical.parent() {
             if !parent.exists() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| AetherError::IoError(e.to_string()))?;
+                fs::create_dir_all(parent).map_err(|e| AetherError::IoError(e.to_string()))?;
             }
         }
 
@@ -372,7 +373,10 @@ impl FileOpsExecutor {
             bytes,
         };
 
-        info!("Copied {:?} -> {:?} ({} bytes)", from_canonical, to_canonical, bytes);
+        info!(
+            "Copied {:?} -> {:?} ({} bytes)",
+            from_canonical, to_canonical, bytes
+        );
 
         Ok(TaskResult::with_output(serde_json::to_value(result)?)
             .add_artifact(to_canonical.clone())
@@ -401,8 +405,8 @@ impl FileOpsExecutor {
             })));
         }
 
-        let metadata = fs::metadata(&canonical_path)
-            .map_err(|e| AetherError::IoError(e.to_string()))?;
+        let metadata =
+            fs::metadata(&canonical_path).map_err(|e| AetherError::IoError(e.to_string()))?;
         let was_dir = metadata.is_dir();
         let mut items_deleted = 1;
 
@@ -410,12 +414,11 @@ impl FileOpsExecutor {
             // Count items in directory
             items_deleted = fs::read_dir(&canonical_path)
                 .map_err(|e| AetherError::IoError(e.to_string()))?
-                .count() + 1;
-            fs::remove_dir_all(&canonical_path)
-                .map_err(|e| AetherError::IoError(e.to_string()))?;
+                .count()
+                + 1;
+            fs::remove_dir_all(&canonical_path).map_err(|e| AetherError::IoError(e.to_string()))?;
         } else {
-            fs::remove_file(&canonical_path)
-                .map_err(|e| AetherError::IoError(e.to_string()))?;
+            fs::remove_file(&canonical_path).map_err(|e| AetherError::IoError(e.to_string()))?;
         }
 
         let result = DeleteResult {
@@ -491,11 +494,17 @@ impl FileOpsExecutor {
             total_matches,
         };
 
-        info!("Search '{}' in {:?}: {} matches", pattern, canonical_dir, total_matches);
+        info!(
+            "Search '{}' in {:?}: {} matches",
+            pattern, canonical_dir, total_matches
+        );
 
         Ok(TaskResult::with_output(serde_json::to_value(result)?)
             .with_duration(start.elapsed())
-            .with_summary(format!("Found {} files matching '{}'", total_matches, pattern)))
+            .with_summary(format!(
+                "Found {} files matching '{}'",
+                total_matches, pattern
+            )))
     }
 
     /// Execute a list operation
@@ -518,8 +527,8 @@ impl FileOpsExecutor {
 
         let mut entries = Vec::new();
 
-        for entry in fs::read_dir(&canonical_path)
-            .map_err(|e| AetherError::IoError(e.to_string()))?
+        for entry in
+            fs::read_dir(&canonical_path).map_err(|e| AetherError::IoError(e.to_string()))?
         {
             let entry = entry.map_err(|e| AetherError::IoError(e.to_string()))?;
             let entry_path = entry.path();
@@ -533,12 +542,10 @@ impl FileOpsExecutor {
         }
 
         // Sort entries: directories first, then by name
-        entries.sort_by(|a, b| {
-            match (a.is_dir, b.is_dir) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => a.path.cmp(&b.path),
-            }
+        entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.path.cmp(&b.path),
         });
 
         let total_entries = entries.len();
@@ -553,7 +560,10 @@ impl FileOpsExecutor {
 
         Ok(TaskResult::with_output(serde_json::to_value(result)?)
             .with_duration(start.elapsed())
-            .with_summary(format!("Listed {} entries in {:?}", total_entries, canonical_path)))
+            .with_summary(format!(
+                "Listed {} entries in {:?}",
+                total_entries, canonical_path
+            )))
     }
 
     /// Execute a batch move operation
@@ -663,7 +673,9 @@ impl TaskExecutor for FileOpsExecutor {
         };
 
         // Get content from parameters if needed for write operations
-        let content = task.parameters.get("content")
+        let content = task
+            .parameters
+            .get("content")
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
@@ -711,7 +723,9 @@ mod tests {
         let task = Task::new(
             "test_read",
             "Read test file",
-            TaskType::FileOperation(FileOp::Read { path: file_path.clone() }),
+            TaskType::FileOperation(FileOp::Read {
+                path: file_path.clone(),
+            }),
         );
 
         let ctx = ExecutionContext::new("test_graph");
@@ -729,7 +743,9 @@ mod tests {
         let task = Task::new(
             "test_write",
             "Write test file",
-            TaskType::FileOperation(FileOp::Write { path: file_path.clone() }),
+            TaskType::FileOperation(FileOp::Write {
+                path: file_path.clone(),
+            }),
         )
         .with_parameters(json!({"content": "Test content"}));
 
@@ -773,7 +789,9 @@ mod tests {
         let task = Task::new(
             "test_dry_run",
             "Dry run write",
-            TaskType::FileOperation(FileOp::Write { path: file_path.clone() }),
+            TaskType::FileOperation(FileOp::Write {
+                path: file_path.clone(),
+            }),
         )
         .with_parameters(json!({"content": "Should not be written"}));
 

@@ -242,9 +242,7 @@ impl GeminiProvider {
 
         // Add text if not empty
         if !full_input.is_empty() {
-            parts.push(Part::Text {
-                text: full_input,
-            });
+            parts.push(Part::Text { text: full_input });
         } else {
             // Default prompt for image-only requests
             parts.push(Part::Text {
@@ -305,10 +303,7 @@ impl GeminiProvider {
     /// Parse error response and convert to AetherError
     fn handle_error(&self, error: GeminiError) -> AetherError {
         match error.code {
-            400 => AetherError::provider(format!(
-                "Gemini bad request: {}",
-                error.message
-            )),
+            400 => AetherError::provider(format!("Gemini bad request: {}", error.message)),
             401 | 403 => AetherError::authentication(
                 &self.name,
                 &format!("Invalid Gemini API key: {}", error.message),
@@ -338,10 +333,9 @@ impl GeminiProvider {
 
         // Fallback if we can't parse the error response
         match status.as_u16() {
-            401 | 403 => AetherError::authentication(
-                self.name.clone(),
-                "Invalid Gemini API key".to_string(),
-            ),
+            401 | 403 => {
+                AetherError::authentication(self.name.clone(), "Invalid Gemini API key".to_string())
+            }
             429 => AetherError::rate_limit("Gemini rate limit exceeded".to_string()),
             500..=599 => AetherError::provider(format!("Gemini server error: {}", status)),
             _ => AetherError::provider(format!("Gemini API error: {}", status)),

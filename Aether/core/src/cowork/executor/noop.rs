@@ -64,16 +64,15 @@ impl TaskExecutor for NoopExecutor {
             tokio::time::sleep(self.delay).await;
         }
 
-        Ok(TaskResult::with_string(format!(
-            "NoopExecutor completed task: {}",
-            task.name
-        ))
-        .with_duration(self.delay)
-        .with_summary(format!(
-            "Mock execution of {} task '{}'",
-            task.task_type.category(),
-            task.name
-        )))
+        Ok(
+            TaskResult::with_string(format!("NoopExecutor completed task: {}", task.name))
+                .with_duration(self.delay)
+                .with_summary(format!(
+                    "Mock execution of {} task '{}'",
+                    task.task_type.category(),
+                    task.name
+                )),
+        )
     }
 
     fn name(&self) -> &str {
@@ -135,13 +134,13 @@ mod tests {
             path: PathBuf::from("/tmp")
         })));
 
-        assert!(executor.can_execute(&TaskType::AiInference(
-            crate::cowork::types::AiTask {
+        assert!(
+            executor.can_execute(&TaskType::AiInference(crate::cowork::types::AiTask {
                 prompt: "test".into(),
                 requires_privacy: false,
                 has_images: false,
                 output_format: None,
-            }
-        )));
+            }))
+        );
     }
 }

@@ -252,7 +252,9 @@ mod tests {
         summary.total_tasks = 10;
         summary.completed_tasks = 8;
         summary.failed_tasks = 2;
-        summary.errors.push("Task failed: connection timeout".into());
+        summary
+            .errors
+            .push("Task failed: connection timeout".into());
 
         assert!(!summary.is_success());
         assert_eq!(summary.completion_percentage(), 80.0);

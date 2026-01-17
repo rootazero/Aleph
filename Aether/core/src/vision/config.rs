@@ -106,8 +106,7 @@ mod tests {
 
     #[test]
     fn test_config_builder() {
-        let config = VisionConfig::new(1920, 90)
-            .with_ocr_prompt("Custom OCR prompt");
+        let config = VisionConfig::new(1920, 90).with_ocr_prompt("Custom OCR prompt");
 
         assert_eq!(config.max_image_dimension, 1920);
         assert_eq!(config.jpeg_quality, 90);

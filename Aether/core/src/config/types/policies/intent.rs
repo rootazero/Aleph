@@ -87,7 +87,9 @@ mod tests {
         assert_eq!(policy.confidence_threshold, 0.7);
         assert_eq!(policy.timeout_ms, 3000);
         assert_eq!(policy.min_input_length, 3);
-        assert!(policy.video_url_patterns.contains(&"youtube.com/watch".to_string()));
+        assert!(policy
+            .video_url_patterns
+            .contains(&"youtube.com/watch".to_string()));
     }
 
     #[test]
@@ -122,6 +124,8 @@ mod tests {
         assert_eq!(policy.timeout_ms, 5000);
         // Defaults for unspecified fields
         assert_eq!(policy.min_input_length, 3);
-        assert!(policy.video_url_patterns.contains(&"youtube.com/watch".to_string()));
+        assert!(policy
+            .video_url_patterns
+            .contains(&"youtube.com/watch".to_string()));
     }
 }

@@ -48,8 +48,7 @@ impl WebFetchTool {
     pub const NAME: &'static str = "web_fetch";
 
     /// Tool description for AI
-    pub const DESCRIPTION: &'static str =
-        "Fetch and extract text content from a web page URL.";
+    pub const DESCRIPTION: &'static str = "Fetch and extract text content from a web page URL.";
 
     /// Default maximum content length (used when no policy provided)
     const DEFAULT_MAX_CONTENT_LENGTH: usize = 10000;
@@ -290,8 +289,7 @@ mod tests {
 
     #[test]
     fn test_web_fetch_args() {
-        let args: WebFetchArgs =
-            serde_json::from_str(r#"{"url": "https://example.com"}"#).unwrap();
+        let args: WebFetchArgs = serde_json::from_str(r#"{"url": "https://example.com"}"#).unwrap();
         assert_eq!(args.url, "https://example.com");
     }
 

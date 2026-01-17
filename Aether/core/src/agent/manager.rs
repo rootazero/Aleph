@@ -265,7 +265,10 @@ impl RigAgentManager {
 
     /// Check if a tool is registered
     pub async fn has_tool(&self, tool_name: &str) -> bool {
-        self.registered_tools.read().unwrap().contains(&tool_name.to_string())
+        self.registered_tools
+            .read()
+            .unwrap()
+            .contains(&tool_name.to_string())
     }
 
     // ========================================================================
@@ -426,7 +429,10 @@ impl RigAgentManager {
             }
         };
 
-        info!(response_len = response.len(), "Response with history received");
+        info!(
+            response_len = response.len(),
+            "Response with history received"
+        );
         Ok(AgentResponse::simple(response))
     }
 
@@ -513,7 +519,10 @@ impl RigAgentManager {
             }
         };
 
-        info!(response_len = response.len(), "Multimodal response received");
+        info!(
+            response_len = response.len(),
+            "Multimodal response received"
+        );
         Ok(AgentResponse::simple(response))
     }
 
@@ -611,7 +620,10 @@ impl RigAgentManager {
             }
         };
 
-        info!(response_len = response.len(), "Multimodal + history response received");
+        info!(
+            response_len = response.len(),
+            "Multimodal + history response received"
+        );
         Ok(AgentResponse::simple(response))
     }
 
@@ -656,14 +668,8 @@ impl RigAgentManager {
                 "utf8" => {
                     // Text content (documents) - add as text block with header
                     let filename = attachment.filename.as_deref().unwrap_or("document");
-                    let doc_content = format!(
-                        "\n\n--- {} ---\n{}",
-                        filename,
-                        attachment.data
-                    );
-                    content_items.push(UserContent::Text(Text {
-                        text: doc_content,
-                    }));
+                    let doc_content = format!("\n\n--- {} ---\n{}", filename, attachment.data);
+                    content_items.push(UserContent::Text(Text { text: doc_content }));
                 }
                 _ => {
                     // Unknown encoding - log and skip
@@ -695,10 +701,13 @@ impl RigAgentManager {
                 .api_key(api_key)
                 .base_url(base_url)
                 .build()
-                .map_err(|e| AetherError::provider(format!("Failed to create OpenAI client: {}", e)))
+                .map_err(|e| {
+                    AetherError::provider(format!("Failed to create OpenAI client: {}", e))
+                })
         } else {
-            openai::Client::new(api_key)
-                .map_err(|e| AetherError::provider(format!("Failed to create OpenAI client: {}", e)))
+            openai::Client::new(api_key).map_err(|e| {
+                AetherError::provider(format!("Failed to create OpenAI client: {}", e))
+            })
         }
     }
 
@@ -719,10 +728,9 @@ impl RigAgentManager {
                     AetherError::provider(format!("Failed to create Anthropic client: {}", e))
                 })
         } else {
-            anthropic::Client::new(api_key)
-                .map_err(|e| {
-                    AetherError::provider(format!("Failed to create Anthropic client: {}", e))
-                })
+            anthropic::Client::new(api_key).map_err(|e| {
+                AetherError::provider(format!("Failed to create Anthropic client: {}", e))
+            })
         }
     }
 

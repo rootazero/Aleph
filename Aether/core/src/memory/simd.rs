@@ -323,7 +323,11 @@ mod tests {
         let a = vec![1.0, 2.0, 3.0, 4.0];
         let b = vec![1.0, 2.0, 3.0, 4.0];
         let result = cosine_similarity(&a, &b);
-        assert!((result - 1.0).abs() < 0.0001, "Expected 1.0, got {}", result);
+        assert!(
+            (result - 1.0).abs() < 0.0001,
+            "Expected 1.0, got {}",
+            result
+        );
     }
 
     #[test]
@@ -451,7 +455,10 @@ mod benchmarks {
         let scalar_ns = scalar_time.as_nanos() as f64 / iterations as f64;
         let speedup = scalar_ns / simd_ns;
 
-        println!("\n=== Cosine Similarity Benchmark ({} dims, {} iterations) ===", dim, iterations);
+        println!(
+            "\n=== Cosine Similarity Benchmark ({} dims, {} iterations) ===",
+            dim, iterations
+        );
         println!("SIMD:   {:?} ({:.1} ns/op)", simd_time, simd_ns);
         println!("Scalar: {:?} ({:.1} ns/op)", scalar_time, scalar_ns);
         println!("Speedup: {:.2}x", speedup);

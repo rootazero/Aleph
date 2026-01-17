@@ -121,7 +121,10 @@ impl CoworkEngine {
         // Initialize model matcher if pipelines are enabled
         let model_matcher = if config.enable_pipelines && !config.model_profiles.is_empty() {
             let rules = config.routing_rules.clone().unwrap_or_default();
-            Some(Arc::new(ModelMatcher::new(config.model_profiles.clone(), rules)))
+            Some(Arc::new(ModelMatcher::new(
+                config.model_profiles.clone(),
+                rules,
+            )))
         } else {
             None
         };
@@ -141,10 +144,7 @@ impl CoworkEngine {
     }
 
     /// Create a CoworkEngine with a custom planner
-    pub fn with_planner(
-        config: CoworkConfig,
-        planner: Arc<dyn TaskPlanner>,
-    ) -> Self {
+    pub fn with_planner(config: CoworkConfig, planner: Arc<dyn TaskPlanner>) -> Self {
         let scheduler_config = SchedulerConfig {
             max_parallelism: config.max_parallelism,
         };
@@ -155,7 +155,10 @@ impl CoworkEngine {
         // Initialize model matcher if pipelines are enabled
         let model_matcher = if config.enable_pipelines && !config.model_profiles.is_empty() {
             let rules = config.routing_rules.clone().unwrap_or_default();
-            Some(Arc::new(ModelMatcher::new(config.model_profiles.clone(), rules)))
+            Some(Arc::new(ModelMatcher::new(
+                config.model_profiles.clone(),
+                rules,
+            )))
         } else {
             None
         };
@@ -190,7 +193,10 @@ impl CoworkEngine {
         // Initialize model matcher if pipelines are enabled
         let model_matcher = if config.enable_pipelines && !config.model_profiles.is_empty() {
             let rules = config.routing_rules.clone().unwrap_or_default();
-            Some(Arc::new(ModelMatcher::new(config.model_profiles.clone(), rules)))
+            Some(Arc::new(ModelMatcher::new(
+                config.model_profiles.clone(),
+                rules,
+            )))
         } else {
             None
         };
@@ -217,7 +223,10 @@ impl CoworkEngine {
     /// Register the FileOpsExecutor with the given configuration
     ///
     /// This should be called after creating the engine to enable file operations.
-    pub fn register_file_ops_executor(&mut self, config: crate::config::types::cowork::FileOpsConfigToml) {
+    pub fn register_file_ops_executor(
+        &mut self,
+        config: crate::config::types::cowork::FileOpsConfigToml,
+    ) {
         if config.enabled {
             let executor = config.create_executor();
             self.executors.register("file_ops", Arc::new(executor));
@@ -305,7 +314,10 @@ impl CoworkEngine {
             return Err(AetherError::config("Cowork is disabled"));
         }
 
-        info!("Executing task graph: {} ({})", graph.metadata.title, graph.id);
+        info!(
+            "Executing task graph: {} ({})",
+            graph.metadata.title, graph.id
+        );
         *self.state.write().await = ExecutionState::Executing;
 
         // Reset state
@@ -531,15 +543,13 @@ impl CoworkEngine {
         if let Some(ref mut matcher) = self.model_matcher {
             // We need to get a mutable reference, so we clone and replace
             let mut new_matcher = (**matcher).clone();
-            new_matcher.set_fallback_provider(Some(
-                super::model_router::FallbackProvider::new(provider),
-            ));
+            new_matcher
+                .set_fallback_provider(Some(super::model_router::FallbackProvider::new(provider)));
             *matcher = Arc::new(new_matcher);
         } else {
             // If model routing is not enabled, create a minimal matcher with just fallback
             let rules = super::model_router::ModelRoutingRules::default();
-            let matcher = ModelMatcher::new(vec![], rules)
-                .with_fallback_provider(provider);
+            let matcher = ModelMatcher::new(vec![], rules).with_fallback_provider(provider);
             self.model_matcher = Some(Arc::new(matcher));
         }
     }
@@ -554,8 +564,8 @@ impl CoworkEngine {
             *matcher = Arc::new(new_matcher);
         } else {
             let rules = super::model_router::ModelRoutingRules::default();
-            let matcher = ModelMatcher::new(vec![], rules)
-                .with_fallback_provider_and_model(provider, model);
+            let matcher =
+                ModelMatcher::new(vec![], rules).with_fallback_provider_and_model(provider, model);
             self.model_matcher = Some(Arc::new(matcher));
         }
     }
@@ -572,11 +582,14 @@ impl CoworkEngine {
     ///
     /// Returns the selected ModelProfile, or an error if routing fails.
     pub fn route_task(&self, task: &Task) -> Result<ModelProfile> {
-        let matcher = self.model_matcher.as_ref().ok_or_else(|| {
-            AetherError::config("Model routing is not enabled")
-        })?;
+        let matcher = self
+            .model_matcher
+            .as_ref()
+            .ok_or_else(|| AetherError::config("Model routing is not enabled"))?;
 
-        matcher.route(task).map_err(|e| AetherError::config(e.to_string()))
+        matcher
+            .route(task)
+            .map_err(|e| AetherError::config(e.to_string()))
     }
 
     /// Route by TaskIntent for unified routing integration
@@ -612,9 +625,10 @@ impl CoworkEngine {
         intent: &super::model_router::TaskIntent,
         preferred_model: Option<&str>,
     ) -> Result<ModelProfile> {
-        let matcher = self.model_matcher.as_ref().ok_or_else(|| {
-            AetherError::config("Model routing is not enabled")
-        })?;
+        let matcher = self
+            .model_matcher
+            .as_ref()
+            .ok_or_else(|| AetherError::config("Model routing is not enabled"))?;
 
         matcher
             .route_by_intent_with_preference(intent, preferred_model)
@@ -634,10 +648,7 @@ impl CoworkEngine {
     ///
     /// * `Ok(ModelProfile)` - The selected model profile
     /// * `Err` - If routing fails
-    pub fn route_from_rule(
-        &self,
-        rule: &crate::config::RoutingRuleConfig,
-    ) -> Result<ModelProfile> {
+    pub fn route_from_rule(&self, rule: &crate::config::RoutingRuleConfig) -> Result<ModelProfile> {
         let intent = rule.get_task_intent();
         let preferred = rule.get_preferred_model();
         self.route_by_intent(&intent, preferred)
@@ -667,7 +678,10 @@ impl CoworkEngine {
             return self.execute(graph).await;
         }
 
-        info!("Executing task graph with model routing: {} ({})", graph.metadata.title, graph.id);
+        info!(
+            "Executing task graph with model routing: {} ({})",
+            graph.metadata.title, graph.id
+        );
         *self.state.write().await = ExecutionState::Executing;
 
         // Reset state
@@ -749,7 +763,8 @@ impl CoworkEngine {
 
                 // Route AI tasks to optimal model
                 let (result, model_used) = if matches!(task.task_type, TaskType::AiInference(_)) {
-                    self.execute_ai_task_with_routing(&task, &ctx, &context_manager).await
+                    self.execute_ai_task_with_routing(&task, &ctx, &context_manager)
+                        .await
                 } else {
                     // Non-AI tasks use standard execution
                     let result = self.executors.execute(&task, &ctx).await;
@@ -761,7 +776,10 @@ impl CoworkEngine {
                         debug!(
                             "Task {} completed successfully{}",
                             task_id,
-                            model_used.as_ref().map(|m| format!(" (model: {})", m)).unwrap_or_default()
+                            model_used
+                                .as_ref()
+                                .map(|m| format!(" (model: {})", m))
+                                .unwrap_or_default()
                         );
 
                         // Store result in context manager
@@ -965,10 +983,7 @@ mod tests {
         };
 
         // Create engine with mock planner
-        let engine = CoworkEngine::with_planner(
-            config,
-            Arc::new(MockPlanner),
-        );
+        let engine = CoworkEngine::with_planner(config, Arc::new(MockPlanner));
 
         let graph = create_test_graph();
         let summary = engine.execute(graph).await.unwrap();
@@ -986,11 +1001,11 @@ mod tests {
         let event_count = Arc::new(AtomicUsize::new(0));
         let count_clone = event_count.clone();
 
-        engine.subscribe(Arc::new(
-            crate::cowork::monitor::CallbackSubscriber::new(move |_| {
+        engine.subscribe(Arc::new(crate::cowork::monitor::CallbackSubscriber::new(
+            move |_| {
                 count_clone.fetch_add(1, Ordering::SeqCst);
-            }),
-        ));
+            },
+        )));
 
         let graph = create_test_graph();
         engine.execute(graph).await.unwrap();

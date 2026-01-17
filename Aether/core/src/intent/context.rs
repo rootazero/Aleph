@@ -87,8 +87,7 @@ impl InputFeatures {
     fn extract_urls(input: &str) -> Vec<String> {
         // Match URLs starting with http:// or https://
         // Excludes common trailing punctuation and brackets
-        let url_pattern =
-            Regex::new(r"https?://[^\s<>\[\]{}|\\^`\x00-\x1f]+").ok();
+        let url_pattern = Regex::new(r"https?://[^\s<>\[\]{}|\\^`\x00-\x1f]+").ok();
 
         url_pattern
             .map(|re| {
@@ -381,10 +380,7 @@ impl TimeContext {
             hour: now.hour(),
             minute: now.minute(),
             weekday: now.weekday().num_days_from_sunday(),
-            is_weekend: matches!(
-                now.weekday(),
-                chrono::Weekday::Sat | chrono::Weekday::Sun
-            ),
+            is_weekend: matches!(now.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun),
         }
     }
 
@@ -395,10 +391,7 @@ impl TimeContext {
             hour,
             minute,
             weekday: now.weekday().num_days_from_sunday(),
-            is_weekend: matches!(
-                now.weekday(),
-                chrono::Weekday::Sat | chrono::Weekday::Sun
-            ),
+            is_weekend: matches!(now.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun),
         }
     }
 
@@ -684,9 +677,8 @@ mod tests {
 
     #[test]
     fn test_input_features_youtube_url() {
-        let features = InputFeatures::extract(
-            "Check out this video: https://www.youtube.com/watch?v=abc123",
-        );
+        let features =
+            InputFeatures::extract("Check out this video: https://www.youtube.com/watch?v=abc123");
 
         assert!(features.has_youtube_url());
         let youtube_urls = features.get_youtube_urls();
@@ -821,8 +813,7 @@ mod tests {
 
     #[test]
     fn test_app_context_with_window_title() {
-        let ctx = AppContext::new("com.apple.Notes", "Notes")
-            .with_window_title("My Shopping List");
+        let ctx = AppContext::new("com.apple.Notes", "Notes").with_window_title("My Shopping List");
 
         assert_eq!(ctx.window_title, Some("My Shopping List".to_string()));
     }
@@ -987,11 +978,7 @@ mod tests {
     fn test_matching_context_with_conversation() {
         let mut conversation = ConversationContext::new();
         conversation.record_intent("weather");
-        conversation.add_pending_param(PendingParam::new(
-            "location",
-            "weather",
-            "Where?",
-        ));
+        conversation.add_pending_param(PendingParam::new("location", "weather", "Where?"));
 
         let ctx = MatchingContext::builder()
             .raw_input("Beijing")

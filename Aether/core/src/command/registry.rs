@@ -78,9 +78,7 @@ impl CommandRegistry {
         }
 
         // Sort commands alphabetically by key for consistent display
-        registry
-            .builtin_commands
-            .sort_by(|a, b| a.key.cmp(&b.key));
+        registry.builtin_commands.sort_by(|a, b| a.key.cmp(&b.key));
 
         // NOTE: In flat namespace mode, MCP namespace is NOT added.
         // MCP tools are registered directly as root commands via ToolRegistry.
@@ -289,9 +287,7 @@ impl CommandRegistry {
                     ))
                 }
             }
-            None => {
-                CommandExecutionResult::error(format!("Command not found: {}", root_key))
-            }
+            None => CommandExecutionResult::error(format!("Command not found: {}", root_key)),
         }
     }
 
@@ -356,10 +352,13 @@ impl CommandRegistry {
                 None
             };
 
-            let mut skill_node =
-                CommandNode::new("skill", "Execute predefined skill workflows", CommandType::Prompt)
-                    .with_icon("wand.and.stars")
-                    .with_source_id("builtin:skill");
+            let mut skill_node = CommandNode::new(
+                "skill",
+                "Execute predefined skill workflows",
+                CommandType::Prompt,
+            )
+            .with_icon("wand.and.stars")
+            .with_source_id("builtin:skill");
 
             skill_node.has_children = true;
 
@@ -369,8 +368,7 @@ impl CommandRegistry {
 
             self.builtin_commands.push(skill_node);
             // Re-sort after adding
-            self.builtin_commands
-                .sort_by(|a, b| a.key.cmp(&b.key));
+            self.builtin_commands.sort_by(|a, b| a.key.cmp(&b.key));
         }
 
         // Build skill children nodes
@@ -527,10 +525,7 @@ mod tests {
             get_builtin_hint("search", "zh-Hans"),
             Some("网页搜索".to_string())
         );
-        assert_eq!(
-            get_builtin_hint("unknown", "en"),
-            None
-        );
+        assert_eq!(get_builtin_hint("unknown", "en"), None);
     }
 
     #[test]
@@ -566,7 +561,10 @@ mod tests {
         let commands = registry.get_root_commands();
         let mcp = commands.iter().find(|c| c.key == "mcp");
         // /mcp should NOT exist in flat namespace mode
-        assert!(mcp.is_none(), "/mcp namespace should not exist in flat namespace mode");
+        assert!(
+            mcp.is_none(),
+            "/mcp namespace should not exist in flat namespace mode"
+        );
     }
 
     #[test]
@@ -579,11 +577,29 @@ mod tests {
         let commands = registry.get_root_commands();
 
         // Verify no builtin commands exist (AI-first architecture)
-        assert!(!commands.iter().any(|c| c.key == "search"), "search should not exist in AI-first mode");
-        assert!(!commands.iter().any(|c| c.key == "youtube"), "youtube should not exist in AI-first mode");
-        assert!(!commands.iter().any(|c| c.key == "webfetch"), "webfetch should not exist in AI-first mode");
-        assert!(!commands.iter().any(|c| c.key == "mcp"), "/mcp should not exist");
-        assert!(!commands.iter().any(|c| c.key == "skill"), "/skill should not exist");
-        assert!(!commands.iter().any(|c| c.key == "chat"), "/chat should not exist");
+        assert!(
+            !commands.iter().any(|c| c.key == "search"),
+            "search should not exist in AI-first mode"
+        );
+        assert!(
+            !commands.iter().any(|c| c.key == "youtube"),
+            "youtube should not exist in AI-first mode"
+        );
+        assert!(
+            !commands.iter().any(|c| c.key == "webfetch"),
+            "webfetch should not exist in AI-first mode"
+        );
+        assert!(
+            !commands.iter().any(|c| c.key == "mcp"),
+            "/mcp should not exist"
+        );
+        assert!(
+            !commands.iter().any(|c| c.key == "skill"),
+            "/skill should not exist"
+        );
+        assert!(
+            !commands.iter().any(|c| c.key == "chat"),
+            "/chat should not exist"
+        );
     }
 }

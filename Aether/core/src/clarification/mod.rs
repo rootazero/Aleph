@@ -253,8 +253,7 @@ mod tests {
 
     #[test]
     fn test_clarification_request_text() {
-        let request =
-            ClarificationRequest::text("test-id", "Enter name:", Some("e.g., John Doe"));
+        let request = ClarificationRequest::text("test-id", "Enter name:", Some("e.g., John Doe"));
 
         assert_eq!(request.id, "test-id");
         assert_eq!(request.prompt, "Enter name:");
@@ -265,8 +264,8 @@ mod tests {
 
     #[test]
     fn test_clarification_request_with_source() {
-        let request = ClarificationRequest::select("test", "Prompt", vec![])
-            .with_source("skill:refine-text");
+        let request =
+            ClarificationRequest::select("test", "Prompt", vec![]).with_source("skill:refine-text");
 
         assert_eq!(request.source, Some("skill:refine-text".to_string()));
     }

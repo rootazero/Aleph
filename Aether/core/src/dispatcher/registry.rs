@@ -11,9 +11,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use super::types::{ConflictInfo, ConflictResolution, ToolSource, UnifiedTool};
 #[cfg(test)]
 use super::types::ToolPriority;
+use super::types::{ConflictInfo, ConflictResolution, ToolSource, UnifiedTool};
 
 /// Unified Tool Registry
 ///
@@ -101,7 +101,8 @@ impl ToolRegistry {
         .with_localization_key("tool.generate_speech")
         .with_sort_order(61);
 
-        self.register_with_conflict_resolution(speech_generate).await;
+        self.register_with_conflict_resolution(speech_generate)
+            .await;
 
         info!("Registered 2 builtin generation tools");
     }
@@ -426,15 +427,22 @@ impl ToolRegistry {
             let resolution = self.resolve_conflict(&tool.name, &conflict, &tool.source);
 
             match resolution {
-                ConflictResolution::RenameExisting { original_name, new_name } => {
+                ConflictResolution::RenameExisting {
+                    original_name,
+                    new_name,
+                } => {
                     // Rename the existing tool
-                    self.rename_existing_tool(&conflict.existing_id, &new_name).await;
+                    self.rename_existing_tool(&conflict.existing_id, &new_name)
+                        .await;
                     info!(
                         "Conflict resolved: existing tool '{}' renamed to '{}', new tool '{}' takes priority",
                         original_name, new_name, tool.name
                     );
                 }
-                ConflictResolution::RenameNew { original_name, new_name } => {
+                ConflictResolution::RenameNew {
+                    original_name,
+                    new_name,
+                } => {
                     // Rename the new tool
                     tool.original_name = Some(original_name.clone());
                     tool.was_renamed = true;
@@ -447,7 +455,9 @@ impl ToolRegistry {
                         ToolSource::Builtin => format!("builtin:{}", new_name),
                         ToolSource::Mcp { server } => format!("mcp:{}:{}", server, new_name),
                         ToolSource::Skill { id } => format!("skill:{}", id),
-                        ToolSource::Custom { rule_index } => format!("custom:{}:{}", rule_index, new_name),
+                        ToolSource::Custom { rule_index } => {
+                            format!("custom:{}:{}", rule_index, new_name)
+                        }
                     };
 
                     debug!(
@@ -489,10 +499,8 @@ impl ToolRegistry {
     /// This uses a single write lock operation, so UI will never see
     /// an empty or partially populated tool list during refresh.
     pub async fn refresh_atomic(&self, new_tools: Vec<UnifiedTool>) {
-        let new_map: HashMap<String, UnifiedTool> = new_tools
-            .into_iter()
-            .map(|t| (t.id.clone(), t))
-            .collect();
+        let new_map: HashMap<String, UnifiedTool> =
+            new_tools.into_iter().map(|t| (t.id.clone(), t)).collect();
 
         let count = new_map.len();
 
@@ -524,9 +532,7 @@ impl ToolRegistry {
         let mut tools = self.tools.write().await;
         let initial_count = tools.len();
 
-        tools.retain(|_, tool| {
-            super::types::ToolSourceType::from(&tool.source) != source_type
-        });
+        tools.retain(|_, tool| super::types::ToolSourceType::from(&tool.source) != source_type);
 
         let removed = initial_count - tools.len();
         debug!(
@@ -553,11 +559,9 @@ impl ToolRegistry {
         let mut tools = self.tools.write().await;
         let initial_count = tools.len();
 
-        tools.retain(|_, tool| {
-            match &tool.source {
-                super::types::ToolSource::Mcp { server } => server != server_name,
-                _ => true,
-            }
+        tools.retain(|_, tool| match &tool.source {
+            super::types::ToolSource::Mcp { server } => server != server_name,
+            _ => true,
         });
 
         let removed = initial_count - tools.len();
@@ -577,7 +581,8 @@ impl ToolRegistry {
     ///
     /// Number of tools removed
     pub async fn remove_skills(&self) -> usize {
-        self.remove_by_source_type(super::types::ToolSourceType::Skill).await
+        self.remove_by_source_type(super::types::ToolSourceType::Skill)
+            .await
     }
 
     /// Remove all custom commands
@@ -588,7 +593,8 @@ impl ToolRegistry {
     ///
     /// Number of tools removed
     pub async fn remove_custom_commands(&self) -> usize {
-        self.remove_by_source_type(super::types::ToolSourceType::Custom).await
+        self.remove_by_source_type(super::types::ToolSourceType::Custom)
+            .await
     }
 
     /// Remove all MCP tools (from all servers)
@@ -599,7 +605,8 @@ impl ToolRegistry {
     ///
     /// Number of tools removed
     pub async fn remove_all_mcp_tools(&self) -> usize {
-        self.remove_by_source_type(super::types::ToolSourceType::Mcp).await
+        self.remove_by_source_type(super::types::ToolSourceType::Mcp)
+            .await
     }
 
     /// Remove all native tools
@@ -610,7 +617,8 @@ impl ToolRegistry {
     ///
     /// Number of tools removed
     pub async fn remove_native_tools(&self) -> usize {
-        self.remove_by_source_type(super::types::ToolSourceType::Native).await
+        self.remove_by_source_type(super::types::ToolSourceType::Native)
+            .await
     }
 
     /// Refresh all tools from all sources
@@ -652,10 +660,7 @@ impl ToolRegistry {
         self.register_custom_commands(rules).await;
 
         let count = self.tools.read().await.len();
-        info!(
-            "Tool registry refreshed: {} total tools",
-            count
-        );
+        info!("Tool registry refreshed: {} total tools", count);
     }
 
     // =========================================================================
@@ -667,11 +672,7 @@ impl ToolRegistry {
     /// Returns all tools where `is_active == true`.
     pub async fn list_all(&self) -> Vec<UnifiedTool> {
         let tools = self.tools.read().await;
-        tools
-            .values()
-            .filter(|t| t.is_active)
-            .cloned()
-            .collect()
+        tools.values().filter(|t| t.is_active).cloned().collect()
     }
 
     /// List builtin tools only
@@ -697,9 +698,7 @@ impl ToolRegistry {
         let tools = self.tools.read().await;
         let mut presets: Vec<_> = tools
             .values()
-            .filter(|t| {
-                t.is_active && !matches!(t.source, ToolSource::Custom { .. })
-            })
+            .filter(|t| t.is_active && !matches!(t.source, ToolSource::Custom { .. }))
             .cloned()
             .collect();
 
@@ -769,14 +768,8 @@ impl ToolRegistry {
     /// Returns all active tools suitable for Settings UI display.
     pub async fn list_all_for_ui(&self) -> Vec<UnifiedTool> {
         let tools = self.tools.read().await;
-        let mut result: Vec<_> = tools
-            .values()
-            .filter(|t| t.is_active)
-            .cloned()
-            .collect();
-        result.sort_by(|a, b| {
-            a.sort_order.cmp(&b.sort_order).then(a.name.cmp(&b.name))
-        });
+        let mut result: Vec<_> = tools.values().filter(|t| t.is_active).cloned().collect();
+        result.sort_by(|a, b| a.sort_order.cmp(&b.sort_order).then(a.name.cmp(&b.name)));
         result
     }
 
@@ -795,11 +788,7 @@ impl ToolRegistry {
     /// 5. Skill (Claude Agent skills)
     pub async fn list_root_commands(&self) -> Vec<UnifiedTool> {
         let tools = self.tools.read().await;
-        let mut result: Vec<_> = tools
-            .values()
-            .filter(|t| t.is_active)
-            .cloned()
-            .collect();
+        let mut result: Vec<_> = tools.values().filter(|t| t.is_active).cloned().collect();
 
         // Sort by source priority, then sort_order, then name
         result.sort_by(|a, b| {
@@ -853,8 +842,7 @@ impl ToolRegistry {
         tools
             .values()
             .filter(|t| {
-                t.is_active
-                    && matches!(&t.source, ToolSource::Mcp { server: s } if s == server)
+                t.is_active && matches!(&t.source, ToolSource::Mcp { server: s } if s == server)
             })
             .cloned()
             .collect()
@@ -1230,7 +1218,10 @@ mod tests {
     fn test_truncate_description() {
         assert_eq!(truncate_description("Short", 100), "Short");
         assert_eq!(
-            truncate_description("This is a very long description that should be truncated", 20),
+            truncate_description(
+                "This is a very long description that should be truncated",
+                20
+            ),
             "This is a very lo..."
         );
     }
@@ -1306,19 +1297,20 @@ mod tests {
         let conflict = ConflictInfo {
             existing_id: "mcp:server:search".to_string(),
             existing_name: "search".to_string(),
-            existing_source: ToolSource::Mcp { server: "server".into() },
+            existing_source: ToolSource::Mcp {
+                server: "server".into(),
+            },
             existing_priority: ToolPriority::Mcp,
         };
 
-        let resolution = registry.resolve_conflict(
-            "search",
-            &conflict,
-            &ToolSource::Builtin,
-        );
+        let resolution = registry.resolve_conflict("search", &conflict, &ToolSource::Builtin);
 
         // Builtin has higher priority, should rename existing
         match resolution {
-            ConflictResolution::RenameExisting { original_name, new_name } => {
+            ConflictResolution::RenameExisting {
+                original_name,
+                new_name,
+            } => {
                 assert_eq!(original_name, "search");
                 assert_eq!(new_name, "search-mcp");
             }
@@ -1341,12 +1333,17 @@ mod tests {
         let resolution = registry.resolve_conflict(
             "search",
             &conflict,
-            &ToolSource::Mcp { server: "server".into() },
+            &ToolSource::Mcp {
+                server: "server".into(),
+            },
         );
 
         // Builtin has higher priority, should rename new
         match resolution {
-            ConflictResolution::RenameNew { original_name, new_name } => {
+            ConflictResolution::RenameNew {
+                original_name,
+                new_name,
+            } => {
                 assert_eq!(original_name, "search");
                 assert_eq!(new_name, "search-mcp");
             }
@@ -1362,19 +1359,26 @@ mod tests {
         let conflict = ConflictInfo {
             existing_id: "mcp:server1:status".to_string(),
             existing_name: "status".to_string(),
-            existing_source: ToolSource::Mcp { server: "server1".into() },
+            existing_source: ToolSource::Mcp {
+                server: "server1".into(),
+            },
             existing_priority: ToolPriority::Mcp,
         };
 
         let resolution = registry.resolve_conflict(
             "status",
             &conflict,
-            &ToolSource::Mcp { server: "server2".into() },
+            &ToolSource::Mcp {
+                server: "server2".into(),
+            },
         );
 
         // Same priority - new tool gets renamed (first registered wins)
         match resolution {
-            ConflictResolution::RenameNew { original_name, new_name } => {
+            ConflictResolution::RenameNew {
+                original_name,
+                new_name,
+            } => {
                 assert_eq!(original_name, "status");
                 assert_eq!(new_name, "status-mcp");
             }
@@ -1390,7 +1394,9 @@ mod tests {
             "mcp:server:git",
             "git",
             "Git operations",
-            ToolSource::Mcp { server: "server".into() },
+            ToolSource::Mcp {
+                server: "server".into(),
+            },
         );
 
         let id = registry.register_with_conflict_resolution(tool).await;
@@ -1414,14 +1420,18 @@ mod tests {
             "Custom Search",
             ToolSource::Custom { rule_index: 0 },
         );
-        registry.register_with_conflict_resolution(custom_tool).await;
+        registry
+            .register_with_conflict_resolution(custom_tool)
+            .await;
 
         // Try to register MCP tool with same name as custom
         let mcp_tool = UnifiedTool::new(
             "mcp:server:search",
             "search",
             "MCP Search",
-            ToolSource::Mcp { server: "server".into() },
+            ToolSource::Mcp {
+                server: "server".into(),
+            },
         );
 
         let id = registry.register_with_conflict_resolution(mcp_tool).await;
@@ -1449,7 +1459,9 @@ mod tests {
             "mcp:server:test",
             "test",
             "MCP Test",
-            ToolSource::Mcp { server: "server".into() },
+            ToolSource::Mcp {
+                server: "server".into(),
+            },
         );
         registry.register_with_conflict_resolution(mcp_tool).await;
 
@@ -1460,7 +1472,9 @@ mod tests {
             "Custom Test",
             ToolSource::Custom { rule_index: 0 },
         );
-        let id = registry.register_with_conflict_resolution(custom_tool).await;
+        let id = registry
+            .register_with_conflict_resolution(custom_tool)
+            .await;
 
         // Custom tool takes the name
         assert_eq!(id, "custom:test");
@@ -1486,14 +1500,12 @@ mod tests {
         let registry = ToolRegistry::new();
 
         // Register some initial tools
-        let rules = vec![
-            RoutingRuleConfig {
-                regex: "^/old".to_string(),
-                provider: Some("openai".to_string()),
-                system_prompt: Some("Old command".to_string()),
-                ..Default::default()
-            },
-        ];
+        let rules = vec![RoutingRuleConfig {
+            regex: "^/old".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Old command".to_string()),
+            ..Default::default()
+        }];
         registry.register_custom_commands(&rules).await;
         let initial_count = registry.count().await;
         assert_eq!(initial_count, 1);

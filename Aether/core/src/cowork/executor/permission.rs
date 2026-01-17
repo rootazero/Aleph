@@ -39,9 +39,7 @@ pub enum FileOpError {
 impl From<std::io::Error> for FileOpError {
     fn from(err: std::io::Error) -> Self {
         match err.kind() {
-            std::io::ErrorKind::NotFound => {
-                FileOpError::NotFound(PathBuf::from(err.to_string()))
-            }
+            std::io::ErrorKind::NotFound => FileOpError::NotFound(PathBuf::from(err.to_string())),
             std::io::ErrorKind::PermissionDenied => FileOpError::PermissionDenied,
             _ => FileOpError::IoError(err.to_string()),
         }
@@ -91,11 +89,7 @@ impl PathPermissionChecker {
     ];
 
     /// Create a new permission checker
-    pub fn new(
-        allowed_paths: Vec<String>,
-        denied_paths: Vec<String>,
-        max_file_size: u64,
-    ) -> Self {
+    pub fn new(allowed_paths: Vec<String>, denied_paths: Vec<String>, max_file_size: u64) -> Self {
         // Expand ~ and canonicalize base paths
         let allowed_expanded: Vec<String> = allowed_paths
             .iter()
@@ -104,7 +98,13 @@ impl PathPermissionChecker {
 
         let denied_expanded: Vec<String> = denied_paths
             .iter()
-            .chain(Self::DEFAULT_DENIED_PATHS.iter().map(|s| s.to_string()).collect::<Vec<_>>().iter())
+            .chain(
+                Self::DEFAULT_DENIED_PATHS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .iter(),
+            )
             .map(|p| Self::expand_and_canonicalize(p))
             .collect();
 
@@ -309,11 +309,7 @@ mod tests {
 
     #[test]
     fn test_default_denied_paths() {
-        let checker = PathPermissionChecker::new(
-            vec!["~/**".to_string()],
-            vec![],
-            0,
-        );
+        let checker = PathPermissionChecker::new(vec!["~/**".to_string()], vec![], 0);
 
         // Should deny ~/.ssh even if ~ is allowed
         let ssh_path = PathPermissionChecker::expand_tilde("~/.ssh/id_rsa");
@@ -323,11 +319,7 @@ mod tests {
 
     #[test]
     fn test_allowed_paths() {
-        let checker = PathPermissionChecker::new(
-            vec!["/tmp/**".to_string()],
-            vec![],
-            0,
-        );
+        let checker = PathPermissionChecker::new(vec!["/tmp/**".to_string()], vec![], 0);
 
         // Should allow /tmp paths
         let result = checker.check_path(Path::new("/tmp/test.txt"));
@@ -353,11 +345,7 @@ mod tests {
 
     #[test]
     fn test_path_traversal_detection() {
-        let checker = PathPermissionChecker::new(
-            vec!["/tmp/**".to_string()],
-            vec![],
-            0,
-        );
+        let checker = PathPermissionChecker::new(vec!["/tmp/**".to_string()], vec![], 0);
 
         let result = checker.check_path(Path::new("/tmp/../etc/passwd"));
         assert!(matches!(result, Err(FileOpError::PathTraversal)));

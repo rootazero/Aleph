@@ -169,9 +169,8 @@ impl GenerationProviderRegistry {
     /// assert!(result.is_err());
     /// ```
     pub fn get_or_err(&self, name: &str) -> GenerationResult<Arc<dyn GenerationProvider>> {
-        self.get(name).ok_or_else(|| {
-            GenerationError::internal(format!("Provider '{}' not found", name))
-        })
+        self.get(name)
+            .ok_or_else(|| GenerationError::internal(format!("Provider '{}' not found", name)))
     }
 
     /// Get all registered provider names in sorted order
@@ -246,10 +245,7 @@ impl GenerationProviderRegistry {
     /// let image_providers = registry.providers_for_type(GenerationType::Image);
     /// assert_eq!(image_providers.len(), 1);
     /// ```
-    pub fn providers_for_type(
-        &self,
-        gen_type: GenerationType,
-    ) -> Vec<Arc<dyn GenerationProvider>> {
+    pub fn providers_for_type(&self, gen_type: GenerationType) -> Vec<Arc<dyn GenerationProvider>> {
         self.providers
             .values()
             .filter(|p| p.supported_types().contains(&gen_type))

@@ -21,7 +21,10 @@ pub enum ContextError {
     DependencyNotSatisfied { dependency_id: String },
 
     #[error("Context too large: {current_size} > {max_size}")]
-    ContextTooLarge { current_size: usize, max_size: usize },
+    ContextTooLarge {
+        current_size: usize,
+        max_size: usize,
+    },
 
     #[error("Serialization error: {message}")]
     SerializationError { message: String },
@@ -142,9 +145,7 @@ impl TaskContext {
         let task_id = task_id.into();
 
         // Update size estimate
-        let output_size = serde_json::to_string(&output)
-            .map(|s| s.len())
-            .unwrap_or(0);
+        let output_size = serde_json::to_string(&output).map(|s| s.len()).unwrap_or(0);
         self.context_size += output_size;
 
         self.dependency_outputs.insert(task_id.clone(), output);
@@ -189,11 +190,8 @@ impl TaskContext {
         let available = max_size.saturating_sub(truncate_marker.len());
 
         if available > 0 {
-            self.combined_context = format!(
-                "{}{}",
-                &self.combined_context[..available],
-                truncate_marker
-            );
+            self.combined_context =
+                format!("{}{}", &self.combined_context[..available], truncate_marker);
         } else {
             self.combined_context = truncate_marker.to_string();
         }
@@ -265,13 +263,8 @@ impl TaskContextManager {
         tokens_used: u32,
     ) -> Result<(), ContextError> {
         // Create stored result
-        let mut stored = StoredTaskResult::new(
-            &task.id,
-            &self.graph_id,
-            &task.task_type,
-            result,
-        )
-        .with_tokens(tokens_used);
+        let mut stored = StoredTaskResult::new(&task.id, &self.graph_id, &task.task_type, result)
+            .with_tokens(tokens_used);
 
         if let (Some(model), Some(prov)) = (model_used, provider) {
             stored = stored.with_model(model, prov);
@@ -312,10 +305,7 @@ impl TaskContextManager {
     /// Get context from dependency tasks
     ///
     /// Builds a TaskContext containing outputs from all specified dependencies.
-    pub async fn get_context(
-        &self,
-        dependencies: &[String],
-    ) -> Result<TaskContext, ContextError> {
+    pub async fn get_context(&self, dependencies: &[String]) -> Result<TaskContext, ContextError> {
         let results = self.results.read().await;
         let mut context = TaskContext::new();
 
@@ -523,7 +513,10 @@ mod tests {
 
         assert_eq!(stored.metadata.task_id, "t1");
         assert_eq!(stored.metadata.graph_id, "graph-1");
-        assert_eq!(stored.metadata.model_used, Some("claude-sonnet".to_string()));
+        assert_eq!(
+            stored.metadata.model_used,
+            Some("claude-sonnet".to_string())
+        );
         assert_eq!(stored.metadata.provider, Some("anthropic".to_string()));
         assert_eq!(stored.metadata.tokens_used, 150);
     }
@@ -542,11 +535,7 @@ mod tests {
             Some("Summary 1".to_string()),
         );
 
-        context.add_dependency(
-            "task2",
-            serde_json::json!({"key": "value2"}),
-            None,
-        );
+        context.add_dependency("task2", serde_json::json!({"key": "value2"}), None);
 
         assert_eq!(context.dependency_outputs.len(), 2);
         assert_eq!(context.dependency_summaries.len(), 1);
@@ -751,10 +740,7 @@ mod tests {
             .await
             .unwrap();
 
-        let context = manager
-            .get_context(&["t1".to_string()])
-            .await
-            .unwrap();
+        let context = manager.get_context(&["t1".to_string()]).await.unwrap();
 
         // Context should be truncated
         assert!(context.combined_context.len() <= 50);

@@ -100,7 +100,11 @@ impl ConversationManager {
     ///
     /// # Returns
     /// The added turn, or None if no active session.
-    pub fn add_turn(&mut self, user_input: String, ai_response: String) -> Option<ConversationTurn> {
+    pub fn add_turn(
+        &mut self,
+        user_input: String,
+        ai_response: String,
+    ) -> Option<ConversationTurn> {
         let session = self.active_session.as_mut()?;
 
         // Check if we've exceeded max turns

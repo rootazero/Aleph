@@ -1087,8 +1087,8 @@ mod tests {
 
     #[test]
     fn test_generation_metadata_revised_prompt() {
-        let metadata = GenerationMetadata::new()
-            .with_revised_prompt("An enhanced description of a cat");
+        let metadata =
+            GenerationMetadata::new().with_revised_prompt("An enhanced description of a cat");
 
         assert_eq!(
             metadata.revised_prompt,
@@ -1182,8 +1182,8 @@ mod tests {
 
     #[test]
     fn test_generation_progress_with_eta() {
-        let progress = GenerationProgress::new(50.0, "Processing")
-            .with_eta(Duration::from_secs(30));
+        let progress =
+            GenerationProgress::new(50.0, "Processing").with_eta(Duration::from_secs(30));
 
         assert_eq!(progress.eta, Some(Duration::from_secs(30)));
     }

@@ -144,7 +144,9 @@ mod tests {
             self.files
                 .get(path.to_string_lossy().as_ref())
                 .cloned()
-                .ok_or_else(|| crate::error::AetherError::NotFound(path.to_string_lossy().to_string()))
+                .ok_or_else(|| {
+                    crate::error::AetherError::NotFound(path.to_string_lossy().to_string())
+                })
         }
 
         async fn read_file_bytes(&self, path: &Path) -> Result<Vec<u8>> {

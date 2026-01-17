@@ -548,8 +548,8 @@ impl GenerationProvider for OpenAiCompatProvider {
             }
 
             // Parse successful response
-            let api_response: ImageGenerationResponse =
-                serde_json::from_str(&response_text).map_err(|e| {
+            let api_response: ImageGenerationResponse = serde_json::from_str(&response_text)
+                .map_err(|e| {
                     error!(
                         error = %e,
                         body = %response_text,
@@ -668,7 +668,8 @@ mod tests {
 
     #[test]
     fn test_builder_new() {
-        let builder = OpenAiCompatProviderBuilder::new("my-proxy", "sk-xxx", "https://api.proxy.com");
+        let builder =
+            OpenAiCompatProviderBuilder::new("my-proxy", "sk-xxx", "https://api.proxy.com");
 
         assert_eq!(builder.name, "my-proxy");
         assert_eq!(builder.api_key, "sk-xxx");
@@ -714,11 +715,12 @@ mod tests {
 
     #[test]
     fn test_builder_chaining() {
-        let builder = OpenAiCompatProviderBuilder::new("my-proxy", "sk-xxx", "https://api.proxy.com")
-            .model("custom-model")
-            .color("#00ff00")
-            .supported_types(vec![GenerationType::Image])
-            .timeout_secs(60);
+        let builder =
+            OpenAiCompatProviderBuilder::new("my-proxy", "sk-xxx", "https://api.proxy.com")
+                .model("custom-model")
+                .color("#00ff00")
+                .supported_types(vec![GenerationType::Image])
+                .timeout_secs(60);
 
         assert_eq!(builder.name, "my-proxy");
         assert_eq!(builder.model, "custom-model");
@@ -728,11 +730,12 @@ mod tests {
 
     #[test]
     fn test_builder_build_success() {
-        let provider = OpenAiCompatProviderBuilder::new("my-proxy", "sk-xxx", "https://api.proxy.com/v1")
-            .model("dall-e-3")
-            .color("#ff0000")
-            .build()
-            .unwrap();
+        let provider =
+            OpenAiCompatProviderBuilder::new("my-proxy", "sk-xxx", "https://api.proxy.com/v1")
+                .model("dall-e-3")
+                .color("#ff0000")
+                .build()
+                .unwrap();
 
         assert_eq!(provider.name(), "my-proxy");
         assert_eq!(provider.color(), "#ff0000");
@@ -1003,7 +1006,8 @@ mod tests {
     fn test_parse_error_response_auth() {
         let provider =
             OpenAiCompatProvider::new("my-proxy", "key", "https://api.example.com", None).unwrap();
-        let error = provider.parse_error_response(reqwest::StatusCode::UNAUTHORIZED, "Unauthorized");
+        let error =
+            provider.parse_error_response(reqwest::StatusCode::UNAUTHORIZED, "Unauthorized");
 
         assert!(matches!(error, GenerationError::AuthenticationError { .. }));
     }
@@ -1033,7 +1037,10 @@ mod tests {
 
         let error = provider.parse_error_response(reqwest::StatusCode::BAD_REQUEST, body);
 
-        assert!(matches!(error, GenerationError::ContentFilteredError { .. }));
+        assert!(matches!(
+            error,
+            GenerationError::ContentFilteredError { .. }
+        ));
     }
 
     #[test]

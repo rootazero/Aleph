@@ -598,6 +598,10 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func cancel() 
     
+    func cancelGeneration(providerName: String, jobId: String) throws 
+    
+    func checkGenerationProgress(providerName: String, jobId: String) throws  -> GenerationProgressFfi
+    
     func clearFacts() throws  -> UInt64
     
     func clearMemories(appBundleId: String?, windowTitle: String?) throws  -> UInt64
@@ -664,7 +668,17 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func extractText(imageData: [UInt8]) throws  -> String
     
+    func generate(providerName: String, generationType: GenerationTypeFfi, prompt: String, params: GenerationParamsFfi?) throws  -> GenerationOutputFfi
+    
+    func generateAudio(providerName: String, prompt: String, params: GenerationParamsFfi?) throws  -> GenerationOutputFfi
+    
+    func generateImage(providerName: String, prompt: String, params: GenerationParamsFfi?) throws  -> GenerationOutputFfi
+    
+    func generateSpeech(providerName: String, text: String, params: GenerationParamsFfi?) throws  -> GenerationOutputFfi
+    
     func generateTopicTitle(userInput: String, aiResponse: String) throws  -> String
+    
+    func generateVideo(providerName: String, prompt: String, params: GenerationParamsFfi?) throws  -> GenerationOutputFfi
     
     func getCompressionStats() throws  -> CompressionStats
     
@@ -690,6 +704,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func getMemoryStats() throws  -> MemoryStats
     
+    func getProvidersForType(generationType: GenerationTypeFfi)  -> [GenerationProviderInfoFfi]
+    
     func getRootCommandsFromRegistry()  -> [CommandNode]
     
     func getSkillsDir() throws  -> String
@@ -703,6 +719,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func isCancelled()  -> Bool
     
     func listBuiltinTools()  -> [UnifiedToolInfo]
+    
+    func listGenerationProviders()  -> [GenerationProviderInfoFfi]
     
     func listMcpServers()  -> [McpServerConfig]
     
@@ -819,6 +837,23 @@ open func cancel() {try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_cancel(self.uniffiClonePointer(),$0
     )
 }
+}
+    
+open func cancelGeneration(providerName: String, jobId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_cancel_generation(self.uniffiClonePointer(),
+        FfiConverterString.lower(providerName),
+        FfiConverterString.lower(jobId),$0
+    )
+}
+}
+    
+open func checkGenerationProgress(providerName: String, jobId: String)throws  -> GenerationProgressFfi {
+    return try  FfiConverterTypeGenerationProgressFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_check_generation_progress(self.uniffiClonePointer(),
+        FfiConverterString.lower(providerName),
+        FfiConverterString.lower(jobId),$0
+    )
+})
 }
     
 open func clearFacts()throws  -> UInt64 {
@@ -1055,11 +1090,62 @@ open func extractText(imageData: [UInt8])throws  -> String {
 })
 }
     
+open func generate(providerName: String, generationType: GenerationTypeFfi, prompt: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi {
+    return try  FfiConverterTypeGenerationOutputFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_generate(self.uniffiClonePointer(),
+        FfiConverterString.lower(providerName),
+        FfiConverterTypeGenerationTypeFFI.lower(generationType),
+        FfiConverterString.lower(prompt),
+        FfiConverterOptionTypeGenerationParamsFFI.lower(params),$0
+    )
+})
+}
+    
+open func generateAudio(providerName: String, prompt: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi {
+    return try  FfiConverterTypeGenerationOutputFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_generate_audio(self.uniffiClonePointer(),
+        FfiConverterString.lower(providerName),
+        FfiConverterString.lower(prompt),
+        FfiConverterOptionTypeGenerationParamsFFI.lower(params),$0
+    )
+})
+}
+    
+open func generateImage(providerName: String, prompt: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi {
+    return try  FfiConverterTypeGenerationOutputFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_generate_image(self.uniffiClonePointer(),
+        FfiConverterString.lower(providerName),
+        FfiConverterString.lower(prompt),
+        FfiConverterOptionTypeGenerationParamsFFI.lower(params),$0
+    )
+})
+}
+    
+open func generateSpeech(providerName: String, text: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi {
+    return try  FfiConverterTypeGenerationOutputFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_generate_speech(self.uniffiClonePointer(),
+        FfiConverterString.lower(providerName),
+        FfiConverterString.lower(text),
+        FfiConverterOptionTypeGenerationParamsFFI.lower(params),$0
+    )
+})
+}
+    
 open func generateTopicTitle(userInput: String, aiResponse: String)throws  -> String {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
     uniffi_aethecore_fn_method_aethercore_generate_topic_title(self.uniffiClonePointer(),
         FfiConverterString.lower(userInput),
         FfiConverterString.lower(aiResponse),$0
+    )
+})
+}
+    
+open func generateVideo(providerName: String, prompt: String, params: GenerationParamsFfi?)throws  -> GenerationOutputFfi {
+    return try  FfiConverterTypeGenerationOutputFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_generate_video(self.uniffiClonePointer(),
+        FfiConverterString.lower(providerName),
+        FfiConverterString.lower(prompt),
+        FfiConverterOptionTypeGenerationParamsFFI.lower(params),$0
     )
 })
 }
@@ -1152,6 +1238,14 @@ open func getMemoryStats()throws  -> MemoryStats {
 })
 }
     
+open func getProvidersForType(generationType: GenerationTypeFfi) -> [GenerationProviderInfoFfi] {
+    return try!  FfiConverterSequenceTypeGenerationProviderInfoFFI.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_providers_for_type(self.uniffiClonePointer(),
+        FfiConverterTypeGenerationTypeFFI.lower(generationType),$0
+    )
+})
+}
+    
 open func getRootCommandsFromRegistry() -> [CommandNode] {
     return try!  FfiConverterSequenceTypeCommandNode.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_get_root_commands_from_registry(self.uniffiClonePointer(),$0
@@ -1199,6 +1293,13 @@ open func isCancelled() -> Bool {
 open func listBuiltinTools() -> [UnifiedToolInfo] {
     return try!  FfiConverterSequenceTypeUnifiedToolInfo.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_list_builtin_tools(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func listGenerationProviders() -> [GenerationProviderInfoFfi] {
+    return try!  FfiConverterSequenceTypeGenerationProviderInfoFFI.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_list_generation_providers(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -3770,6 +3871,682 @@ public func FfiConverterTypeGeneralConfig_lift(_ buf: RustBuffer) throws -> Gene
 #endif
 public func FfiConverterTypeGeneralConfig_lower(_ value: GeneralConfig) -> RustBuffer {
     return FfiConverterTypeGeneralConfig.lower(value)
+}
+
+
+public struct GenerationDataFfi {
+    public var dataType: GenerationDataTypeFfi
+    public var bytes: [UInt8]?
+    public var url: String?
+    public var localPath: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(dataType: GenerationDataTypeFfi, bytes: [UInt8]?, url: String?, localPath: String?) {
+        self.dataType = dataType
+        self.bytes = bytes
+        self.url = url
+        self.localPath = localPath
+    }
+}
+
+
+
+extension GenerationDataFfi: Equatable, Hashable {
+    public static func ==(lhs: GenerationDataFfi, rhs: GenerationDataFfi) -> Bool {
+        if lhs.dataType != rhs.dataType {
+            return false
+        }
+        if lhs.bytes != rhs.bytes {
+            return false
+        }
+        if lhs.url != rhs.url {
+            return false
+        }
+        if lhs.localPath != rhs.localPath {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(dataType)
+        hasher.combine(bytes)
+        hasher.combine(url)
+        hasher.combine(localPath)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeGenerationDataFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GenerationDataFfi {
+        return
+            try GenerationDataFfi(
+                dataType: FfiConverterTypeGenerationDataTypeFFI.read(from: &buf), 
+                bytes: FfiConverterOptionSequenceUInt8.read(from: &buf), 
+                url: FfiConverterOptionString.read(from: &buf), 
+                localPath: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: GenerationDataFfi, into buf: inout [UInt8]) {
+        FfiConverterTypeGenerationDataTypeFFI.write(value.dataType, into: &buf)
+        FfiConverterOptionSequenceUInt8.write(value.bytes, into: &buf)
+        FfiConverterOptionString.write(value.url, into: &buf)
+        FfiConverterOptionString.write(value.localPath, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationDataFFI_lift(_ buf: RustBuffer) throws -> GenerationDataFfi {
+    return try FfiConverterTypeGenerationDataFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationDataFFI_lower(_ value: GenerationDataFfi) -> RustBuffer {
+    return FfiConverterTypeGenerationDataFFI.lower(value)
+}
+
+
+public struct GenerationMetadataFfi {
+    public var provider: String?
+    public var model: String?
+    public var durationMs: UInt64?
+    public var seed: Int64?
+    public var revisedPrompt: String?
+    public var contentType: String?
+    public var sizeBytes: UInt64?
+    public var width: UInt32?
+    public var height: UInt32?
+    public var durationSeconds: Float?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(provider: String?, model: String?, durationMs: UInt64?, seed: Int64?, revisedPrompt: String?, contentType: String?, sizeBytes: UInt64?, width: UInt32?, height: UInt32?, durationSeconds: Float?) {
+        self.provider = provider
+        self.model = model
+        self.durationMs = durationMs
+        self.seed = seed
+        self.revisedPrompt = revisedPrompt
+        self.contentType = contentType
+        self.sizeBytes = sizeBytes
+        self.width = width
+        self.height = height
+        self.durationSeconds = durationSeconds
+    }
+}
+
+
+
+extension GenerationMetadataFfi: Equatable, Hashable {
+    public static func ==(lhs: GenerationMetadataFfi, rhs: GenerationMetadataFfi) -> Bool {
+        if lhs.provider != rhs.provider {
+            return false
+        }
+        if lhs.model != rhs.model {
+            return false
+        }
+        if lhs.durationMs != rhs.durationMs {
+            return false
+        }
+        if lhs.seed != rhs.seed {
+            return false
+        }
+        if lhs.revisedPrompt != rhs.revisedPrompt {
+            return false
+        }
+        if lhs.contentType != rhs.contentType {
+            return false
+        }
+        if lhs.sizeBytes != rhs.sizeBytes {
+            return false
+        }
+        if lhs.width != rhs.width {
+            return false
+        }
+        if lhs.height != rhs.height {
+            return false
+        }
+        if lhs.durationSeconds != rhs.durationSeconds {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(provider)
+        hasher.combine(model)
+        hasher.combine(durationMs)
+        hasher.combine(seed)
+        hasher.combine(revisedPrompt)
+        hasher.combine(contentType)
+        hasher.combine(sizeBytes)
+        hasher.combine(width)
+        hasher.combine(height)
+        hasher.combine(durationSeconds)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeGenerationMetadataFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GenerationMetadataFfi {
+        return
+            try GenerationMetadataFfi(
+                provider: FfiConverterOptionString.read(from: &buf), 
+                model: FfiConverterOptionString.read(from: &buf), 
+                durationMs: FfiConverterOptionUInt64.read(from: &buf), 
+                seed: FfiConverterOptionInt64.read(from: &buf), 
+                revisedPrompt: FfiConverterOptionString.read(from: &buf), 
+                contentType: FfiConverterOptionString.read(from: &buf), 
+                sizeBytes: FfiConverterOptionUInt64.read(from: &buf), 
+                width: FfiConverterOptionUInt32.read(from: &buf), 
+                height: FfiConverterOptionUInt32.read(from: &buf), 
+                durationSeconds: FfiConverterOptionFloat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: GenerationMetadataFfi, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.provider, into: &buf)
+        FfiConverterOptionString.write(value.model, into: &buf)
+        FfiConverterOptionUInt64.write(value.durationMs, into: &buf)
+        FfiConverterOptionInt64.write(value.seed, into: &buf)
+        FfiConverterOptionString.write(value.revisedPrompt, into: &buf)
+        FfiConverterOptionString.write(value.contentType, into: &buf)
+        FfiConverterOptionUInt64.write(value.sizeBytes, into: &buf)
+        FfiConverterOptionUInt32.write(value.width, into: &buf)
+        FfiConverterOptionUInt32.write(value.height, into: &buf)
+        FfiConverterOptionFloat.write(value.durationSeconds, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationMetadataFFI_lift(_ buf: RustBuffer) throws -> GenerationMetadataFfi {
+    return try FfiConverterTypeGenerationMetadataFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationMetadataFFI_lower(_ value: GenerationMetadataFfi) -> RustBuffer {
+    return FfiConverterTypeGenerationMetadataFFI.lower(value)
+}
+
+
+public struct GenerationOutputFfi {
+    public var generationType: GenerationTypeFfi
+    public var data: GenerationDataFfi
+    public var additionalOutputs: [GenerationDataFfi]
+    public var metadata: GenerationMetadataFfi
+    public var requestId: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(generationType: GenerationTypeFfi, data: GenerationDataFfi, additionalOutputs: [GenerationDataFfi], metadata: GenerationMetadataFfi, requestId: String?) {
+        self.generationType = generationType
+        self.data = data
+        self.additionalOutputs = additionalOutputs
+        self.metadata = metadata
+        self.requestId = requestId
+    }
+}
+
+
+
+extension GenerationOutputFfi: Equatable, Hashable {
+    public static func ==(lhs: GenerationOutputFfi, rhs: GenerationOutputFfi) -> Bool {
+        if lhs.generationType != rhs.generationType {
+            return false
+        }
+        if lhs.data != rhs.data {
+            return false
+        }
+        if lhs.additionalOutputs != rhs.additionalOutputs {
+            return false
+        }
+        if lhs.metadata != rhs.metadata {
+            return false
+        }
+        if lhs.requestId != rhs.requestId {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(generationType)
+        hasher.combine(data)
+        hasher.combine(additionalOutputs)
+        hasher.combine(metadata)
+        hasher.combine(requestId)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeGenerationOutputFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GenerationOutputFfi {
+        return
+            try GenerationOutputFfi(
+                generationType: FfiConverterTypeGenerationTypeFFI.read(from: &buf), 
+                data: FfiConverterTypeGenerationDataFFI.read(from: &buf), 
+                additionalOutputs: FfiConverterSequenceTypeGenerationDataFFI.read(from: &buf), 
+                metadata: FfiConverterTypeGenerationMetadataFFI.read(from: &buf), 
+                requestId: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: GenerationOutputFfi, into buf: inout [UInt8]) {
+        FfiConverterTypeGenerationTypeFFI.write(value.generationType, into: &buf)
+        FfiConverterTypeGenerationDataFFI.write(value.data, into: &buf)
+        FfiConverterSequenceTypeGenerationDataFFI.write(value.additionalOutputs, into: &buf)
+        FfiConverterTypeGenerationMetadataFFI.write(value.metadata, into: &buf)
+        FfiConverterOptionString.write(value.requestId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationOutputFFI_lift(_ buf: RustBuffer) throws -> GenerationOutputFfi {
+    return try FfiConverterTypeGenerationOutputFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationOutputFFI_lower(_ value: GenerationOutputFfi) -> RustBuffer {
+    return FfiConverterTypeGenerationOutputFFI.lower(value)
+}
+
+
+public struct GenerationParamsFfi {
+    public var width: UInt32?
+    public var height: UInt32?
+    public var aspectRatio: String?
+    public var quality: String?
+    public var style: String?
+    public var n: UInt32?
+    public var seed: Int64?
+    public var format: String?
+    public var durationSeconds: Float?
+    public var fps: UInt32?
+    public var voice: String?
+    public var speed: Float?
+    public var language: String?
+    public var model: String?
+    public var negativePrompt: String?
+    public var guidanceScale: Float?
+    public var steps: UInt32?
+    public var referenceImage: String?
+    public var referenceAudio: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(width: UInt32?, height: UInt32?, aspectRatio: String?, quality: String?, style: String?, n: UInt32?, seed: Int64?, format: String?, durationSeconds: Float?, fps: UInt32?, voice: String?, speed: Float?, language: String?, model: String?, negativePrompt: String?, guidanceScale: Float?, steps: UInt32?, referenceImage: String?, referenceAudio: String?) {
+        self.width = width
+        self.height = height
+        self.aspectRatio = aspectRatio
+        self.quality = quality
+        self.style = style
+        self.n = n
+        self.seed = seed
+        self.format = format
+        self.durationSeconds = durationSeconds
+        self.fps = fps
+        self.voice = voice
+        self.speed = speed
+        self.language = language
+        self.model = model
+        self.negativePrompt = negativePrompt
+        self.guidanceScale = guidanceScale
+        self.steps = steps
+        self.referenceImage = referenceImage
+        self.referenceAudio = referenceAudio
+    }
+}
+
+
+
+extension GenerationParamsFfi: Equatable, Hashable {
+    public static func ==(lhs: GenerationParamsFfi, rhs: GenerationParamsFfi) -> Bool {
+        if lhs.width != rhs.width {
+            return false
+        }
+        if lhs.height != rhs.height {
+            return false
+        }
+        if lhs.aspectRatio != rhs.aspectRatio {
+            return false
+        }
+        if lhs.quality != rhs.quality {
+            return false
+        }
+        if lhs.style != rhs.style {
+            return false
+        }
+        if lhs.n != rhs.n {
+            return false
+        }
+        if lhs.seed != rhs.seed {
+            return false
+        }
+        if lhs.format != rhs.format {
+            return false
+        }
+        if lhs.durationSeconds != rhs.durationSeconds {
+            return false
+        }
+        if lhs.fps != rhs.fps {
+            return false
+        }
+        if lhs.voice != rhs.voice {
+            return false
+        }
+        if lhs.speed != rhs.speed {
+            return false
+        }
+        if lhs.language != rhs.language {
+            return false
+        }
+        if lhs.model != rhs.model {
+            return false
+        }
+        if lhs.negativePrompt != rhs.negativePrompt {
+            return false
+        }
+        if lhs.guidanceScale != rhs.guidanceScale {
+            return false
+        }
+        if lhs.steps != rhs.steps {
+            return false
+        }
+        if lhs.referenceImage != rhs.referenceImage {
+            return false
+        }
+        if lhs.referenceAudio != rhs.referenceAudio {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(width)
+        hasher.combine(height)
+        hasher.combine(aspectRatio)
+        hasher.combine(quality)
+        hasher.combine(style)
+        hasher.combine(n)
+        hasher.combine(seed)
+        hasher.combine(format)
+        hasher.combine(durationSeconds)
+        hasher.combine(fps)
+        hasher.combine(voice)
+        hasher.combine(speed)
+        hasher.combine(language)
+        hasher.combine(model)
+        hasher.combine(negativePrompt)
+        hasher.combine(guidanceScale)
+        hasher.combine(steps)
+        hasher.combine(referenceImage)
+        hasher.combine(referenceAudio)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeGenerationParamsFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GenerationParamsFfi {
+        return
+            try GenerationParamsFfi(
+                width: FfiConverterOptionUInt32.read(from: &buf), 
+                height: FfiConverterOptionUInt32.read(from: &buf), 
+                aspectRatio: FfiConverterOptionString.read(from: &buf), 
+                quality: FfiConverterOptionString.read(from: &buf), 
+                style: FfiConverterOptionString.read(from: &buf), 
+                n: FfiConverterOptionUInt32.read(from: &buf), 
+                seed: FfiConverterOptionInt64.read(from: &buf), 
+                format: FfiConverterOptionString.read(from: &buf), 
+                durationSeconds: FfiConverterOptionFloat.read(from: &buf), 
+                fps: FfiConverterOptionUInt32.read(from: &buf), 
+                voice: FfiConverterOptionString.read(from: &buf), 
+                speed: FfiConverterOptionFloat.read(from: &buf), 
+                language: FfiConverterOptionString.read(from: &buf), 
+                model: FfiConverterOptionString.read(from: &buf), 
+                negativePrompt: FfiConverterOptionString.read(from: &buf), 
+                guidanceScale: FfiConverterOptionFloat.read(from: &buf), 
+                steps: FfiConverterOptionUInt32.read(from: &buf), 
+                referenceImage: FfiConverterOptionString.read(from: &buf), 
+                referenceAudio: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: GenerationParamsFfi, into buf: inout [UInt8]) {
+        FfiConverterOptionUInt32.write(value.width, into: &buf)
+        FfiConverterOptionUInt32.write(value.height, into: &buf)
+        FfiConverterOptionString.write(value.aspectRatio, into: &buf)
+        FfiConverterOptionString.write(value.quality, into: &buf)
+        FfiConverterOptionString.write(value.style, into: &buf)
+        FfiConverterOptionUInt32.write(value.n, into: &buf)
+        FfiConverterOptionInt64.write(value.seed, into: &buf)
+        FfiConverterOptionString.write(value.format, into: &buf)
+        FfiConverterOptionFloat.write(value.durationSeconds, into: &buf)
+        FfiConverterOptionUInt32.write(value.fps, into: &buf)
+        FfiConverterOptionString.write(value.voice, into: &buf)
+        FfiConverterOptionFloat.write(value.speed, into: &buf)
+        FfiConverterOptionString.write(value.language, into: &buf)
+        FfiConverterOptionString.write(value.model, into: &buf)
+        FfiConverterOptionString.write(value.negativePrompt, into: &buf)
+        FfiConverterOptionFloat.write(value.guidanceScale, into: &buf)
+        FfiConverterOptionUInt32.write(value.steps, into: &buf)
+        FfiConverterOptionString.write(value.referenceImage, into: &buf)
+        FfiConverterOptionString.write(value.referenceAudio, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationParamsFFI_lift(_ buf: RustBuffer) throws -> GenerationParamsFfi {
+    return try FfiConverterTypeGenerationParamsFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationParamsFFI_lower(_ value: GenerationParamsFfi) -> RustBuffer {
+    return FfiConverterTypeGenerationParamsFFI.lower(value)
+}
+
+
+public struct GenerationProgressFfi {
+    public var percentage: Float
+    public var step: String
+    public var etaMs: UInt64?
+    public var isComplete: Bool
+    public var previewUrl: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(percentage: Float, step: String, etaMs: UInt64?, isComplete: Bool, previewUrl: String?) {
+        self.percentage = percentage
+        self.step = step
+        self.etaMs = etaMs
+        self.isComplete = isComplete
+        self.previewUrl = previewUrl
+    }
+}
+
+
+
+extension GenerationProgressFfi: Equatable, Hashable {
+    public static func ==(lhs: GenerationProgressFfi, rhs: GenerationProgressFfi) -> Bool {
+        if lhs.percentage != rhs.percentage {
+            return false
+        }
+        if lhs.step != rhs.step {
+            return false
+        }
+        if lhs.etaMs != rhs.etaMs {
+            return false
+        }
+        if lhs.isComplete != rhs.isComplete {
+            return false
+        }
+        if lhs.previewUrl != rhs.previewUrl {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(percentage)
+        hasher.combine(step)
+        hasher.combine(etaMs)
+        hasher.combine(isComplete)
+        hasher.combine(previewUrl)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeGenerationProgressFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GenerationProgressFfi {
+        return
+            try GenerationProgressFfi(
+                percentage: FfiConverterFloat.read(from: &buf), 
+                step: FfiConverterString.read(from: &buf), 
+                etaMs: FfiConverterOptionUInt64.read(from: &buf), 
+                isComplete: FfiConverterBool.read(from: &buf), 
+                previewUrl: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: GenerationProgressFfi, into buf: inout [UInt8]) {
+        FfiConverterFloat.write(value.percentage, into: &buf)
+        FfiConverterString.write(value.step, into: &buf)
+        FfiConverterOptionUInt64.write(value.etaMs, into: &buf)
+        FfiConverterBool.write(value.isComplete, into: &buf)
+        FfiConverterOptionString.write(value.previewUrl, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationProgressFFI_lift(_ buf: RustBuffer) throws -> GenerationProgressFfi {
+    return try FfiConverterTypeGenerationProgressFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationProgressFFI_lower(_ value: GenerationProgressFfi) -> RustBuffer {
+    return FfiConverterTypeGenerationProgressFFI.lower(value)
+}
+
+
+public struct GenerationProviderInfoFfi {
+    public var name: String
+    public var color: String
+    public var supportedTypes: [GenerationTypeFfi]
+    public var defaultModel: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(name: String, color: String, supportedTypes: [GenerationTypeFfi], defaultModel: String?) {
+        self.name = name
+        self.color = color
+        self.supportedTypes = supportedTypes
+        self.defaultModel = defaultModel
+    }
+}
+
+
+
+extension GenerationProviderInfoFfi: Equatable, Hashable {
+    public static func ==(lhs: GenerationProviderInfoFfi, rhs: GenerationProviderInfoFfi) -> Bool {
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.color != rhs.color {
+            return false
+        }
+        if lhs.supportedTypes != rhs.supportedTypes {
+            return false
+        }
+        if lhs.defaultModel != rhs.defaultModel {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+        hasher.combine(color)
+        hasher.combine(supportedTypes)
+        hasher.combine(defaultModel)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeGenerationProviderInfoFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GenerationProviderInfoFfi {
+        return
+            try GenerationProviderInfoFfi(
+                name: FfiConverterString.read(from: &buf), 
+                color: FfiConverterString.read(from: &buf), 
+                supportedTypes: FfiConverterSequenceTypeGenerationTypeFFI.read(from: &buf), 
+                defaultModel: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: GenerationProviderInfoFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.color, into: &buf)
+        FfiConverterSequenceTypeGenerationTypeFFI.write(value.supportedTypes, into: &buf)
+        FfiConverterOptionString.write(value.defaultModel, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationProviderInfoFFI_lift(_ buf: RustBuffer) throws -> GenerationProviderInfoFfi {
+    return try FfiConverterTypeGenerationProviderInfoFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationProviderInfoFFI_lower(_ value: GenerationProviderInfoFfi) -> RustBuffer {
+    return FfiConverterTypeGenerationProviderInfoFFI.lower(value)
 }
 
 
@@ -9860,6 +10637,155 @@ extension ExecutionIntentTypeFfi: Equatable, Hashable {}
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
+public enum GenerationDataTypeFfi {
+    
+    case bytes
+    case url
+    case localPath
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeGenerationDataTypeFFI: FfiConverterRustBuffer {
+    typealias SwiftType = GenerationDataTypeFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GenerationDataTypeFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .bytes
+        
+        case 2: return .url
+        
+        case 3: return .localPath
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: GenerationDataTypeFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .bytes:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .url:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .localPath:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationDataTypeFFI_lift(_ buf: RustBuffer) throws -> GenerationDataTypeFfi {
+    return try FfiConverterTypeGenerationDataTypeFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationDataTypeFFI_lower(_ value: GenerationDataTypeFfi) -> RustBuffer {
+    return FfiConverterTypeGenerationDataTypeFFI.lower(value)
+}
+
+
+
+extension GenerationDataTypeFfi: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum GenerationTypeFfi {
+    
+    case image
+    case video
+    case audio
+    case speech
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeGenerationTypeFFI: FfiConverterRustBuffer {
+    typealias SwiftType = GenerationTypeFfi
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GenerationTypeFfi {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .image
+        
+        case 2: return .video
+        
+        case 3: return .audio
+        
+        case 4: return .speech
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: GenerationTypeFfi, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .image:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .video:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .audio:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .speech:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationTypeFFI_lift(_ buf: RustBuffer) throws -> GenerationTypeFfi {
+    return try FfiConverterTypeGenerationTypeFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationTypeFFI_lower(_ value: GenerationTypeFfi) -> RustBuffer {
+    return FfiConverterTypeGenerationTypeFFI.lower(value)
+}
+
+
+
+extension GenerationTypeFfi: Equatable, Hashable {}
+
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 public enum LogLevel {
     
     case error
@@ -11713,6 +12639,54 @@ fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionInt64: FfiConverterRustBuffer {
+    typealias SwiftType = Int64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionFloat: FfiConverterRustBuffer {
     typealias SwiftType = Float?
 
@@ -11801,6 +12775,30 @@ fileprivate struct FfiConverterOptionTypeBehaviorConfig: FfiConverterRustBuffer 
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeBehaviorConfig.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeGenerationParamsFFI: FfiConverterRustBuffer {
+    typealias SwiftType = GenerationParamsFfi?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeGenerationParamsFFI.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeGenerationParamsFFI.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -11993,6 +12991,30 @@ fileprivate struct FfiConverterOptionCallbackInterfaceInitializationProgressHand
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterCallbackInterfaceInitializationProgressHandler.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionSequenceUInt8: FfiConverterRustBuffer {
+    typealias SwiftType = [UInt8]?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterSequenceUInt8.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterSequenceUInt8.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -12315,6 +13337,56 @@ fileprivate struct FfiConverterSequenceTypeCoworkTaskFFI: FfiConverterRustBuffer
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeCoworkTaskFFI.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeGenerationDataFFI: FfiConverterRustBuffer {
+    typealias SwiftType = [GenerationDataFfi]
+
+    public static func write(_ value: [GenerationDataFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeGenerationDataFFI.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [GenerationDataFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [GenerationDataFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeGenerationDataFFI.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeGenerationProviderInfoFFI: FfiConverterRustBuffer {
+    typealias SwiftType = [GenerationProviderInfoFfi]
+
+    public static func write(_ value: [GenerationProviderInfoFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeGenerationProviderInfoFFI.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [GenerationProviderInfoFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [GenerationProviderInfoFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeGenerationProviderInfoFFI.read(from: &buf))
         }
         return seq
     }
@@ -12748,6 +13820,31 @@ fileprivate struct FfiConverterSequenceTypeUnifiedToolInfo: FfiConverterRustBuff
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeGenerationTypeFFI: FfiConverterRustBuffer {
+    typealias SwiftType = [GenerationTypeFfi]
+
+    public static func write(_ value: [GenerationTypeFfi], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeGenerationTypeFFI.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [GenerationTypeFfi] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [GenerationTypeFfi]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeGenerationTypeFFI.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeModelCapabilityFFI: FfiConverterRustBuffer {
     typealias SwiftType = [ModelCapabilityFfi]
 
@@ -12892,6 +13989,12 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_cancel() != 44564) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_cancel_generation() != 17817) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_check_generation_progress() != 39952) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_clear_facts() != 49121) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -12991,7 +14094,22 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_extract_text() != 36904) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_generate() != 17036) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_generate_audio() != 35406) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_generate_image() != 42720) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_generate_speech() != 13012) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_generate_topic_title() != 9650) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_generate_video() != 32019) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_get_compression_stats() != 49764) {
@@ -13030,6 +14148,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_get_memory_stats() != 37731) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_get_providers_for_type() != 30953) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_get_root_commands_from_registry() != 64284) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -13049,6 +14170,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_list_builtin_tools() != 62441) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_list_generation_providers() != 9686) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_list_mcp_servers() != 29913) {

@@ -81,7 +81,10 @@ impl ClarificationInfo {
 
     /// Check if this has suggestions (should show select UI).
     pub fn has_suggestions(&self) -> bool {
-        self.suggestions.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
+        self.suggestions
+            .as_ref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
     }
 }
 
@@ -122,7 +125,11 @@ impl CapabilityRequest {
     }
 
     /// Add a parameter to the request.
-    pub fn with_param(mut self, key: impl Into<String>, value: impl Into<serde_json::Value>) -> Self {
+    pub fn with_param(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<serde_json::Value>,
+    ) -> Self {
         self.parameters.insert(key.into(), value.into());
         self
     }
@@ -135,7 +142,10 @@ impl CapabilityRequest {
 
     /// Get a string parameter by name.
     pub fn get_string_param(&self, name: &str) -> Option<String> {
-        self.parameters.get(name).and_then(|v| v.as_str()).map(String::from)
+        self.parameters
+            .get(name)
+            .and_then(|v| v.as_str())
+            .map(String::from)
     }
 
     /// Check if this is a search request.
@@ -318,7 +328,10 @@ mod tests {
         assert_eq!(req.capability, "search");
         assert_eq!(req.query, "weather in Tokyo");
         assert!(req.is_search());
-        assert_eq!(req.get_string_param("query"), Some("Tokyo weather".to_string()));
+        assert_eq!(
+            req.get_string_param("query"),
+            Some("Tokyo weather".to_string())
+        );
         assert!(req.reasoning.is_some());
     }
 
@@ -403,9 +416,18 @@ mod tests {
 
     #[test]
     fn test_clarification_reason_display() {
-        assert_eq!(ClarificationReason::InsufficientInfo.to_string(), "insufficient_info");
+        assert_eq!(
+            ClarificationReason::InsufficientInfo.to_string(),
+            "insufficient_info"
+        );
         assert_eq!(ClarificationReason::Ambiguous.to_string(), "ambiguous");
-        assert_eq!(ClarificationReason::ConfirmationNeeded.to_string(), "confirmation_needed");
-        assert_eq!(ClarificationReason::MissingParameter.to_string(), "missing_parameter");
+        assert_eq!(
+            ClarificationReason::ConfirmationNeeded.to_string(),
+            "confirmation_needed"
+        );
+        assert_eq!(
+            ClarificationReason::MissingParameter.to_string(),
+            "missing_parameter"
+        );
     }
 }

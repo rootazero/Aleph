@@ -237,8 +237,8 @@ pub struct IntentCache {
 impl IntentCache {
     /// Create a new intent cache with the given configuration.
     pub fn new(config: CacheConfig) -> Self {
-        let capacity = NonZeroUsize::new(config.capacity.max(1))
-            .expect("Cache capacity must be > 0");
+        let capacity =
+            NonZeroUsize::new(config.capacity.max(1)).expect("Cache capacity must be > 0");
 
         Self {
             cache: Arc::new(RwLock::new(LruCache::new(capacity))),
@@ -394,12 +394,7 @@ impl IntentCache {
     /// 2. Converting to lowercase
     /// 3. Taking only the first 100 characters
     fn hash_input(&self, input: &str) -> u64 {
-        let normalized: String = input
-            .trim()
-            .to_lowercase()
-            .chars()
-            .take(100)
-            .collect();
+        let normalized: String = input.trim().to_lowercase().chars().take(100).collect();
 
         let mut hasher = DefaultHasher::new();
         normalized.hash(&mut hasher);

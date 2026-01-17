@@ -9,7 +9,9 @@
 //! Cowork is a multi-task orchestration system that decomposes complex requests
 //! into DAG-structured task graphs and executes them with parallel scheduling.
 
-use crate::cowork::model_router::{Capability, CostStrategy, CostTier, LatencyTier, ModelProfile, ModelRoutingRules};
+use crate::cowork::model_router::{
+    Capability, CostStrategy, CostTier, LatencyTier, ModelProfile, ModelRoutingRules,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -146,7 +148,10 @@ pub struct FileOpsConfigToml {
     /// Maximum file size in bytes for read operations
     /// 0 = unlimited
     /// Accepts human-readable values: "100MB", "1GB", etc.
-    #[serde(default = "default_max_file_size", deserialize_with = "deserialize_file_size")]
+    #[serde(
+        default = "default_max_file_size",
+        deserialize_with = "deserialize_file_size"
+    )]
     pub max_file_size: u64,
 
     /// Require confirmation before write operations
@@ -251,7 +256,9 @@ impl CodeExecConfigToml {
         }
 
         // Validate runtime names
-        let valid_runtimes = ["shell", "bash", "zsh", "python", "python3", "node", "nodejs", "ruby"];
+        let valid_runtimes = [
+            "shell", "bash", "zsh", "python", "python3", "node", "nodejs", "ruby",
+        ];
         for runtime in &self.allowed_runtimes {
             if !valid_runtimes.contains(&runtime.as_str()) {
                 tracing::warn!(
@@ -537,59 +544,93 @@ impl ModelRoutingConfigToml {
 
         // Add task type mappings
         if let Some(ref model) = self.code_generation {
-            rules.task_type_mappings.insert("code_generation".to_string(), model.clone());
+            rules
+                .task_type_mappings
+                .insert("code_generation".to_string(), model.clone());
         }
         if let Some(ref model) = self.code_review {
-            rules.task_type_mappings.insert("code_review".to_string(), model.clone());
+            rules
+                .task_type_mappings
+                .insert("code_review".to_string(), model.clone());
         }
         if let Some(ref model) = self.image_analysis {
-            rules.task_type_mappings.insert("image_analysis".to_string(), model.clone());
+            rules
+                .task_type_mappings
+                .insert("image_analysis".to_string(), model.clone());
         }
         if let Some(ref model) = self.video_understanding {
-            rules.task_type_mappings.insert("video_understanding".to_string(), model.clone());
+            rules
+                .task_type_mappings
+                .insert("video_understanding".to_string(), model.clone());
         }
         if let Some(ref model) = self.long_document {
-            rules.task_type_mappings.insert("long_document".to_string(), model.clone());
+            rules
+                .task_type_mappings
+                .insert("long_document".to_string(), model.clone());
         }
         if let Some(ref model) = self.quick_tasks {
-            rules.task_type_mappings.insert("quick_tasks".to_string(), model.clone());
+            rules
+                .task_type_mappings
+                .insert("quick_tasks".to_string(), model.clone());
         }
         if let Some(ref model) = self.privacy_sensitive {
-            rules.task_type_mappings.insert("privacy_sensitive".to_string(), model.clone());
+            rules
+                .task_type_mappings
+                .insert("privacy_sensitive".to_string(), model.clone());
         }
         if let Some(ref model) = self.reasoning {
-            rules.task_type_mappings.insert("reasoning".to_string(), model.clone());
+            rules
+                .task_type_mappings
+                .insert("reasoning".to_string(), model.clone());
         }
 
         // Add user overrides
         for (task_type, model) in &self.overrides {
-            rules.task_type_mappings.insert(task_type.clone(), model.clone());
+            rules
+                .task_type_mappings
+                .insert(task_type.clone(), model.clone());
         }
 
         // Add capability mappings based on task types
         if let Some(ref model) = self.code_generation {
-            rules.capability_mappings.insert(Capability::CodeGeneration, model.clone());
+            rules
+                .capability_mappings
+                .insert(Capability::CodeGeneration, model.clone());
         }
         if let Some(ref model) = self.code_review {
-            rules.capability_mappings.insert(Capability::CodeReview, model.clone());
+            rules
+                .capability_mappings
+                .insert(Capability::CodeReview, model.clone());
         }
         if let Some(ref model) = self.image_analysis {
-            rules.capability_mappings.insert(Capability::ImageUnderstanding, model.clone());
+            rules
+                .capability_mappings
+                .insert(Capability::ImageUnderstanding, model.clone());
         }
         if let Some(ref model) = self.video_understanding {
-            rules.capability_mappings.insert(Capability::VideoUnderstanding, model.clone());
+            rules
+                .capability_mappings
+                .insert(Capability::VideoUnderstanding, model.clone());
         }
         if let Some(ref model) = self.long_document {
-            rules.capability_mappings.insert(Capability::LongDocument, model.clone());
+            rules
+                .capability_mappings
+                .insert(Capability::LongDocument, model.clone());
         }
         if let Some(ref model) = self.quick_tasks {
-            rules.capability_mappings.insert(Capability::FastResponse, model.clone());
+            rules
+                .capability_mappings
+                .insert(Capability::FastResponse, model.clone());
         }
         if let Some(ref model) = self.privacy_sensitive {
-            rules.capability_mappings.insert(Capability::LocalPrivacy, model.clone());
+            rules
+                .capability_mappings
+                .insert(Capability::LocalPrivacy, model.clone());
         }
         if let Some(ref model) = self.reasoning {
-            rules.capability_mappings.insert(Capability::Reasoning, model.clone());
+            rules
+                .capability_mappings
+                .insert(Capability::Reasoning, model.clone());
         }
 
         rules
@@ -597,7 +638,8 @@ impl ModelRoutingConfigToml {
 
     /// Validate routing configuration against available model profiles
     pub fn validate(&self, available_profiles: &[&str]) -> Result<(), String> {
-        let profile_set: std::collections::HashSet<&str> = available_profiles.iter().copied().collect();
+        let profile_set: std::collections::HashSet<&str> =
+            available_profiles.iter().copied().collect();
 
         // Helper to validate a model reference
         let validate_model = |model: &Option<String>, field: &str| -> Result<(), String> {
@@ -640,15 +682,33 @@ impl ModelRoutingConfigToml {
     pub fn referenced_model_ids(&self) -> Vec<&str> {
         let mut ids = Vec::new();
 
-        if let Some(ref m) = self.code_generation { ids.push(m.as_str()); }
-        if let Some(ref m) = self.code_review { ids.push(m.as_str()); }
-        if let Some(ref m) = self.image_analysis { ids.push(m.as_str()); }
-        if let Some(ref m) = self.video_understanding { ids.push(m.as_str()); }
-        if let Some(ref m) = self.long_document { ids.push(m.as_str()); }
-        if let Some(ref m) = self.quick_tasks { ids.push(m.as_str()); }
-        if let Some(ref m) = self.privacy_sensitive { ids.push(m.as_str()); }
-        if let Some(ref m) = self.reasoning { ids.push(m.as_str()); }
-        if let Some(ref m) = self.default_model { ids.push(m.as_str()); }
+        if let Some(ref m) = self.code_generation {
+            ids.push(m.as_str());
+        }
+        if let Some(ref m) = self.code_review {
+            ids.push(m.as_str());
+        }
+        if let Some(ref m) = self.image_analysis {
+            ids.push(m.as_str());
+        }
+        if let Some(ref m) = self.video_understanding {
+            ids.push(m.as_str());
+        }
+        if let Some(ref m) = self.long_document {
+            ids.push(m.as_str());
+        }
+        if let Some(ref m) = self.quick_tasks {
+            ids.push(m.as_str());
+        }
+        if let Some(ref m) = self.privacy_sensitive {
+            ids.push(m.as_str());
+        }
+        if let Some(ref m) = self.reasoning {
+            ids.push(m.as_str());
+        }
+        if let Some(ref m) = self.default_model {
+            ids.push(m.as_str());
+        }
 
         for m in self.overrides.values() {
             ids.push(m.as_str());
@@ -777,7 +837,10 @@ fn parse_file_size(s: &str) -> Result<u64, String> {
     } else if s.ends_with('B') {
         (&s[..s.len() - 1], 1)
     } else {
-        return Err(format!("Invalid file size format: '{}'. Use formats like '100MB', '1GB', etc.", s));
+        return Err(format!(
+            "Invalid file size format: '{}'. Use formats like '100MB', '1GB', etc.",
+            s
+        ));
     };
 
     let num: u64 = num_part
@@ -1260,8 +1323,14 @@ mod tests {
         };
 
         let rules = config.to_routing_rules();
-        assert_eq!(rules.get_for_task_type("code_generation"), Some("claude-opus"));
-        assert_eq!(rules.get_for_task_type("code_review"), Some("claude-sonnet"));
+        assert_eq!(
+            rules.get_for_task_type("code_generation"),
+            Some("claude-opus")
+        );
+        assert_eq!(
+            rules.get_for_task_type("code_review"),
+            Some("claude-sonnet")
+        );
         assert_eq!(rules.get_for_task_type("image_analysis"), Some("gpt-4o"));
         assert_eq!(rules.get_for_task_type("quick_tasks"), Some("claude-haiku"));
         assert_eq!(rules.get_default(), Some("claude-sonnet"));
@@ -1282,7 +1351,10 @@ mod tests {
 
         let rules = config.to_routing_rules();
         // Override should win
-        assert_eq!(rules.get_for_task_type("code_generation"), Some("gpt-4-turbo"));
+        assert_eq!(
+            rules.get_for_task_type("code_generation"),
+            Some("gpt-4-turbo")
+        );
     }
 
     #[test]
@@ -1418,7 +1490,10 @@ mod tests {
         };
 
         let rules = config.get_routing_rules();
-        assert_eq!(rules.get_for_task_type("code_generation"), Some("claude-opus"));
+        assert_eq!(
+            rules.get_for_task_type("code_generation"),
+            Some("claude-opus")
+        );
         assert_eq!(rules.cost_strategy, CostStrategy::BestQuality);
         assert!(!rules.enable_pipelines);
         assert_eq!(rules.get_default(), Some("claude-sonnet"));

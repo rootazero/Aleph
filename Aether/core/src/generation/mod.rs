@@ -400,8 +400,8 @@ impl GenerationProvider for MockGenerationProvider {
                 .with_model("mock-model")
                 .with_revised_prompt(format!("Mock processed: {}", request.prompt));
 
-            let mut output = GenerationOutput::new(request.generation_type, data)
-                .with_metadata(metadata);
+            let mut output =
+                GenerationOutput::new(request.generation_type, data).with_metadata(metadata);
 
             if let Some(id) = request.request_id {
                 output = output.with_request_id(id);
@@ -550,10 +550,8 @@ mod tests {
 
     #[test]
     fn test_mock_provider_with_types() {
-        let provider = MockGenerationProvider::new("test").with_types(vec![
-            GenerationType::Video,
-            GenerationType::Audio,
-        ]);
+        let provider = MockGenerationProvider::new("test")
+            .with_types(vec![GenerationType::Video, GenerationType::Audio]);
 
         assert!(provider.supports(GenerationType::Video));
         assert!(provider.supports(GenerationType::Audio));
@@ -562,8 +560,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_provider_failure() {
-        let provider = MockGenerationProvider::new("failing")
-            .with_failure("Test error message");
+        let provider = MockGenerationProvider::new("failing").with_failure("Test error message");
 
         let request = GenerationRequest::image("test");
         let result = provider.generate(request).await;
@@ -577,8 +574,7 @@ mod tests {
     async fn test_mock_provider_with_request_id() {
         let provider = MockGenerationProvider::new("test");
 
-        let request = GenerationRequest::image("test")
-            .with_request_id("req-123");
+        let request = GenerationRequest::image("test").with_request_id("req-123");
 
         let output = provider.generate(request).await.unwrap();
 

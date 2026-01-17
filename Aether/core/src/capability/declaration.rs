@@ -45,7 +45,11 @@ pub struct CapabilityDeclaration {
 
 impl CapabilityDeclaration {
     /// Create a new capability declaration.
-    pub fn new(id: impl Into<String>, name: impl Into<String>, description: impl Into<String>) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
         Self {
             id: id.into(),
             name: name.into(),
@@ -170,7 +174,10 @@ impl CapabilityDeclaration {
             .with_parameter(CapabilityParameter::new(
                 "tool",
                 "string",
-                format!("The MCP tool name to invoke. Must be one of: {}", tool_list.join(", ")),
+                format!(
+                    "The MCP tool name to invoke. Must be one of: {}",
+                    tool_list.join(", ")
+                ),
                 true,
             ))
             .with_parameter(CapabilityParameter::new(
@@ -376,7 +383,12 @@ mod tests {
     #[test]
     fn test_capability_declaration_builder() {
         let cap = CapabilityDeclaration::new("test", "Test Cap", "A test capability")
-            .with_parameter(CapabilityParameter::new("query", "string", "Search query", true))
+            .with_parameter(CapabilityParameter::new(
+                "query",
+                "string",
+                "Search query",
+                true,
+            ))
             .with_example("test example")
             .with_available(true);
 

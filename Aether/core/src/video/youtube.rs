@@ -16,7 +16,10 @@ use tracing::{debug, info};
 /// Get yt-dlp path in Aether config directory
 fn get_ytdlp_config_path() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(home).join(".config").join("aether").join("yt-dlp")
+    std::path::PathBuf::from(home)
+        .join(".config")
+        .join("aether")
+        .join("yt-dlp")
 }
 
 /// Find yt-dlp executable path, auto-installing if needed
@@ -59,16 +62,15 @@ fn which_ytdlp() -> Option<std::path::PathBuf> {
 
 /// Auto-install yt-dlp to ~/.config/yt-dlp using curl
 fn install_ytdlp() -> Result<std::path::PathBuf> {
-    use std::process::Command;
     use std::fs;
+    use std::process::Command;
 
     let config_path = get_ytdlp_config_path();
 
     // Ensure ~/.config directory exists
     if let Some(parent) = config_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| {
-            AetherError::video(format!("Failed to create config directory: {}", e))
-        })?;
+        fs::create_dir_all(parent)
+            .map_err(|e| AetherError::video(format!("Failed to create config directory: {}", e)))?;
     }
 
     info!("Installing yt-dlp to {:?}", config_path);
@@ -77,9 +79,10 @@ fn install_ytdlp() -> Result<std::path::PathBuf> {
     let download_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
     let output = Command::new("curl")
         .args([
-            "-L",                                    // Follow redirects
-            "--insecure",                            // Skip SSL verification (for environments with SSL issues)
-            "-o", config_path.to_str().unwrap_or(""),
+            "-L",         // Follow redirects
+            "--insecure", // Skip SSL verification (for environments with SSL issues)
+            "-o",
+            config_path.to_str().unwrap_or(""),
             download_url,
         ])
         .output()
@@ -87,7 +90,10 @@ fn install_ytdlp() -> Result<std::path::PathBuf> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::video(format!("Failed to download yt-dlp: {}", stderr)));
+        return Err(AetherError::video(format!(
+            "Failed to download yt-dlp: {}",
+            stderr
+        )));
     }
 
     // Make it executable
@@ -145,9 +151,17 @@ impl YouTubeExtractor {
 
         let mut headers = HeaderMap::new();
         headers.insert(ACCEPT, HeaderValue::from_static("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"));
-        headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7"));
+        headers.insert(
+            ACCEPT_LANGUAGE,
+            HeaderValue::from_static("en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7"),
+        );
         // YouTube consent cookie to bypass consent page
-        headers.insert(COOKIE, HeaderValue::from_static("CONSENT=YES+cb; SOCS=CAESEwgDEgk2MjcxNDkzNDgaAmVuIAEaBgiA_sCjBg"));
+        headers.insert(
+            COOKIE,
+            HeaderValue::from_static(
+                "CONSENT=YES+cb; SOCS=CAESEwgDEgk2MjcxNDkzNDgaAmVuIAEaBgiA_sCjBg",
+            ),
+        );
 
         let client = reqwest::Client::builder()
             .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
@@ -236,7 +250,10 @@ impl YouTubeExtractor {
         let response = self
             .client
             .get(&json3_url)
-            .header(REFERER, HeaderValue::from_static("https://www.youtube.com/"))
+            .header(
+                REFERER,
+                HeaderValue::from_static("https://www.youtube.com/"),
+            )
             .send()
             .await
             .map_err(|e| AetherError::video(format!("Failed to fetch caption: {}", e)))?;
@@ -254,7 +271,11 @@ impl YouTubeExtractor {
                 })?;
 
                 if !text.is_empty() {
-                    debug!(format = "json3", len = text.len(), "Caption fetched successfully");
+                    debug!(
+                        format = "json3",
+                        len = text.len(),
+                        "Caption fetched successfully"
+                    );
                     return Ok(text);
                 }
             }
@@ -266,7 +287,10 @@ impl YouTubeExtractor {
         let response = self
             .client
             .get(base_url)
-            .header(REFERER, HeaderValue::from_static("https://www.youtube.com/"))
+            .header(
+                REFERER,
+                HeaderValue::from_static("https://www.youtube.com/"),
+            )
             .send()
             .await
             .map_err(|e| AetherError::video(format!("Failed to fetch caption: {}", e)))?;
@@ -277,7 +301,11 @@ impl YouTubeExtractor {
             })?;
 
             if !text.is_empty() {
-                debug!(format = "xml", len = text.len(), "Caption fetched successfully");
+                debug!(
+                    format = "xml",
+                    len = text.len(),
+                    "Caption fetched successfully"
+                );
                 return Ok(text);
             }
         }
@@ -295,8 +323,8 @@ impl YouTubeExtractor {
     ///
     /// Tries preferred language first, falls back to English, then any available language.
     async fn fetch_caption_via_ytdlp(video_id: &str, preferred_lang: &str) -> Result<String> {
-        use std::process::Command;
         use std::fs;
+        use std::process::Command;
 
         // Check if yt-dlp is available, auto-install if not
         let ytdlp = match which_ytdlp() {
@@ -325,13 +353,16 @@ impl YouTubeExtractor {
         // Run yt-dlp to download subtitles with language fallback
         let output = Command::new(&ytdlp)
             .args([
-                "--no-check-certificates",  // Bypass SSL issues
-                "--write-auto-sub",         // Download auto-generated subtitles
-                "--write-sub",              // Also try manual subtitles (often better quality)
-                "--sub-langs", &lang_list,  // Try multiple languages with "all" as fallback
-                "--sub-format", "vtt",
-                "--skip-download",          // Don't download video
-                "-o", output_template.to_str().unwrap_or("/tmp/aether_sub"),
+                "--no-check-certificates", // Bypass SSL issues
+                "--write-auto-sub",        // Download auto-generated subtitles
+                "--write-sub",             // Also try manual subtitles (often better quality)
+                "--sub-langs",
+                &lang_list, // Try multiple languages with "all" as fallback
+                "--sub-format",
+                "vtt",
+                "--skip-download", // Don't download video
+                "-o",
+                output_template.to_str().unwrap_or("/tmp/aether_sub"),
                 &url,
             ])
             .output()
@@ -360,7 +391,8 @@ impl YouTubeExtractor {
             candidate_paths.push(temp_dir.join(format!("aether_sub_{}.zh-CN.vtt", video_id)));
             candidate_paths.push(temp_dir.join(format!("aether_sub_{}.zh-TW.vtt", video_id)));
         } else {
-            candidate_paths.push(temp_dir.join(format!("aether_sub_{}.{}.vtt", video_id, preferred_lang)));
+            candidate_paths
+                .push(temp_dir.join(format!("aether_sub_{}.{}.vtt", video_id, preferred_lang)));
         }
 
         // Add English as fallback
@@ -402,7 +434,10 @@ impl YouTubeExtractor {
         // Clean up temp file
         let _ = fs::remove_file(&subtitle_path);
 
-        debug!(len = vtt_content.len(), "Caption fetched via yt-dlp successfully");
+        debug!(
+            len = vtt_content.len(),
+            "Caption fetched via yt-dlp successfully"
+        );
 
         // Return VTT content - will be parsed by parse_transcript_vtt
         Ok(vtt_content)
@@ -412,9 +447,12 @@ impl YouTubeExtractor {
     async fn fetch_page(&self, url: &str) -> Result<String> {
         debug!(url = %url, "Fetching page");
 
-        let response = self.client.get(url).send().await.map_err(|e| {
-            AetherError::video(format!("Failed to fetch page: {}", e))
-        })?;
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| AetherError::video(format!("Failed to fetch page: {}", e)))?;
 
         let status = response.status();
         if !status.is_success() {
@@ -436,9 +474,10 @@ impl YouTubeExtractor {
             ));
         }
 
-        let text = response.text().await.map_err(|e| {
-            AetherError::video(format!("Failed to read response: {}", e))
-        })?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| AetherError::video(format!("Failed to read response: {}", e)))?;
 
         // Double check for empty body
         if text.is_empty() {
@@ -634,8 +673,9 @@ impl YouTubeExtractor {
 
         // VTT timestamp regex: 00:00:00.000 --> 00:00:00.000
         let timestamp_regex = Regex::new(
-            r"(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})"
-        ).map_err(|e| AetherError::video(format!("Invalid VTT regex: {}", e)))?;
+            r"(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})",
+        )
+        .map_err(|e| AetherError::video(format!("Invalid VTT regex: {}", e)))?;
 
         // Tag removal regex for VTT formatting tags
         let tag_regex = Regex::new(r"<[^>]+>")
@@ -648,7 +688,11 @@ impl YouTubeExtractor {
             let line = lines[i].trim();
 
             // Skip WEBVTT header and metadata
-            if line.starts_with("WEBVTT") || line.starts_with("Kind:") || line.starts_with("Language:") || line.is_empty() {
+            if line.starts_with("WEBVTT")
+                || line.starts_with("Kind:")
+                || line.starts_with("Language:")
+                || line.is_empty()
+            {
                 i += 1;
                 continue;
             }
@@ -733,10 +777,22 @@ impl YouTubeExtractor {
 
     /// Parse VTT timestamp components to seconds
     fn parse_vtt_timestamp(caps: &regex::Captures, start_group: usize) -> f64 {
-        let hours: f64 = caps.get(start_group).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
-        let minutes: f64 = caps.get(start_group + 1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
-        let seconds: f64 = caps.get(start_group + 2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
-        let millis: f64 = caps.get(start_group + 3).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
+        let hours: f64 = caps
+            .get(start_group)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0.0);
+        let minutes: f64 = caps
+            .get(start_group + 1)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0.0);
+        let seconds: f64 = caps
+            .get(start_group + 2)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0.0);
+        let millis: f64 = caps
+            .get(start_group + 3)
+            .and_then(|m| m.as_str().parse().ok())
+            .unwrap_or(0.0);
 
         hours * 3600.0 + minutes * 60.0 + seconds + millis / 1000.0
     }
@@ -747,20 +803,23 @@ impl YouTubeExtractor {
 
         // Simple XML parsing for YouTube transcript format:
         // <text start="0.0" dur="2.5">Hello everyone</text>
-        let text_regex = Regex::new(
-            r#"<text\s+start="([^"]+)"\s+dur="([^"]+)"[^>]*>([^<]*)</text>"#
-        ).map_err(|e| AetherError::video(format!("Invalid regex: {}", e)))?;
+        let text_regex =
+            Regex::new(r#"<text\s+start="([^"]+)"\s+dur="([^"]+)"[^>]*>([^<]*)</text>"#)
+                .map_err(|e| AetherError::video(format!("Invalid regex: {}", e)))?;
 
         for caps in text_regex.captures_iter(xml) {
-            let start: f64 = caps.get(1)
+            let start: f64 = caps
+                .get(1)
                 .and_then(|m| m.as_str().parse().ok())
                 .unwrap_or(0.0);
 
-            let dur: f64 = caps.get(2)
+            let dur: f64 = caps
+                .get(2)
                 .and_then(|m| m.as_str().parse().ok())
                 .unwrap_or(0.0);
 
-            let text = caps.get(3)
+            let text = caps
+                .get(3)
                 .map(|m| Self::decode_html_entities(m.as_str()))
                 .unwrap_or_default();
 
@@ -795,10 +854,7 @@ impl YouTubeExtractor {
                 None => continue,
             };
 
-            let start_ms = event
-                .get("tStartMs")
-                .and_then(|t| t.as_i64())
-                .unwrap_or(0);
+            let start_ms = event.get("tStartMs").and_then(|t| t.as_i64()).unwrap_or(0);
 
             let dur_ms = event
                 .get("dDurationMs")
@@ -887,7 +943,10 @@ mod tests {
     fn test_extract_youtube_url_from_text() {
         let input = "Please analyze this video: https://youtube.com/watch?v=abc12345678 thanks!";
         let url = extract_youtube_url(input);
-        assert_eq!(url, Some("https://youtube.com/watch?v=abc12345678".to_string()));
+        assert_eq!(
+            url,
+            Some("https://youtube.com/watch?v=abc12345678".to_string())
+        );
     }
 
     #[test]
@@ -906,8 +965,12 @@ mod tests {
 
     #[test]
     fn test_contains_youtube_url() {
-        assert!(contains_youtube_url("https://youtube.com/watch?v=abc12345678"));
-        assert!(contains_youtube_url("Check https://youtu.be/abc12345678 out"));
+        assert!(contains_youtube_url(
+            "https://youtube.com/watch?v=abc12345678"
+        ));
+        assert!(contains_youtube_url(
+            "Check https://youtu.be/abc12345678 out"
+        ));
         assert!(!contains_youtube_url("No URL here"));
     }
 
@@ -1119,7 +1182,11 @@ mod integration_tests {
                 println!("Title: {}", transcript.title);
                 println!("Language: {}", transcript.language);
                 println!("Segments: {}", transcript.segments.len());
-                println!("First 200 chars: {}", &transcript.format_for_context()[..200.min(transcript.format_for_context().len())]);
+                println!(
+                    "First 200 chars: {}",
+                    &transcript.format_for_context()
+                        [..200.min(transcript.format_for_context().len())]
+                );
             }
             Err(e) => {
                 println!("❌ Failed: {:?}", e);
@@ -1149,9 +1216,13 @@ mod integration_tests {
         println!("3. Title: {}", title);
 
         // Find caption URL
-        let (caption_url, lang) = YouTubeExtractor::find_caption_url(&player_response, "en").unwrap();
+        let (caption_url, lang) =
+            YouTubeExtractor::find_caption_url(&player_response, "en").unwrap();
         println!("4. Caption URL found for language: {}", lang);
-        println!("   URL preview: {}...", &caption_url[..100.min(caption_url.len())]);
+        println!(
+            "   URL preview: {}...",
+            &caption_url[..100.min(caption_url.len())]
+        );
 
         // Fetch caption using the new method
         println!("\n5. Fetching caption...");

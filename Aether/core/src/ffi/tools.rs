@@ -13,24 +13,33 @@ impl AetherCore {
     /// This includes built-in tools and any dynamically added MCP tools.
     pub fn list_tools(&self) -> Vec<ToolInfoFFI> {
         let tools = self.registered_tools.read().unwrap();
-        tools.iter().map(|name| {
-            let (description, source) = match name.as_str() {
-                "search" => ("Search the internet".to_string(), "builtin".to_string()),
-                "web_fetch" => ("Fetch web page content".to_string(), "builtin".to_string()),
-                "youtube" => ("Extract YouTube video transcripts".to_string(), "builtin".to_string()),
-                name if name.contains(':') => {
-                    // MCP tool format: "server:tool_name"
-                    let server = name.split(':').next().unwrap_or("mcp");
-                    (format!("MCP tool from {}", server), format!("mcp:{}", server))
+        tools
+            .iter()
+            .map(|name| {
+                let (description, source) = match name.as_str() {
+                    "search" => ("Search the internet".to_string(), "builtin".to_string()),
+                    "web_fetch" => ("Fetch web page content".to_string(), "builtin".to_string()),
+                    "youtube" => (
+                        "Extract YouTube video transcripts".to_string(),
+                        "builtin".to_string(),
+                    ),
+                    name if name.contains(':') => {
+                        // MCP tool format: "server:tool_name"
+                        let server = name.split(':').next().unwrap_or("mcp");
+                        (
+                            format!("MCP tool from {}", server),
+                            format!("mcp:{}", server),
+                        )
+                    }
+                    _ => ("Dynamic tool".to_string(), "dynamic".to_string()),
+                };
+                ToolInfoFFI {
+                    name: name.clone(),
+                    description,
+                    source,
                 }
-                _ => ("Dynamic tool".to_string(), "dynamic".to_string()),
-            };
-            ToolInfoFFI {
-                name: name.clone(),
-                description,
-                source,
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     /// Add an MCP tool dynamically (hot-reload)
@@ -76,11 +85,7 @@ impl AetherCore {
         };
 
         // Extract server name from tool name (format: "server:tool")
-        let server_name = tool_name
-            .split(':')
-            .next()
-            .unwrap_or("unknown")
-            .to_string();
+        let server_name = tool_name.split(':').next().unwrap_or("unknown").to_string();
 
         // Note: We need an MCP client to execute the tool. For now, we create a placeholder.
         // In a full implementation, this should receive the actual McpClient.
@@ -93,7 +98,9 @@ impl AetherCore {
         let tool_name_clone = tool_name.clone();
 
         self.runtime.block_on(async move {
-            handle.add_tool(wrapper).await
+            handle
+                .add_tool(wrapper)
+                .await
                 .map_err(|e| AetherFfiError::Tool(format!("Failed to add tool: {}", e)))?;
 
             // Track the tool
@@ -122,7 +129,9 @@ impl AetherCore {
         let tool_name_clone = tool_name.clone();
 
         self.runtime.block_on(async move {
-            handle.remove_tool(&tool_name_clone).await
+            handle
+                .remove_tool(&tool_name_clone)
+                .await
                 .map_err(|e| AetherFfiError::Tool(format!("Failed to remove tool: {}", e)))?;
 
             // Update tracking
@@ -209,7 +218,8 @@ impl AetherCore {
                 id: "builtin:agent".to_string(),
                 name: "agent".to_string(),
                 display_name: "Agent".to_string(),
-                description: "Execute task in Agent mode (auto plan + confirm + execute)".to_string(),
+                description: "Execute task in Agent mode (auto plan + confirm + execute)"
+                    .to_string(),
                 source_type: crate::dispatcher::ToolSourceType::Builtin,
                 source_id: None,
                 parameters_schema: None,
@@ -239,7 +249,10 @@ impl AetherCore {
             commands.push(crate::command::CommandNode {
                 key: tool.name.clone(),
                 description: tool.description.clone(),
-                icon: tool.icon.clone().unwrap_or_else(|| "command.circle.fill".to_string()),
+                icon: tool
+                    .icon
+                    .clone()
+                    .unwrap_or_else(|| "command.circle.fill".to_string()),
                 hint: tool.usage.clone(),
                 node_type: crate::command::CommandType::Action,
                 has_children: tool.has_subtools,
@@ -277,7 +290,8 @@ impl AetherCore {
                 continue;
             }
             // Extract command name from regex (e.g., "^/translate" -> "translate")
-            let command_name: String = rule.regex
+            let command_name: String = rule
+                .regex
                 .trim_start_matches("^/")
                 .trim_start_matches("(?i)")
                 .chars()
@@ -285,9 +299,16 @@ impl AetherCore {
                 .collect();
 
             if !command_name.is_empty() {
-                let description = rule.system_prompt
+                let description = rule
+                    .system_prompt
                     .as_ref()
-                    .map(|s: &String| if s.len() > 50 { format!("{}...", &s[..47]) } else { s.clone() })
+                    .map(|s: &String| {
+                        if s.len() > 50 {
+                            format!("{}...", &s[..47])
+                        } else {
+                            s.clone()
+                        }
+                    })
                     .unwrap_or_else(|| format!("Custom command /{}", command_name));
 
                 commands.push(crate::command::CommandNode {

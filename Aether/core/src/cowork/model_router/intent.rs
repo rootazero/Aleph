@@ -250,13 +250,19 @@ mod tests {
             TaskIntent::from_string("code_generation"),
             TaskIntent::CodeGeneration
         );
-        assert_eq!(TaskIntent::from_string("code_review"), TaskIntent::CodeReview);
+        assert_eq!(
+            TaskIntent::from_string("code_review"),
+            TaskIntent::CodeReview
+        );
         assert_eq!(
             TaskIntent::from_string("image_analysis"),
             TaskIntent::ImageAnalysis
         );
         assert_eq!(TaskIntent::from_string("reasoning"), TaskIntent::Reasoning);
-        assert_eq!(TaskIntent::from_string("translation"), TaskIntent::Translation);
+        assert_eq!(
+            TaskIntent::from_string("translation"),
+            TaskIntent::Translation
+        );
     }
 
     #[test]
@@ -321,7 +327,10 @@ mod tests {
 
     #[test]
     fn test_task_intent_case_insensitive() {
-        assert_eq!(TaskIntent::from_string("CODE_GENERATION"), TaskIntent::CodeGeneration);
+        assert_eq!(
+            TaskIntent::from_string("CODE_GENERATION"),
+            TaskIntent::CodeGeneration
+        );
         assert_eq!(TaskIntent::from_string("Search"), TaskIntent::Search);
         assert_eq!(TaskIntent::from_string("REASONING"), TaskIntent::Reasoning);
     }
@@ -330,7 +339,10 @@ mod tests {
     fn test_task_intent_aliases() {
         // Test various aliases map to same intent
         assert_eq!(TaskIntent::from_string("code"), TaskIntent::CodeGeneration);
-        assert_eq!(TaskIntent::from_string("coding"), TaskIntent::CodeGeneration);
+        assert_eq!(
+            TaskIntent::from_string("coding"),
+            TaskIntent::CodeGeneration
+        );
         assert_eq!(TaskIntent::from_string("review"), TaskIntent::CodeReview);
         assert_eq!(TaskIntent::from_string("draw"), TaskIntent::ImageGeneration);
         assert_eq!(TaskIntent::from_string("think"), TaskIntent::Reasoning);

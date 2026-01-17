@@ -88,7 +88,9 @@ impl DagScheduler {
 
     /// Get available parallelism slots
     pub fn available_slots(&self) -> usize {
-        self.config.max_parallelism.saturating_sub(self.running.len())
+        self.config
+            .max_parallelism
+            .saturating_sub(self.running.len())
     }
 }
 
@@ -198,8 +200,7 @@ mod tests {
         assert_eq!(scheduler.running_count(), 0);
 
         // Update task status in graph
-        graph.get_task_mut("a").unwrap().status =
-            TaskStatus::completed(TaskResult::default());
+        graph.get_task_mut("a").unwrap().status = TaskStatus::completed(TaskResult::default());
 
         // Now 'b' should be ready
         let ready = scheduler.next_ready(&graph);
@@ -287,8 +288,7 @@ mod tests {
         // Complete 'a'
         scheduler.mark_running("a");
         scheduler.mark_completed("a");
-        graph.get_task_mut("a").unwrap().status =
-            TaskStatus::completed(TaskResult::default());
+        graph.get_task_mut("a").unwrap().status = TaskStatus::completed(TaskResult::default());
 
         // 'b' and 'c' should be ready in parallel
         let ready = scheduler.next_ready(&graph);
@@ -299,10 +299,8 @@ mod tests {
         scheduler.mark_running("c");
         scheduler.mark_completed("b");
         scheduler.mark_completed("c");
-        graph.get_task_mut("b").unwrap().status =
-            TaskStatus::completed(TaskResult::default());
-        graph.get_task_mut("c").unwrap().status =
-            TaskStatus::completed(TaskResult::default());
+        graph.get_task_mut("b").unwrap().status = TaskStatus::completed(TaskResult::default());
+        graph.get_task_mut("c").unwrap().status = TaskStatus::completed(TaskResult::default());
 
         // Now 'd' should be ready
         let ready = scheduler.next_ready(&graph);

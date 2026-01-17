@@ -61,9 +61,9 @@ impl GitOps for GitRepository {
                 .include_ignored(false)
                 .include_unmodified(false);
 
-            let statuses = repo.statuses(Some(&mut opts)).map_err(|e| {
-                AetherError::GitError(format!("Failed to get status: {}", e))
-            })?;
+            let statuses = repo
+                .statuses(Some(&mut opts))
+                .map_err(|e| AetherError::GitError(format!("Failed to get status: {}", e)))?;
 
             let results: Vec<GitFileStatus> = statuses
                 .iter()
@@ -98,17 +98,17 @@ impl GitOps for GitRepository {
         tokio::task::spawn_blocking(move || {
             let repo = Self::open_repo(&path)?;
 
-            let head = repo.head().map_err(|e| {
-                AetherError::GitError(format!("Failed to get HEAD: {}", e))
-            })?;
+            let head = repo
+                .head()
+                .map_err(|e| AetherError::GitError(format!("Failed to get HEAD: {}", e)))?;
 
-            let head_commit = head.peel_to_commit().map_err(|e| {
-                AetherError::GitError(format!("Failed to get HEAD commit: {}", e))
-            })?;
+            let head_commit = head
+                .peel_to_commit()
+                .map_err(|e| AetherError::GitError(format!("Failed to get HEAD commit: {}", e)))?;
 
-            let mut revwalk = repo.revwalk().map_err(|e| {
-                AetherError::GitError(format!("Failed to create revwalk: {}", e))
-            })?;
+            let mut revwalk = repo
+                .revwalk()
+                .map_err(|e| AetherError::GitError(format!("Failed to create revwalk: {}", e)))?;
 
             revwalk.push(head_commit.id()).map_err(|e| {
                 AetherError::GitError(format!("Failed to push HEAD to revwalk: {}", e))
@@ -168,8 +168,8 @@ impl GitOps for GitRepository {
                     if let Some(path) = delta.new_file().path() {
                         // Check if we need to create a new entry
                         let should_create = results.last().is_none_or(|last| {
-                            last.file_path != path.to_string_lossy() ||
-                            last.new_start != hunk.new_start()
+                            last.file_path != path.to_string_lossy()
+                                || last.new_start != hunk.new_start()
                         });
 
                         if should_create {
@@ -213,15 +213,12 @@ impl GitOps for GitRepository {
         tokio::task::spawn_blocking(move || {
             let repo = Self::open_repo(&path)?;
 
-            let head = repo.head().map_err(|e| {
-                AetherError::GitError(format!("Failed to get HEAD: {}", e))
-            })?;
+            let head = repo
+                .head()
+                .map_err(|e| AetherError::GitError(format!("Failed to get HEAD: {}", e)))?;
 
             if head.is_branch() {
-                Ok(head
-                    .shorthand()
-                    .unwrap_or("HEAD")
-                    .to_string())
+                Ok(head.shorthand().unwrap_or("HEAD").to_string())
             } else {
                 // Detached HEAD
                 Ok("HEAD".to_string())
@@ -234,11 +231,9 @@ impl GitOps for GitRepository {
     async fn is_repo(&self, path: &Path) -> Result<bool> {
         let path = path.to_path_buf();
 
-        tokio::task::spawn_blocking(move || {
-            Ok(Repository::discover(&path).is_ok())
-        })
-        .await
-        .map_err(|e| AetherError::GitError(format!("Task join error: {}", e)))?
+        tokio::task::spawn_blocking(move || Ok(Repository::discover(&path).is_ok()))
+            .await
+            .map_err(|e| AetherError::GitError(format!("Task join error: {}", e)))?
     }
 }
 

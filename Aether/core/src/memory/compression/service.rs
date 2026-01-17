@@ -65,8 +65,10 @@ impl CompressionService {
 
         let extractor = Arc::new(FactExtractor::new(provider, embedding_model));
 
-        let conflict_detector =
-            Arc::new(ConflictDetector::new(Arc::clone(&database), config.conflict.clone()));
+        let conflict_detector = Arc::new(ConflictDetector::new(
+            Arc::clone(&database),
+            config.conflict.clone(),
+        ));
 
         let scheduler = Arc::new(CompressionScheduler::new(config.scheduler.clone()));
 
@@ -131,7 +133,10 @@ impl CompressionService {
             let resolutions = self.conflict_detector.resolve_conflicts(&fact).await?;
 
             // Apply resolutions (invalidate old facts)
-            let invalidated = self.conflict_detector.apply_resolutions(&resolutions).await?;
+            let invalidated = self
+                .conflict_detector
+                .apply_resolutions(&resolutions)
+                .await?;
             total_invalidated += invalidated;
 
             // Store the new fact
@@ -380,12 +385,8 @@ mod tests {
 
         let config = CompressionConfig::default();
 
-        let service = CompressionService::new(
-            Arc::clone(&database),
-            provider,
-            embedding_model,
-            config,
-        );
+        let service =
+            CompressionService::new(Arc::clone(&database), provider, embedding_model, config);
 
         (service, database)
     }

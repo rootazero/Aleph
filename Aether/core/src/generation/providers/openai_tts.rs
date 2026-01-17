@@ -256,10 +256,7 @@ impl OpenAiTtsProvider {
 
         // Handle based on status code
         match status.as_u16() {
-            401 => GenerationError::authentication(
-                "Invalid API key or unauthorized",
-                "openai-tts",
-            ),
+            401 => GenerationError::authentication("Invalid API key or unauthorized", "openai-tts"),
             429 => GenerationError::rate_limit("Rate limit exceeded", None),
             400 => {
                 // Check for empty input error
@@ -531,26 +528,17 @@ mod tests {
 
     #[test]
     fn test_new_with_custom_model() {
-        let provider = OpenAiTtsProvider::new(
-            "sk-test-key",
-            None,
-            Some("tts-1-hd".to_string()),
-            None,
-        )
-        .unwrap();
+        let provider =
+            OpenAiTtsProvider::new("sk-test-key", None, Some("tts-1-hd".to_string()), None)
+                .unwrap();
 
         assert_eq!(provider.model, "tts-1-hd");
     }
 
     #[test]
     fn test_new_with_custom_voice() {
-        let provider = OpenAiTtsProvider::new(
-            "sk-test-key",
-            None,
-            None,
-            Some("nova".to_string()),
-        )
-        .unwrap();
+        let provider =
+            OpenAiTtsProvider::new("sk-test-key", None, None, Some("nova".to_string())).unwrap();
 
         assert_eq!(provider.default_voice, "nova");
     }
@@ -575,30 +563,28 @@ mod tests {
 
     #[test]
     fn test_new_invalid_voice_fails() {
-        let result = OpenAiTtsProvider::new(
-            "sk-test-key",
-            None,
-            None,
-            Some("invalid-voice".to_string()),
-        );
+        let result =
+            OpenAiTtsProvider::new("sk-test-key", None, None, Some("invalid-voice".to_string()));
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+        assert!(matches!(
+            err,
+            GenerationError::InvalidParametersError { .. }
+        ));
     }
 
     #[test]
     fn test_new_invalid_model_fails() {
-        let result = OpenAiTtsProvider::new(
-            "sk-test-key",
-            None,
-            Some("invalid-model".to_string()),
-            None,
-        );
+        let result =
+            OpenAiTtsProvider::new("sk-test-key", None, Some("invalid-model".to_string()), None);
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+        assert!(matches!(
+            err,
+            GenerationError::InvalidParametersError { .. }
+        ));
     }
 
     #[test]
@@ -660,13 +646,9 @@ mod tests {
         let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None).unwrap();
         assert_eq!(provider.default_model(), Some("tts-1"));
 
-        let custom_provider = OpenAiTtsProvider::new(
-            "sk-test-key",
-            None,
-            Some("tts-1-hd".to_string()),
-            None,
-        )
-        .unwrap();
+        let custom_provider =
+            OpenAiTtsProvider::new("sk-test-key", None, Some("tts-1-hd".to_string()), None)
+                .unwrap();
         assert_eq!(custom_provider.default_model(), Some("tts-1-hd"));
     }
 

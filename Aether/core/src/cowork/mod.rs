@@ -57,6 +57,10 @@ mod engine;
 // Re-export main types
 pub use engine::{CoworkConfig, CoworkEngine, ExecutionState};
 pub use executor::{ExecutionContext, ExecutorRegistry, NoopExecutor, TaskExecutor};
+pub use model_router::{
+    Capability, CostStrategy, CostTier, FallbackProvider, LatencyTier, ModelMatcher, ModelProfile,
+    ModelRouter, ModelRoutingRules, RoutingError, StageResult, TaskContextManager, TaskIntent,
+};
 pub use monitor::{ProgressEvent, ProgressMonitor, ProgressSubscriber, TaskMonitor};
 pub use planner::{LlmTaskPlanner, TaskPlanner};
 pub use scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
@@ -64,8 +68,4 @@ pub use types::{
     AiTask, AppAuto, CodeExec, DocGen, ExecutionSummary, FileOp, GraphValidationError, Language,
     Task, TaskCountByStatus, TaskDependency, TaskGraph, TaskGraphMeta, TaskResult, TaskStatus,
     TaskType,
-};
-pub use model_router::{
-    Capability, CostStrategy, CostTier, FallbackProvider, LatencyTier, ModelMatcher, ModelProfile,
-    ModelRouter, ModelRoutingRules, RoutingError, StageResult, TaskContextManager, TaskIntent,
 };

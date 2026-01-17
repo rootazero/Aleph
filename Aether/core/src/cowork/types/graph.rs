@@ -231,9 +231,7 @@ impl TaskGraph {
             adj.insert(&task.id, Vec::new());
         }
         for edge in &self.edges {
-            adj.get_mut(edge.from.as_str())
-                .unwrap()
-                .push(&edge.to);
+            adj.get_mut(edge.from.as_str()).unwrap().push(&edge.to);
         }
 
         // Track visited and recursion stack
@@ -243,9 +241,10 @@ impl TaskGraph {
 
         for task in &self.tasks {
             if !visited.contains(task.id.as_str())
-                && self.dfs_detect_cycle(&task.id, &adj, &mut visited, &mut rec_stack, &mut path) {
-                    return Some(path);
-                }
+                && self.dfs_detect_cycle(&task.id, &adj, &mut visited, &mut rec_stack, &mut path)
+            {
+                return Some(path);
+            }
         }
 
         None
@@ -297,9 +296,7 @@ impl TaskGraph {
 
         for edge in &self.edges {
             *in_degree.get_mut(edge.to.as_str()).unwrap() += 1;
-            adj.get_mut(edge.from.as_str())
-                .unwrap()
-                .push(&edge.to);
+            adj.get_mut(edge.from.as_str()).unwrap().push(&edge.to);
         }
 
         // Start with nodes having zero in-degree

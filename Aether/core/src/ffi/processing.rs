@@ -31,8 +31,8 @@ impl Default for ProcessOptions {
         Self {
             app_context: None,
             window_title: None,
-            topic_id: None,  // None means "single-turn"
-            stream: true,  // Streaming enabled by default
+            topic_id: None, // None means "single-turn"
+            stream: true,   // Streaming enabled by default
             attachments: None,
         }
     }
@@ -131,7 +131,11 @@ impl AetherCore {
             // Check for explicit /agent command first (hybrid mode)
             let (is_explicit_agent, task_input) = if input.trim().starts_with("/agent ") {
                 // Extract task description after "/agent "
-                let task = input.trim().strip_prefix("/agent ").unwrap_or(&input).trim();
+                let task = input
+                    .trim()
+                    .strip_prefix("/agent ")
+                    .unwrap_or(&input)
+                    .trim();
                 info!(task = %task, "Explicit /agent command detected");
                 (true, task.to_string())
             } else if input.trim() == "/agent" {
@@ -183,10 +187,13 @@ impl AetherCore {
             };
 
             // Create manager with shared ToolServerHandle (all tools persist across calls)
-            let manager = RigAgentManager::with_shared_handle(config, tool_server_handle, registered_tools);
+            let manager =
+                RigAgentManager::with_shared_handle(config, tool_server_handle, registered_tools);
 
             // Get or create conversation history for this topic
-            let topic_key = topic_id.clone().unwrap_or_else(|| "single-turn".to_string());
+            let topic_key = topic_id
+                .clone()
+                .unwrap_or_else(|| "single-turn".to_string());
             let mut history = {
                 let histories = conversation_histories.read().unwrap();
                 histories.get(&topic_key).cloned().unwrap_or_default()
@@ -234,7 +241,8 @@ impl AetherCore {
                                     app_context.as_deref(),
                                     window_title.as_deref(),
                                     topic_id.as_deref(),
-                                ).await
+                                )
+                                .await
                             });
 
                             match store_result {
@@ -324,15 +332,13 @@ impl AetherCore {
                 // Find the provider config
                 let provider_config = full_cfg.providers.get(name);
                 match provider_config {
-                    Some(cfg) => {
-                        match crate::providers::create_provider(name, cfg.clone()) {
-                            Ok(p) => Some(p),
-                            Err(e) => {
-                                info!(error = %e, "Failed to create provider for title generation");
-                                None
-                            }
+                    Some(cfg) => match crate::providers::create_provider(name, cfg.clone()) {
+                        Ok(p) => Some(p),
+                        Err(e) => {
+                            info!(error = %e, "Failed to create provider for title generation");
+                            None
                         }
-                    }
+                    },
                     None => {
                         info!(provider = %name, "Default provider not found in config");
                         None
@@ -348,8 +354,9 @@ impl AetherCore {
         match provider {
             Some(p) => {
                 // Execute AI call using the runtime
-                let result: Result<String, crate::error::AetherError> =
-                    self.runtime.block_on(async move { p.process(&prompt, None).await });
+                let result: Result<String, crate::error::AetherError> = self
+                    .runtime
+                    .block_on(async move { p.process(&prompt, None).await });
 
                 match result {
                     Ok(title) => {
@@ -381,7 +388,11 @@ impl AetherCore {
         info!(data_size = image_data.len(), "Extracting text from image");
 
         // Get config for vision service
-        let config = self.full_config.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let config = self
+            .full_config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
 
         // Create vision service and extract text
         let vision_service = VisionService::with_defaults();
@@ -427,14 +438,17 @@ pub(crate) async fn store_memory_after_response(
     );
 
     // Create VectorDatabase
-    let db = VectorDatabase::new(PathBuf::from(db_path))
-        .map_err(|e| crate::error::AetherError::config(format!("Failed to open memory database: {}", e)))?;
+    let db = VectorDatabase::new(PathBuf::from(db_path)).map_err(|e| {
+        crate::error::AetherError::config(format!("Failed to open memory database: {}", e))
+    })?;
 
     // Create EmbeddingModel
-    let model_path = EmbeddingModel::get_default_model_path()
-        .map_err(|e| crate::error::AetherError::config(format!("Failed to get model path: {}", e)))?;
-    let embedding_model = EmbeddingModel::new(model_path)
-        .map_err(|e| crate::error::AetherError::config(format!("Failed to create embedding model: {}", e)))?;
+    let model_path = EmbeddingModel::get_default_model_path().map_err(|e| {
+        crate::error::AetherError::config(format!("Failed to get model path: {}", e))
+    })?;
+    let embedding_model = EmbeddingModel::new(model_path).map_err(|e| {
+        crate::error::AetherError::config(format!("Failed to create embedding model: {}", e))
+    })?;
 
     // Create MemoryIngestion
     let ingestion = MemoryIngestion::new(

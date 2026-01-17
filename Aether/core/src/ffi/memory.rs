@@ -10,10 +10,15 @@ impl AetherCore {
     /// Search memory for relevant entries
     ///
     /// Searches the memory store for entries matching the query using vector similarity.
-    pub fn search_memory(&self, query: String, limit: u32) -> Result<Vec<MemoryItem>, AetherFfiError> {
-        let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherFfiError::Memory("Memory store not initialized".to_string())
-        })?;
+    pub fn search_memory(
+        &self,
+        query: String,
+        limit: u32,
+    ) -> Result<Vec<MemoryItem>, AetherFfiError> {
+        let memory_path = self
+            .memory_path
+            .as_ref()
+            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
 
         use crate::memory::{EmbeddingModel, VectorDatabase};
 
@@ -22,10 +27,9 @@ impl AetherCore {
         // Create embedding model and database
         let model_path = EmbeddingModel::get_default_model_path()
             .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
-        let embedding_model = EmbeddingModel::new(model_path)
-            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
-        let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
+        let embedding_model =
+            EmbeddingModel::new(model_path).map_err(|e| AetherFfiError::Memory(e.to_string()))?;
+        let db = VectorDatabase::new(db_path).map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
         // Generate query embedding and search
         let result = self.runtime.block_on(async {
@@ -41,17 +45,18 @@ impl AetherCore {
 
     /// Clear all memory entries
     pub fn clear_memory(&self) -> Result<(), AetherFfiError> {
-        let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherFfiError::Memory("Memory store not initialized".to_string())
-        })?;
+        let memory_path = self
+            .memory_path
+            .as_ref()
+            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
 
         use crate::memory::VectorDatabase;
         let db_path = PathBuf::from(memory_path);
-        let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
+        let db = VectorDatabase::new(db_path).map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
         // Clear all memories (no filter)
-        self.runtime.block_on(db.clear_memories(None, None))
+        self.runtime
+            .block_on(db.clear_memories(None, None))
             .map(|_| ())
             .map_err(|e| AetherFfiError::Memory(e.to_string()))
     }
@@ -63,64 +68,77 @@ impl AetherCore {
     }
 
     /// Update memory configuration
-    pub fn update_memory_config(&self, new_config: crate::config::MemoryConfig) -> Result<(), AetherFfiError> {
+    pub fn update_memory_config(
+        &self,
+        new_config: crate::config::MemoryConfig,
+    ) -> Result<(), AetherFfiError> {
         let mut config = self.lock_config();
         config.memory = new_config;
-        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        config
+            .save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
         info!("Memory configuration updated");
         Ok(())
     }
 
     /// Delete specific memory by ID
     pub fn delete_memory(&self, id: String) -> Result<(), AetherFfiError> {
-        let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherFfiError::Memory("Memory store not initialized".to_string())
-        })?;
+        let memory_path = self
+            .memory_path
+            .as_ref()
+            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
 
         use crate::memory::database::VectorDatabase;
         let db_path = PathBuf::from(&memory_path);
-        let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
+        let db = VectorDatabase::new(db_path).map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
-        self.runtime.block_on(db.delete_memory(&id))
+        self.runtime
+            .block_on(db.delete_memory(&id))
             .map_err(|e| AetherFfiError::Memory(e.to_string()))
     }
 
     /// Get memory database statistics
     pub fn get_memory_stats(&self) -> Result<crate::memory::database::MemoryStats, AetherFfiError> {
-        let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherFfiError::Memory("Memory store not initialized".to_string())
-        })?;
+        let memory_path = self
+            .memory_path
+            .as_ref()
+            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
 
         use crate::memory::database::VectorDatabase;
         let db_path = PathBuf::from(&memory_path);
-        let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
+        let db = VectorDatabase::new(db_path).map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
-        self.runtime.block_on(db.get_stats())
+        self.runtime
+            .block_on(db.get_stats())
             .map_err(|e| AetherFfiError::Memory(e.to_string()))
     }
 
     /// Get list of unique app bundle IDs from memories
-    pub fn get_memory_app_list(&self) -> Result<Vec<crate::core::types::AppMemoryInfo>, AetherFfiError> {
-        let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherFfiError::Memory("Memory store not initialized".to_string())
-        })?;
+    pub fn get_memory_app_list(
+        &self,
+    ) -> Result<Vec<crate::core::types::AppMemoryInfo>, AetherFfiError> {
+        let memory_path = self
+            .memory_path
+            .as_ref()
+            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
 
         use crate::memory::database::VectorDatabase;
         let db_path = PathBuf::from(&memory_path);
-        let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
+        let db = VectorDatabase::new(db_path).map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
-        let apps = self.runtime.block_on(db.get_app_list())
+        let apps = self
+            .runtime
+            .block_on(db.get_app_list())
             .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
         Ok(apps
             .into_iter()
-            .map(|(app_bundle_id, memory_count)| crate::core::types::AppMemoryInfo {
-                app_bundle_id,
-                memory_count,
-            })
+            .map(
+                |(app_bundle_id, memory_count)| crate::core::types::AppMemoryInfo {
+                    app_bundle_id,
+                    memory_count,
+                },
+            )
             .collect())
     }
 
@@ -130,63 +148,72 @@ impl AetherCore {
         app_bundle_id: Option<String>,
         window_title: Option<String>,
     ) -> Result<u64, AetherFfiError> {
-        let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherFfiError::Memory("Memory store not initialized".to_string())
-        })?;
+        let memory_path = self
+            .memory_path
+            .as_ref()
+            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
 
         use crate::memory::database::VectorDatabase;
         let db_path = PathBuf::from(&memory_path);
-        let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
+        let db = VectorDatabase::new(db_path).map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
-        self.runtime.block_on(db.clear_memories(app_bundle_id.as_deref(), window_title.as_deref()))
+        self.runtime
+            .block_on(db.clear_memories(app_bundle_id.as_deref(), window_title.as_deref()))
             .map_err(|e| AetherFfiError::Memory(e.to_string()))
     }
 
     /// Clear all compressed facts (Layer 2 data)
     pub fn clear_facts(&self) -> Result<u64, AetherFfiError> {
-        let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherFfiError::Memory("Memory store not initialized".to_string())
-        })?;
+        let memory_path = self
+            .memory_path
+            .as_ref()
+            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
 
         use crate::memory::database::VectorDatabase;
         let db_path = PathBuf::from(&memory_path);
-        let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
+        let db = VectorDatabase::new(db_path).map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
-        self.runtime.block_on(db.clear_facts())
+        self.runtime
+            .block_on(db.clear_facts())
             .map_err(|e| AetherFfiError::Memory(e.to_string()))
     }
 
     /// Delete all memories associated with a specific topic ID
     pub fn delete_memories_by_topic_id(&self, topic_id: String) -> Result<u64, AetherFfiError> {
-        let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherFfiError::Memory("Memory store not initialized".to_string())
-        })?;
+        let memory_path = self
+            .memory_path
+            .as_ref()
+            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
 
         use crate::memory::database::VectorDatabase;
         let db_path = PathBuf::from(&memory_path);
-        let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
+        let db = VectorDatabase::new(db_path).map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
-        self.runtime.block_on(db.delete_by_topic_id(&topic_id))
+        self.runtime
+            .block_on(db.delete_by_topic_id(&topic_id))
             .map_err(|e| AetherFfiError::Memory(e.to_string()))
     }
 
     /// Get compression statistics
-    pub fn get_compression_stats(&self) -> Result<crate::core::types::CompressionStats, AetherFfiError> {
-        let memory_path = self.memory_path.as_ref().ok_or_else(|| {
-            AetherFfiError::Memory("Memory store not initialized".to_string())
-        })?;
+    pub fn get_compression_stats(
+        &self,
+    ) -> Result<crate::core::types::CompressionStats, AetherFfiError> {
+        let memory_path = self
+            .memory_path
+            .as_ref()
+            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
 
         use crate::memory::database::VectorDatabase;
         let db_path = PathBuf::from(&memory_path);
-        let db = VectorDatabase::new(db_path)
-            .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
+        let db = VectorDatabase::new(db_path).map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
-        let stats = self.runtime.block_on(db.get_stats())
+        let stats = self
+            .runtime
+            .block_on(db.get_stats())
             .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
-        let fact_stats = self.runtime.block_on(db.get_fact_stats())
+        let fact_stats = self
+            .runtime
+            .block_on(db.get_fact_stats())
             .map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
         Ok(crate::core::types::CompressionStats {
@@ -201,7 +228,9 @@ impl AetherCore {
     ///
     /// Note: In V2, compression is simplified. This is a placeholder
     /// that returns a default result.
-    pub fn trigger_compression(&self) -> Result<crate::memory::context::CompressionResult, AetherFfiError> {
+    pub fn trigger_compression(
+        &self,
+    ) -> Result<crate::memory::context::CompressionResult, AetherFfiError> {
         // V2 compression is not yet fully implemented
         // Return a default result indicating no compression occurred
         Ok(crate::memory::context::CompressionResult {

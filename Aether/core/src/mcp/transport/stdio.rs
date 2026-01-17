@@ -172,18 +172,18 @@ impl StdioTransport {
         child.stdout = Some(reader.into_inner());
 
         match read_result {
-            Ok(Ok(0)) => {
-                Err(AetherError::IoError(format!(
-                    "MCP server '{}' closed connection",
-                    self.server_name
-                )))
-            }
+            Ok(Ok(0)) => Err(AetherError::IoError(format!(
+                "MCP server '{}' closed connection",
+                self.server_name
+            ))),
             Ok(Ok(_)) => {
                 let response: JsonRpcResponse = serde_json::from_str(response_line.trim())
                     .map_err(|e| {
                         AetherError::IoError(format!(
                             "Failed to parse response from '{}': {} (raw: {})",
-                            self.server_name, e, response_line.trim()
+                            self.server_name,
+                            e,
+                            response_line.trim()
                         ))
                     })?;
 
@@ -196,12 +196,10 @@ impl StdioTransport {
 
                 Ok(response)
             }
-            Ok(Err(e)) => {
-                Err(AetherError::IoError(format!(
-                    "Failed to read from MCP server '{}': {}",
-                    self.server_name, e
-                )))
-            }
+            Ok(Err(e)) => Err(AetherError::IoError(format!(
+                "Failed to read from MCP server '{}': {}",
+                self.server_name, e
+            ))),
             Err(_) => {
                 tracing::warn!(
                     server = %self.server_name,
@@ -369,15 +367,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_timeout_configuration() {
-        let transport = StdioTransport::spawn(
-            "test-timeout",
-            "cat",
-            &[],
-            &HashMap::new(),
-            None,
-        )
-        .await
-        .unwrap();
+        let transport = StdioTransport::spawn("test-timeout", "cat", &[], &HashMap::new(), None)
+            .await
+            .unwrap();
 
         let transport = transport.with_timeout(Duration::from_secs(5));
         assert_eq!(transport.timeout, Duration::from_secs(5));

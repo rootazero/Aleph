@@ -5,15 +5,14 @@
 
 use std::sync::Arc;
 
-use crate::cowork::{CoworkConfig, ExecutionState};
 use crate::cowork::model_router::{
-    Capability, CostStrategy, CostTier, LatencyTier, ModelProfile, ModelRoutingRules,
-    StageResult,
+    Capability, CostStrategy, CostTier, LatencyTier, ModelProfile, ModelRoutingRules, StageResult,
 };
 use crate::cowork::monitor::{ProgressEvent, ProgressSubscriber};
 use crate::cowork::types::{
     ExecutionSummary, Task, TaskDependency, TaskGraph, TaskStatus, TaskType,
 };
+use crate::cowork::{CoworkConfig, ExecutionState};
 
 // ============================================================================
 // FFI Enums
@@ -432,7 +431,11 @@ impl From<ModelProfile> for ModelProfileFFI {
             id: profile.id,
             provider: profile.provider,
             model: profile.model,
-            capabilities: profile.capabilities.into_iter().map(ModelCapabilityFFI::from).collect(),
+            capabilities: profile
+                .capabilities
+                .into_iter()
+                .map(ModelCapabilityFFI::from)
+                .collect(),
             cost_tier: ModelCostTierFFI::from(profile.cost_tier),
             latency_tier: ModelLatencyTierFFI::from(profile.latency_tier),
             max_context: profile.max_context,
@@ -447,7 +450,12 @@ impl From<&ModelProfile> for ModelProfileFFI {
             id: profile.id.clone(),
             provider: profile.provider.clone(),
             model: profile.model.clone(),
-            capabilities: profile.capabilities.iter().copied().map(ModelCapabilityFFI::from).collect(),
+            capabilities: profile
+                .capabilities
+                .iter()
+                .copied()
+                .map(ModelCapabilityFFI::from)
+                .collect(),
             cost_tier: ModelCostTierFFI::from(profile.cost_tier),
             latency_tier: ModelLatencyTierFFI::from(profile.latency_tier),
             max_context: profile.max_context,
@@ -462,7 +470,11 @@ impl From<ModelProfileFFI> for ModelProfile {
             id: profile.id,
             provider: profile.provider,
             model: profile.model,
-            capabilities: profile.capabilities.into_iter().map(Capability::from).collect(),
+            capabilities: profile
+                .capabilities
+                .into_iter()
+                .map(Capability::from)
+                .collect(),
             cost_tier: CostTier::from(profile.cost_tier),
             latency_tier: LatencyTier::from(profile.latency_tier),
             max_context: profile.max_context,
@@ -499,11 +511,16 @@ pub struct ModelRoutingRulesFFI {
 impl From<ModelRoutingRules> for ModelRoutingRulesFFI {
     fn from(rules: ModelRoutingRules) -> Self {
         Self {
-            task_type_mappings: rules.task_type_mappings
+            task_type_mappings: rules
+                .task_type_mappings
                 .into_iter()
-                .map(|(task_type, model_id)| TaskTypeMappingFFI { task_type, model_id })
+                .map(|(task_type, model_id)| TaskTypeMappingFFI {
+                    task_type,
+                    model_id,
+                })
                 .collect(),
-            capability_mappings: rules.capability_mappings
+            capability_mappings: rules
+                .capability_mappings
                 .into_iter()
                 .map(|(cap, model_id)| CapabilityMappingFFI {
                     capability: ModelCapabilityFFI::from(cap),
@@ -520,14 +537,16 @@ impl From<ModelRoutingRules> for ModelRoutingRulesFFI {
 impl From<&ModelRoutingRules> for ModelRoutingRulesFFI {
     fn from(rules: &ModelRoutingRules) -> Self {
         Self {
-            task_type_mappings: rules.task_type_mappings
+            task_type_mappings: rules
+                .task_type_mappings
                 .iter()
                 .map(|(task_type, model_id)| TaskTypeMappingFFI {
                     task_type: task_type.clone(),
                     model_id: model_id.clone(),
                 })
                 .collect(),
-            capability_mappings: rules.capability_mappings
+            capability_mappings: rules
+                .capability_mappings
                 .iter()
                 .map(|(cap, model_id)| CapabilityMappingFFI {
                     capability: ModelCapabilityFFI::from(*cap),
@@ -546,14 +565,15 @@ impl From<ModelRoutingRulesFFI> for ModelRoutingRules {
         let mut result = ModelRoutingRules::default();
 
         for mapping in rules.task_type_mappings {
-            result.task_type_mappings.insert(mapping.task_type, mapping.model_id);
+            result
+                .task_type_mappings
+                .insert(mapping.task_type, mapping.model_id);
         }
 
         for mapping in rules.capability_mappings {
-            result.capability_mappings.insert(
-                Capability::from(mapping.capability),
-                mapping.model_id,
-            );
+            result
+                .capability_mappings
+                .insert(Capability::from(mapping.capability), mapping.model_id);
         }
 
         result.cost_strategy = CostStrategy::from(rules.cost_strategy);
@@ -676,7 +696,11 @@ impl From<&TaskGraph> for CoworkTaskGraphFFI {
             title: graph.metadata.title.clone(),
             original_request: graph.metadata.original_request.clone(),
             tasks: graph.tasks.iter().map(CoworkTaskFFI::from).collect(),
-            edges: graph.edges.iter().map(CoworkTaskDependencyFFI::from).collect(),
+            edges: graph
+                .edges
+                .iter()
+                .map(CoworkTaskDependencyFFI::from)
+                .collect(),
         }
     }
 }
@@ -742,9 +766,7 @@ impl From<&ProgressEvent> for CoworkProgressEventFFI {
                 error: None,
             },
             ProgressEvent::TaskCompleted {
-                task_id,
-                task_name,
-                ..
+                task_id, task_name, ..
             } => Self {
                 event_type: CoworkProgressEventType::TaskCompleted,
                 task_id: Some(task_id.clone()),
@@ -970,11 +992,20 @@ mod tests {
 
         // Test all capability conversions
         let capabilities = vec![
-            (Capability::CodeGeneration, ModelCapabilityFFI::CodeGeneration),
+            (
+                Capability::CodeGeneration,
+                ModelCapabilityFFI::CodeGeneration,
+            ),
             (Capability::CodeReview, ModelCapabilityFFI::CodeReview),
             (Capability::TextAnalysis, ModelCapabilityFFI::TextAnalysis),
-            (Capability::ImageUnderstanding, ModelCapabilityFFI::ImageUnderstanding),
-            (Capability::VideoUnderstanding, ModelCapabilityFFI::VideoUnderstanding),
+            (
+                Capability::ImageUnderstanding,
+                ModelCapabilityFFI::ImageUnderstanding,
+            ),
+            (
+                Capability::VideoUnderstanding,
+                ModelCapabilityFFI::VideoUnderstanding,
+            ),
             (Capability::LongContext, ModelCapabilityFFI::LongContext),
             (Capability::Reasoning, ModelCapabilityFFI::Reasoning),
             (Capability::LocalPrivacy, ModelCapabilityFFI::LocalPrivacy),
@@ -1175,12 +1206,10 @@ mod tests {
                     model_id: "claude-haiku".to_string(),
                 },
             ],
-            capability_mappings: vec![
-                CapabilityMappingFFI {
-                    capability: ModelCapabilityFFI::Reasoning,
-                    model_id: "claude-opus".to_string(),
-                },
-            ],
+            capability_mappings: vec![CapabilityMappingFFI {
+                capability: ModelCapabilityFFI::Reasoning,
+                model_id: "claude-opus".to_string(),
+            }],
         };
 
         assert_eq!(rules.cost_strategy, ModelCostStrategyFFI::Balanced);

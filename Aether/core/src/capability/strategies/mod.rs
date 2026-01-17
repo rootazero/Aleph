@@ -5,11 +5,11 @@
 //! - `McpStrategy`: MCP (Model Context Protocol) tool access
 //! - `SkillsStrategy`: Claude Agent Skills instruction injection
 
-pub mod memory;
 pub mod mcp;
+pub mod memory;
 pub mod skills;
 
 // Re-exports for convenience
-pub use memory::MemoryStrategy;
 pub use mcp::McpStrategy;
+pub use memory::MemoryStrategy;
 pub use skills::SkillsStrategy;

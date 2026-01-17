@@ -21,7 +21,11 @@ pub const SINGLE_TURN_TOPIC_ID: &str = "single-turn";
 impl ContextAnchor {
     /// Create a new context anchor with current timestamp (for single-turn)
     pub fn now(app_bundle_id: String, window_title: String) -> Self {
-        Self::with_topic(app_bundle_id, window_title, SINGLE_TURN_TOPIC_ID.to_string())
+        Self::with_topic(
+            app_bundle_id,
+            window_title,
+            SINGLE_TURN_TOPIC_ID.to_string(),
+        )
     }
 
     /// Create context anchor with specific timestamp (for single-turn)
@@ -156,7 +160,6 @@ impl FactType {
         }
     }
 }
-
 
 impl std::fmt::Display for FactType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

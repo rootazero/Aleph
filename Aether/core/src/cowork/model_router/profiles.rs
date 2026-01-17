@@ -186,7 +186,11 @@ pub struct ModelProfile {
 
 impl ModelProfile {
     /// Create a new model profile with required fields
-    pub fn new(id: impl Into<String>, provider: impl Into<String>, model: impl Into<String>) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
         Self {
             id: id.into(),
             provider: provider.into(),
@@ -262,10 +266,7 @@ impl std::fmt::Display for ModelProfile {
         write!(
             f,
             "{} ({}/{}) [{}]",
-            self.id,
-            self.provider,
-            self.model,
-            self.cost_tier
+            self.id, self.provider, self.model, self.cost_tier
         )
     }
 }
@@ -356,23 +357,22 @@ mod tests {
             .with_capabilities(vec![Capability::LongContext]);
         assert!(profile_with_flag.supports_long_context());
 
-        let profile_with_size = ModelProfile::new("gemini", "google", "gemini-pro")
-            .with_max_context(1_000_000);
+        let profile_with_size =
+            ModelProfile::new("gemini", "google", "gemini-pro").with_max_context(1_000_000);
         assert!(profile_with_size.supports_long_context());
 
-        let profile_small = ModelProfile::new("haiku", "anthropic", "haiku")
-            .with_max_context(50_000);
+        let profile_small =
+            ModelProfile::new("haiku", "anthropic", "haiku").with_max_context(50_000);
         assert!(!profile_small.supports_long_context());
     }
 
     #[test]
     fn test_model_profile_capability_set() {
-        let profile = ModelProfile::new("test", "test", "test")
-            .with_capabilities(vec![
-                Capability::CodeGeneration,
-                Capability::CodeReview,
-                Capability::CodeGeneration, // duplicate
-            ]);
+        let profile = ModelProfile::new("test", "test", "test").with_capabilities(vec![
+            Capability::CodeGeneration,
+            Capability::CodeReview,
+            Capability::CodeGeneration, // duplicate
+        ]);
 
         let set = profile.capability_set();
         assert_eq!(set.len(), 2); // duplicates removed

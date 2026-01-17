@@ -134,7 +134,9 @@ impl ModelRoutingRules {
 
     /// Get model profile ID for a capability
     pub fn get_for_capability(&self, capability: Capability) -> Option<&str> {
-        self.capability_mappings.get(&capability).map(|s| s.as_str())
+        self.capability_mappings
+            .get(&capability)
+            .map(|s| s.as_str())
     }
 
     /// Get default model profile ID
@@ -201,7 +203,9 @@ impl ModelRoutingRules {
 /// Validation error for routing rules
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ValidationError {
-    #[error("Invalid model reference in {context}: '{model_id}' not found. Available: {available:?}")]
+    #[error(
+        "Invalid model reference in {context}: '{model_id}' not found. Available: {available:?}"
+    )]
     InvalidModelReference {
         context: String,
         model_id: String,
@@ -253,7 +257,10 @@ mod tests {
             .with_cost_strategy(CostStrategy::Balanced);
 
         assert_eq!(rules.get_default(), Some("claude-sonnet"));
-        assert_eq!(rules.get_for_task_type("code_generation"), Some("claude-opus"));
+        assert_eq!(
+            rules.get_for_task_type("code_generation"),
+            Some("claude-opus")
+        );
         assert_eq!(rules.get_for_task_type("image_analysis"), Some("gpt-4o"));
         assert_eq!(rules.get_for_task_type("unknown"), None);
         assert_eq!(
@@ -265,8 +272,8 @@ mod tests {
 
     #[test]
     fn test_routing_rules_has_mapping() {
-        let rules = ModelRoutingRules::new("default")
-            .with_task_type("code_generation", "claude-opus");
+        let rules =
+            ModelRoutingRules::new("default").with_task_type("code_generation", "claude-opus");
 
         assert!(rules.has_task_type_mapping("code_generation"));
         assert!(!rules.has_task_type_mapping("unknown"));
@@ -306,9 +313,7 @@ mod tests {
         let err = result.unwrap_err();
         match err {
             ValidationError::InvalidModelReference {
-                context,
-                model_id,
-                ..
+                context, model_id, ..
             } => {
                 assert!(context.contains("code_generation"));
                 assert_eq!(model_id, "nonexistent-model");

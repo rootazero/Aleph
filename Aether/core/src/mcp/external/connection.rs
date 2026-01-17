@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio::sync::RwLock;
 
 use crate::error::{AetherError, Result};
-use crate::mcp::jsonrpc::{IdGenerator, JsonRpcNotification, JsonRpcRequest, mcp as mcp_types};
+use crate::mcp::jsonrpc::{mcp as mcp_types, IdGenerator, JsonRpcNotification, JsonRpcRequest};
 use crate::mcp::transport::StdioTransport;
 use crate::mcp::types::McpTool;
 
@@ -96,13 +96,7 @@ impl McpServerConnection {
         timeout: Option<Duration>,
     ) -> Result<Self> {
         // Spawn the server process
-        let mut transport = StdioTransport::spawn(
-            name,
-            command,
-            args,
-            env,
-            cwd,
-        ).await?;
+        let mut transport = StdioTransport::spawn(name, command, args, env, cwd).await?;
 
         // Set per-request timeout if provided
         if let Some(t) = timeout {
@@ -144,8 +138,8 @@ impl McpServerConnection {
         })?;
 
         // Parse initialize result
-        let init_result: mcp_types::InitializeResult = serde_json::from_value(result)
-            .map_err(|e| {
+        let init_result: mcp_types::InitializeResult =
+            serde_json::from_value(result).map_err(|e| {
                 AetherError::IoError(format!(
                     "Failed to parse initialize result from '{}': {}",
                     self.name, e
@@ -199,8 +193,8 @@ impl McpServerConnection {
             ))
         })?;
 
-        let tools_result: mcp_types::ToolsListResult = serde_json::from_value(result)
-            .map_err(|e| {
+        let tools_result: mcp_types::ToolsListResult =
+            serde_json::from_value(result).map_err(|e| {
                 AetherError::IoError(format!(
                     "Failed to parse tools list from '{}': {}",
                     self.name, e
@@ -321,7 +315,9 @@ impl McpServerConnection {
             .content
             .into_iter()
             .map(|c| match c {
-                mcp_types::ToolResultContent::Text { text } => json!({"type": "text", "text": text}),
+                mcp_types::ToolResultContent::Text { text } => {
+                    json!({"type": "text", "text": text})
+                }
                 mcp_types::ToolResultContent::Image { data, mime_type } => {
                     json!({"type": "image", "data": data, "mimeType": mime_type})
                 }
