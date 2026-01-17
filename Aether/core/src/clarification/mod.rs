@@ -30,6 +30,10 @@
 //! );
 //! ```
 
+pub mod session;
+
+pub use session::{ClarificationManager, PendingClarification, SessionConfig};
+
 use serde::{Deserialize, Serialize};
 
 /// Type of clarification request
