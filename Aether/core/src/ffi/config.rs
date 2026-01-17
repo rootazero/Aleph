@@ -143,28 +143,88 @@ impl AetherCore {
     ///
     /// Adds or updates a generation provider (image/video/audio/speech) in the config.
     /// The provider will be persisted to config.toml under [generation.providers.<name>].
+    /// Also updates the in-memory generation registry so changes take effect immediately.
     pub fn update_generation_provider(
         &self,
         name: String,
         provider: crate::ffi::generation::GenerationProviderConfigFFI,
     ) -> Result<(), AetherFfiError> {
-        let mut config = self.lock_config();
+        use crate::generation::providers::create_provider;
+        use tracing::{info, warn};
+
         // Convert FFI type to internal config type
         let internal_config: crate::config::GenerationProviderConfig = provider.into();
-        config.generation.providers.insert(name, internal_config);
-        config
-            .save()
-            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
+
+        // 1. Save to config file
+        {
+            let mut config = self.lock_config();
+            config
+                .generation
+                .providers
+                .insert(name.clone(), internal_config.clone());
+            config
+                .save()
+                .map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        }
+
+        // 2. Sync to in-memory registry
+        if internal_config.enabled {
+            match create_provider(&name, &internal_config) {
+                Ok(provider_instance) => {
+                    let mut registry = self.generation_registry.write().unwrap_or_else(|e| {
+                        warn!("Generation registry lock poisoned, recovering");
+                        e.into_inner()
+                    });
+                    // Remove existing if any (for updates)
+                    let _ = registry.remove(&name);
+                    if let Err(e) = registry.register(name.clone(), provider_instance) {
+                        warn!(provider = %name, error = %e, "Failed to register generation provider");
+                    } else {
+                        info!(provider = %name, "Generation provider registered to registry");
+                    }
+                }
+                Err(e) => {
+                    warn!(provider = %name, error = %e, "Failed to create generation provider instance");
+                }
+            }
+        } else {
+            // Provider is disabled, remove from registry if exists
+            let mut registry = self.generation_registry.write().unwrap_or_else(|e| {
+                warn!("Generation registry lock poisoned, recovering");
+                e.into_inner()
+            });
+            let _ = registry.remove(&name);
+            info!(provider = %name, "Generation provider disabled, removed from registry");
+        }
+
         Ok(())
     }
 
     /// Delete generation provider configuration
+    ///
+    /// Removes a generation provider from both the config file and the in-memory registry.
     pub fn delete_generation_provider(&self, name: String) -> Result<(), AetherFfiError> {
-        let mut config = self.lock_config();
-        config.generation.providers.remove(&name);
-        config
-            .save()
-            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        use tracing::{info, warn};
+
+        // 1. Remove from config file
+        {
+            let mut config = self.lock_config();
+            config.generation.providers.remove(&name);
+            config
+                .save()
+                .map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        }
+
+        // 2. Remove from in-memory registry
+        {
+            let mut registry = self.generation_registry.write().unwrap_or_else(|e| {
+                warn!("Generation registry lock poisoned, recovering");
+                e.into_inner()
+            });
+            let _ = registry.remove(&name);
+            info!(provider = %name, "Generation provider removed from registry");
+        }
+
         Ok(())
     }
 

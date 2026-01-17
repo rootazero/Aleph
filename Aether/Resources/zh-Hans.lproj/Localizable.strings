@@ -93,6 +93,10 @@
 "settings.generation.type.video" = "视频";
 "settings.generation.type.audio" = "音频";
 "settings.generation.type.speech" = "语音";
+"settings.generation.tab.image" = "图片";
+"settings.generation.tab.video" = "视频";
+"settings.generation.tab.audio" = "音频";
+"settings.generation.custom_provider" = "自定义";
 
 // MARK: - Generation Provider Help
 "provider.help.generation_base_url" = "覆盖默认的 API 端点。留空使用官方 URL。";

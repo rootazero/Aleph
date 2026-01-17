@@ -3,10 +3,39 @@
 //  Aether
 //
 //  Settings view for configuring image/video/audio generation providers.
-//  Supports OpenAI DALL-E, OpenAI-compatible APIs, and other generation services.
+//  Organized by category tabs: Image | Video | Audio
 //
 
 import SwiftUI
+
+// MARK: - Generation Category
+
+/// Categories for generation providers
+enum GenerationCategory: String, CaseIterable, Identifiable {
+    case image = "image"
+    case video = "video"
+    case audio = "audio"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .image: return L("settings.generation.tab.image")
+        case .video: return L("settings.generation.tab.video")
+        case .audio: return L("settings.generation.tab.audio")
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .image: return "photo"
+        case .video: return "video"
+        case .audio: return "waveform"
+        }
+    }
+}
+
+// MARK: - Generation Preset Provider
 
 /// Generation provider preset definition
 struct GenerationPresetProvider: Identifiable, Equatable {
@@ -19,11 +48,43 @@ struct GenerationPresetProvider: Identifiable, Equatable {
     let defaultModel: String
     let description: String
     let baseUrl: String?
+    let category: GenerationCategory
+    let isCustom: Bool
+
+    init(
+        id: String,
+        name: String,
+        iconName: String,
+        color: String,
+        providerType: String,
+        supportedTypes: [GenerationTypeFfi],
+        defaultModel: String,
+        description: String,
+        baseUrl: String?,
+        category: GenerationCategory,
+        isCustom: Bool = false
+    ) {
+        self.id = id
+        self.name = name
+        self.iconName = iconName
+        self.color = color
+        self.providerType = providerType
+        self.supportedTypes = supportedTypes
+        self.defaultModel = defaultModel
+        self.description = description
+        self.baseUrl = baseUrl
+        self.category = category
+        self.isCustom = isCustom
+    }
 }
 
-/// Preset generation providers
+// MARK: - Preset Providers Data
+
+/// Preset generation providers organized by category
 enum GenerationPresetProviders {
-    static let all: [GenerationPresetProvider] = [
+    // MARK: - Image Providers
+
+    static let imageProviders: [GenerationPresetProvider] = [
         GenerationPresetProvider(
             id: "openai-dalle",
             name: "OpenAI DALL-E",
@@ -33,8 +94,129 @@ enum GenerationPresetProviders {
             supportedTypes: [.image],
             defaultModel: "dall-e-3",
             description: "OpenAI's DALL-E image generation models",
-            baseUrl: "https://api.openai.com/v1"
+            baseUrl: "https://api.openai.com/v1",
+            category: .image
         ),
+        GenerationPresetProvider(
+            id: "stability-ai",
+            name: "Stability AI",
+            iconName: "sparkles",
+            color: "#8B5CF6",
+            providerType: "stability",
+            supportedTypes: [.image],
+            defaultModel: "stable-diffusion-xl-1024-v1-0",
+            description: "Stable Diffusion models via Stability AI",
+            baseUrl: "https://api.stability.ai/v1",
+            category: .image
+        ),
+        GenerationPresetProvider(
+            id: "google-imagen",
+            name: "Google Imagen",
+            iconName: "camera.filters",
+            color: "#4285F4",
+            providerType: "google",
+            supportedTypes: [.image],
+            defaultModel: "imagen-3.0-generate-001",
+            description: "Google's Imagen image generation",
+            baseUrl: nil,
+            category: .image
+        ),
+        GenerationPresetProvider(
+            id: "replicate",
+            name: "Replicate",
+            iconName: "cpu",
+            color: "#F97316",
+            providerType: "replicate",
+            supportedTypes: [.image],
+            defaultModel: "black-forest-labs/flux-schnell",
+            description: "Run open-source models on Replicate",
+            baseUrl: "https://api.replicate.com/v1",
+            category: .image
+        ),
+        GenerationPresetProvider(
+            id: "custom-image",
+            name: "Custom Image",
+            iconName: "puzzlepiece.extension.fill",
+            color: "#5E5CE6",
+            providerType: "openai_compat",
+            supportedTypes: [.image],
+            defaultModel: "",
+            description: "OpenAI-compatible image generation API",
+            baseUrl: nil,
+            category: .image,
+            isCustom: true
+        ),
+    ]
+
+    // MARK: - Video Providers
+
+    static let videoProviders: [GenerationPresetProvider] = [
+        GenerationPresetProvider(
+            id: "google-veo",
+            name: "Google Veo",
+            iconName: "film",
+            color: "#4285F4",
+            providerType: "google",
+            supportedTypes: [.video],
+            defaultModel: "veo-3",
+            description: "Google's Veo video generation",
+            baseUrl: nil,
+            category: .video
+        ),
+        GenerationPresetProvider(
+            id: "runway",
+            name: "Runway",
+            iconName: "play.rectangle.fill",
+            color: "#00D4AA",
+            providerType: "runway",
+            supportedTypes: [.video],
+            defaultModel: "gen-3",
+            description: "Runway Gen-3 video generation",
+            baseUrl: "https://api.runwayml.com/v1",
+            category: .video
+        ),
+        GenerationPresetProvider(
+            id: "pika",
+            name: "Pika",
+            iconName: "sparkle.magnifyingglass",
+            color: "#FF6B6B",
+            providerType: "pika",
+            supportedTypes: [.video],
+            defaultModel: "pika-1.0",
+            description: "Pika video generation",
+            baseUrl: "https://api.pika.art/v1",
+            category: .video
+        ),
+        GenerationPresetProvider(
+            id: "luma",
+            name: "Luma",
+            iconName: "movieclapper",
+            color: "#A855F7",
+            providerType: "luma",
+            supportedTypes: [.video],
+            defaultModel: "dream-machine",
+            description: "Luma Dream Machine video generation",
+            baseUrl: "https://api.lumalabs.ai/v1",
+            category: .video
+        ),
+        GenerationPresetProvider(
+            id: "custom-video",
+            name: "Custom Video",
+            iconName: "puzzlepiece.extension.fill",
+            color: "#5E5CE6",
+            providerType: "openai_compat",
+            supportedTypes: [.video],
+            defaultModel: "",
+            description: "OpenAI-compatible video generation API",
+            baseUrl: nil,
+            category: .video,
+            isCustom: true
+        ),
+    ]
+
+    // MARK: - Audio Providers
+
+    static let audioProviders: [GenerationPresetProvider] = [
         GenerationPresetProvider(
             id: "openai-tts",
             name: "OpenAI TTS",
@@ -42,27 +224,82 @@ enum GenerationPresetProviders {
             color: "#10a37f",
             providerType: "openai",
             supportedTypes: [.speech],
-            defaultModel: "tts-1",
-            description: "OpenAI's text-to-speech models",
-            baseUrl: "https://api.openai.com/v1"
+            defaultModel: "tts-1-hd",
+            description: "OpenAI text-to-speech models",
+            baseUrl: "https://api.openai.com/v1",
+            category: .audio
         ),
         GenerationPresetProvider(
-            id: "custom-generation",
-            name: "Custom Provider",
+            id: "elevenlabs",
+            name: "ElevenLabs",
+            iconName: "speaker.wave.3.fill",
+            color: "#000000",
+            providerType: "elevenlabs",
+            supportedTypes: [.speech, .audio],
+            defaultModel: "eleven_multilingual_v2",
+            description: "ElevenLabs voice synthesis",
+            baseUrl: "https://api.elevenlabs.io/v1",
+            category: .audio
+        ),
+        GenerationPresetProvider(
+            id: "google-tts",
+            name: "Google TTS",
+            iconName: "mic.fill",
+            color: "#4285F4",
+            providerType: "google",
+            supportedTypes: [.speech],
+            defaultModel: "en-US-Neural2-A",
+            description: "Google Cloud Text-to-Speech",
+            baseUrl: nil,
+            category: .audio
+        ),
+        GenerationPresetProvider(
+            id: "azure-tts",
+            name: "Azure TTS",
+            iconName: "cloud.fill",
+            color: "#0078D4",
+            providerType: "azure",
+            supportedTypes: [.speech],
+            defaultModel: "en-US-JennyNeural",
+            description: "Azure Cognitive Services TTS",
+            baseUrl: nil,
+            category: .audio
+        ),
+        GenerationPresetProvider(
+            id: "custom-audio",
+            name: "Custom Audio",
             iconName: "puzzlepiece.extension.fill",
             color: "#5E5CE6",
             providerType: "openai_compat",
-            supportedTypes: [.image],
+            supportedTypes: [.speech, .audio],
             defaultModel: "",
-            description: "OpenAI-compatible image generation API",
-            baseUrl: nil
-        )
+            description: "OpenAI-compatible audio/speech API",
+            baseUrl: nil,
+            category: .audio,
+            isCustom: true
+        ),
     ]
+
+    // MARK: - Accessors
+
+    static var all: [GenerationPresetProvider] {
+        imageProviders + videoProviders + audioProviders
+    }
+
+    static func providers(for category: GenerationCategory) -> [GenerationPresetProvider] {
+        switch category {
+        case .image: return imageProviders
+        case .video: return videoProviders
+        case .audio: return audioProviders
+        }
+    }
 
     static func find(byId id: String) -> GenerationPresetProvider? {
         return all.first { $0.id == id }
     }
 }
+
+// MARK: - Main View
 
 /// Main view for generation provider settings
 struct GenerationProvidersView: View {
@@ -74,6 +311,7 @@ struct GenerationProvidersView: View {
     // MARK: - State
 
     @State private var providers: [GenerationProviderInfoFfi] = []
+    @State private var selectedCategory: GenerationCategory = .image
     @State private var selectedProviderId: String?
     @State private var selectedPreset: GenerationPresetProvider?
     @State private var isAddingNew: Bool = false
@@ -91,22 +329,13 @@ struct GenerationProvidersView: View {
 
     // MARK: - Computed Properties
 
-    private var allPresets: [GenerationPresetProvider] {
-        GenerationPresetProviders.all
-    }
-
-    private var filteredPresets: [GenerationPresetProvider] {
-        guard !searchText.isEmpty else { return allPresets }
-        return allPresets.filter { preset in
-            preset.name.localizedCaseInsensitiveContains(searchText) ||
-            preset.description.localizedCaseInsensitiveContains(searchText)
+    private var currentCategoryPresets: [GenerationPresetProvider] {
+        let presets = GenerationPresetProviders.providers(for: selectedCategory)
+        guard !searchText.isEmpty else { return presets }
+        return presets.filter { preset in
+            preset.name.localizedCaseInsensitiveContains(searchText)
+                || preset.description.localizedCaseInsensitiveContains(searchText)
         }
-    }
-
-    private func isConfigured(_ preset: GenerationPresetProvider) -> Bool {
-        // For now, we consider a preset configured if we can test connection
-        // This will be expanded when generation provider config persistence is added
-        return false
     }
 
     // MARK: - Body
@@ -122,15 +351,25 @@ struct GenerationProvidersView: View {
 
             // Two-panel layout
             HStack(spacing: DesignTokens.Spacing.md) {
-                // Left: Provider list
-                providerListSection
-                    .frame(width: 240)
-                    .background(DesignTokens.Colors.sidebarBackground)
-                    .cornerRadius(DesignTokens.CornerRadius.medium)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
-                            .stroke(DesignTokens.Colors.border, lineWidth: 1)
-                    )
+                // Left: Category tabs + Provider list
+                VStack(spacing: 0) {
+                    // Category tab bar
+                    categoryTabBar
+                        .padding(.horizontal, DesignTokens.Spacing.sm)
+                        .padding(.vertical, DesignTokens.Spacing.sm)
+
+                    Divider()
+
+                    // Provider list for current category
+                    providerListSection
+                }
+                .frame(width: 240)
+                .background(DesignTokens.Colors.sidebarBackground)
+                .cornerRadius(DesignTokens.CornerRadius.medium)
+                .overlay(
+                    RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium)
+                        .stroke(DesignTokens.Colors.border, lineWidth: 1)
+                )
 
                 // Right: Edit panel
                 GenerationProviderEditPanel(
@@ -157,10 +396,18 @@ struct GenerationProvidersView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             loadProviders()
-            // Auto-select first preset
+            // Auto-select first preset in current category
             if selectedPreset == nil {
-                selectedPreset = allPresets.first
+                let presets = GenerationPresetProviders.providers(for: selectedCategory)
+                selectedPreset = presets.first
                 selectedProviderId = selectedPreset?.id
+            }
+        }
+        .onChange(of: selectedCategory) { _, _ in
+            // When category changes, select first provider in new category
+            let presets = GenerationPresetProviders.providers(for: selectedCategory)
+            if let first = presets.first {
+                selectProvider(first)
             }
         }
     }
@@ -192,6 +439,22 @@ struct GenerationProvidersView: View {
     }
 
     @ViewBuilder
+    private var categoryTabBar: some View {
+        HStack(spacing: 4) {
+            ForEach(GenerationCategory.allCases) { category in
+                CategoryTab(
+                    category: category,
+                    isSelected: selectedCategory == category,
+                    onTap: { selectedCategory = category }
+                )
+            }
+        }
+        .padding(4)
+        .background(DesignTokens.Colors.surfaceSecondary)
+        .cornerRadius(8)
+    }
+
+    @ViewBuilder
     private var providerListSection: some View {
         if isLoading {
             loadingStateView
@@ -216,7 +479,7 @@ struct GenerationProvidersView: View {
     private var providerListView: some View {
         ScrollView {
             VStack(spacing: DesignTokens.Spacing.xs) {
-                ForEach(filteredPresets) { preset in
+                ForEach(currentCategoryPresets) { preset in
                     GenerationProviderCard(
                         preset: preset,
                         isSelected: selectedProviderId == preset.id,
@@ -241,11 +504,19 @@ struct GenerationProvidersView: View {
     private func selectProvider(_ preset: GenerationPresetProvider) {
         selectedProviderId = preset.id
         selectedPreset = preset
-        isAddingNew = preset.id == "custom-generation"
+        isAddingNew = preset.isCustom
     }
 
     private func addCustomProvider() {
-        if let customPreset = GenerationPresetProviders.find(byId: "custom-generation") {
+        // Find custom provider for current category
+        let customId =
+            switch selectedCategory {
+            case .image: "custom-image"
+            case .video: "custom-video"
+            case .audio: "custom-audio"
+            }
+
+        if let customPreset = GenerationPresetProviders.find(byId: customId) {
             selectedPreset = customPreset
             selectedProviderId = customPreset.id
             isAddingNew = true
@@ -254,6 +525,38 @@ struct GenerationProvidersView: View {
 
     private func testConnection() {
         // Implementation in GenerationProviderEditPanel handles actual testing
+    }
+}
+
+// MARK: - Category Tab
+
+struct CategoryTab: View {
+    let category: GenerationCategory
+    let isSelected: Bool
+    let onTap: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 4) {
+                Image(systemName: category.icon)
+                    .font(.system(size: 12))
+                Text(category.displayName)
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundColor(isSelected ? .white : DesignTokens.Colors.textSecondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? DesignTokens.Colors.accentBlue : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovered = hovering
+        }
     }
 }
 
@@ -283,16 +586,10 @@ struct GenerationProviderCard: View {
                         .font(DesignTokens.Typography.body)
                         .foregroundColor(DesignTokens.Colors.textPrimary)
 
-                    HStack(spacing: 4) {
-                        ForEach(preset.supportedTypes, id: \.self) { type in
-                            Text(generationTypeName(type))
-                                .font(.system(size: 10))
-                                .foregroundColor(DesignTokens.Colors.textSecondary)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 2)
-                                .background(DesignTokens.Colors.surfaceSecondary)
-                                .cornerRadius(4)
-                        }
+                    if preset.isCustom {
+                        Text(L("settings.generation.custom_provider"))
+                            .font(.system(size: 10))
+                            .foregroundColor(DesignTokens.Colors.textSecondary)
                     }
                 }
 
@@ -339,15 +636,6 @@ struct GenerationProviderCard: View {
             return .clear
         }
     }
-
-    private func generationTypeName(_ type: GenerationTypeFfi) -> String {
-        switch type {
-        case .image: return "Image"
-        case .video: return "Video"
-        case .audio: return "Audio"
-        case .speech: return "Speech"
-        }
-    }
 }
 
 // MARK: - Generation Provider Edit Panel
@@ -378,7 +666,7 @@ struct GenerationProviderEditPanel: View {
     @State private var errorMessage: String?
 
     private var isCustomProvider: Bool {
-        selectedPreset?.id == "custom-generation"
+        selectedPreset?.isCustom ?? false
     }
 
     private var canTestConnection: Bool {
@@ -548,13 +836,22 @@ struct GenerationProviderEditPanel: View {
                                 Image(systemName: "network")
                                     .font(.system(size: 12))
                             }
-                            Text(localIsTesting ? L("provider.button.testing") : L("common.test_connection"))
-                                .font(.system(size: 12, weight: .medium))
+                            Text(
+                                localIsTesting
+                                    ? L("provider.button.testing") : L("common.test_connection")
+                            )
+                            .font(.system(size: 12, weight: .medium))
                         }
-                        .foregroundColor(canTestConnection ? .white : DesignTokens.Colors.textSecondary)
+                        .foregroundColor(
+                            canTestConnection ? .white : DesignTokens.Colors.textSecondary
+                        )
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .background(canTestConnection ? Color(hex: "#007AFF") ?? .blue : DesignTokens.Colors.textSecondary.opacity(0.15))
+                        .background(
+                            canTestConnection
+                                ? Color(hex: "#007AFF") ?? .blue
+                                : DesignTokens.Colors.textSecondary.opacity(0.15)
+                        )
                         .cornerRadius(6)
                     }
                     .buttonStyle(.plain)
@@ -601,15 +898,21 @@ struct GenerationProviderEditPanel: View {
                 }
         }
 
-        FormField(title: isCustomProvider ? L("provider.field.base_url") : L("provider.field.base_url_optional")) {
+        FormField(
+            title: isCustomProvider
+                ? L("provider.field.base_url") : L("provider.field.base_url_optional")
+        ) {
             TextField(getBaseUrlPlaceholder(preset), text: $baseURL)
                 .textFieldStyle(.roundedBorder)
                 .onChange(of: baseURL) { _, _ in
                     localTestResult = nil
                 }
-            Text(isCustomProvider ? L("provider.help.base_url_custom") : L("provider.help.generation_base_url"))
-                .font(DesignTokens.Typography.caption)
-                .foregroundColor(DesignTokens.Colors.textSecondary)
+            Text(
+                isCustomProvider
+                    ? L("provider.help.base_url_custom") : L("provider.help.generation_base_url")
+            )
+            .font(DesignTokens.Typography.caption)
+            .foregroundColor(DesignTokens.Colors.textSecondary)
         }
 
         // Supported generation types
@@ -674,7 +977,8 @@ struct GenerationProviderEditPanel: View {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundColor(.red)
                     .font(.system(size: 12))
-                let truncatedMessage = message.count > 100 ? String(message.prefix(100)) + "..." : message
+                let truncatedMessage =
+                    message.count > 100 ? String(message.prefix(100)) + "..." : message
                 Text(truncatedMessage)
                     .font(DesignTokens.Typography.caption)
                     .foregroundColor(.red)
@@ -692,7 +996,7 @@ struct GenerationProviderEditPanel: View {
     private func loadPresetDefaults(_ preset: GenerationPresetProvider?) {
         guard let preset = preset else { return }
 
-        if preset.id == "custom-generation" {
+        if preset.isCustom {
             providerName = ""
             model = ""
             baseURL = ""
@@ -712,7 +1016,7 @@ struct GenerationProviderEditPanel: View {
         localTestResult = nil
 
         Task {
-            // Use the new testGenerationProviderConnection method
+            // Use the testGenerationProviderConnection method
             let providerType = selectedPreset?.providerType ?? "openai_compat"
             let result = core.testGenerationProviderConnection(
                 providerType: providerType,

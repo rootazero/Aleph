@@ -93,6 +93,10 @@
 "settings.generation.type.video" = "Video";
 "settings.generation.type.audio" = "Audio";
 "settings.generation.type.speech" = "Speech";
+"settings.generation.tab.image" = "Image";
+"settings.generation.tab.video" = "Video";
+"settings.generation.tab.audio" = "Audio";
+"settings.generation.custom_provider" = "Custom";
 
 // MARK: - Generation Provider Help
 "provider.help.generation_base_url" = "Override the default API endpoint. Leave empty to use official URL.";
