@@ -71,6 +71,7 @@
 //! handled conversationally rather than triggering file operations.
 
 pub mod agent_prompt;
+pub mod aggregator;
 pub mod ai_detector;
 pub mod cache;
 pub mod calibrator;
@@ -84,6 +85,9 @@ pub mod presets;
 pub mod task_category;
 
 pub use agent_prompt::{AgentModePrompt, ToolDescription};
+pub use aggregator::{
+    AggregatedIntent, AggregatorConfig, IntentAction, IntentAggregator, MissingParameter,
+};
 pub use ai_detector::{AiIntentDetector, AiIntentResult};
 pub use classifier::{ExecutableTask, ExecutionIntent, IntentClassifier};
 pub use defaults::DefaultsResolver;
