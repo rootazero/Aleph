@@ -188,10 +188,19 @@ impl OpenAiTtsProvider {
             .build()
             .expect("Failed to build HTTP client");
 
+        // Normalize base URL: remove trailing slash and /v1 suffix to prevent duplicate /v1
+        // e.g., "https://api.example.com/v1" -> "https://api.example.com"
+        let endpoint = base_url
+            .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string())
+            .trim_end_matches('/')
+            .trim_end_matches("/v1")
+            .trim_end_matches('/')
+            .to_string();
+
         Ok(Self {
             client,
             api_key,
-            endpoint: base_url.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
+            endpoint,
             model,
             default_voice: voice,
         })
@@ -606,6 +615,47 @@ mod tests {
             custom_provider.speech_url(),
             "https://api.example.com/v1/audio/speech"
         );
+    }
+
+    #[test]
+    fn test_url_normalization_with_v1_suffix() {
+        // User provides URL with /v1 suffix - should NOT produce duplicate /v1
+        let provider = OpenAiTtsProvider::new(
+            "sk-test-key",
+            Some("https://ai.t8star.cn/v1".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(provider.endpoint, "https://ai.t8star.cn");
+        assert_eq!(
+            provider.speech_url(),
+            "https://ai.t8star.cn/v1/audio/speech"
+        );
+    }
+
+    #[test]
+    fn test_url_normalization_with_trailing_slash() {
+        let provider = OpenAiTtsProvider::new(
+            "sk-test-key",
+            Some("https://api.example.com/".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(provider.endpoint, "https://api.example.com");
+    }
+
+    #[test]
+    fn test_url_normalization_with_v1_and_trailing_slash() {
+        let provider = OpenAiTtsProvider::new(
+            "sk-test-key",
+            Some("https://api.example.com/v1/".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(provider.endpoint, "https://api.example.com");
     }
 
     // === Trait implementation tests ===

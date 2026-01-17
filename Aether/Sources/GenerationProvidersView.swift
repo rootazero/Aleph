@@ -222,7 +222,7 @@ enum GenerationPresetProviders {
             name: "OpenAI TTS",
             iconName: "waveform",
             color: "#10a37f",
-            providerType: "openai",
+            providerType: "openai_tts",
             supportedTypes: [.speech],
             defaultModel: "tts-1-hd",
             description: "OpenAI text-to-speech models",

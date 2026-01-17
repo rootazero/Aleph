@@ -120,10 +120,19 @@ impl OpenAiImageProvider {
             .build()
             .expect("Failed to build HTTP client");
 
+        // Normalize base URL: remove trailing slash and /v1 suffix to prevent duplicate /v1
+        // e.g., "https://api.example.com/v1" -> "https://api.example.com"
+        let endpoint = base_url
+            .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string())
+            .trim_end_matches('/')
+            .trim_end_matches("/v1")
+            .trim_end_matches('/')
+            .to_string();
+
         Self {
             client,
             api_key: api_key.into(),
-            endpoint: base_url.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
+            endpoint,
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
         }
     }
@@ -499,6 +508,49 @@ mod tests {
         );
         assert_eq!(
             custom_provider.generations_url(),
+            "https://api.example.com/v1/images/generations"
+        );
+    }
+
+    #[test]
+    fn test_url_normalization_with_v1_suffix() {
+        // User provides URL with /v1 suffix - should NOT produce duplicate /v1
+        let provider = OpenAiImageProvider::new(
+            "sk-test-key",
+            Some("https://ai.t8star.cn/v1".to_string()),
+            None,
+        );
+        assert_eq!(provider.endpoint, "https://ai.t8star.cn");
+        assert_eq!(
+            provider.generations_url(),
+            "https://ai.t8star.cn/v1/images/generations"
+        );
+    }
+
+    #[test]
+    fn test_url_normalization_with_trailing_slash() {
+        let provider = OpenAiImageProvider::new(
+            "sk-test-key",
+            Some("https://api.example.com/".to_string()),
+            None,
+        );
+        assert_eq!(provider.endpoint, "https://api.example.com");
+        assert_eq!(
+            provider.generations_url(),
+            "https://api.example.com/v1/images/generations"
+        );
+    }
+
+    #[test]
+    fn test_url_normalization_with_v1_and_trailing_slash() {
+        let provider = OpenAiImageProvider::new(
+            "sk-test-key",
+            Some("https://api.example.com/v1/".to_string()),
+            None,
+        );
+        assert_eq!(provider.endpoint, "https://api.example.com");
+        assert_eq!(
+            provider.generations_url(),
             "https://api.example.com/v1/images/generations"
         );
     }
