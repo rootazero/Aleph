@@ -28,6 +28,7 @@ pub mod ai_detector;
 pub mod classifier;
 pub mod defaults;
 pub mod ffi;
+pub mod keyword;
 pub mod parameters;
 pub mod presets;
 pub mod task_category;
@@ -36,6 +37,7 @@ pub use agent_prompt::{AgentModePrompt, ToolDescription};
 pub use ai_detector::{AiIntentDetector, AiIntentResult};
 pub use classifier::{ExecutableTask, ExecutionIntent, IntentClassifier};
 pub use defaults::DefaultsResolver;
+pub use keyword::{KeywordIndex, KeywordMatch, KeywordMatchMode, KeywordRule};
 pub use ffi::{
     AmbiguousTaskFFI, ConflictResolutionFFI, ExecutableTaskFFI, ExecutionIntentTypeFFI,
     OrganizeMethodFFI, ParameterSourceFFI, TaskCategoryFFI, TaskParametersFFI,
