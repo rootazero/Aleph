@@ -65,19 +65,19 @@ from PIL import Image, ImageDraw, ImageFilter
 WIDTH = ${WINDOW_WIDTH}
 HEIGHT = ${WINDOW_HEIGHT}
 
-# Dark theme colors
-BG_START = (12, 18, 30)
-BG_END = (22, 30, 48)
+# Gradient from dark top to lighter bottom (for text visibility)
+BG_TOP = (12, 18, 30)
+BG_BOTTOM = (55, 65, 85)
 
-img = Image.new('RGBA', (WIDTH, HEIGHT), BG_START)
+img = Image.new('RGBA', (WIDTH, HEIGHT), BG_TOP)
 draw = ImageDraw.Draw(img)
 
-# Gradient background
+# Gradient background with ease-in curve
 for y in range(HEIGHT):
-    ratio = y / HEIGHT
-    r = int(BG_START[0] + (BG_END[0] - BG_START[0]) * ratio)
-    g = int(BG_START[1] + (BG_END[1] - BG_START[1]) * ratio)
-    b = int(BG_START[2] + (BG_END[2] - BG_START[2]) * ratio)
+    ratio = (y / HEIGHT) ** 0.7
+    r = int(BG_TOP[0] + (BG_BOTTOM[0] - BG_TOP[0]) * ratio)
+    g = int(BG_TOP[1] + (BG_BOTTOM[1] - BG_TOP[1]) * ratio)
+    b = int(BG_TOP[2] + (BG_BOTTOM[2] - BG_TOP[2]) * ratio)
     draw.line([(0, y), (WIDTH, y)], fill=(r, g, b, 255))
 
 # Load and place logo
@@ -102,12 +102,12 @@ try:
 except Exception as e:
     print(f"Warning: Could not load logo: {e}")
 
-# Draw single arrow - shorter and wider
+# Draw single short arrow
 arrow_y = ${APP_ICON_Y}
 arrow_color = (10, 132, 255)
 
-shaft_start = 225
-shaft_end = 315
+shaft_start = 248
+shaft_end = 293
 
 for x in range(shaft_start, shaft_end, 4):
     progress = (x - shaft_start) / (shaft_end - shaft_start)
@@ -168,7 +168,6 @@ icon_locations = {
 default_view = 'icon-view'
 show_icon_preview = False
 text_size = 14
-text_color = (1.0, 1.0, 1.0)
 SETTINGS
 
     echo "Building DMG with dmgbuild..."
