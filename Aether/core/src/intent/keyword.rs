@@ -98,6 +98,7 @@ pub struct KeywordIndex {
 
 impl KeywordIndex {
     /// Create a new empty keyword index
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -145,8 +146,7 @@ impl KeywordIndex {
             if Self::is_cjk_char(c) {
                 // Flush current word if any
                 if !current_word.is_empty() {
-                    tokens.push(current_word.clone());
-                    current_word.clear();
+                    tokens.push(std::mem::take(&mut current_word));
                 }
                 // CJK character is its own token
                 tokens.push(c.to_string());
@@ -155,8 +155,7 @@ impl KeywordIndex {
             } else {
                 // Whitespace or punctuation: flush current word
                 if !current_word.is_empty() {
-                    tokens.push(current_word.clone());
-                    current_word.clear();
+                    tokens.push(std::mem::take(&mut current_word));
                 }
             }
         }
@@ -170,6 +169,7 @@ impl KeywordIndex {
     }
 
     /// Match keywords against input text, returning all matching rules
+    #[must_use]
     pub fn match_keywords(&self, text: &str) -> Vec<KeywordMatch> {
         let tokens: Vec<String> = Self::tokenize(text);
         let token_set: std::collections::HashSet<&str> =
@@ -211,11 +211,12 @@ impl KeywordIndex {
         }
 
         // Sort by score descending
-        matches.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        matches.sort_by(|a, b| b.score.total_cmp(&a.score));
         matches
     }
 
     /// Get the best match above a threshold
+    #[must_use]
     pub fn best_match(&self, text: &str, threshold: f32) -> Option<KeywordMatch> {
         self.match_keywords(text)
             .into_iter()
@@ -350,7 +351,8 @@ mod tests {
 
         let translate_rule = KeywordRule::new("translate", "translation")
             .with_keyword("translate", 2.0)
-            .with_keyword("翻译", 2.0)
+            .with_keyword("翻", 2.0)
+            .with_keyword("译", 1.0)
             .with_match_mode(KeywordMatchMode::Any);
 
         index.add_rule(search_rule);
