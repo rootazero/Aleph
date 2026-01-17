@@ -552,16 +552,28 @@ impl AiProvider for OpenAiProvider {
             })?;
 
             // Check status code
-            if !response.status().is_success() {
-                let status = response.status();
+            let status = response.status();
+            if !status.is_success() {
                 debug!(status = %status, "OpenAI request failed");
                 return Err(self.handle_error(response).await);
             }
 
+            // Handle HTTP 204 No Content (common for unsupported models/endpoints)
+            if status == reqwest::StatusCode::NO_CONTENT {
+                error!(model = %self.config.model, "API returned no content - model may not support chat completions");
+                return Err(AetherError::provider(format!(
+                    "Model '{}' returned no content. This model may not support chat completions (e.g., it might be an image generation model). Please check the model name and API documentation.",
+                    self.config.model
+                )));
+            }
+
             // Parse response
             let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
-                error!(error = %e, "Failed to parse OpenAI response");
-                AetherError::provider(format!("Failed to parse OpenAI response: {}", e))
+                error!(error = %e, model = %self.config.model, "Failed to parse OpenAI response");
+                AetherError::provider(format!(
+                    "Failed to parse response for model '{}': {}. The model may not support chat completions.",
+                    self.config.model, e
+                ))
             })?;
 
             // Extract message content
@@ -645,16 +657,28 @@ impl AiProvider for OpenAiProvider {
             })?;
 
             // Check status code
-            if !response.status().is_success() {
-                let status = response.status();
+            let status = response.status();
+            if !status.is_success() {
                 debug!(status = %status, "OpenAI vision request failed");
                 return Err(self.handle_error(response).await);
             }
 
+            // Handle HTTP 204 No Content
+            if status == reqwest::StatusCode::NO_CONTENT {
+                error!(model = %self.config.model, "API returned no content for vision request");
+                return Err(AetherError::provider(format!(
+                    "Model '{}' returned no content. This model may not support vision/chat completions.",
+                    self.config.model
+                )));
+            }
+
             // Parse response
             let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
-                error!(error = %e, "Failed to parse OpenAI vision response");
-                AetherError::provider(format!("Failed to parse OpenAI response: {}", e))
+                error!(error = %e, model = %self.config.model, "Failed to parse OpenAI vision response");
+                AetherError::provider(format!(
+                    "Failed to parse response for model '{}': {}",
+                    self.config.model, e
+                ))
             })?;
 
             // Extract message content
@@ -799,8 +823,8 @@ impl AiProvider for OpenAiProvider {
                 })?;
 
             // Check status code
-            if !response.status().is_success() {
-                let status = response.status();
+            let status = response.status();
+            if !status.is_success() {
                 error!(
                     status = %status,
                     endpoint = %self.endpoint,
@@ -810,11 +834,29 @@ impl AiProvider for OpenAiProvider {
                 return Err(self.handle_error(response).await);
             }
 
+            // Handle HTTP 204 No Content
+            if status == reqwest::StatusCode::NO_CONTENT {
+                error!(model = %self.config.model, "API returned no content for multimodal request");
+                return Err(AetherError::provider(format!(
+                    "Model '{}' returned no content. This model may not support multimodal/chat completions.",
+                    self.config.model
+                )));
+            }
+
             // Parse response
             let response_text = response.text().await.map_err(|e| {
                 error!(error = %e, "Failed to read OpenAI response body");
                 AetherError::provider(format!("Failed to read response: {}", e))
             })?;
+
+            // Check for empty response
+            if response_text.is_empty() {
+                error!(model = %self.config.model, "API returned empty response body");
+                return Err(AetherError::provider(format!(
+                    "Model '{}' returned empty response. This model may not support chat completions.",
+                    self.config.model
+                )));
+            }
 
             let completion: ChatCompletionResponse = serde_json::from_str(&response_text).map_err(|e| {
                 error!(
@@ -822,7 +864,10 @@ impl AiProvider for OpenAiProvider {
                     response_preview = %response_text.chars().take(500).collect::<String>(),
                     "Failed to parse OpenAI multimodal response"
                 );
-                AetherError::provider(format!("Failed to parse OpenAI response: {}", e))
+                AetherError::provider(format!(
+                    "Failed to parse response for model '{}': {}",
+                    self.config.model, e
+                ))
             })?;
 
             // Extract message content
