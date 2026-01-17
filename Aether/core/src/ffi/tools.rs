@@ -230,20 +230,121 @@ impl AetherCore {
     /// Get root commands from the tool registry for command completion
     ///
     /// Returns all root-level commands as CommandNode for UI display.
+    /// Includes: Builtin, MCP, Skills, and Custom tools.
     pub fn get_root_commands_from_registry(&self) -> Vec<crate::command::CommandNode> {
-        // Convert builtin tools to CommandNode format
-        self.list_builtin_tools()
-            .iter()
-            .map(|tool| crate::command::CommandNode {
+        let mut commands = Vec::new();
+
+        // 1. Add builtin tools (System category)
+        for tool in self.list_builtin_tools() {
+            commands.push(crate::command::CommandNode {
                 key: tool.name.clone(),
                 description: tool.description.clone(),
-                icon: tool.icon.clone().unwrap_or_else(|| "command".to_string()),
+                icon: tool.icon.clone().unwrap_or_else(|| "command.circle.fill".to_string()),
                 hint: tool.usage.clone(),
                 node_type: crate::command::CommandType::Action,
                 has_children: tool.has_subtools,
                 source_id: tool.source_id.clone(),
                 source_type: tool.source_type,
-            })
-            .collect()
+            });
+        }
+
+        // 2. Add MCP tools (from enabled MCP servers)
+        for server in self.list_mcp_servers() {
+            if server.enabled {
+                // Add MCP server as a tool entry
+                commands.push(crate::command::CommandNode {
+                    key: server.id.clone(),
+                    description: format!("MCP: {}", server.name),
+                    icon: server.icon.clone(),
+                    hint: server.trigger_command.clone(),
+                    node_type: crate::command::CommandType::Action,
+                    has_children: false,
+                    source_id: Some(server.id.clone()),
+                    source_type: crate::dispatcher::ToolSourceType::Mcp,
+                });
+            }
+        }
+
+        // 3. Add Custom tools (from routing rules with ^/ prefix)
+        let cfg = self.lock_config();
+        for rule in &cfg.rules {
+            // Skip builtin rules
+            if rule.is_builtin {
+                continue;
+            }
+            // Only include slash commands
+            if !rule.regex.starts_with("^/") {
+                continue;
+            }
+            // Extract command name from regex (e.g., "^/translate" -> "translate")
+            let command_name: String = rule.regex
+                .trim_start_matches("^/")
+                .trim_start_matches("(?i)")
+                .chars()
+                .take_while(|c: &char| c.is_alphanumeric() || *c == '-' || *c == '_')
+                .collect();
+
+            if !command_name.is_empty() {
+                let description = rule.system_prompt
+                    .as_ref()
+                    .map(|s: &String| if s.len() > 50 { format!("{}...", &s[..47]) } else { s.clone() })
+                    .unwrap_or_else(|| format!("Custom command /{}", command_name));
+
+                commands.push(crate::command::CommandNode {
+                    key: command_name.clone(),
+                    description,
+                    icon: rule.icon.clone().unwrap_or_else(|| "command".to_string()),
+                    hint: rule.hint.clone(),
+                    node_type: crate::command::CommandType::Action,
+                    has_children: false,
+                    source_id: None,
+                    source_type: crate::dispatcher::ToolSourceType::Custom,
+                });
+            }
+        }
+        drop(cfg);
+
+        // 4. Add Skills (from installed skills)
+        if let Ok(skills) = crate::initialization::list_installed_skills() {
+            for skill in skills {
+                commands.push(crate::command::CommandNode {
+                    key: skill.id.clone(),
+                    description: skill.description.clone(),
+                    icon: "lightbulb.fill".to_string(),
+                    hint: Some(format!("/{} [input]", skill.id)),
+                    node_type: crate::command::CommandType::Action,
+                    has_children: false,
+                    source_id: Some(skill.id.clone()),
+                    source_type: crate::dispatcher::ToolSourceType::Skill,
+                });
+            }
+        }
+
+        // Sort: Builtin first, then by name
+        commands.sort_by(|a, b| {
+            let priority_a = match a.source_type {
+                crate::dispatcher::ToolSourceType::Builtin => 0,
+                crate::dispatcher::ToolSourceType::Native => 1,
+                crate::dispatcher::ToolSourceType::Custom => 2,
+                crate::dispatcher::ToolSourceType::Mcp => 3,
+                crate::dispatcher::ToolSourceType::Skill => 4,
+            };
+            let priority_b = match b.source_type {
+                crate::dispatcher::ToolSourceType::Builtin => 0,
+                crate::dispatcher::ToolSourceType::Native => 1,
+                crate::dispatcher::ToolSourceType::Custom => 2,
+                crate::dispatcher::ToolSourceType::Mcp => 3,
+                crate::dispatcher::ToolSourceType::Skill => 4,
+            };
+            priority_a.cmp(&priority_b).then(a.key.cmp(&b.key))
+        });
+
+        info!(
+            count = commands.len(),
+            "get_root_commands_from_registry: returned {} commands",
+            commands.len()
+        );
+
+        commands
     }
 }
