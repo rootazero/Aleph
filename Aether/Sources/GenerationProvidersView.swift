@@ -582,7 +582,8 @@ struct GenerationProvidersView: View {
         let matchingProvider = providers.first { $0.name == preset.id }
 
         let isConfigured = matchingProvider != nil
-        let isActive = matchingProvider?.enabled ?? false
+        // If a generation provider is in the list, it's configured and active
+        let isActive = isConfigured
 
         // For generation providers, we don't have a default concept like chat providers
         // So we just mark the first active provider as default for now
