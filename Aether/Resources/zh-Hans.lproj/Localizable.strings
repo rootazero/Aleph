@@ -81,6 +81,22 @@
 "settings.providers.status.active_tooltip" = "活跃的提供商";
 "settings.providers.status.inactive_tooltip" = "未激活的提供商";
 
+// MARK: - Settings Window - Generation Tab
+"settings.generation.title" = "生成";
+"settings.generation.description" = "配置图像、视频、音频和语音生成供应商。";
+"settings.generation.search_placeholder" = "搜索生成供应商...";
+"settings.generation.add_custom" = "添加自定义供应商";
+"settings.generation.supported_types" = "支持的类型";
+"settings.generation.empty_state.title" = "未选择供应商";
+"settings.generation.empty_state.message" = "从列表中选择一个供应商进行配置。";
+"settings.generation.type.image" = "图像";
+"settings.generation.type.video" = "视频";
+"settings.generation.type.audio" = "音频";
+"settings.generation.type.speech" = "语音";
+
+// MARK: - Generation Provider Help
+"provider.help.generation_base_url" = "覆盖默认的 API 端点。留空使用官方 URL。";
+
 // MARK: - Provider Configuration
 "provider.field.active" = "启用";
 "provider.field.provider_name" = "提供商名称";

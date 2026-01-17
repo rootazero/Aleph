@@ -81,6 +81,22 @@
 "settings.providers.status.active_tooltip" = "Active provider";
 "settings.providers.status.inactive_tooltip" = "Inactive provider";
 
+// MARK: - Settings Window - Generation Tab
+"settings.generation.title" = "Generation";
+"settings.generation.description" = "Configure image, video, audio, and speech generation providers.";
+"settings.generation.search_placeholder" = "Search generation providers...";
+"settings.generation.add_custom" = "Add Custom Provider";
+"settings.generation.supported_types" = "Supported Types";
+"settings.generation.empty_state.title" = "No Provider Selected";
+"settings.generation.empty_state.message" = "Select a provider from the list to configure it.";
+"settings.generation.type.image" = "Image";
+"settings.generation.type.video" = "Video";
+"settings.generation.type.audio" = "Audio";
+"settings.generation.type.speech" = "Speech";
+
+// MARK: - Generation Provider Help
+"provider.help.generation_base_url" = "Override the default API endpoint. Leave empty to use official URL.";
+
 // MARK: - Provider Configuration
 "provider.field.active" = "Active";
 "provider.field.provider_name" = "Provider Name";

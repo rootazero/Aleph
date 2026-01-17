@@ -122,6 +122,8 @@ struct RootContentView: View {
             return L("settings.general.title")
         case .providers:
             return L("settings.providers.title")
+        case .generation:
+            return L("settings.generation.title")
         case .routing:
             return L("settings.routing.title")
         case .shortcuts:
@@ -150,6 +152,8 @@ struct RootContentView: View {
             return L("settings.general.description")
         case .providers:
             return L("settings.providers.description")
+        case .generation:
+            return L("settings.generation.description")
         case .routing:
             return L("settings.routing.description")
         case .shortcuts:
@@ -245,6 +249,15 @@ struct RootContentView: View {
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Provider management requires AetherCore initialization")
+            }
+
+        case .generation:
+            // core used for generation provider management
+            if let core = core {
+                GenerationProvidersView(core: core, saveBarState: saveBarState)
+                    .id(configReloadTrigger)
+            } else {
+                placeholderView("Generation provider management requires AetherCore initialization")
             }
 
         case .routing:

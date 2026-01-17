@@ -191,6 +191,7 @@ struct SidebarWithTrafficLights: View {
         [
             NavigationItemConfig(tab: .general, iconName: "gear", titleKey: "settings.general.title"),
             NavigationItemConfig(tab: .providers, iconName: "brain.head.profile", titleKey: "settings.providers.title"),
+            NavigationItemConfig(tab: .generation, iconName: "photo.artframe", titleKey: "settings.generation.title"),
             NavigationItemConfig(tab: .routing, iconName: "arrow.triangle.branch", titleKey: "settings.routing.title"),
             NavigationItemConfig(tab: .shortcuts, iconName: "command", titleKey: "settings.shortcuts.title"),
             NavigationItemConfig(tab: .behavior, iconName: "slider.horizontal.3", titleKey: "settings.behavior.title"),
@@ -221,6 +222,7 @@ private struct NavigationItemConfig {
         switch tab {
         case .general: return "General"
         case .providers: return "Providers"
+        case .generation: return "Generation"
         case .routing: return "Routing"
         case .shortcuts: return "Shortcuts"
         case .behavior: return "Behavior"
