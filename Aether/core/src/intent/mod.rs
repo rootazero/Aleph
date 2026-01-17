@@ -73,6 +73,7 @@
 pub mod agent_prompt;
 pub mod ai_detector;
 pub mod cache;
+pub mod calibrator;
 pub mod classifier;
 pub mod context;
 pub mod defaults;
@@ -95,6 +96,10 @@ pub use parameters::{ConflictResolution, OrganizeMethod, ParameterSource, TaskPa
 pub use presets::{PresetRegistry, ScenarioPreset};
 pub use task_category::TaskCategory;
 pub use cache::{CacheConfig, CacheMetrics, CachedIntent, IntentCache};
+pub use calibrator::{
+    CalibrationHistory, CalibratedSignal, CalibratorConfig, ConfidenceCalibrator, IntentSignal,
+    RoutingLayer,
+};
 pub use context::{
     AppContext, ConversationContext, InputFeatures, MatchingContext, MatchingContextBuilder,
     PendingParam, TimeContext,
