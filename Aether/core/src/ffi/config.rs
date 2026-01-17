@@ -139,6 +139,35 @@ impl AetherCore {
         Ok(())
     }
 
+    /// Update generation provider configuration
+    ///
+    /// Adds or updates a generation provider (image/video/audio/speech) in the config.
+    /// The provider will be persisted to config.toml under [generation.providers.<name>].
+    pub fn update_generation_provider(
+        &self,
+        name: String,
+        provider: crate::ffi::generation::GenerationProviderConfigFFI,
+    ) -> Result<(), AetherFfiError> {
+        let mut config = self.lock_config();
+        // Convert FFI type to internal config type
+        let internal_config: crate::config::GenerationProviderConfig = provider.into();
+        config.generation.providers.insert(name, internal_config);
+        config
+            .save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Delete generation provider configuration
+    pub fn delete_generation_provider(&self, name: String) -> Result<(), AetherFfiError> {
+        let mut config = self.lock_config();
+        config.generation.providers.remove(&name);
+        config
+            .save()
+            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        Ok(())
+    }
+
     /// Update routing rules
     ///
     /// This method updates the routing rules in config.

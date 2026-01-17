@@ -165,6 +165,7 @@
 
 "provider.button.testing" = "测试中...";
 "provider.button.saving" = "保存中...";
+"provider.save.success" = "提供商保存成功";
 
 "provider.empty_state.title" = "未选择提供商";
 "provider.empty_state.message" = "从列表中选择提供商或添加新的提供商";

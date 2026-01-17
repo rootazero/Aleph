@@ -165,6 +165,7 @@
 
 "provider.button.testing" = "Testing...";
 "provider.button.saving" = "Saving...";
+"provider.save.success" = "Provider saved successfully";
 
 "provider.empty_state.title" = "No Provider Selected";
 "provider.empty_state.message" = "Select a provider from the list or add a new one";

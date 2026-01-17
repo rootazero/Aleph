@@ -654,6 +654,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func coworkUpdateRoutingRule(taskType: String, modelId: String) throws 
     
+    func deleteGenerationProvider(name: String) throws 
+    
     func deleteMcpServer(id: String) throws 
     
     func deleteMemoriesByTopicId(topicId: String) throws  -> UInt64
@@ -759,6 +761,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func updateBehavior(behavior: BehaviorConfig) throws 
     
     func updateGeneralConfig(config: GeneralConfig) throws 
+    
+    func updateGenerationProvider(name: String, provider: GenerationProviderConfigFfi) throws 
     
     func updateMcpConfig(config: McpSettingsConfig) throws 
     
@@ -1041,6 +1045,13 @@ open func coworkUpdateRoutingRule(taskType: String, modelId: String)throws  {try
     uniffi_aethecore_fn_method_aethercore_cowork_update_routing_rule(self.uniffiClonePointer(),
         FfiConverterString.lower(taskType),
         FfiConverterString.lower(modelId),$0
+    )
+}
+}
+    
+open func deleteGenerationProvider(name: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_delete_generation_provider(self.uniffiClonePointer(),
+        FfiConverterString.lower(name),$0
     )
 }
 }
@@ -1454,6 +1465,14 @@ open func updateBehavior(behavior: BehaviorConfig)throws  {try rustCallWithError
 open func updateGeneralConfig(config: GeneralConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
     uniffi_aethecore_fn_method_aethercore_update_general_config(self.uniffiClonePointer(),
         FfiConverterTypeGeneralConfig.lower(config),$0
+    )
+}
+}
+    
+open func updateGenerationProvider(name: String, provider: GenerationProviderConfigFfi)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_update_generation_provider(self.uniffiClonePointer(),
+        FfiConverterString.lower(name),
+        FfiConverterTypeGenerationProviderConfigFFI.lower(provider),$0
     )
 }
 }
@@ -4508,6 +4527,120 @@ public func FfiConverterTypeGenerationProgressFFI_lift(_ buf: RustBuffer) throws
 #endif
 public func FfiConverterTypeGenerationProgressFFI_lower(_ value: GenerationProgressFfi) -> RustBuffer {
     return FfiConverterTypeGenerationProgressFFI.lower(value)
+}
+
+
+public struct GenerationProviderConfigFfi {
+    public var providerType: String
+    public var apiKey: String?
+    public var baseUrl: String?
+    public var model: String?
+    public var enabled: Bool
+    public var color: String
+    public var capabilities: [GenerationTypeFfi]
+    public var timeoutSeconds: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(providerType: String, apiKey: String?, baseUrl: String?, model: String?, enabled: Bool, color: String, capabilities: [GenerationTypeFfi], timeoutSeconds: UInt64) {
+        self.providerType = providerType
+        self.apiKey = apiKey
+        self.baseUrl = baseUrl
+        self.model = model
+        self.enabled = enabled
+        self.color = color
+        self.capabilities = capabilities
+        self.timeoutSeconds = timeoutSeconds
+    }
+}
+
+
+
+extension GenerationProviderConfigFfi: Equatable, Hashable {
+    public static func ==(lhs: GenerationProviderConfigFfi, rhs: GenerationProviderConfigFfi) -> Bool {
+        if lhs.providerType != rhs.providerType {
+            return false
+        }
+        if lhs.apiKey != rhs.apiKey {
+            return false
+        }
+        if lhs.baseUrl != rhs.baseUrl {
+            return false
+        }
+        if lhs.model != rhs.model {
+            return false
+        }
+        if lhs.enabled != rhs.enabled {
+            return false
+        }
+        if lhs.color != rhs.color {
+            return false
+        }
+        if lhs.capabilities != rhs.capabilities {
+            return false
+        }
+        if lhs.timeoutSeconds != rhs.timeoutSeconds {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(providerType)
+        hasher.combine(apiKey)
+        hasher.combine(baseUrl)
+        hasher.combine(model)
+        hasher.combine(enabled)
+        hasher.combine(color)
+        hasher.combine(capabilities)
+        hasher.combine(timeoutSeconds)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeGenerationProviderConfigFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GenerationProviderConfigFfi {
+        return
+            try GenerationProviderConfigFfi(
+                providerType: FfiConverterString.read(from: &buf), 
+                apiKey: FfiConverterOptionString.read(from: &buf), 
+                baseUrl: FfiConverterOptionString.read(from: &buf), 
+                model: FfiConverterOptionString.read(from: &buf), 
+                enabled: FfiConverterBool.read(from: &buf), 
+                color: FfiConverterString.read(from: &buf), 
+                capabilities: FfiConverterSequenceTypeGenerationTypeFFI.read(from: &buf), 
+                timeoutSeconds: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: GenerationProviderConfigFfi, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.providerType, into: &buf)
+        FfiConverterOptionString.write(value.apiKey, into: &buf)
+        FfiConverterOptionString.write(value.baseUrl, into: &buf)
+        FfiConverterOptionString.write(value.model, into: &buf)
+        FfiConverterBool.write(value.enabled, into: &buf)
+        FfiConverterString.write(value.color, into: &buf)
+        FfiConverterSequenceTypeGenerationTypeFFI.write(value.capabilities, into: &buf)
+        FfiConverterUInt64.write(value.timeoutSeconds, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationProviderConfigFFI_lift(_ buf: RustBuffer) throws -> GenerationProviderConfigFfi {
+    return try FfiConverterTypeGenerationProviderConfigFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGenerationProviderConfigFFI_lower(_ value: GenerationProviderConfigFfi) -> RustBuffer {
+    return FfiConverterTypeGenerationProviderConfigFFI.lower(value)
 }
 
 
@@ -14116,6 +14249,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_cowork_update_routing_rule() != 55243) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_delete_generation_provider() != 6436) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_delete_mcp_server() != 52792) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -14273,6 +14409,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_general_config() != 40313) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_update_generation_provider() != 4344) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_mcp_config() != 34477) {

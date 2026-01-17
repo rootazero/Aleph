@@ -285,7 +285,8 @@ pub use crate::uniffi_core::{
     ToolInfoFFI,
     // Generation FFI types
     GenerationDataFFI, GenerationDataTypeFFI, GenerationMetadataFFI, GenerationOutputFFI,
-    GenerationParamsFFI, GenerationProgressFFI, GenerationProviderInfoFFI, GenerationTypeFFI,
+    GenerationParamsFFI, GenerationProgressFFI, GenerationProviderConfigFFI,
+    GenerationProviderInfoFFI, GenerationTypeFFI,
 };
 
 // Test-only exports

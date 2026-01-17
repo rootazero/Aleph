@@ -609,6 +609,18 @@ dictionary ProviderConfigEntry {
   ProviderConfig config;
 };
 
+// Generation provider configuration (image/video/audio/speech)
+dictionary GenerationProviderConfigFFI {
+  string provider_type;          // Provider type identifier (openai, stability, elevenlabs, etc.)
+  string? api_key;               // API key (optional, can use keychain)
+  string? base_url;              // Base URL for API (optional, for self-hosted or proxy)
+  string? model;                 // Default model to use
+  boolean enabled;               // Whether this provider is enabled
+  string color;                  // Brand color for UI theming (hex format)
+  sequence<GenerationTypeFFI> capabilities;  // Supported generation types
+  u64 timeout_seconds;           // Request timeout in seconds
+};
+
 // Memory entry for a single interaction
 dictionary MemoryEntry {
   string id;
@@ -990,6 +1002,12 @@ interface AetherCore {
 
     [Throws=AetherFfiError]
     void delete_provider(string name);
+
+    [Throws=AetherFfiError]
+    void update_generation_provider(string name, GenerationProviderConfigFFI provider);
+
+    [Throws=AetherFfiError]
+    void delete_generation_provider(string name);
 
     [Throws=AetherFfiError]
     void update_routing_rules(sequence<RoutingRuleConfig> rules);

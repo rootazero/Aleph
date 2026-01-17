@@ -47,6 +47,7 @@ pub use crate::ffi::{
     GenerationOutputFFI,
     GenerationParamsFFI,
     GenerationProgressFFI,
+    GenerationProviderConfigFFI,
     GenerationProviderInfoFFI,
     GenerationTypeFFI,
 };

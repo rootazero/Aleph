@@ -35,7 +35,8 @@ use tracing::{info, warn};
 // Re-export public types
 pub use self::generation::{
     GenerationDataFFI, GenerationDataTypeFFI, GenerationMetadataFFI, GenerationOutputFFI,
-    GenerationParamsFFI, GenerationProgressFFI, GenerationProviderInfoFFI, GenerationTypeFFI,
+    GenerationParamsFFI, GenerationProgressFFI, GenerationProviderConfigFFI,
+    GenerationProviderInfoFFI, GenerationTypeFFI,
 };
 pub use self::processing::ProcessOptions;
 

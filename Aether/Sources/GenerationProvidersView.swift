@@ -373,12 +373,45 @@ struct GenerationProviderEditPanel: View {
     @State private var localTestResult: GenerationProvidersView.TestResult?
     @State private var localIsTesting: Bool = false
 
+    // Save state
+    @State private var isSaving: Bool = false
+    @State private var errorMessage: String?
+
     private var isCustomProvider: Bool {
         selectedPreset?.id == "custom-generation"
     }
 
     private var canTestConnection: Bool {
         !apiKey.isEmpty && !model.isEmpty && (isCustomProvider ? !baseURL.isEmpty : true)
+    }
+
+    /// Check if the form has unsaved changes
+    private var hasUnsavedFormChanges: Bool {
+        guard selectedPreset != nil else { return false }
+
+        // For custom provider: require name, API key, model, and base URL
+        if isCustomProvider {
+            return !providerName.isEmpty && !apiKey.isEmpty && !model.isEmpty && !baseURL.isEmpty
+        }
+
+        // For preset providers: require API key and model
+        return !apiKey.isEmpty && !model.isEmpty
+    }
+
+    /// Check if form is valid for saving
+    private var isFormValid: Bool {
+        guard selectedPreset != nil else { return false }
+
+        // Basic required fields
+        if isCustomProvider {
+            guard !providerName.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+            guard !baseURL.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        }
+
+        guard !model.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        guard !apiKey.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+
+        return true
     }
 
     var body: some View {
@@ -396,8 +429,89 @@ struct GenerationProviderEditPanel: View {
         .onChange(of: selectedPreset) { _, newPreset in
             loadPresetDefaults(newPreset)
         }
+        .onChange(of: providerName) { _, _ in updateSaveBarState() }
+        .onChange(of: apiKey) { _, _ in updateSaveBarState() }
+        .onChange(of: model) { _, _ in updateSaveBarState() }
+        .onChange(of: baseURL) { _, _ in updateSaveBarState() }
         .onAppear {
             loadPresetDefaults(selectedPreset)
+        }
+    }
+
+    // MARK: - Save Bar State
+
+    /// Update saveBarState to reflect current editing state
+    private func updateSaveBarState() {
+        saveBarState.update(
+            hasUnsavedChanges: hasUnsavedFormChanges && isFormValid,
+            isSaving: isSaving,
+            statusMessage: errorMessage,
+            onSave: { await self.saveProviderAsync() },
+            onCancel: cancelEditing
+        )
+    }
+
+    /// Async wrapper for saveProvider
+    private func saveProviderAsync() async {
+        await MainActor.run {
+            saveProvider()
+        }
+    }
+
+    /// Cancel editing and revert to defaults
+    private func cancelEditing() {
+        loadPresetDefaults(selectedPreset)
+        errorMessage = nil
+        localTestResult = nil
+        updateSaveBarState()
+    }
+
+    /// Save the provider configuration
+    private func saveProvider() {
+        guard isFormValid, let preset = selectedPreset else { return }
+
+        isSaving = true
+        errorMessage = nil
+        updateSaveBarState()
+
+        let finalName = isCustomProvider ? providerName : preset.id
+
+        Task {
+            do {
+                // Build the provider config
+                let providerConfig = GenerationProviderConfigFfi(
+                    providerType: preset.providerType,
+                    apiKey: apiKey.isEmpty ? nil : apiKey,
+                    baseUrl: baseURL.isEmpty ? nil : baseURL,
+                    model: model.isEmpty ? nil : model,
+                    enabled: true,
+                    color: preset.color,
+                    capabilities: preset.supportedTypes,
+                    timeoutSeconds: 120
+                )
+
+                // Save to config
+                try core.updateGenerationProvider(name: finalName, provider: providerConfig)
+
+                await MainActor.run {
+                    isSaving = false
+                    isAddingNew = false
+                    localTestResult = .success(L("provider.save.success"))
+                    updateSaveBarState()
+
+                    // Notify that configuration was saved
+                    NotificationCenter.default.post(
+                        name: .aetherConfigSavedInternally,
+                        object: finalName
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Failed to save: \(error.localizedDescription)"
+                    isSaving = false
+                    updateSaveBarState()
+                }
+            }
         }
     }
 
