@@ -52,39 +52,39 @@
 // Module declarations
 // NOTE: clipboard module retained for ImageData/ImageFormat types (used by AI providers)
 // Clipboard operations are handled by Swift ClipboardManager
+pub mod agent; // NEW: Agent loop for tool calling
 pub mod capability;
 pub mod clarification; // NEW: Phantom Flow interaction types
 mod clipboard;
-pub mod conversation; // NEW: Multi-turn conversation support
 pub mod command; // NEW: Command completion system
 mod config;
+pub mod conversation; // NEW: Multi-turn conversation support
 mod core;
+pub mod cowork; // NEW: Cowork task orchestration (Phase 1)
+pub mod cowork_ffi; // NEW: Cowork FFI bindings
+pub mod dispatcher; // NEW: Intelligent tool routing (Dispatcher Layer)
 mod error;
 mod event_handler;
+pub mod ffi; // FFI module - split AetherCore implementation
+pub mod generation;
 pub mod initialization;
 pub mod intent; // NEW: Smart intent detection for conversation flow
 pub mod logging;
+pub mod mcp; // NEW: MCP (Model Context Protocol) capability
 pub mod memory;
 pub mod metrics;
 pub mod payload; // Structured context protocol with capability support
 pub mod providers;
+pub mod rig_tools; // NEW: Rig-compatible tool wrapper
 pub mod search; // NEW: Search capability with multiple provider support
+pub mod services; // NEW: Shared foundation services (FileOps, GitOps, SystemInfo)
 pub mod skills; // NEW: Claude Agent Skills support
 pub mod suggestion; // NEW: AI response suggestion parsing
+mod title_generator; // Title generation for conversation topics
+pub mod uniffi_core; // UniFFI core bindings - re-exports from ffi module
 pub mod utils; // NEW: Capability executor for enriching payloads
 pub mod video; // NEW: Video transcript extraction (YouTube)
-pub mod services; // NEW: Shared foundation services (FileOps, GitOps, SystemInfo)
-pub mod mcp; // NEW: MCP (Model Context Protocol) capability
-pub mod agent; // NEW: Agent loop for tool calling
-pub mod rig_tools; // NEW: Rig-compatible tool wrapper
-pub mod ffi; // FFI module - split AetherCore implementation
-pub mod uniffi_core; // UniFFI core bindings - re-exports from ffi module
-pub mod dispatcher; // NEW: Intelligent tool routing (Dispatcher Layer)
-mod title_generator; // Title generation for conversation topics
-pub mod vision; // NEW: Vision capability (screen OCR, image understanding)
-pub mod cowork; // NEW: Cowork task orchestration (Phase 1)
-pub mod cowork_ffi; // NEW: Cowork FFI bindings
-pub mod generation; // NEW: Media generation providers (image, video, audio, speech)
+pub mod vision; // NEW: Vision capability (screen OCR, image understanding) // NEW: Media generation providers (image, video, audio, speech)
 
 // Integration tests module
 #[cfg(test)]
@@ -95,72 +95,73 @@ mod tests;
 pub use crate::clipboard::{ImageData, ImageFormat};
 pub use crate::command::{CommandExecutionResult, CommandNode, CommandRegistry, CommandType};
 pub use crate::config::{
-    BehaviorConfig, Config, ContextRuleConfig, DispatcherConfigToml, FullConfig, GeneralConfig,
-    IntentDetectionConfig, KeywordRuleConfig, MemoryConfig, PIIConfig, ProviderConfig,
-    ProviderConfigEntry, RoutingRuleConfig, SearchBackendConfig, SearchBackendEntry, SearchConfig,
-    SearchConfigInternal, ShortcutsConfig, SkillsConfig, SmartFlowConfig, SmartMatchingConfig,
-    SuggestionParsingConfig, TestConnectionResult, TriggerConfig, VideoConfig,
-    // Mechanism-policy separation types
-    PoliciesConfig, ToolSafetyPolicy, IntentDetectionPolicy, MemoryPolicies,
-    CompressionPolicy, AiRetrievalPolicy, RetryPolicy, WebFetchPolicy, TextFormatPolicy, MetricsPolicy,
-    KeywordPolicy, PolicyKeywordRule, PolicyWeightedKeyword,
+    AiRetrievalPolicy,
+    BehaviorConfig,
+    CompressionPolicy,
+    Config,
+    ContextRuleConfig,
+    DispatcherConfigToml,
+    FullConfig,
+    GeneralConfig,
     // Generation config types
-    GenerationConfig, GenerationDefaults, GenerationProviderConfig,
+    GenerationConfig,
+    GenerationDefaults,
+    GenerationProviderConfig,
+    IntentDetectionConfig,
+    IntentDetectionPolicy,
+    KeywordPolicy,
+    KeywordRuleConfig,
+    MemoryConfig,
+    MemoryPolicies,
+    MetricsPolicy,
+    PIIConfig,
+    // Mechanism-policy separation types
+    PoliciesConfig,
+    PolicyKeywordRule,
+    PolicyWeightedKeyword,
+    ProviderConfig,
+    ProviderConfigEntry,
+    RetryPolicy,
+    RoutingRuleConfig,
+    SearchBackendConfig,
+    SearchBackendEntry,
+    SearchConfig,
+    SearchConfigInternal,
+    ShortcutsConfig,
+    SkillsConfig,
+    SmartFlowConfig,
+    SmartMatchingConfig,
+    SuggestionParsingConfig,
+    TestConnectionResult,
+    TextFormatPolicy,
+    ToolSafetyPolicy,
+    TriggerConfig,
+    VideoConfig,
+    WebFetchPolicy,
 };
 // Internal types from core module
 pub use crate::core::{
     AppMemoryInfo, CapturedContext, CompressionStats, MediaAttachment,
     MemoryEntryFFI as MemoryEntry,
 };
-pub use crate::memory::context::CompressionResult;
 pub use crate::error::{AetherError, AetherException, Result};
+pub use crate::memory::context::CompressionResult;
 // Event handler types (legacy V1 trait removed, use AetherEventHandler from uniffi_core)
 pub use crate::event_handler::{
     ErrorType, McpServerErrorFFI, McpStartupReportFFI, ProcessingState,
 };
 pub use crate::initialization::{
-    check_embedding_model_exists, download_embedding_model_standalone,
-    get_skills_dir, get_skills_dir_string, initialize_builtin_skills, initialize_builtin_skills_ffi,
+    check_embedding_model_exists, download_embedding_model_standalone, get_skills_dir,
+    get_skills_dir_string, initialize_builtin_skills, initialize_builtin_skills_ffi,
     is_fresh_install, list_installed_skills, run_first_time_init, InitializationProgressHandler,
 };
 // NOTE: Skill modification functions are in AetherCore to ensure automatic tool registry refresh.
 // Use AetherCore.delete_skill(), AetherCore.install_skill(), etc.
-pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer};
-pub use crate::memory::database::MemoryStats;
-pub use crate::metrics::StageTimer;
-pub use crate::providers::AiProvider;
-pub use crate::search::{ProviderTestResult, SearchProviderTestConfig};
 pub use crate::clarification::{
     ClarificationOption, ClarificationRequest, ClarificationResult, ClarificationResultType,
     ClarificationType,
 };
 pub use crate::conversation::{ConversationManager, ConversationSession, ConversationTurn};
-pub use crate::intent::{
-    // Core classifier types
-    AgentModePrompt, AiIntentDetector, AiIntentResult, AmbiguousTaskFFI, ConflictResolution,
-    ConflictResolutionFFI, DefaultsResolver, ExecutableTask, ExecutableTaskFFI, ExecutionIntent,
-    ExecutionIntentTypeFFI, IntentClassifier, OrganizeMethod, OrganizeMethodFFI, ParameterSource,
-    ParameterSourceFFI, PresetRegistry, ScenarioPreset, TaskCategory, TaskCategoryFFI,
-    TaskParameters, TaskParametersFFI,
-    // Aggregator types
-    AggregatedIntent, AggregatorConfig, IntentAction, IntentAggregator, MissingParameter,
-    // Cache types
-    CacheConfig, CacheMetrics, CachedIntent, IntentCache,
-    // Calibrator types
-    CalibratedSignal, CalibrationHistory, CalibratorConfig, ConfidenceCalibrator, IntentSignal,
-    RoutingLayer,
-    // Context types
-    AppContext, ConversationContext, InputFeatures, MatchingContext, MatchingContextBuilder,
-    PendingParam, TimeContext,
-    // Rollback types
-    RollbackCapable, RollbackConfig, RollbackEntry, RollbackManager, RollbackResult,
-};
-pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
-pub use crate::skills::{Skill, SkillInfo, SkillsInstaller, SkillsRegistry};
-pub use crate::mcp::{
-    McpEnvVar, McpServerConfig, McpServerPermissions, McpServerStatus, McpServerStatusInfo,
-    McpServerType, McpServiceInfo, McpSettingsConfig, McpToolInfo,
-};
 pub use crate::dispatcher::{
     AsyncConfirmationConfig, AsyncConfirmationHandler, ConfirmationAction, ConfirmationConfig,
     ConfirmationDecision, ConfirmationState, DispatcherAction, DispatcherConfig,
@@ -169,20 +170,104 @@ pub use crate::dispatcher::{
     ToolResult, ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo,
     UserConfirmationDecision,
 };
+pub use crate::intent::{
+    // Core classifier types
+    AgentModePrompt,
+    // Aggregator types
+    AggregatedIntent,
+    AggregatorConfig,
+    AiIntentDetector,
+    AiIntentResult,
+    AmbiguousTaskFFI,
+    // Context types
+    AppContext,
+    // Cache types
+    CacheConfig,
+    CacheMetrics,
+    CachedIntent,
+    // Calibrator types
+    CalibratedSignal,
+    CalibrationHistory,
+    CalibratorConfig,
+    ConfidenceCalibrator,
+    ConflictResolution,
+    ConflictResolutionFFI,
+    ConversationContext,
+    DefaultsResolver,
+    ExecutableTask,
+    ExecutableTaskFFI,
+    ExecutionIntent,
+    ExecutionIntentTypeFFI,
+    InputFeatures,
+    IntentAction,
+    IntentAggregator,
+    IntentCache,
+    IntentClassifier,
+    IntentSignal,
+    MatchingContext,
+    MatchingContextBuilder,
+    MissingParameter,
+    OrganizeMethod,
+    OrganizeMethodFFI,
+    ParameterSource,
+    ParameterSourceFFI,
+    PendingParam,
+    PresetRegistry,
+    // Rollback types
+    RollbackCapable,
+    RollbackConfig,
+    RollbackEntry,
+    RollbackManager,
+    RollbackResult,
+    RoutingLayer,
+    ScenarioPreset,
+    TaskCategory,
+    TaskCategoryFFI,
+    TaskParameters,
+    TaskParametersFFI,
+    TimeContext,
+};
+pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer};
+pub use crate::mcp::{
+    McpEnvVar, McpServerConfig, McpServerPermissions, McpServerStatus, McpServerStatusInfo,
+    McpServerType, McpServiceInfo, McpSettingsConfig, McpToolInfo,
+};
+pub use crate::memory::database::MemoryStats;
+pub use crate::metrics::StageTimer;
+pub use crate::providers::AiProvider;
+pub use crate::search::{ProviderTestResult, SearchProviderTestConfig};
+pub use crate::skills::{Skill, SkillInfo, SkillsInstaller, SkillsRegistry};
+pub use crate::suggestion::{ParsedSuggestions, SuggestionOption, SuggestionParser};
 pub use crate::utils::pii;
 pub use crate::vision::{
     CaptureMode, VisionConfig, VisionRequest, VisionResult, VisionService, VisionTask,
 };
 // Cowork FFI exports (task orchestration)
 pub use crate::cowork_ffi::{
-    // Base Cowork types
-    CodeExecConfigFFI, CoworkConfigFFI, CoworkExecutionState, CoworkExecutionSummaryFFI,
-    CoworkProgressEventFFI, CoworkProgressEventType, CoworkProgressHandler,
-    CoworkTaskDependencyFFI, CoworkTaskFFI, CoworkTaskGraphFFI, CoworkTaskStatusState,
-    CoworkTaskTypeCategory, FileOpsConfigFFI, FfiProgressSubscriber,
     // Model Router types
-    CapabilityMappingFFI, ModelCapabilityFFI, ModelCostStrategyFFI, ModelCostTierFFI,
-    ModelLatencyTierFFI, ModelProfileFFI, ModelRoutingRulesFFI, StageResultFFI,
+    CapabilityMappingFFI,
+    // Base Cowork types
+    CodeExecConfigFFI,
+    CoworkConfigFFI,
+    CoworkExecutionState,
+    CoworkExecutionSummaryFFI,
+    CoworkProgressEventFFI,
+    CoworkProgressEventType,
+    CoworkProgressHandler,
+    CoworkTaskDependencyFFI,
+    CoworkTaskFFI,
+    CoworkTaskGraphFFI,
+    CoworkTaskStatusState,
+    CoworkTaskTypeCategory,
+    FfiProgressSubscriber,
+    FileOpsConfigFFI,
+    ModelCapabilityFFI,
+    ModelCostStrategyFFI,
+    ModelCostTierFFI,
+    ModelLatencyTierFFI,
+    ModelProfileFFI,
+    ModelRoutingRulesFFI,
+    StageResultFFI,
     TaskTypeMappingFFI,
 };
 
@@ -198,6 +283,9 @@ pub use crate::generation::{
 pub use crate::uniffi_core::{
     init_core, AetherCore, AetherEventHandler, AetherFfiError, MemoryItem, ProcessOptions,
     ToolInfoFFI,
+    // Generation FFI types
+    GenerationDataFFI, GenerationDataTypeFFI, GenerationMetadataFFI, GenerationOutputFFI,
+    GenerationParamsFFI, GenerationProgressFFI, GenerationProviderInfoFFI, GenerationTypeFFI,
 };
 
 // Test-only exports

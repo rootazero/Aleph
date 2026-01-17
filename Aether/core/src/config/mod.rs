@@ -95,6 +95,9 @@ pub struct Config {
     /// Contains configurable behavioral parameters extracted from mechanism code
     #[serde(default)]
     pub policies: PoliciesConfig,
+    /// Generation providers configuration (image, speech, audio, video)
+    #[serde(default)]
+    pub generation: GenerationConfig,
 }
 
 // =============================================================================
@@ -180,6 +183,7 @@ impl Default for Config {
             dispatcher: DispatcherConfigToml::default(),
             cowork: CoworkConfigToml::default(),
             policies: PoliciesConfig::default(),
+            generation: GenerationConfig::default(),
         }
     }
 }
@@ -1062,7 +1066,10 @@ impl Config {
 
         // Read existing file
         let existing_contents = fs::read_to_string(&path).map_err(|e| {
-            AetherError::invalid_config(format!("Failed to read config for incremental save: {}", e))
+            AetherError::invalid_config(format!(
+                "Failed to read config for incremental save: {}",
+                e
+            ))
         })?;
 
         // Parse existing as toml::Value
@@ -1133,11 +1140,13 @@ impl Config {
                 .write(true)
                 .open(&temp_path)
                 .map_err(|e| {
-                    AetherError::invalid_config(format!("Failed to open temp file for fsync: {}", e))
+                    AetherError::invalid_config(format!(
+                        "Failed to open temp file for fsync: {}",
+                        e
+                    ))
                 })?;
-            file.sync_all().map_err(|e| {
-                AetherError::invalid_config(format!("Failed to fsync: {}", e))
-            })?;
+            file.sync_all()
+                .map_err(|e| AetherError::invalid_config(format!("Failed to fsync: {}", e)))?;
         }
 
         // Atomic rename
@@ -1237,10 +1246,7 @@ impl Config {
         warn!("Migrating deprecated [mcp.builtin] section to [tools]");
 
         // Extract mcp.builtin
-        let builtin = value
-            .get("mcp")
-            .and_then(|mcp| mcp.get("builtin"))
-            .cloned();
+        let builtin = value.get("mcp").and_then(|mcp| mcp.get("builtin")).cloned();
 
         if let Some(builtin_value) = builtin {
             // Add as [tools]

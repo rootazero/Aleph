@@ -28,16 +28,25 @@
 
 // Re-export all public types from ffi module
 pub use crate::ffi::{
+    // Initialization
+    init_core,
     // Core types
     AetherCore,
     AetherEventHandler,
     AetherFfiError,
+    // Memory types
+    MemoryItem,
     // Processing types
     ProcessOptions,
     // Tool types
     ToolInfoFFI,
-    // Memory types
-    MemoryItem,
-    // Initialization
-    init_core,
+    // Generation types
+    GenerationDataFFI,
+    GenerationDataTypeFFI,
+    GenerationMetadataFFI,
+    GenerationOutputFFI,
+    GenerationParamsFFI,
+    GenerationProgressFFI,
+    GenerationProviderInfoFFI,
+    GenerationTypeFFI,
 };

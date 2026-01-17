@@ -831,6 +831,103 @@ dictionary PendingConfirmationInfo {
   u64 timeout_ms;               // Timeout in milliseconds
 };
 
+// ===== GENERATION TYPES (media generation support) =====
+
+// Generation type enum (image, video, audio, speech)
+enum GenerationTypeFFI {
+  "Image",   // Image generation (DALL-E, Stable Diffusion, etc.)
+  "Video",   // Video generation (Runway, Pika, etc.)
+  "Audio",   // Audio/music generation (Suno, MusicGen, etc.)
+  "Speech",  // Text-to-speech synthesis (ElevenLabs, OpenAI TTS, etc.)
+};
+
+// Generation parameters for requests
+dictionary GenerationParamsFFI {
+  // Image/Video parameters
+  u32? width;
+  u32? height;
+  string? aspect_ratio;
+  string? quality;
+  string? style;
+  u32? n;
+  i64? seed;
+  string? format;
+
+  // Video-specific
+  f32? duration_seconds;
+  u32? fps;
+
+  // Audio/Speech parameters
+  string? voice;
+  f32? speed;
+  string? language;
+
+  // Common parameters
+  string? model;
+  string? negative_prompt;
+  f32? guidance_scale;
+  u32? steps;
+
+  // Reference inputs
+  string? reference_image;
+  string? reference_audio;
+};
+
+// Generation data type enum
+enum GenerationDataTypeFFI {
+  "Bytes",      // Raw binary data
+  "Url",        // URL to the generated content
+  "LocalPath",  // Path to a local file
+};
+
+// Generation data container
+dictionary GenerationDataFFI {
+  GenerationDataTypeFFI data_type;
+  sequence<u8>? bytes;
+  string? url;
+  string? local_path;
+};
+
+// Generation metadata
+dictionary GenerationMetadataFFI {
+  string? provider;
+  string? model;
+  u64? duration_ms;
+  i64? seed;
+  string? revised_prompt;
+  string? content_type;
+  u64? size_bytes;
+  u32? width;
+  u32? height;
+  f32? duration_seconds;
+};
+
+// Generation output result
+dictionary GenerationOutputFFI {
+  GenerationTypeFFI generation_type;
+  GenerationDataFFI data;
+  sequence<GenerationDataFFI> additional_outputs;
+  GenerationMetadataFFI metadata;
+  string? request_id;
+};
+
+// Generation progress for long-running operations
+dictionary GenerationProgressFFI {
+  f32 percentage;
+  string step;
+  u64? eta_ms;
+  boolean is_complete;
+  string? preview_url;
+};
+
+// Generation provider info for listing
+dictionary GenerationProviderInfoFFI {
+  string name;
+  string color;
+  sequence<GenerationTypeFFI> supported_types;
+  string? default_model;
+};
+
 // ===== CORE INTERFACE (rig-core based) =====
 // New simplified interface using rig-core for AI provider integration.
 // This provides a cleaner API compared to v1 and will eventually replace it.
@@ -1036,6 +1133,42 @@ interface AetherCore {
     // Extract text from image data using OCR
     [Throws=AetherFfiError]
     string extract_text(sequence<u8> image_data);
+
+    // ===== MEDIA GENERATION =====
+
+    // List all registered generation providers
+    sequence<GenerationProviderInfoFFI> list_generation_providers();
+
+    // Generate an image from text prompt
+    [Throws=AetherFfiError]
+    GenerationOutputFFI generate_image(string provider_name, string prompt, GenerationParamsFFI? params);
+
+    // Generate speech from text (TTS)
+    [Throws=AetherFfiError]
+    GenerationOutputFFI generate_speech(string provider_name, string text, GenerationParamsFFI? params);
+
+    // Generate audio/music from text prompt
+    [Throws=AetherFfiError]
+    GenerationOutputFFI generate_audio(string provider_name, string prompt, GenerationParamsFFI? params);
+
+    // Generate video from text prompt
+    [Throws=AetherFfiError]
+    GenerationOutputFFI generate_video(string provider_name, string prompt, GenerationParamsFFI? params);
+
+    // Generic generate method for any type
+    [Throws=AetherFfiError]
+    GenerationOutputFFI generate(string provider_name, GenerationTypeFFI generation_type, string prompt, GenerationParamsFFI? params);
+
+    // Check progress of a long-running generation
+    [Throws=AetherFfiError]
+    GenerationProgressFFI check_generation_progress(string provider_name, string job_id);
+
+    // Cancel a running generation
+    [Throws=AetherFfiError]
+    void cancel_generation(string provider_name, string job_id);
+
+    // Get providers that support a specific generation type
+    sequence<GenerationProviderInfoFFI> get_providers_for_type(GenerationTypeFFI generation_type);
 
     // ===== COWORK TASK ORCHESTRATION =====
 

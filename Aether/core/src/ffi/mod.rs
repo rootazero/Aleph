@@ -10,9 +10,11 @@
 //! - `skills`: Skills management (list_skills, install_skill, etc.)
 //! - `mcp`: MCP server management (list_mcp_servers, add_mcp_server, etc.)
 //! - `cowork`: Cowork task orchestration (cowork_plan, cowork_execute, etc.)
+//! - `generation`: Media generation (generate_image, generate_speech, etc.)
 
 mod config;
 mod cowork;
+mod generation;
 mod mcp;
 mod memory;
 mod processing;
@@ -31,6 +33,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 // Re-export public types
+pub use self::generation::{
+    GenerationDataFFI, GenerationDataTypeFFI, GenerationMetadataFFI, GenerationOutputFFI,
+    GenerationParamsFFI, GenerationProgressFFI, GenerationProviderInfoFFI, GenerationTypeFFI,
+};
 pub use self::processing::ProcessOptions;
 
 /// Error type for FFI boundary
@@ -119,7 +125,11 @@ pub struct ToolInfoFFI {
 impl ToolInfoFFI {
     /// Create a new tool info
     pub fn new(name: String, description: String, source: String) -> Self {
-        Self { name, description, source }
+        Self {
+            name,
+            description,
+            source,
+        }
     }
 }
 
@@ -207,6 +217,9 @@ pub struct AetherCore {
     pub(crate) cowork_engine: Arc<RwLock<Option<Arc<crate::cowork::CoworkEngine>>>>,
     /// Conversation histories keyed by topic_id for multi-turn support
     pub(crate) conversation_histories: Arc<RwLock<HashMap<String, Vec<Message>>>>,
+    /// Generation provider registry for media generation (image, speech, etc.)
+    pub(crate) generation_registry:
+        Arc<RwLock<crate::generation::GenerationProviderRegistry>>,
 }
 
 impl AetherCore {
@@ -230,17 +243,23 @@ impl AetherCore {
     /// - Skill install/delete
     /// - Custom command changes
     pub(crate) fn notify_tools_changed(&self) {
-        let tool_count = self.registered_tools.read()
+        let tool_count = self
+            .registered_tools
+            .read()
             .map(|tools| tools.len() as u32)
             .unwrap_or(0);
 
-        info!(tool_count = tool_count, "Notifying UI of tool registry change");
+        info!(
+            tool_count = tool_count,
+            "Notifying UI of tool registry change"
+        );
         self.handler.on_tools_changed(tool_count);
     }
 
     /// Get current tool count
     pub fn get_tool_count(&self) -> u32 {
-        self.registered_tools.read()
+        self.registered_tools
+            .read()
             .map(|tools| tools.len() as u32)
             .unwrap_or(0)
     }
@@ -285,8 +304,7 @@ pub fn init_core(
         }
         Err(_) => {
             // Not in async context, create our own runtime
-            let rt = tokio::runtime::Runtime::new()
-                .expect("Failed to create Tokio runtime");
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
             let handle = rt.handle().clone();
             (handle, Some(rt))
         }
@@ -324,12 +342,28 @@ pub fn init_core(
             } else {
                 // Default provider name exists but config not found
                 info!(provider = %name, "Default provider config not found, using defaults");
-                ("openai".to_string(), "gpt-4o".to_string(), None, None, None, None, None)
+                (
+                    "openai".to_string(),
+                    "gpt-4o".to_string(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
             }
         } else {
             // No default provider configured
             info!("No default provider configured, using openai defaults");
-            ("openai".to_string(), "gpt-4o".to_string(), None, None, None, None, None)
+            (
+                "openai".to_string(),
+                "gpt-4o".to_string(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
         }
     };
 
@@ -340,7 +374,8 @@ pub fn init_core(
         temperature: temperature.unwrap_or(0.7),
         max_tokens: max_tokens.unwrap_or(4096),
         max_turns: 50, // Default to 50 turns for complex multi-step tasks
-        system_prompt: system_prompt.unwrap_or_else(|| "You are Aether, an intelligent assistant.".to_string()),
+        system_prompt: system_prompt
+            .unwrap_or_else(|| "You are Aether, an intelligent assistant.".to_string()),
         api_key,
         base_url,
     };
@@ -386,9 +421,7 @@ pub fn init_core(
                 info!("Tavily API key found in config file");
             }
 
-            BuiltinToolConfig {
-                tavily_api_key,
-            }
+            BuiltinToolConfig { tavily_api_key }
         } else {
             BuiltinToolConfig::default()
         }
@@ -400,7 +433,7 @@ pub fn init_core(
     // NOTE: ToolServer::run() requires a tokio runtime context (uses tokio::spawn)
     // We use runtime.enter() to set the current runtime context before creating the handle
     let (tool_server_handle, registered_tools) = {
-        let _guard = runtime.enter();  // Enter runtime context for tokio::spawn
+        let _guard = runtime.enter(); // Enter runtime context for tokio::spawn
         RigAgentManager::create_shared_handle_with_config(builtin_tool_config)
     };
     info!(
@@ -408,18 +441,22 @@ pub fn init_core(
         "Created shared ToolServerHandle with built-in tools"
     );
 
+    // Initialize generation provider registry from config
+    let generation_registry = generation::init_generation_providers(&full_config);
+
     Ok(Arc::new(AetherCore {
         config_holder,
         full_config: Arc::new(Mutex::new(full_config)),
-        config_path,  // Store config path for reload capability
+        config_path, // Store config path for reload capability
         memory_path,
         handler,
         runtime,
-        _owned_runtime: owned_runtime,  // Keep runtime alive if we created it
+        _owned_runtime: owned_runtime, // Keep runtime alive if we created it
         current_op_token,
         tool_server_handle,
         registered_tools,
-        cowork_engine: Arc::new(RwLock::new(None)),  // Lazily initialized
-        conversation_histories: Arc::new(RwLock::new(HashMap::new())),  // Multi-turn support
+        cowork_engine: Arc::new(RwLock::new(None)), // Lazily initialized
+        conversation_histories: Arc::new(RwLock::new(HashMap::new())), // Multi-turn support
+        generation_registry,
     }))
 }
