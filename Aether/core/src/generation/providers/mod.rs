@@ -31,6 +31,7 @@
 //! ```
 
 pub mod elevenlabs;
+pub mod google_imagen;
 pub mod openai_compat;
 pub mod openai_image;
 pub mod openai_tts;
@@ -38,6 +39,7 @@ pub mod replicate;
 pub mod stability;
 
 pub use elevenlabs::ElevenLabsProvider;
+pub use google_imagen::GoogleImagenProvider;
 pub use openai_compat::{OpenAiCompatProvider, OpenAiCompatProviderBuilder};
 pub use openai_image::OpenAiImageProvider;
 pub use openai_tts::OpenAiTtsProvider;
@@ -157,6 +159,11 @@ pub fn create_provider(
             config.base_url.clone(),
             config.model.clone(),
         )),
+        "google" | "google_imagen" | "imagen" => Arc::new(GoogleImagenProvider::new(
+            api_key,
+            config.base_url.clone(),
+            config.model.clone(),
+        )),
         "replicate" => {
             let mut builder = ReplicateProvider::builder(&api_key);
 
@@ -185,7 +192,7 @@ pub fn create_provider(
         other => {
             return Err(GenerationError::invalid_parameters(
                 format!(
-                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_compat, stability, stability_image, sdxl, replicate, elevenlabs",
+                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, replicate, elevenlabs",
                     other
                 ),
                 Some("provider_type".to_string()),

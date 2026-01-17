@@ -116,8 +116,8 @@ enum GenerationPresetProviders {
             color: "#4285F4",
             providerType: "google",
             supportedTypes: [.image],
-            defaultModel: "imagen-3.0-generate-001",
-            description: "Google's Imagen image generation",
+            defaultModel: "imagen-3.0-generate-002",
+            description: "Google's Imagen image generation via Gemini API",
             baseUrl: nil,
             category: .image
         ),
