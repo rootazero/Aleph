@@ -476,6 +476,131 @@ dictionary FullConfig {
   TriggerConfig? trigger;
   SmartMatchingConfig smart_matching;
   SkillsConfig? skills;  // Skills configuration (add-skills-capability)
+  PoliciesConfig policies;  // Mechanism-policy separation configuration
+};
+
+// =============================================================================
+// Policies Configuration (mechanism-policy separation)
+// =============================================================================
+
+// Root policies configuration
+dictionary PoliciesConfig {
+  ToolSafetyPolicy tool_safety;
+  IntentDetectionPolicy intent;
+  MemoryPolicies memory;
+  RetryPolicy retry;
+  WebFetchPolicy web_fetch;
+  TextFormatPolicy text;
+  MetricsPolicy metrics;
+  KeywordPolicy keyword;
+};
+
+// Keyword matching policy for intent detection
+dictionary KeywordPolicy {
+  boolean enabled;
+  f32 global_min_score;
+  sequence<PolicyKeywordRule> rules;
+};
+
+// A keyword rule in policy config
+dictionary PolicyKeywordRule {
+  string id;
+  string intent_type;
+  sequence<PolicyWeightedKeyword> keywords;
+  string match_mode;
+  f32 min_score;
+};
+
+// Single keyword with weight for policy-based matching
+dictionary PolicyWeightedKeyword {
+  string word;
+  f32 weight;
+};
+
+// Tool safety inference policy
+dictionary ToolSafetyPolicy {
+  sequence<string> high_risk_keywords;
+  sequence<string> low_risk_keywords;
+  sequence<string> reversible_keywords;
+  sequence<string> readonly_keywords;
+  string builtin_fallback;
+  string native_fallback;
+  string mcp_fallback;
+  string skill_fallback;
+  string custom_fallback;
+};
+
+// Intent detection policy
+dictionary IntentDetectionPolicy {
+  f64 confidence_threshold;
+  u64 timeout_ms;
+  u64 min_input_length;
+  sequence<string> video_url_patterns;
+};
+
+// Memory policies container
+dictionary MemoryPolicies {
+  CompressionPolicy compression;
+  AiRetrievalPolicy ai_retrieval;
+};
+
+// Compression scheduling policy
+dictionary CompressionPolicy {
+  u32 idle_timeout_seconds;
+  u32 turn_threshold;
+  u32 background_interval_seconds;
+};
+
+// AI-based memory retrieval policy
+dictionary AiRetrievalPolicy {
+  u64 timeout_ms;
+  u32 max_candidates;
+  u32 fallback_count;
+  u64 content_truncate_length;
+};
+
+// Network retry policy
+dictionary RetryPolicy {
+  u32 max_retries;
+  u64 initial_backoff_ms;
+  f64 backoff_multiplier;
+  u64 max_backoff_ms;
+  sequence<u16> retryable_status_codes;
+  boolean retry_on_timeout;
+  boolean retry_on_network_error;
+};
+
+// Web fetch behavior policy
+dictionary WebFetchPolicy {
+  u64 max_content_length;
+  u64 min_content_length;
+  string user_agent;
+  u64 timeout_seconds;
+  boolean follow_redirects;
+  u64 max_redirects;
+  sequence<string> content_selectors;
+};
+
+// Text formatting policy
+dictionary TextFormatPolicy {
+  u64 default_truncate_length;
+  u64 search_snippet_length;
+  u64 mcp_result_length;
+  u64 system_prompt_length;
+  u64 user_message_length;
+  string truncation_suffix;
+};
+
+// Performance metrics policy
+dictionary MetricsPolicy {
+  u64 target_hotkey_to_clipboard_ms;
+  u64 target_clipboard_to_memory_ms;
+  u64 target_memory_to_ai_ms;
+  u64 target_ai_to_paste_ms;
+  u64 target_paste_to_complete_ms;
+  f64 warning_multiplier;
+  boolean enable_logging;
+  boolean enable_warnings;
 };
 
 // Provider config entry (name + config)
@@ -777,6 +902,9 @@ interface AetherCore {
 
     [Throws=AetherFfiError]
     void update_search_config(SearchConfig search);
+
+    [Throws=AetherFfiError]
+    void update_policies(PoliciesConfig policies);
 
     // Test search provider with ad-hoc config (Config Management)
     [Throws=AetherFfiError]

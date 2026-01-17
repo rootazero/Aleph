@@ -945,3 +945,83 @@
 "settings.model_routing.task.quick_tasks" = "Quick Tasks";
 "settings.model_routing.task.privacy_sensitive" = "Privacy Sensitive";
 "settings.model_routing.task.reasoning" = "Reasoning";
+
+// MARK: - Settings Window - Policies Tab
+"settings.policies.title" = "Policies";
+"settings.policies.description" = "Configure behavioral parameters that control how Aether operates. These settings allow you to tune system behavior without code changes.";
+
+// Policies Sections
+"settings.policies.intent_detection" = "Intent Detection";
+"settings.policies.memory" = "Memory";
+"settings.policies.network_retry" = "Network Retry";
+"settings.policies.web_fetch" = "Web Fetch";
+"settings.policies.text_format" = "Text Format";
+"settings.policies.performance_metrics" = "Performance Metrics";
+"settings.policies.tool_safety" = "Tool Safety";
+
+// Intent Detection Policy
+"settings.policies.confidence_threshold" = "Confidence Threshold";
+"settings.policies.confidence_threshold_desc" = "Minimum confidence for accepting an intent (0.0-1.0)";
+"settings.policies.timeout_ms" = "Timeout";
+"settings.policies.timeout_ms_desc" = "Maximum time for AI intent detection";
+"settings.policies.min_input_length" = "Minimum Input Length";
+"settings.policies.min_input_length_desc" = "Skip intent detection for shorter inputs";
+
+// Memory Policy
+"settings.policies.compression" = "Compression";
+"settings.policies.idle_timeout" = "Idle Timeout";
+"settings.policies.idle_timeout_desc" = "Time before triggering memory compression";
+"settings.policies.turn_threshold" = "Turn Threshold";
+"settings.policies.turn_threshold_desc" = "Conversation turns before compression";
+"settings.policies.ai_retrieval" = "AI Retrieval";
+"settings.policies.max_candidates" = "Max Candidates";
+"settings.policies.max_candidates_desc" = "Maximum memories to send to AI for selection";
+"settings.policies.fallback_count" = "Fallback Count";
+"settings.policies.fallback_count_desc" = "Return top N by similarity if AI fails";
+
+// Retry Policy
+"settings.policies.max_retries" = "Max Retries";
+"settings.policies.max_retries_desc" = "Maximum retry attempts for failed requests";
+"settings.policies.initial_backoff" = "Initial Backoff";
+"settings.policies.initial_backoff_desc" = "Initial wait time before first retry";
+"settings.policies.backoff_multiplier" = "Backoff Multiplier";
+"settings.policies.backoff_multiplier_desc" = "Factor to multiply backoff time after each retry";
+"settings.policies.retry_on_timeout" = "Retry on Timeout";
+"settings.policies.retry_on_network_error" = "Retry on Network Error";
+
+// Web Fetch Policy
+"settings.policies.max_content_length" = "Max Content Length";
+"settings.policies.max_content_length_desc" = "Maximum characters to return from web fetch";
+"settings.policies.timeout" = "Timeout";
+"settings.policies.web_timeout_desc" = "Request timeout for web fetching";
+"settings.policies.user_agent" = "User Agent";
+"settings.policies.user_agent_desc" = "HTTP User-Agent header for requests";
+"settings.policies.follow_redirects" = "Follow Redirects";
+
+// Text Format Policy
+"settings.policies.default_truncate" = "Default Truncate";
+"settings.policies.default_truncate_desc" = "Default text truncation length";
+"settings.policies.search_snippet" = "Search Snippet";
+"settings.policies.search_snippet_desc" = "Search result snippet length";
+"settings.policies.mcp_result" = "MCP Result";
+"settings.policies.mcp_result_desc" = "MCP tool result truncation length";
+"settings.policies.truncation_suffix" = "Truncation Suffix";
+"settings.policies.truncation_suffix_desc" = "Text appended when content is truncated";
+
+// Metrics Policy
+"settings.policies.target_latencies" = "Target Latencies";
+"settings.policies.hotkey_clipboard" = "Hotkey→Clip";
+"settings.policies.clipboard_memory" = "Clip→Memory";
+"settings.policies.memory_ai" = "Memory→AI";
+"settings.policies.warning_multiplier" = "Warning Multiplier";
+"settings.policies.warning_multiplier_desc" = "Factor above target to trigger warnings";
+"settings.policies.enable_logging" = "Enable Logging";
+"settings.policies.enable_warnings" = "Enable Warnings";
+
+// Tool Safety Policy
+"settings.policies.safety_keywords" = "Safety Keywords";
+"settings.policies.high_risk" = "High Risk";
+"settings.policies.low_risk" = "Low Risk";
+"settings.policies.reversible" = "Reversible";
+"settings.policies.readonly" = "Read-only";
+"settings.policies.fallback_levels" = "Fallback Safety Levels";

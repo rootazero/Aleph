@@ -23,7 +23,7 @@ pub struct IntentDetectionPolicy {
     /// Minimum input length for intent detection (skip shorter inputs)
     /// Default: 3
     #[serde(default = "default_min_input_length")]
-    pub min_input_length: usize,
+    pub min_input_length: u64,
 
     /// URL patterns for video detection
     /// Default: ["youtube.com/watch", "youtu.be/", "youtube.com/shorts",
@@ -51,7 +51,7 @@ fn default_timeout_ms() -> u64 {
     3000
 }
 
-fn default_min_input_length() -> usize {
+fn default_min_input_length() -> u64 {
     3
 }
 

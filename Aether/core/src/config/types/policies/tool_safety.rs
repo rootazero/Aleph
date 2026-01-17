@@ -16,24 +16,24 @@ pub struct ToolSafetyPolicy {
     /// Default: ["delete", "remove", "drop", "shell", "execute", "run_command",
     ///           "bash", "terminal", "destroy", "erase", "purge"]
     #[serde(default = "default_high_risk_keywords")]
-    pub high_risk_keywords: HashSet<String>,
+    pub high_risk_keywords: Vec<String>,
 
     /// Keywords indicating low-risk irreversible operations
     /// Default: ["send", "notify", "post", "publish", "email", "message", "commit", "push"]
     #[serde(default = "default_low_risk_keywords")]
-    pub low_risk_keywords: HashSet<String>,
+    pub low_risk_keywords: Vec<String>,
 
     /// Keywords indicating reversible operations
     /// Default: ["create", "copy", "move", "rename", "update", "write", "edit",
     ///           "modify", "set", "add", "insert"]
     #[serde(default = "default_reversible_keywords")]
-    pub reversible_keywords: HashSet<String>,
+    pub reversible_keywords: Vec<String>,
 
     /// Keywords indicating read-only operations
     /// Default: ["search", "query", "get", "read", "list", "show", "view",
     ///           "find", "fetch", "browse", "summarize", "translate", "analyze"]
     #[serde(default = "default_readonly_keywords")]
-    pub readonly_keywords: HashSet<String>,
+    pub readonly_keywords: Vec<String>,
 
     /// Default safety level for unmatched Builtin tools
     /// Values: "readonly", "reversible", "irreversible_low_risk", "irreversible_high_risk"
@@ -113,10 +113,30 @@ impl ToolSafetyPolicy {
             _ => "irreversible_low_risk", // Default fallback
         }
     }
+
+    /// Convert to HashSet for efficient lookup (internal use)
+    pub fn high_risk_set(&self) -> HashSet<String> {
+        self.high_risk_keywords.iter().cloned().collect()
+    }
+
+    /// Convert to HashSet for efficient lookup (internal use)
+    pub fn low_risk_set(&self) -> HashSet<String> {
+        self.low_risk_keywords.iter().cloned().collect()
+    }
+
+    /// Convert to HashSet for efficient lookup (internal use)
+    pub fn reversible_set(&self) -> HashSet<String> {
+        self.reversible_keywords.iter().cloned().collect()
+    }
+
+    /// Convert to HashSet for efficient lookup (internal use)
+    pub fn readonly_set(&self) -> HashSet<String> {
+        self.readonly_keywords.iter().cloned().collect()
+    }
 }
 
-fn default_high_risk_keywords() -> HashSet<String> {
-    [
+fn default_high_risk_keywords() -> Vec<String> {
+    vec![
         "delete", "remove", "drop", "shell", "execute", "run_command",
         "bash", "terminal", "destroy", "erase", "purge",
     ]
@@ -125,15 +145,15 @@ fn default_high_risk_keywords() -> HashSet<String> {
     .collect()
 }
 
-fn default_low_risk_keywords() -> HashSet<String> {
-    ["send", "notify", "post", "publish", "email", "message", "commit", "push"]
+fn default_low_risk_keywords() -> Vec<String> {
+    vec!["send", "notify", "post", "publish", "email", "message", "commit", "push"]
         .iter()
         .map(|s| s.to_string())
         .collect()
 }
 
-fn default_reversible_keywords() -> HashSet<String> {
-    [
+fn default_reversible_keywords() -> Vec<String> {
+    vec![
         "create", "copy", "move", "rename", "update", "write", "edit",
         "modify", "set", "add", "insert",
     ]
@@ -142,8 +162,8 @@ fn default_reversible_keywords() -> HashSet<String> {
     .collect()
 }
 
-fn default_readonly_keywords() -> HashSet<String> {
-    [
+fn default_readonly_keywords() -> Vec<String> {
+    vec![
         "search", "query", "get", "read", "list", "show", "view",
         "find", "fetch", "browse", "summarize", "translate", "analyze",
     ]
@@ -179,10 +199,10 @@ mod tests {
     #[test]
     fn test_default_policy_has_expected_keywords() {
         let policy = ToolSafetyPolicy::default();
-        assert!(policy.high_risk_keywords.contains("delete"));
-        assert!(policy.high_risk_keywords.contains("shell"));
-        assert!(policy.readonly_keywords.contains("search"));
-        assert!(policy.readonly_keywords.contains("query"));
+        assert!(policy.high_risk_keywords.contains(&"delete".to_string()));
+        assert!(policy.high_risk_keywords.contains(&"shell".to_string()));
+        assert!(policy.readonly_keywords.contains(&"search".to_string()));
+        assert!(policy.readonly_keywords.contains(&"query".to_string()));
     }
 
     #[test]
@@ -200,11 +220,11 @@ mod tests {
         "#;
         let policy: ToolSafetyPolicy = toml::from_str(toml).unwrap();
         // Custom keywords used
-        assert!(policy.high_risk_keywords.contains("custom_delete"));
-        assert!(policy.high_risk_keywords.contains("danger"));
+        assert!(policy.high_risk_keywords.contains(&"custom_delete".to_string()));
+        assert!(policy.high_risk_keywords.contains(&"danger".to_string()));
         // Defaults NOT included when overridden
-        assert!(!policy.high_risk_keywords.contains("delete"));
+        assert!(!policy.high_risk_keywords.contains(&"delete".to_string()));
         // Other fields use defaults
-        assert!(policy.readonly_keywords.contains("search"));
+        assert!(policy.readonly_keywords.contains(&"search".to_string()));
     }
 }

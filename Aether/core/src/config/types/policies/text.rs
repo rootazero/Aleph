@@ -14,27 +14,27 @@ pub struct TextFormatPolicy {
     /// Default text truncation length
     /// Default: 200
     #[serde(default = "default_text_truncate_length")]
-    pub default_truncate_length: usize,
+    pub default_truncate_length: u64,
 
     /// Search snippet truncation length
     /// Default: 300
     #[serde(default = "default_search_snippet_length")]
-    pub search_snippet_length: usize,
+    pub search_snippet_length: u64,
 
     /// MCP tool result truncation length
     /// Default: 2000
     #[serde(default = "default_mcp_result_length")]
-    pub mcp_result_length: usize,
+    pub mcp_result_length: u64,
 
     /// System prompt truncation length
     /// Default: 5000
     #[serde(default = "default_system_prompt_length")]
-    pub system_prompt_length: usize,
+    pub system_prompt_length: u64,
 
     /// User message truncation length
     /// Default: 8000
     #[serde(default = "default_user_message_length")]
-    pub user_message_length: usize,
+    pub user_message_length: u64,
 
     /// Truncation suffix to append when content is truncated
     /// Default: "..."
@@ -55,23 +55,23 @@ impl Default for TextFormatPolicy {
     }
 }
 
-fn default_text_truncate_length() -> usize {
+fn default_text_truncate_length() -> u64 {
     200
 }
 
-fn default_search_snippet_length() -> usize {
+fn default_search_snippet_length() -> u64 {
     300
 }
 
-fn default_mcp_result_length() -> usize {
+fn default_mcp_result_length() -> u64 {
     2000
 }
 
-fn default_system_prompt_length() -> usize {
+fn default_system_prompt_length() -> u64 {
     5000
 }
 
-fn default_user_message_length() -> usize {
+fn default_user_message_length() -> u64 {
     8000
 }
 
@@ -82,17 +82,17 @@ fn default_truncation_suffix() -> String {
 impl TextFormatPolicy {
     /// Truncate text to the default length
     pub fn truncate_default(&self, text: &str) -> String {
-        self.truncate_to_length(text, self.default_truncate_length)
+        self.truncate_to_length(text, self.default_truncate_length as usize)
     }
 
     /// Truncate text to the search snippet length
     pub fn truncate_search_snippet(&self, text: &str) -> String {
-        self.truncate_to_length(text, self.search_snippet_length)
+        self.truncate_to_length(text, self.search_snippet_length as usize)
     }
 
     /// Truncate text to the MCP result length
     pub fn truncate_mcp_result(&self, text: &str) -> String {
-        self.truncate_to_length(text, self.mcp_result_length)
+        self.truncate_to_length(text, self.mcp_result_length as usize)
     }
 
     /// Truncate text to a specific length, appending suffix if truncated

@@ -14,12 +14,12 @@ pub struct WebFetchPolicy {
     /// Maximum content length in characters to return
     /// Default: 10000
     #[serde(default = "default_max_content_length")]
-    pub max_content_length: usize,
+    pub max_content_length: u64,
 
     /// Minimum content length to accept a selector match
     /// Default: 100
     #[serde(default = "default_min_content_length")]
-    pub min_content_length: usize,
+    pub min_content_length: u64,
 
     /// User-Agent header value for HTTP requests
     /// Default: "Aether/1.0"
@@ -39,7 +39,7 @@ pub struct WebFetchPolicy {
     /// Maximum number of redirects to follow
     /// Default: 10
     #[serde(default = "default_max_redirects")]
-    pub max_redirects: usize,
+    pub max_redirects: u64,
 
     /// CSS selectors for content extraction in priority order
     /// Default: ["article", "main", ".content", ".post-content", "#content", "body"]
@@ -61,11 +61,11 @@ impl Default for WebFetchPolicy {
     }
 }
 
-fn default_max_content_length() -> usize {
+fn default_max_content_length() -> u64 {
     10000
 }
 
-fn default_min_content_length() -> usize {
+fn default_min_content_length() -> u64 {
     100
 }
 
@@ -81,7 +81,7 @@ fn default_follow_redirects() -> bool {
     true
 }
 
-fn default_max_redirects() -> usize {
+fn default_max_redirects() -> u64 {
     10
 }
 
@@ -104,7 +104,8 @@ impl WebFetchPolicy {
 
     /// Check if content length is within acceptable range
     pub fn is_content_acceptable(&self, length: usize) -> bool {
-        length >= self.min_content_length && length <= self.max_content_length
+        let len = length as u64;
+        len >= self.min_content_length && len <= self.max_content_length
     }
 }
 

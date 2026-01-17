@@ -84,7 +84,7 @@ pub struct AiRetrievalPolicy {
     /// Maximum content length for each candidate (characters)
     /// Default: 300
     #[serde(default = "default_content_truncate_length")]
-    pub content_truncate_length: usize,
+    pub content_truncate_length: u64,
 }
 
 impl Default for AiRetrievalPolicy {
@@ -110,7 +110,7 @@ fn default_fallback_count() -> u32 {
     3
 }
 
-fn default_content_truncate_length() -> usize {
+fn default_content_truncate_length() -> u64 {
     300
 }
 

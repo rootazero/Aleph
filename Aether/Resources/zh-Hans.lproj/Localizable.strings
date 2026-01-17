@@ -947,3 +947,113 @@
 "settings.model_routing.task.quick_tasks" = "快速任务";
 "settings.model_routing.task.privacy_sensitive" = "隐私敏感";
 "settings.model_routing.task.reasoning" = "推理";
+
+// MARK: - Settings Window - Policies Tab
+"settings.policies.title" = "策略配置";
+"settings.policies.description" = "配置系统行为策略。这些设置控制工具安全、意图检测、记忆管理等方面的参数。";
+
+// Tool Safety Policy
+"settings.policies.tool_safety.title" = "工具安全";
+"settings.policies.tool_safety.description" = "配置工具执行的安全级别分类";
+"settings.policies.tool_safety.high_risk_keywords" = "高风险关键词";
+"settings.policies.tool_safety.high_risk_keywords_description" = "包含这些关键词的工具将被标记为高风险";
+"settings.policies.tool_safety.low_risk_keywords" = "低风险关键词";
+"settings.policies.tool_safety.low_risk_keywords_description" = "包含这些关键词的工具将被标记为低风险";
+"settings.policies.tool_safety.reversible_keywords" = "可逆操作关键词";
+"settings.policies.tool_safety.reversible_keywords_description" = "包含这些关键词的工具将被标记为可逆操作";
+"settings.policies.tool_safety.readonly_keywords" = "只读关键词";
+"settings.policies.tool_safety.readonly_keywords_description" = "包含这些关键词的工具将被标记为只读操作";
+"settings.policies.tool_safety.fallback_levels" = "默认安全级别";
+"settings.policies.tool_safety.builtin_fallback" = "内置工具默认级别";
+"settings.policies.tool_safety.native_fallback" = "原生工具默认级别";
+"settings.policies.tool_safety.mcp_fallback" = "MCP 工具默认级别";
+"settings.policies.tool_safety.skill_fallback" = "技能工具默认级别";
+"settings.policies.tool_safety.custom_fallback" = "自定义工具默认级别";
+
+// Intent Detection Policy
+"settings.policies.intent.title" = "意图检测";
+"settings.policies.intent.description" = "配置 AI 意图检测的参数";
+"settings.policies.intent.confidence_threshold" = "置信度阈值";
+"settings.policies.intent.confidence_threshold_description" = "触发特定意图的最小置信度分数 (0.0-1.0)";
+"settings.policies.intent.timeout_ms" = "超时时间 (毫秒)";
+"settings.policies.intent.timeout_ms_description" = "意图检测的最大等待时间";
+"settings.policies.intent.min_input_length" = "最小输入长度";
+"settings.policies.intent.min_input_length_description" = "触发意图检测的最小字符数";
+"settings.policies.intent.video_url_patterns" = "视频 URL 模式";
+"settings.policies.intent.video_url_patterns_description" = "用于识别视频链接的 URL 模式";
+
+// Memory Policies
+"settings.policies.memory.title" = "记忆管理";
+"settings.policies.memory.description" = "配置记忆压缩和 AI 检索的参数";
+
+// Compression Policy
+"settings.policies.memory.compression.title" = "压缩策略";
+"settings.policies.memory.compression.idle_timeout_seconds" = "空闲超时 (秒)";
+"settings.policies.memory.compression.idle_timeout_description" = "触发压缩的空闲时间";
+"settings.policies.memory.compression.turn_threshold" = "对话轮次阈值";
+"settings.policies.memory.compression.turn_threshold_description" = "触发压缩的对话轮次数";
+"settings.policies.memory.compression.background_interval_seconds" = "后台间隔 (秒)";
+"settings.policies.memory.compression.background_interval_description" = "后台压缩任务的执行间隔";
+
+// AI Retrieval Policy
+"settings.policies.memory.ai_retrieval.title" = "AI 检索策略";
+"settings.policies.memory.ai_retrieval.timeout_ms" = "超时时间 (毫秒)";
+"settings.policies.memory.ai_retrieval.timeout_description" = "AI 检索的最大等待时间";
+"settings.policies.memory.ai_retrieval.max_candidates" = "最大候选数";
+"settings.policies.memory.ai_retrieval.max_candidates_description" = "检索时考虑的最大候选记忆数";
+"settings.policies.memory.ai_retrieval.fallback_count" = "降级数量";
+"settings.policies.memory.ai_retrieval.fallback_count_description" = "AI 检索失败时返回的默认结果数";
+"settings.policies.memory.ai_retrieval.content_truncate_length" = "内容截断长度";
+"settings.policies.memory.ai_retrieval.content_truncate_description" = "检索内容的最大字符数";
+
+// Retry Policy
+"settings.policies.retry.title" = "重试策略";
+"settings.policies.retry.description" = "配置 API 请求重试行为";
+"settings.policies.retry.max_retries" = "最大重试次数";
+"settings.policies.retry.max_retries_description" = "请求失败后的最大重试次数";
+"settings.policies.retry.initial_backoff_ms" = "初始退避时间 (毫秒)";
+"settings.policies.retry.initial_backoff_description" = "第一次重试前的等待时间";
+"settings.policies.retry.backoff_multiplier" = "退避倍数";
+"settings.policies.retry.backoff_multiplier_description" = "每次重试的退避时间倍增系数";
+"settings.policies.retry.retryable_status_codes" = "可重试状态码";
+"settings.policies.retry.retryable_status_codes_description" = "触发重试的 HTTP 状态码";
+
+// Web Fetch Policy
+"settings.policies.web_fetch.title" = "网页获取";
+"settings.policies.web_fetch.description" = "配置网页内容获取的参数";
+"settings.policies.web_fetch.max_content_length" = "最大内容长度";
+"settings.policies.web_fetch.max_content_length_description" = "获取网页内容的最大字符数";
+"settings.policies.web_fetch.min_content_length" = "最小内容长度";
+"settings.policies.web_fetch.min_content_length_description" = "有效网页内容的最小字符数";
+"settings.policies.web_fetch.user_agent" = "User-Agent";
+"settings.policies.web_fetch.user_agent_description" = "HTTP 请求的 User-Agent 字符串";
+"settings.policies.web_fetch.timeout_seconds" = "超时时间 (秒)";
+"settings.policies.web_fetch.timeout_seconds_description" = "网页获取的最大等待时间";
+"settings.policies.web_fetch.max_redirects" = "最大重定向次数";
+"settings.policies.web_fetch.max_redirects_description" = "允许的最大 HTTP 重定向次数";
+
+// Text Format Policy
+"settings.policies.text.title" = "文本格式";
+"settings.policies.text.description" = "配置文本截断和格式化参数";
+"settings.policies.text.default_truncate_length" = "默认截断长度";
+"settings.policies.text.default_truncate_description" = "一般文本的默认最大字符数";
+"settings.policies.text.search_snippet_length" = "搜索片段长度";
+"settings.policies.text.search_snippet_description" = "搜索结果片段的最大字符数";
+"settings.policies.text.mcp_result_length" = "MCP 结果长度";
+"settings.policies.text.mcp_result_description" = "MCP 工具结果的最大字符数";
+
+// Metrics Policy
+"settings.policies.metrics.title" = "性能指标";
+"settings.policies.metrics.description" = "配置性能监控的目标阈值";
+"settings.policies.metrics.target_hotkey_to_clipboard_ms" = "热键到剪贴板目标 (毫秒)";
+"settings.policies.metrics.target_hotkey_description" = "从热键按下到剪贴板读取的目标时间";
+"settings.policies.metrics.target_clipboard_to_memory_ms" = "剪贴板到记忆目标 (毫秒)";
+"settings.policies.metrics.target_clipboard_description" = "从剪贴板读取到记忆存储的目标时间";
+"settings.policies.metrics.target_memory_to_ai_ms" = "记忆到 AI 目标 (毫秒)";
+"settings.policies.metrics.target_memory_description" = "从记忆检索到 AI 请求的目标时间";
+"settings.policies.metrics.target_ai_to_paste_ms" = "AI 到粘贴目标 (毫秒)";
+"settings.policies.metrics.target_ai_description" = "从 AI 响应到粘贴准备的目标时间";
+"settings.policies.metrics.target_paste_to_complete_ms" = "粘贴到完成目标 (毫秒)";
+"settings.policies.metrics.target_paste_description" = "从粘贴开始到完成的目标时间";
+"settings.policies.metrics.warning_multiplier" = "警告倍数";
+"settings.policies.metrics.warning_multiplier_description" = "超过目标时间多少倍触发警告";

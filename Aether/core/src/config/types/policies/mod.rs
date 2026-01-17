@@ -29,6 +29,7 @@
 //! ```
 
 pub mod intent;
+pub mod keyword;
 pub mod memory;
 pub mod metrics;
 pub mod retry;
@@ -37,6 +38,7 @@ pub mod tool_safety;
 pub mod web_fetch;
 
 pub use intent::IntentDetectionPolicy;
+pub use keyword::{KeywordPolicy, PolicyKeywordRule, PolicyWeightedKeyword};
 pub use memory::{AiRetrievalPolicy, CompressionPolicy, MemoryPolicies};
 pub use metrics::MetricsPolicy;
 pub use retry::RetryPolicy;
@@ -80,6 +82,10 @@ pub struct PoliciesConfig {
     /// Performance metrics policy
     #[serde(default)]
     pub metrics: MetricsPolicy,
+
+    /// Keyword matching policy for intent detection
+    #[serde(default)]
+    pub keyword: KeywordPolicy,
 }
 
 #[cfg(test)]
@@ -94,7 +100,7 @@ mod tests {
         assert_eq!(config.intent.confidence_threshold, 0.7);
         assert_eq!(config.retry.max_retries, 3);
         assert_eq!(config.memory.compression.idle_timeout_seconds, 300);
-        assert!(config.tool_safety.high_risk_keywords.contains("delete"));
+        assert!(config.tool_safety.high_risk_keywords.contains(&"delete".to_string()));
     }
 
     #[test]
@@ -114,7 +120,7 @@ mod tests {
 
         // Defaults for unspecified policies
         assert_eq!(config.memory.compression.idle_timeout_seconds, 300);
-        assert!(config.tool_safety.high_risk_keywords.contains("delete"));
+        assert!(config.tool_safety.high_risk_keywords.contains(&"delete".to_string()));
     }
 
     #[test]
@@ -156,8 +162,8 @@ mod tests {
         let config: PoliciesConfig = toml::from_str(toml).unwrap();
 
         // Verify all specified values
-        assert!(config.tool_safety.high_risk_keywords.contains("rm"));
-        assert!(!config.tool_safety.high_risk_keywords.contains("delete")); // Overridden
+        assert!(config.tool_safety.high_risk_keywords.contains(&"rm".to_string()));
+        assert!(!config.tool_safety.high_risk_keywords.contains(&"delete".to_string())); // Overridden
         assert_eq!(config.intent.confidence_threshold, 0.9);
         assert_eq!(config.memory.compression.idle_timeout_seconds, 600);
         assert_eq!(config.memory.ai_retrieval.max_candidates, 30);

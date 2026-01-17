@@ -122,6 +122,8 @@ pub struct FullConfig {
     pub smart_matching: SmartMatchingConfig,
     #[serde(default)]
     pub skills: Option<SkillsConfig>,
+    #[serde(default)]
+    pub policies: PoliciesConfig,
 }
 
 impl From<Config> for FullConfig {
@@ -146,6 +148,7 @@ impl From<Config> for FullConfig {
             trigger: config.trigger,
             smart_matching: config.smart_matching,
             skills: Some(config.skills),
+            policies: config.policies,
         }
     }
 }

@@ -102,7 +102,7 @@ impl AiMemoryRetriever {
             timeout: policy.timeout_duration(),
             max_candidates: policy.max_candidates,
             fallback_count: policy.fallback_count,
-            content_truncate_length: policy.content_truncate_length,
+            content_truncate_length: policy.content_truncate_length as usize,
         }
     }
 

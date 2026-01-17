@@ -415,6 +415,22 @@ fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt16: FfiConverterPrimitive {
+    typealias FfiType = UInt16
+    typealias SwiftType = UInt16
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt16 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
@@ -725,6 +741,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func updateMcpServer(config: McpServerConfig) throws 
     
     func updateMemoryConfig(config: MemoryConfig) throws 
+    
+    func updatePolicies(policies: PoliciesConfig) throws 
     
     func updateProvider(name: String, provider: ProviderConfig) throws 
     
@@ -1325,6 +1343,13 @@ open func updateMemoryConfig(config: MemoryConfig)throws  {try rustCallWithError
 }
 }
     
+open func updatePolicies(policies: PoliciesConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_update_policies(self.uniffiClonePointer(),
+        FfiConverterTypePoliciesConfig.lower(policies),$0
+    )
+}
+}
+    
 open func updateProvider(name: String, provider: ProviderConfig)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
     uniffi_aethecore_fn_method_aethercore_update_provider(self.uniffiClonePointer(),
         FfiConverterString.lower(name),
@@ -1421,6 +1446,88 @@ public func FfiConverterTypeAetherCore_lift(_ pointer: UnsafeMutableRawPointer) 
 #endif
 public func FfiConverterTypeAetherCore_lower(_ value: AetherCore) -> UnsafeMutableRawPointer {
     return FfiConverterTypeAetherCore.lower(value)
+}
+
+
+public struct AiRetrievalPolicy {
+    public var timeoutMs: UInt64
+    public var maxCandidates: UInt32
+    public var fallbackCount: UInt32
+    public var contentTruncateLength: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(timeoutMs: UInt64, maxCandidates: UInt32, fallbackCount: UInt32, contentTruncateLength: UInt64) {
+        self.timeoutMs = timeoutMs
+        self.maxCandidates = maxCandidates
+        self.fallbackCount = fallbackCount
+        self.contentTruncateLength = contentTruncateLength
+    }
+}
+
+
+
+extension AiRetrievalPolicy: Equatable, Hashable {
+    public static func ==(lhs: AiRetrievalPolicy, rhs: AiRetrievalPolicy) -> Bool {
+        if lhs.timeoutMs != rhs.timeoutMs {
+            return false
+        }
+        if lhs.maxCandidates != rhs.maxCandidates {
+            return false
+        }
+        if lhs.fallbackCount != rhs.fallbackCount {
+            return false
+        }
+        if lhs.contentTruncateLength != rhs.contentTruncateLength {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(timeoutMs)
+        hasher.combine(maxCandidates)
+        hasher.combine(fallbackCount)
+        hasher.combine(contentTruncateLength)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAiRetrievalPolicy: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AiRetrievalPolicy {
+        return
+            try AiRetrievalPolicy(
+                timeoutMs: FfiConverterUInt64.read(from: &buf), 
+                maxCandidates: FfiConverterUInt32.read(from: &buf), 
+                fallbackCount: FfiConverterUInt32.read(from: &buf), 
+                contentTruncateLength: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AiRetrievalPolicy, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.timeoutMs, into: &buf)
+        FfiConverterUInt32.write(value.maxCandidates, into: &buf)
+        FfiConverterUInt32.write(value.fallbackCount, into: &buf)
+        FfiConverterUInt64.write(value.contentTruncateLength, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAiRetrievalPolicy_lift(_ buf: RustBuffer) throws -> AiRetrievalPolicy {
+    return try FfiConverterTypeAiRetrievalPolicy.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAiRetrievalPolicy_lower(_ value: AiRetrievalPolicy) -> RustBuffer {
+    return FfiConverterTypeAiRetrievalPolicy.lower(value)
 }
 
 
@@ -2257,6 +2364,80 @@ public func FfiConverterTypeCommandNode_lift(_ buf: RustBuffer) throws -> Comman
 #endif
 public func FfiConverterTypeCommandNode_lower(_ value: CommandNode) -> RustBuffer {
     return FfiConverterTypeCommandNode.lower(value)
+}
+
+
+public struct CompressionPolicy {
+    public var idleTimeoutSeconds: UInt32
+    public var turnThreshold: UInt32
+    public var backgroundIntervalSeconds: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(idleTimeoutSeconds: UInt32, turnThreshold: UInt32, backgroundIntervalSeconds: UInt32) {
+        self.idleTimeoutSeconds = idleTimeoutSeconds
+        self.turnThreshold = turnThreshold
+        self.backgroundIntervalSeconds = backgroundIntervalSeconds
+    }
+}
+
+
+
+extension CompressionPolicy: Equatable, Hashable {
+    public static func ==(lhs: CompressionPolicy, rhs: CompressionPolicy) -> Bool {
+        if lhs.idleTimeoutSeconds != rhs.idleTimeoutSeconds {
+            return false
+        }
+        if lhs.turnThreshold != rhs.turnThreshold {
+            return false
+        }
+        if lhs.backgroundIntervalSeconds != rhs.backgroundIntervalSeconds {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(idleTimeoutSeconds)
+        hasher.combine(turnThreshold)
+        hasher.combine(backgroundIntervalSeconds)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCompressionPolicy: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CompressionPolicy {
+        return
+            try CompressionPolicy(
+                idleTimeoutSeconds: FfiConverterUInt32.read(from: &buf), 
+                turnThreshold: FfiConverterUInt32.read(from: &buf), 
+                backgroundIntervalSeconds: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CompressionPolicy, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.idleTimeoutSeconds, into: &buf)
+        FfiConverterUInt32.write(value.turnThreshold, into: &buf)
+        FfiConverterUInt32.write(value.backgroundIntervalSeconds, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCompressionPolicy_lift(_ buf: RustBuffer) throws -> CompressionPolicy {
+    return try FfiConverterTypeCompressionPolicy.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCompressionPolicy_lower(_ value: CompressionPolicy) -> RustBuffer {
+    return FfiConverterTypeCompressionPolicy.lower(value)
 }
 
 
@@ -3392,10 +3573,11 @@ public struct FullConfig {
     public var trigger: TriggerConfig?
     public var smartMatching: SmartMatchingConfig
     public var skills: SkillsConfig?
+    public var policies: PoliciesConfig
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(defaultHotkey: String, general: GeneralConfig, memory: MemoryConfig, providers: [ProviderConfigEntry], rules: [RoutingRuleConfig], shortcuts: ShortcutsConfig?, behavior: BehaviorConfig?, search: SearchConfig?, trigger: TriggerConfig?, smartMatching: SmartMatchingConfig, skills: SkillsConfig?) {
+    public init(defaultHotkey: String, general: GeneralConfig, memory: MemoryConfig, providers: [ProviderConfigEntry], rules: [RoutingRuleConfig], shortcuts: ShortcutsConfig?, behavior: BehaviorConfig?, search: SearchConfig?, trigger: TriggerConfig?, smartMatching: SmartMatchingConfig, skills: SkillsConfig?, policies: PoliciesConfig) {
         self.defaultHotkey = defaultHotkey
         self.general = general
         self.memory = memory
@@ -3407,6 +3589,7 @@ public struct FullConfig {
         self.trigger = trigger
         self.smartMatching = smartMatching
         self.skills = skills
+        self.policies = policies
     }
 }
 
@@ -3447,6 +3630,9 @@ extension FullConfig: Equatable, Hashable {
         if lhs.skills != rhs.skills {
             return false
         }
+        if lhs.policies != rhs.policies {
+            return false
+        }
         return true
     }
 
@@ -3462,6 +3648,7 @@ extension FullConfig: Equatable, Hashable {
         hasher.combine(trigger)
         hasher.combine(smartMatching)
         hasher.combine(skills)
+        hasher.combine(policies)
     }
 }
 
@@ -3483,7 +3670,8 @@ public struct FfiConverterTypeFullConfig: FfiConverterRustBuffer {
                 search: FfiConverterOptionTypeSearchConfig.read(from: &buf), 
                 trigger: FfiConverterOptionTypeTriggerConfig.read(from: &buf), 
                 smartMatching: FfiConverterTypeSmartMatchingConfig.read(from: &buf), 
-                skills: FfiConverterOptionTypeSkillsConfig.read(from: &buf)
+                skills: FfiConverterOptionTypeSkillsConfig.read(from: &buf), 
+                policies: FfiConverterTypePoliciesConfig.read(from: &buf)
         )
     }
 
@@ -3499,6 +3687,7 @@ public struct FfiConverterTypeFullConfig: FfiConverterRustBuffer {
         FfiConverterOptionTypeTriggerConfig.write(value.trigger, into: &buf)
         FfiConverterTypeSmartMatchingConfig.write(value.smartMatching, into: &buf)
         FfiConverterOptionTypeSkillsConfig.write(value.skills, into: &buf)
+        FfiConverterTypePoliciesConfig.write(value.policies, into: &buf)
     }
 }
 
@@ -3581,6 +3770,88 @@ public func FfiConverterTypeGeneralConfig_lift(_ buf: RustBuffer) throws -> Gene
 #endif
 public func FfiConverterTypeGeneralConfig_lower(_ value: GeneralConfig) -> RustBuffer {
     return FfiConverterTypeGeneralConfig.lower(value)
+}
+
+
+public struct IntentDetectionPolicy {
+    public var confidenceThreshold: Double
+    public var timeoutMs: UInt64
+    public var minInputLength: UInt64
+    public var videoUrlPatterns: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(confidenceThreshold: Double, timeoutMs: UInt64, minInputLength: UInt64, videoUrlPatterns: [String]) {
+        self.confidenceThreshold = confidenceThreshold
+        self.timeoutMs = timeoutMs
+        self.minInputLength = minInputLength
+        self.videoUrlPatterns = videoUrlPatterns
+    }
+}
+
+
+
+extension IntentDetectionPolicy: Equatable, Hashable {
+    public static func ==(lhs: IntentDetectionPolicy, rhs: IntentDetectionPolicy) -> Bool {
+        if lhs.confidenceThreshold != rhs.confidenceThreshold {
+            return false
+        }
+        if lhs.timeoutMs != rhs.timeoutMs {
+            return false
+        }
+        if lhs.minInputLength != rhs.minInputLength {
+            return false
+        }
+        if lhs.videoUrlPatterns != rhs.videoUrlPatterns {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(confidenceThreshold)
+        hasher.combine(timeoutMs)
+        hasher.combine(minInputLength)
+        hasher.combine(videoUrlPatterns)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeIntentDetectionPolicy: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> IntentDetectionPolicy {
+        return
+            try IntentDetectionPolicy(
+                confidenceThreshold: FfiConverterDouble.read(from: &buf), 
+                timeoutMs: FfiConverterUInt64.read(from: &buf), 
+                minInputLength: FfiConverterUInt64.read(from: &buf), 
+                videoUrlPatterns: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: IntentDetectionPolicy, into buf: inout [UInt8]) {
+        FfiConverterDouble.write(value.confidenceThreshold, into: &buf)
+        FfiConverterUInt64.write(value.timeoutMs, into: &buf)
+        FfiConverterUInt64.write(value.minInputLength, into: &buf)
+        FfiConverterSequenceString.write(value.videoUrlPatterns, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntentDetectionPolicy_lift(_ buf: RustBuffer) throws -> IntentDetectionPolicy {
+    return try FfiConverterTypeIntentDetectionPolicy.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntentDetectionPolicy_lower(_ value: IntentDetectionPolicy) -> RustBuffer {
+    return FfiConverterTypeIntentDetectionPolicy.lower(value)
 }
 
 
@@ -4980,6 +5251,72 @@ public func FfiConverterTypeMemoryItem_lower(_ value: MemoryItem) -> RustBuffer 
 }
 
 
+public struct MemoryPolicies {
+    public var compression: CompressionPolicy
+    public var aiRetrieval: AiRetrievalPolicy
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(compression: CompressionPolicy, aiRetrieval: AiRetrievalPolicy) {
+        self.compression = compression
+        self.aiRetrieval = aiRetrieval
+    }
+}
+
+
+
+extension MemoryPolicies: Equatable, Hashable {
+    public static func ==(lhs: MemoryPolicies, rhs: MemoryPolicies) -> Bool {
+        if lhs.compression != rhs.compression {
+            return false
+        }
+        if lhs.aiRetrieval != rhs.aiRetrieval {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(compression)
+        hasher.combine(aiRetrieval)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMemoryPolicies: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MemoryPolicies {
+        return
+            try MemoryPolicies(
+                compression: FfiConverterTypeCompressionPolicy.read(from: &buf), 
+                aiRetrieval: FfiConverterTypeAiRetrievalPolicy.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MemoryPolicies, into buf: inout [UInt8]) {
+        FfiConverterTypeCompressionPolicy.write(value.compression, into: &buf)
+        FfiConverterTypeAiRetrievalPolicy.write(value.aiRetrieval, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMemoryPolicies_lift(_ buf: RustBuffer) throws -> MemoryPolicies {
+    return try FfiConverterTypeMemoryPolicies.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMemoryPolicies_lower(_ value: MemoryPolicies) -> RustBuffer {
+    return FfiConverterTypeMemoryPolicies.lower(value)
+}
+
+
 public struct MemoryStats {
     public var totalMemories: UInt64
     public var totalApps: UInt64
@@ -5067,6 +5404,120 @@ public func FfiConverterTypeMemoryStats_lift(_ buf: RustBuffer) throws -> Memory
 #endif
 public func FfiConverterTypeMemoryStats_lower(_ value: MemoryStats) -> RustBuffer {
     return FfiConverterTypeMemoryStats.lower(value)
+}
+
+
+public struct MetricsPolicy {
+    public var targetHotkeyToClipboardMs: UInt64
+    public var targetClipboardToMemoryMs: UInt64
+    public var targetMemoryToAiMs: UInt64
+    public var targetAiToPasteMs: UInt64
+    public var targetPasteToCompleteMs: UInt64
+    public var warningMultiplier: Double
+    public var enableLogging: Bool
+    public var enableWarnings: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(targetHotkeyToClipboardMs: UInt64, targetClipboardToMemoryMs: UInt64, targetMemoryToAiMs: UInt64, targetAiToPasteMs: UInt64, targetPasteToCompleteMs: UInt64, warningMultiplier: Double, enableLogging: Bool, enableWarnings: Bool) {
+        self.targetHotkeyToClipboardMs = targetHotkeyToClipboardMs
+        self.targetClipboardToMemoryMs = targetClipboardToMemoryMs
+        self.targetMemoryToAiMs = targetMemoryToAiMs
+        self.targetAiToPasteMs = targetAiToPasteMs
+        self.targetPasteToCompleteMs = targetPasteToCompleteMs
+        self.warningMultiplier = warningMultiplier
+        self.enableLogging = enableLogging
+        self.enableWarnings = enableWarnings
+    }
+}
+
+
+
+extension MetricsPolicy: Equatable, Hashable {
+    public static func ==(lhs: MetricsPolicy, rhs: MetricsPolicy) -> Bool {
+        if lhs.targetHotkeyToClipboardMs != rhs.targetHotkeyToClipboardMs {
+            return false
+        }
+        if lhs.targetClipboardToMemoryMs != rhs.targetClipboardToMemoryMs {
+            return false
+        }
+        if lhs.targetMemoryToAiMs != rhs.targetMemoryToAiMs {
+            return false
+        }
+        if lhs.targetAiToPasteMs != rhs.targetAiToPasteMs {
+            return false
+        }
+        if lhs.targetPasteToCompleteMs != rhs.targetPasteToCompleteMs {
+            return false
+        }
+        if lhs.warningMultiplier != rhs.warningMultiplier {
+            return false
+        }
+        if lhs.enableLogging != rhs.enableLogging {
+            return false
+        }
+        if lhs.enableWarnings != rhs.enableWarnings {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(targetHotkeyToClipboardMs)
+        hasher.combine(targetClipboardToMemoryMs)
+        hasher.combine(targetMemoryToAiMs)
+        hasher.combine(targetAiToPasteMs)
+        hasher.combine(targetPasteToCompleteMs)
+        hasher.combine(warningMultiplier)
+        hasher.combine(enableLogging)
+        hasher.combine(enableWarnings)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMetricsPolicy: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MetricsPolicy {
+        return
+            try MetricsPolicy(
+                targetHotkeyToClipboardMs: FfiConverterUInt64.read(from: &buf), 
+                targetClipboardToMemoryMs: FfiConverterUInt64.read(from: &buf), 
+                targetMemoryToAiMs: FfiConverterUInt64.read(from: &buf), 
+                targetAiToPasteMs: FfiConverterUInt64.read(from: &buf), 
+                targetPasteToCompleteMs: FfiConverterUInt64.read(from: &buf), 
+                warningMultiplier: FfiConverterDouble.read(from: &buf), 
+                enableLogging: FfiConverterBool.read(from: &buf), 
+                enableWarnings: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MetricsPolicy, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.targetHotkeyToClipboardMs, into: &buf)
+        FfiConverterUInt64.write(value.targetClipboardToMemoryMs, into: &buf)
+        FfiConverterUInt64.write(value.targetMemoryToAiMs, into: &buf)
+        FfiConverterUInt64.write(value.targetAiToPasteMs, into: &buf)
+        FfiConverterUInt64.write(value.targetPasteToCompleteMs, into: &buf)
+        FfiConverterDouble.write(value.warningMultiplier, into: &buf)
+        FfiConverterBool.write(value.enableLogging, into: &buf)
+        FfiConverterBool.write(value.enableWarnings, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMetricsPolicy_lift(_ buf: RustBuffer) throws -> MetricsPolicy {
+    return try FfiConverterTypeMetricsPolicy.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMetricsPolicy_lower(_ value: MetricsPolicy) -> RustBuffer {
+    return FfiConverterTypeMetricsPolicy.lower(value)
 }
 
 
@@ -5483,6 +5934,112 @@ public func FfiConverterTypePendingConfirmationInfo_lift(_ buf: RustBuffer) thro
 #endif
 public func FfiConverterTypePendingConfirmationInfo_lower(_ value: PendingConfirmationInfo) -> RustBuffer {
     return FfiConverterTypePendingConfirmationInfo.lower(value)
+}
+
+
+public struct PoliciesConfig {
+    public var toolSafety: ToolSafetyPolicy
+    public var intent: IntentDetectionPolicy
+    public var memory: MemoryPolicies
+    public var retry: RetryPolicy
+    public var webFetch: WebFetchPolicy
+    public var text: TextFormatPolicy
+    public var metrics: MetricsPolicy
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(toolSafety: ToolSafetyPolicy, intent: IntentDetectionPolicy, memory: MemoryPolicies, retry: RetryPolicy, webFetch: WebFetchPolicy, text: TextFormatPolicy, metrics: MetricsPolicy) {
+        self.toolSafety = toolSafety
+        self.intent = intent
+        self.memory = memory
+        self.retry = retry
+        self.webFetch = webFetch
+        self.text = text
+        self.metrics = metrics
+    }
+}
+
+
+
+extension PoliciesConfig: Equatable, Hashable {
+    public static func ==(lhs: PoliciesConfig, rhs: PoliciesConfig) -> Bool {
+        if lhs.toolSafety != rhs.toolSafety {
+            return false
+        }
+        if lhs.intent != rhs.intent {
+            return false
+        }
+        if lhs.memory != rhs.memory {
+            return false
+        }
+        if lhs.retry != rhs.retry {
+            return false
+        }
+        if lhs.webFetch != rhs.webFetch {
+            return false
+        }
+        if lhs.text != rhs.text {
+            return false
+        }
+        if lhs.metrics != rhs.metrics {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(toolSafety)
+        hasher.combine(intent)
+        hasher.combine(memory)
+        hasher.combine(retry)
+        hasher.combine(webFetch)
+        hasher.combine(text)
+        hasher.combine(metrics)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePoliciesConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PoliciesConfig {
+        return
+            try PoliciesConfig(
+                toolSafety: FfiConverterTypeToolSafetyPolicy.read(from: &buf), 
+                intent: FfiConverterTypeIntentDetectionPolicy.read(from: &buf), 
+                memory: FfiConverterTypeMemoryPolicies.read(from: &buf), 
+                retry: FfiConverterTypeRetryPolicy.read(from: &buf), 
+                webFetch: FfiConverterTypeWebFetchPolicy.read(from: &buf), 
+                text: FfiConverterTypeTextFormatPolicy.read(from: &buf), 
+                metrics: FfiConverterTypeMetricsPolicy.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: PoliciesConfig, into buf: inout [UInt8]) {
+        FfiConverterTypeToolSafetyPolicy.write(value.toolSafety, into: &buf)
+        FfiConverterTypeIntentDetectionPolicy.write(value.intent, into: &buf)
+        FfiConverterTypeMemoryPolicies.write(value.memory, into: &buf)
+        FfiConverterTypeRetryPolicy.write(value.retry, into: &buf)
+        FfiConverterTypeWebFetchPolicy.write(value.webFetch, into: &buf)
+        FfiConverterTypeTextFormatPolicy.write(value.text, into: &buf)
+        FfiConverterTypeMetricsPolicy.write(value.metrics, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePoliciesConfig_lift(_ buf: RustBuffer) throws -> PoliciesConfig {
+    return try FfiConverterTypePoliciesConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePoliciesConfig_lower(_ value: PoliciesConfig) -> RustBuffer {
+    return FfiConverterTypePoliciesConfig.lower(value)
 }
 
 
@@ -5915,6 +6472,112 @@ public func FfiConverterTypeProviderTestResult_lift(_ buf: RustBuffer) throws ->
 #endif
 public func FfiConverterTypeProviderTestResult_lower(_ value: ProviderTestResult) -> RustBuffer {
     return FfiConverterTypeProviderTestResult.lower(value)
+}
+
+
+public struct RetryPolicy {
+    public var maxRetries: UInt32
+    public var initialBackoffMs: UInt64
+    public var backoffMultiplier: Double
+    public var maxBackoffMs: UInt64
+    public var retryableStatusCodes: [UInt16]
+    public var retryOnTimeout: Bool
+    public var retryOnNetworkError: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(maxRetries: UInt32, initialBackoffMs: UInt64, backoffMultiplier: Double, maxBackoffMs: UInt64, retryableStatusCodes: [UInt16], retryOnTimeout: Bool, retryOnNetworkError: Bool) {
+        self.maxRetries = maxRetries
+        self.initialBackoffMs = initialBackoffMs
+        self.backoffMultiplier = backoffMultiplier
+        self.maxBackoffMs = maxBackoffMs
+        self.retryableStatusCodes = retryableStatusCodes
+        self.retryOnTimeout = retryOnTimeout
+        self.retryOnNetworkError = retryOnNetworkError
+    }
+}
+
+
+
+extension RetryPolicy: Equatable, Hashable {
+    public static func ==(lhs: RetryPolicy, rhs: RetryPolicy) -> Bool {
+        if lhs.maxRetries != rhs.maxRetries {
+            return false
+        }
+        if lhs.initialBackoffMs != rhs.initialBackoffMs {
+            return false
+        }
+        if lhs.backoffMultiplier != rhs.backoffMultiplier {
+            return false
+        }
+        if lhs.maxBackoffMs != rhs.maxBackoffMs {
+            return false
+        }
+        if lhs.retryableStatusCodes != rhs.retryableStatusCodes {
+            return false
+        }
+        if lhs.retryOnTimeout != rhs.retryOnTimeout {
+            return false
+        }
+        if lhs.retryOnNetworkError != rhs.retryOnNetworkError {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(maxRetries)
+        hasher.combine(initialBackoffMs)
+        hasher.combine(backoffMultiplier)
+        hasher.combine(maxBackoffMs)
+        hasher.combine(retryableStatusCodes)
+        hasher.combine(retryOnTimeout)
+        hasher.combine(retryOnNetworkError)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRetryPolicy: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RetryPolicy {
+        return
+            try RetryPolicy(
+                maxRetries: FfiConverterUInt32.read(from: &buf), 
+                initialBackoffMs: FfiConverterUInt64.read(from: &buf), 
+                backoffMultiplier: FfiConverterDouble.read(from: &buf), 
+                maxBackoffMs: FfiConverterUInt64.read(from: &buf), 
+                retryableStatusCodes: FfiConverterSequenceUInt16.read(from: &buf), 
+                retryOnTimeout: FfiConverterBool.read(from: &buf), 
+                retryOnNetworkError: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RetryPolicy, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.maxRetries, into: &buf)
+        FfiConverterUInt64.write(value.initialBackoffMs, into: &buf)
+        FfiConverterDouble.write(value.backoffMultiplier, into: &buf)
+        FfiConverterUInt64.write(value.maxBackoffMs, into: &buf)
+        FfiConverterSequenceUInt16.write(value.retryableStatusCodes, into: &buf)
+        FfiConverterBool.write(value.retryOnTimeout, into: &buf)
+        FfiConverterBool.write(value.retryOnNetworkError, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRetryPolicy_lift(_ buf: RustBuffer) throws -> RetryPolicy {
+    return try FfiConverterTypeRetryPolicy.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRetryPolicy_lower(_ value: RetryPolicy) -> RustBuffer {
+    return FfiConverterTypeRetryPolicy.lower(value)
 }
 
 
@@ -7112,6 +7775,104 @@ public func FfiConverterTypeTestConnectionResult_lower(_ value: TestConnectionRe
 }
 
 
+public struct TextFormatPolicy {
+    public var defaultTruncateLength: UInt64
+    public var searchSnippetLength: UInt64
+    public var mcpResultLength: UInt64
+    public var systemPromptLength: UInt64
+    public var userMessageLength: UInt64
+    public var truncationSuffix: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(defaultTruncateLength: UInt64, searchSnippetLength: UInt64, mcpResultLength: UInt64, systemPromptLength: UInt64, userMessageLength: UInt64, truncationSuffix: String) {
+        self.defaultTruncateLength = defaultTruncateLength
+        self.searchSnippetLength = searchSnippetLength
+        self.mcpResultLength = mcpResultLength
+        self.systemPromptLength = systemPromptLength
+        self.userMessageLength = userMessageLength
+        self.truncationSuffix = truncationSuffix
+    }
+}
+
+
+
+extension TextFormatPolicy: Equatable, Hashable {
+    public static func ==(lhs: TextFormatPolicy, rhs: TextFormatPolicy) -> Bool {
+        if lhs.defaultTruncateLength != rhs.defaultTruncateLength {
+            return false
+        }
+        if lhs.searchSnippetLength != rhs.searchSnippetLength {
+            return false
+        }
+        if lhs.mcpResultLength != rhs.mcpResultLength {
+            return false
+        }
+        if lhs.systemPromptLength != rhs.systemPromptLength {
+            return false
+        }
+        if lhs.userMessageLength != rhs.userMessageLength {
+            return false
+        }
+        if lhs.truncationSuffix != rhs.truncationSuffix {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(defaultTruncateLength)
+        hasher.combine(searchSnippetLength)
+        hasher.combine(mcpResultLength)
+        hasher.combine(systemPromptLength)
+        hasher.combine(userMessageLength)
+        hasher.combine(truncationSuffix)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTextFormatPolicy: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TextFormatPolicy {
+        return
+            try TextFormatPolicy(
+                defaultTruncateLength: FfiConverterUInt64.read(from: &buf), 
+                searchSnippetLength: FfiConverterUInt64.read(from: &buf), 
+                mcpResultLength: FfiConverterUInt64.read(from: &buf), 
+                systemPromptLength: FfiConverterUInt64.read(from: &buf), 
+                userMessageLength: FfiConverterUInt64.read(from: &buf), 
+                truncationSuffix: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TextFormatPolicy, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.defaultTruncateLength, into: &buf)
+        FfiConverterUInt64.write(value.searchSnippetLength, into: &buf)
+        FfiConverterUInt64.write(value.mcpResultLength, into: &buf)
+        FfiConverterUInt64.write(value.systemPromptLength, into: &buf)
+        FfiConverterUInt64.write(value.userMessageLength, into: &buf)
+        FfiConverterString.write(value.truncationSuffix, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTextFormatPolicy_lift(_ buf: RustBuffer) throws -> TextFormatPolicy {
+    return try FfiConverterTypeTextFormatPolicy.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTextFormatPolicy_lower(_ value: TextFormatPolicy) -> RustBuffer {
+    return FfiConverterTypeTextFormatPolicy.lower(value)
+}
+
+
 public struct ToolInfoFfi {
     public var name: String
     public var description: String
@@ -7183,6 +7944,128 @@ public func FfiConverterTypeToolInfoFFI_lift(_ buf: RustBuffer) throws -> ToolIn
 #endif
 public func FfiConverterTypeToolInfoFFI_lower(_ value: ToolInfoFfi) -> RustBuffer {
     return FfiConverterTypeToolInfoFFI.lower(value)
+}
+
+
+public struct ToolSafetyPolicy {
+    public var highRiskKeywords: [String]
+    public var lowRiskKeywords: [String]
+    public var reversibleKeywords: [String]
+    public var readonlyKeywords: [String]
+    public var builtinFallback: String
+    public var nativeFallback: String
+    public var mcpFallback: String
+    public var skillFallback: String
+    public var customFallback: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(highRiskKeywords: [String], lowRiskKeywords: [String], reversibleKeywords: [String], readonlyKeywords: [String], builtinFallback: String, nativeFallback: String, mcpFallback: String, skillFallback: String, customFallback: String) {
+        self.highRiskKeywords = highRiskKeywords
+        self.lowRiskKeywords = lowRiskKeywords
+        self.reversibleKeywords = reversibleKeywords
+        self.readonlyKeywords = readonlyKeywords
+        self.builtinFallback = builtinFallback
+        self.nativeFallback = nativeFallback
+        self.mcpFallback = mcpFallback
+        self.skillFallback = skillFallback
+        self.customFallback = customFallback
+    }
+}
+
+
+
+extension ToolSafetyPolicy: Equatable, Hashable {
+    public static func ==(lhs: ToolSafetyPolicy, rhs: ToolSafetyPolicy) -> Bool {
+        if lhs.highRiskKeywords != rhs.highRiskKeywords {
+            return false
+        }
+        if lhs.lowRiskKeywords != rhs.lowRiskKeywords {
+            return false
+        }
+        if lhs.reversibleKeywords != rhs.reversibleKeywords {
+            return false
+        }
+        if lhs.readonlyKeywords != rhs.readonlyKeywords {
+            return false
+        }
+        if lhs.builtinFallback != rhs.builtinFallback {
+            return false
+        }
+        if lhs.nativeFallback != rhs.nativeFallback {
+            return false
+        }
+        if lhs.mcpFallback != rhs.mcpFallback {
+            return false
+        }
+        if lhs.skillFallback != rhs.skillFallback {
+            return false
+        }
+        if lhs.customFallback != rhs.customFallback {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(highRiskKeywords)
+        hasher.combine(lowRiskKeywords)
+        hasher.combine(reversibleKeywords)
+        hasher.combine(readonlyKeywords)
+        hasher.combine(builtinFallback)
+        hasher.combine(nativeFallback)
+        hasher.combine(mcpFallback)
+        hasher.combine(skillFallback)
+        hasher.combine(customFallback)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeToolSafetyPolicy: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ToolSafetyPolicy {
+        return
+            try ToolSafetyPolicy(
+                highRiskKeywords: FfiConverterSequenceString.read(from: &buf), 
+                lowRiskKeywords: FfiConverterSequenceString.read(from: &buf), 
+                reversibleKeywords: FfiConverterSequenceString.read(from: &buf), 
+                readonlyKeywords: FfiConverterSequenceString.read(from: &buf), 
+                builtinFallback: FfiConverterString.read(from: &buf), 
+                nativeFallback: FfiConverterString.read(from: &buf), 
+                mcpFallback: FfiConverterString.read(from: &buf), 
+                skillFallback: FfiConverterString.read(from: &buf), 
+                customFallback: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ToolSafetyPolicy, into buf: inout [UInt8]) {
+        FfiConverterSequenceString.write(value.highRiskKeywords, into: &buf)
+        FfiConverterSequenceString.write(value.lowRiskKeywords, into: &buf)
+        FfiConverterSequenceString.write(value.reversibleKeywords, into: &buf)
+        FfiConverterSequenceString.write(value.readonlyKeywords, into: &buf)
+        FfiConverterString.write(value.builtinFallback, into: &buf)
+        FfiConverterString.write(value.nativeFallback, into: &buf)
+        FfiConverterString.write(value.mcpFallback, into: &buf)
+        FfiConverterString.write(value.skillFallback, into: &buf)
+        FfiConverterString.write(value.customFallback, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeToolSafetyPolicy_lift(_ buf: RustBuffer) throws -> ToolSafetyPolicy {
+    return try FfiConverterTypeToolSafetyPolicy.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeToolSafetyPolicy_lower(_ value: ToolSafetyPolicy) -> RustBuffer {
+    return FfiConverterTypeToolSafetyPolicy.lower(value)
 }
 
 
@@ -7607,6 +8490,112 @@ public func FfiConverterTypeVisionResult_lift(_ buf: RustBuffer) throws -> Visio
 #endif
 public func FfiConverterTypeVisionResult_lower(_ value: VisionResult) -> RustBuffer {
     return FfiConverterTypeVisionResult.lower(value)
+}
+
+
+public struct WebFetchPolicy {
+    public var maxContentLength: UInt64
+    public var minContentLength: UInt64
+    public var userAgent: String
+    public var timeoutSeconds: UInt64
+    public var followRedirects: Bool
+    public var maxRedirects: UInt64
+    public var contentSelectors: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(maxContentLength: UInt64, minContentLength: UInt64, userAgent: String, timeoutSeconds: UInt64, followRedirects: Bool, maxRedirects: UInt64, contentSelectors: [String]) {
+        self.maxContentLength = maxContentLength
+        self.minContentLength = minContentLength
+        self.userAgent = userAgent
+        self.timeoutSeconds = timeoutSeconds
+        self.followRedirects = followRedirects
+        self.maxRedirects = maxRedirects
+        self.contentSelectors = contentSelectors
+    }
+}
+
+
+
+extension WebFetchPolicy: Equatable, Hashable {
+    public static func ==(lhs: WebFetchPolicy, rhs: WebFetchPolicy) -> Bool {
+        if lhs.maxContentLength != rhs.maxContentLength {
+            return false
+        }
+        if lhs.minContentLength != rhs.minContentLength {
+            return false
+        }
+        if lhs.userAgent != rhs.userAgent {
+            return false
+        }
+        if lhs.timeoutSeconds != rhs.timeoutSeconds {
+            return false
+        }
+        if lhs.followRedirects != rhs.followRedirects {
+            return false
+        }
+        if lhs.maxRedirects != rhs.maxRedirects {
+            return false
+        }
+        if lhs.contentSelectors != rhs.contentSelectors {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(maxContentLength)
+        hasher.combine(minContentLength)
+        hasher.combine(userAgent)
+        hasher.combine(timeoutSeconds)
+        hasher.combine(followRedirects)
+        hasher.combine(maxRedirects)
+        hasher.combine(contentSelectors)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeWebFetchPolicy: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> WebFetchPolicy {
+        return
+            try WebFetchPolicy(
+                maxContentLength: FfiConverterUInt64.read(from: &buf), 
+                minContentLength: FfiConverterUInt64.read(from: &buf), 
+                userAgent: FfiConverterString.read(from: &buf), 
+                timeoutSeconds: FfiConverterUInt64.read(from: &buf), 
+                followRedirects: FfiConverterBool.read(from: &buf), 
+                maxRedirects: FfiConverterUInt64.read(from: &buf), 
+                contentSelectors: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: WebFetchPolicy, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.maxContentLength, into: &buf)
+        FfiConverterUInt64.write(value.minContentLength, into: &buf)
+        FfiConverterString.write(value.userAgent, into: &buf)
+        FfiConverterUInt64.write(value.timeoutSeconds, into: &buf)
+        FfiConverterBool.write(value.followRedirects, into: &buf)
+        FfiConverterUInt64.write(value.maxRedirects, into: &buf)
+        FfiConverterSequenceString.write(value.contentSelectors, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWebFetchPolicy_lift(_ buf: RustBuffer) throws -> WebFetchPolicy {
+    return try FfiConverterTypeWebFetchPolicy.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWebFetchPolicy_lower(_ value: WebFetchPolicy) -> RustBuffer {
+    return FfiConverterTypeWebFetchPolicy.lower(value)
 }
 
 
@@ -10819,6 +11808,31 @@ fileprivate struct FfiConverterSequenceUInt8: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceUInt16: FfiConverterRustBuffer {
+    typealias SwiftType = [UInt16]
+
+    public static func write(_ value: [UInt16], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterUInt16.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UInt16] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [UInt16]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterUInt16.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -11752,6 +12766,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_memory_config() != 19269) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_update_policies() != 997) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_update_provider() != 19684) {

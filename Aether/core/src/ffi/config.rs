@@ -198,6 +198,15 @@ impl AetherCore {
         Ok(())
     }
 
+    /// Update policies configuration
+    pub fn update_policies(&self, policies: crate::config::PoliciesConfig) -> Result<(), AetherFfiError> {
+        let mut config = self.lock_config();
+        config.policies = policies;
+        config.save().map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        info!("Policies configuration updated");
+        Ok(())
+    }
+
     /// Test search provider with ad-hoc configuration
     ///
     /// Tests a search provider without requiring saved configuration.

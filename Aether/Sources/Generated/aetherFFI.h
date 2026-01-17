@@ -772,6 +772,11 @@ void uniffi_aethecore_fn_method_aethercore_update_mcp_server(void*_Nonnull ptr, 
 void uniffi_aethecore_fn_method_aethercore_update_memory_config(void*_Nonnull ptr, RustBuffer config, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_POLICIES
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_POLICIES
+void uniffi_aethecore_fn_method_aethercore_update_policies(void*_Nonnull ptr, RustBuffer policies, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_PROVIDER
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_PROVIDER
 void uniffi_aethecore_fn_method_aethercore_update_provider(void*_Nonnull ptr, RustBuffer name, RustBuffer provider, RustCallStatus *_Nonnull out_status
@@ -1630,6 +1635,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_update_mcp_server(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_MEMORY_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_MEMORY_CONFIG
 uint16_t uniffi_aethecore_checksum_method_aethercore_update_memory_config(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_POLICIES
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_POLICIES
+uint16_t uniffi_aethecore_checksum_method_aethercore_update_policies(void
     
 );
 #endif

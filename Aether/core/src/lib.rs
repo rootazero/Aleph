@@ -99,6 +99,10 @@ pub use crate::config::{
     ProviderConfigEntry, RoutingRuleConfig, SearchBackendConfig, SearchBackendEntry, SearchConfig,
     SearchConfigInternal, ShortcutsConfig, SkillsConfig, SmartFlowConfig, SmartMatchingConfig,
     SuggestionParsingConfig, TestConnectionResult, TriggerConfig, VideoConfig,
+    // Mechanism-policy separation types
+    PoliciesConfig, ToolSafetyPolicy, IntentDetectionPolicy, MemoryPolicies,
+    CompressionPolicy, AiRetrievalPolicy, RetryPolicy, WebFetchPolicy, TextFormatPolicy, MetricsPolicy,
+    KeywordPolicy, PolicyKeywordRule, PolicyWeightedKeyword,
 };
 // Internal types from core module
 pub use crate::core::{

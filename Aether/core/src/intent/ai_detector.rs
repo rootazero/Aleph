@@ -87,7 +87,7 @@ impl AiIntentDetector {
             provider,
             confidence_threshold: policy.confidence_threshold,
             timeout: policy.timeout_duration(),
-            min_input_length: policy.min_input_length,
+            min_input_length: policy.min_input_length as usize,
             video_url_patterns: policy.video_url_patterns.clone(),
         }
     }

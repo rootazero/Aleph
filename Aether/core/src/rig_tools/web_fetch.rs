@@ -87,8 +87,8 @@ impl WebFetchTool {
 
         Self {
             client,
-            max_content_length: policy.max_content_length,
-            min_content_length: policy.min_content_length,
+            max_content_length: policy.max_content_length as usize,
+            min_content_length: policy.min_content_length as usize,
             user_agent: policy.user_agent.clone(),
         }
     }
