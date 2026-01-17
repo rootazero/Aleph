@@ -199,7 +199,8 @@ pub struct AetherCore {
     /// Config file path for reload capability (empty string means default path)
     pub(crate) config_path: String,
     /// Memory database path for lazy initialization (enables on-demand creation)
-    pub(crate) memory_path: Option<String>,
+    /// Wrapped in RwLock to support dynamic enable/disable of memory feature
+    pub(crate) memory_path: Arc<RwLock<Option<String>>>,
     pub(crate) handler: Arc<dyn AetherEventHandler>,
     /// Tokio runtime handle for async operations
     pub(crate) runtime: tokio::runtime::Handle,
@@ -393,7 +394,8 @@ pub fn init_core(
     let config_holder = Arc::new(RwLock::new(AgentConfigHolder::new(rig_config)));
 
     // Set up memory store path if memory is enabled
-    let memory_path = if full_config.memory.enabled {
+    // Wrapped in Arc<RwLock> to support dynamic enable/disable of memory feature
+    let memory_path = Arc::new(RwLock::new(if full_config.memory.enabled {
         let db_path = dirs::home_dir()
             .map(|h| h.join(".config/aether/memory.db"))
             .unwrap_or_else(|| std::path::PathBuf::from("memory.db"));
@@ -402,7 +404,7 @@ pub fn init_core(
     } else {
         info!("Memory store disabled in config");
         None
-    };
+    }));
 
     // Create initial cancellation token wrapped in Arc<RwLock> for interior mutability
     // Each operation will get a fresh token via reset_cancel_token()

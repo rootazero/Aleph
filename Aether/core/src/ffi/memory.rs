@@ -7,6 +7,16 @@ use std::path::PathBuf;
 use tracing::info;
 
 impl AetherCore {
+    /// Helper to get memory path from RwLock
+    ///
+    /// Returns the memory database path if set, or an error if memory is not initialized.
+    fn get_memory_path(&self) -> Result<String, AetherFfiError> {
+        let guard = self.memory_path.read().unwrap_or_else(|e| e.into_inner());
+        guard
+            .clone()
+            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))
+    }
+
     /// Search memory for relevant entries
     ///
     /// Searches the memory store for entries matching the query using vector similarity.
@@ -15,14 +25,11 @@ impl AetherCore {
         query: String,
         limit: u32,
     ) -> Result<Vec<MemoryItem>, AetherFfiError> {
-        let memory_path = self
-            .memory_path
-            .as_ref()
-            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
+        let memory_path = self.get_memory_path()?;
 
         use crate::memory::{EmbeddingModel, VectorDatabase};
 
-        let db_path = PathBuf::from(memory_path);
+        let db_path = PathBuf::from(&memory_path);
 
         // Create embedding model and database
         let model_path = EmbeddingModel::get_default_model_path()
@@ -45,13 +52,10 @@ impl AetherCore {
 
     /// Clear all memory entries
     pub fn clear_memory(&self) -> Result<(), AetherFfiError> {
-        let memory_path = self
-            .memory_path
-            .as_ref()
-            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
+        let memory_path = self.get_memory_path()?;
 
         use crate::memory::VectorDatabase;
-        let db_path = PathBuf::from(memory_path);
+        let db_path = PathBuf::from(&memory_path);
         let db = VectorDatabase::new(db_path).map_err(|e| AetherFfiError::Memory(e.to_string()))?;
 
         // Clear all memories (no filter)
@@ -68,25 +72,50 @@ impl AetherCore {
     }
 
     /// Update memory configuration
+    ///
+    /// When memory is enabled, also updates the memory_path to ensure
+    /// memory storage works correctly even if memory was disabled at startup.
     pub fn update_memory_config(
         &self,
         new_config: crate::config::MemoryConfig,
     ) -> Result<(), AetherFfiError> {
-        let mut config = self.lock_config();
-        config.memory = new_config;
-        config
-            .save()
-            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        let was_enabled = {
+            let config = self.lock_config();
+            config.memory.enabled
+        };
+
+        // Update config first
+        {
+            let mut config = self.lock_config();
+            config.memory = new_config.clone();
+            config
+                .save()
+                .map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        }
+
+        // If memory is being enabled, ensure memory_path is set
+        if new_config.enabled && !was_enabled {
+            let db_path = dirs::home_dir()
+                .map(|h| h.join(".config/aether/memory.db"))
+                .unwrap_or_else(|| std::path::PathBuf::from("memory.db"));
+
+            let mut memory_path = self.memory_path.write().unwrap_or_else(|e| e.into_inner());
+            *memory_path = Some(db_path.to_string_lossy().to_string());
+            info!(path = %db_path.display(), "Memory path updated after enabling memory");
+        } else if !new_config.enabled && was_enabled {
+            // If memory is being disabled, clear the path
+            let mut memory_path = self.memory_path.write().unwrap_or_else(|e| e.into_inner());
+            *memory_path = None;
+            info!("Memory path cleared after disabling memory");
+        }
+
         info!("Memory configuration updated");
         Ok(())
     }
 
     /// Delete specific memory by ID
     pub fn delete_memory(&self, id: String) -> Result<(), AetherFfiError> {
-        let memory_path = self
-            .memory_path
-            .as_ref()
-            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
+        let memory_path = self.get_memory_path()?;
 
         use crate::memory::database::VectorDatabase;
         let db_path = PathBuf::from(&memory_path);
@@ -99,10 +128,7 @@ impl AetherCore {
 
     /// Get memory database statistics
     pub fn get_memory_stats(&self) -> Result<crate::memory::database::MemoryStats, AetherFfiError> {
-        let memory_path = self
-            .memory_path
-            .as_ref()
-            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
+        let memory_path = self.get_memory_path()?;
 
         use crate::memory::database::VectorDatabase;
         let db_path = PathBuf::from(&memory_path);
@@ -117,10 +143,7 @@ impl AetherCore {
     pub fn get_memory_app_list(
         &self,
     ) -> Result<Vec<crate::core::types::AppMemoryInfo>, AetherFfiError> {
-        let memory_path = self
-            .memory_path
-            .as_ref()
-            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
+        let memory_path = self.get_memory_path()?;
 
         use crate::memory::database::VectorDatabase;
         let db_path = PathBuf::from(&memory_path);
@@ -148,10 +171,7 @@ impl AetherCore {
         app_bundle_id: Option<String>,
         window_title: Option<String>,
     ) -> Result<u64, AetherFfiError> {
-        let memory_path = self
-            .memory_path
-            .as_ref()
-            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
+        let memory_path = self.get_memory_path()?;
 
         use crate::memory::database::VectorDatabase;
         let db_path = PathBuf::from(&memory_path);
@@ -164,10 +184,7 @@ impl AetherCore {
 
     /// Clear all compressed facts (Layer 2 data)
     pub fn clear_facts(&self) -> Result<u64, AetherFfiError> {
-        let memory_path = self
-            .memory_path
-            .as_ref()
-            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
+        let memory_path = self.get_memory_path()?;
 
         use crate::memory::database::VectorDatabase;
         let db_path = PathBuf::from(&memory_path);
@@ -180,10 +197,7 @@ impl AetherCore {
 
     /// Delete all memories associated with a specific topic ID
     pub fn delete_memories_by_topic_id(&self, topic_id: String) -> Result<u64, AetherFfiError> {
-        let memory_path = self
-            .memory_path
-            .as_ref()
-            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
+        let memory_path = self.get_memory_path()?;
 
         use crate::memory::database::VectorDatabase;
         let db_path = PathBuf::from(&memory_path);
@@ -198,10 +212,7 @@ impl AetherCore {
     pub fn get_compression_stats(
         &self,
     ) -> Result<crate::core::types::CompressionStats, AetherFfiError> {
-        let memory_path = self
-            .memory_path
-            .as_ref()
-            .ok_or_else(|| AetherFfiError::Memory("Memory store not initialized".to_string()))?;
+        let memory_path = self.get_memory_path()?;
 
         use crate::memory::database::VectorDatabase;
         let db_path = PathBuf::from(&memory_path);

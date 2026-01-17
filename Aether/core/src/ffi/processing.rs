@@ -102,7 +102,11 @@ impl AetherCore {
             let full_config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
             full_config.memory.clone()
         };
-        let memory_path = self.memory_path.clone();
+        let memory_path = self
+            .memory_path
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let input_for_memory = input.clone();
 
         // Clone keyword policy for enhanced L2 intent matching
