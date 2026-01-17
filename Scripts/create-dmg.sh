@@ -102,24 +102,23 @@ try:
 except Exception as e:
     print(f"Warning: Could not load logo: {e}")
 
-# Draw single short arrow
+# Draw centered arrow (icons at 130 and 410, center = 270)
 arrow_y = ${APP_ICON_Y}
 arrow_color = (10, 132, 255)
 
-shaft_start = 248
-shaft_end = 293
+# Shaft 45px + head 32px = 77px total, centered at 270
+shaft_start = 232
+shaft_end = 277
 
 for x in range(shaft_start, shaft_end, 4):
     progress = (x - shaft_start) / (shaft_end - shaft_start)
     alpha = int(100 + 100 * progress)
     draw.ellipse([x, arrow_y - 5, x + 10, arrow_y + 5], fill=(*arrow_color, alpha))
 
-# Arrow head
-head_x = shaft_end
 draw.polygon([
-    (head_x, arrow_y - 22),
-    (head_x + 32, arrow_y),
-    (head_x, arrow_y + 22)
+    (shaft_end, arrow_y - 22),
+    (shaft_end + 32, arrow_y),
+    (shaft_end, arrow_y + 22)
 ], fill=(*arrow_color, 220))
 
 img.save('${BACKGROUND_DIR}/background.png', 'PNG')
