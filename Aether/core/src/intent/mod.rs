@@ -82,6 +82,7 @@ pub mod ffi;
 pub mod keyword;
 pub mod parameters;
 pub mod presets;
+pub mod rollback;
 pub mod task_category;
 
 pub use agent_prompt::{AgentModePrompt, ToolDescription};
@@ -107,4 +108,7 @@ pub use calibrator::{
 pub use context::{
     AppContext, ConversationContext, InputFeatures, MatchingContext, MatchingContextBuilder,
     PendingParam, TimeContext,
+};
+pub use rollback::{
+    RollbackCapable, RollbackConfig, RollbackEntry, RollbackManager, RollbackResult,
 };
