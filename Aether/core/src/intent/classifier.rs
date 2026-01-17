@@ -4,10 +4,13 @@
 
 use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::Arc;
 
+use super::ai_detector::{AiIntentDetector, AiIntentResult};
 use super::keyword::{KeywordIndex, KeywordMatchMode, KeywordRule};
 use super::task_category::TaskCategory;
 use crate::config::{KeywordPolicy, PolicyKeywordRule};
+use crate::providers::AiProvider;
 
 /// Regex patterns for L1 classification (Chinese + English)
 static EXECUTABLE_PATTERNS: Lazy<Vec<(Regex, TaskCategory)>> = Lazy::new(|| {
@@ -159,6 +162,8 @@ pub struct IntentClassifier {
     confidence_threshold: f32,
     /// Keyword index for enhanced L2 matching
     keyword_index: KeywordIndex,
+    /// Optional AI detector for L3 classification
+    ai_detector: Option<Arc<AiIntentDetector>>,
 }
 
 impl IntentClassifier {
@@ -167,6 +172,7 @@ impl IntentClassifier {
         Self {
             confidence_threshold: 0.7,
             keyword_index: KeywordIndex::new(),
+            ai_detector: None,
         }
     }
 
@@ -196,6 +202,38 @@ impl IntentClassifier {
 
             self.keyword_index.add_rule(rule);
         }
+    }
+
+    /// Set AI provider for L3 classification
+    pub fn with_ai_provider(mut self, provider: Arc<dyn AiProvider>) -> Self {
+        self.ai_detector = Some(Arc::new(AiIntentDetector::new(provider)));
+        self
+    }
+
+    /// Set AI detector directly
+    pub fn with_ai_detector(mut self, detector: Arc<AiIntentDetector>) -> Self {
+        self.ai_detector = Some(detector);
+        self
+    }
+
+    /// Convert AiIntentResult to ExecutableTask
+    fn convert_ai_result(&self, result: &AiIntentResult, input: &str) -> Option<ExecutableTask> {
+        // Map AI intent types to TaskCategory
+        let category = match result.intent.as_str() {
+            "file_organize" => Some(TaskCategory::FileOrganize),
+            "file_cleanup" => Some(TaskCategory::FileCleanup),
+            "code_execution" => Some(TaskCategory::CodeExecution),
+            "file_transfer" => Some(TaskCategory::FileTransfer),
+            "document_generate" => Some(TaskCategory::DocumentGenerate),
+            _ => None,
+        }?;
+
+        Some(ExecutableTask {
+            category,
+            action: input.to_string(),
+            target: result.params.get("path").cloned(),
+            confidence: result.confidence as f32,
+        })
     }
 
     /// L1: Regex pattern matching (<5ms)
@@ -315,8 +353,15 @@ impl IntentClassifier {
             return ExecutionIntent::Executable(task);
         }
 
-        // L3: LLM classification (future - for now return Conversational)
-        // TODO: Implement LLM-based classification when needed
+        // L3: AI-based classification (optional)
+        if let Some(ref detector) = self.ai_detector {
+            if let Ok(Some(ai_result)) = detector.detect(input).await {
+                if let Some(task) = self.convert_ai_result(&ai_result, input) {
+                    return ExecutionIntent::Executable(task);
+                }
+            }
+        }
+
         ExecutionIntent::Conversational
     }
 }
@@ -699,5 +744,112 @@ mod tests {
             Some(TaskCategory::DocumentGenerate)
         );
         assert_eq!(classifier.intent_type_to_category("Unknown"), None);
+    }
+
+    // Tests for L3 AI detector integration
+
+    #[test]
+    fn test_with_ai_detector_builder() {
+        let classifier = IntentClassifier::new();
+        assert!(classifier.ai_detector.is_none());
+
+        // Can't test with_ai_provider without a real provider
+        // Just ensure the API compiles and field exists
+    }
+
+    #[test]
+    fn test_convert_ai_result() {
+        use crate::intent::ai_detector::AiIntentResult;
+        use std::collections::HashMap;
+
+        let classifier = IntentClassifier::new();
+
+        let result = AiIntentResult {
+            intent: "file_organize".to_string(),
+            confidence: 0.9,
+            params: HashMap::new(),
+            missing: vec![],
+        };
+
+        let task = classifier.convert_ai_result(&result, "organize files");
+        assert!(task.is_some());
+        assert_eq!(task.unwrap().category, TaskCategory::FileOrganize);
+    }
+
+    #[test]
+    fn test_convert_ai_result_with_path() {
+        use crate::intent::ai_detector::AiIntentResult;
+        use std::collections::HashMap;
+
+        let classifier = IntentClassifier::new();
+
+        let mut params = HashMap::new();
+        params.insert("path".to_string(), "/Downloads".to_string());
+
+        let result = AiIntentResult {
+            intent: "file_cleanup".to_string(),
+            confidence: 0.85,
+            params,
+            missing: vec![],
+        };
+
+        let task = classifier.convert_ai_result(&result, "delete temp files");
+        assert!(task.is_some());
+        let task = task.unwrap();
+        assert_eq!(task.category, TaskCategory::FileCleanup);
+        assert_eq!(task.target, Some("/Downloads".to_string()));
+        assert!((task.confidence - 0.85).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_convert_ai_result_unknown_intent() {
+        use crate::intent::ai_detector::AiIntentResult;
+        use std::collections::HashMap;
+
+        let classifier = IntentClassifier::new();
+
+        let result = AiIntentResult {
+            intent: "unknown".to_string(),
+            confidence: 0.9,
+            params: HashMap::new(),
+            missing: vec![],
+        };
+
+        let task = classifier.convert_ai_result(&result, "test");
+        assert!(task.is_none());
+    }
+
+    #[test]
+    fn test_convert_ai_result_all_categories() {
+        use crate::intent::ai_detector::AiIntentResult;
+        use std::collections::HashMap;
+
+        let classifier = IntentClassifier::new();
+
+        let test_cases = vec![
+            ("file_organize", TaskCategory::FileOrganize),
+            ("file_cleanup", TaskCategory::FileCleanup),
+            ("code_execution", TaskCategory::CodeExecution),
+            ("file_transfer", TaskCategory::FileTransfer),
+            ("document_generate", TaskCategory::DocumentGenerate),
+        ];
+
+        for (intent_str, expected_category) in test_cases {
+            let result = AiIntentResult {
+                intent: intent_str.to_string(),
+                confidence: 0.9,
+                params: HashMap::new(),
+                missing: vec![],
+            };
+
+            let task = classifier.convert_ai_result(&result, "test");
+            assert!(task.is_some(), "Failed for intent: {}", intent_str);
+            assert_eq!(
+                task.unwrap().category,
+                expected_category,
+                "Category mismatch for intent: {}",
+                intent_str
+            );
+        }
     }
 }
