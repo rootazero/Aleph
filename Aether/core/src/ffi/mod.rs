@@ -292,6 +292,10 @@ pub fn init_core(
     config_path: String,
     handler: Box<dyn AetherEventHandler>,
 ) -> Result<Arc<AetherCore>, AetherFfiError> {
+    // Initialize logging system first (file + console with PII scrubbing)
+    // Must be called before any tracing macros to ensure logs are captured
+    crate::init_logging();
+
     info!(config_path = %config_path, "Initializing AetherCore");
 
     // Convert Box to Arc for internal use
