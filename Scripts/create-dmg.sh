@@ -102,28 +102,25 @@ try:
 except Exception as e:
     print(f"Warning: Could not load logo: {e}")
 
-# Draw arrow in center
+# Draw single arrow - shorter and wider
 arrow_y = ${APP_ICON_Y}
+arrow_color = (10, 132, 255)
 
-# Arrow shaft with gradient
-for i, x in enumerate(range(200, 340, 3)):
-    progress = (x - 200) / 140
-    alpha = int(80 + 100 * progress)
-    draw.ellipse([x, arrow_y - 3, x + 8, arrow_y + 3], fill=(10, 132, 255, alpha))
+shaft_start = 225
+shaft_end = 315
+
+for x in range(shaft_start, shaft_end, 4):
+    progress = (x - shaft_start) / (shaft_end - shaft_start)
+    alpha = int(100 + 100 * progress)
+    draw.ellipse([x, arrow_y - 5, x + 10, arrow_y + 5], fill=(*arrow_color, alpha))
 
 # Arrow head
+head_x = shaft_end
 draw.polygon([
-    (340, arrow_y - 18),
-    (368, arrow_y),
-    (340, arrow_y + 18)
-], fill=(10, 132, 255, 200))
-
-# Ghost arrows for visual depth
-for offset in [-35, 35]:
-    gy = arrow_y + offset
-    for x in range(220, 320, 6):
-        draw.ellipse([x, gy - 1, x + 4, gy + 1], fill=(10, 132, 255, 40))
-    draw.polygon([(320, gy - 8), (332, gy), (320, gy + 8)], fill=(10, 132, 255, 40))
+    (head_x, arrow_y - 22),
+    (head_x + 32, arrow_y),
+    (head_x, arrow_y + 22)
+], fill=(*arrow_color, 220))
 
 img.save('${BACKGROUND_DIR}/background.png', 'PNG')
 print("Background image created")
@@ -171,6 +168,7 @@ icon_locations = {
 default_view = 'icon-view'
 show_icon_preview = False
 text_size = 14
+text_color = (1.0, 1.0, 1.0)
 SETTINGS
 
     echo "Building DMG with dmgbuild..."
