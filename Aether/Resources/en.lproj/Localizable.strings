@@ -153,6 +153,10 @@
 "provider.custom_api_endpoint" = "OpenAI-compatible API: %@";
 "provider.custom_compatible" = "Custom OpenAI-compatible provider";
 
+// T8Star Provider
+"provider.t8star.name" = "T8Star";
+"provider.t8star.description" = "OpenAI-compatible API proxy supporting multiple AI models";
+
 // MARK: - Provider Default Selection (NEW for default provider management)
 "provider.badge.default" = "Default";
 "provider.action.set_default" = "Set as Default";

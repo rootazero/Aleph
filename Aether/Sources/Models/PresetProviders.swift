@@ -118,6 +118,16 @@ struct PresetProviders {
             baseUrl: nil  // Default: https://openrouter.ai/api/v1
         ),
         PresetProvider(
+            id: "t8star",
+            name: "T8Star",
+            iconName: "sparkles.rectangle.stack",
+            color: "#FF6B35",
+            providerType: "openai",
+            defaultModel: "gpt-4o",
+            description: "OpenAI-compatible API proxy supporting multiple AI models",
+            baseUrl: "https://ai.t8star.cn"
+        ),
+        PresetProvider(
             id: "azure-openai",
             name: "Azure OpenAI",
             iconName: "cloud",

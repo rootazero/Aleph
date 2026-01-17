@@ -153,6 +153,10 @@
 "provider.custom_api_endpoint" = "OpenAI 兼容 API：%@";
 "provider.custom_compatible" = "自定义 OpenAI 兼容提供商";
 
+// T8Star Provider
+"provider.t8star.name" = "T8Star";
+"provider.t8star.description" = "OpenAI 兼容 API 中转，支持多种 AI 模型";
+
 // MARK: - Provider Default Selection (NEW for default provider management)
 "provider.badge.default" = "默认";
 "provider.action.set_default" = "设为默认";

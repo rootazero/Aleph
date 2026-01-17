@@ -134,6 +134,18 @@ enum GenerationPresetProviders {
             category: .image
         ),
         GenerationPresetProvider(
+            id: "t8star-image",
+            name: "T8Star",
+            iconName: "sparkles.rectangle.stack",
+            color: "#FF6B35",
+            providerType: "openai_compat",
+            supportedTypes: [.image],
+            defaultModel: "dall-e-3",
+            description: "OpenAI-compatible image generation (DALL-E, Midjourney, etc.)",
+            baseUrl: "https://ai.t8star.cn",
+            category: .image
+        ),
+        GenerationPresetProvider(
             id: "custom-image",
             name: "Custom Image",
             iconName: "puzzlepiece.extension.fill",
@@ -200,6 +212,18 @@ enum GenerationPresetProviders {
             category: .video
         ),
         GenerationPresetProvider(
+            id: "t8star-video",
+            name: "T8Star",
+            iconName: "sparkles.rectangle.stack",
+            color: "#FF6B35",
+            providerType: "openai_compat",
+            supportedTypes: [.video],
+            defaultModel: "runway-gen3",
+            description: "OpenAI-compatible video generation (Runway, Pika, etc.)",
+            baseUrl: "https://ai.t8star.cn",
+            category: .video
+        ),
+        GenerationPresetProvider(
             id: "custom-video",
             name: "Custom Video",
             iconName: "puzzlepiece.extension.fill",
@@ -263,6 +287,18 @@ enum GenerationPresetProviders {
             defaultModel: "en-US-JennyNeural",
             description: "Azure Cognitive Services TTS",
             baseUrl: nil,
+            category: .audio
+        ),
+        GenerationPresetProvider(
+            id: "t8star-audio",
+            name: "T8Star",
+            iconName: "sparkles.rectangle.stack",
+            color: "#FF6B35",
+            providerType: "openai_compat",
+            supportedTypes: [.speech],
+            defaultModel: "tts-1-hd",
+            description: "OpenAI-compatible speech synthesis (OpenAI TTS, etc.)",
+            baseUrl: "https://ai.t8star.cn",
             category: .audio
         ),
         GenerationPresetProvider(
