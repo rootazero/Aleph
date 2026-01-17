@@ -8,6 +8,8 @@
 //! - [`WebFetchTool`] - Web page fetching
 //! - [`YouTubeTool`] - YouTube video transcript extraction
 //! - [`FileOpsTool`] - File system operations (list, read, write, move, copy, delete, mkdir, search)
+//! - [`ImageGenerateTool`] - Image generation from text prompts
+//! - [`SpeechGenerateTool`] - Text-to-speech generation
 //!
 //! # Tool Wrappers (for hot-reload)
 //!
@@ -15,6 +17,7 @@
 
 pub mod error;
 pub mod file_ops;
+pub mod generation;
 pub mod mcp_wrapper;
 pub mod search;
 pub mod web_fetch;
@@ -22,6 +25,7 @@ pub mod youtube;
 
 pub use error::ToolError;
 pub use file_ops::FileOpsTool;
+pub use generation::{ImageGenerateTool, SpeechGenerateTool};
 pub use mcp_wrapper::McpToolWrapper;
 pub use search::SearchTool;
 pub use web_fetch::WebFetchTool;
