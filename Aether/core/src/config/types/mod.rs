@@ -18,6 +18,7 @@
 pub mod cowork;
 pub mod dispatcher;
 pub mod general;
+pub mod generation;
 pub mod memory;
 pub mod policies;
 pub mod provider;
@@ -33,6 +34,7 @@ pub mod video;
 pub use cowork::*;
 pub use dispatcher::*;
 pub use general::*;
+pub use generation::*;
 pub use memory::*;
 pub use policies::*;
 pub use provider::*;

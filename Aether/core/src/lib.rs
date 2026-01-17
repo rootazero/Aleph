@@ -104,6 +104,8 @@ pub use crate::config::{
     PoliciesConfig, ToolSafetyPolicy, IntentDetectionPolicy, MemoryPolicies,
     CompressionPolicy, AiRetrievalPolicy, RetryPolicy, WebFetchPolicy, TextFormatPolicy, MetricsPolicy,
     KeywordPolicy, PolicyKeywordRule, PolicyWeightedKeyword,
+    // Generation config types
+    GenerationConfig, GenerationDefaults, GenerationProviderConfig,
 };
 // Internal types from core module
 pub use crate::core::{
@@ -182,6 +184,13 @@ pub use crate::cowork_ffi::{
     CapabilityMappingFFI, ModelCapabilityFFI, ModelCostStrategyFFI, ModelCostTierFFI,
     ModelLatencyTierFFI, ModelProfileFFI, ModelRoutingRulesFFI, StageResultFFI,
     TaskTypeMappingFFI,
+};
+
+// Generation exports (media generation providers)
+pub use crate::generation::{
+    GenerationData, GenerationError, GenerationMetadata, GenerationOutput, GenerationParams,
+    GenerationProgress, GenerationProvider, GenerationProviderRegistry, GenerationRequest,
+    GenerationType, MockGenerationProvider,
 };
 
 // Core interface exports (rig-core based architecture)
