@@ -8,6 +8,9 @@
 //! - `OpenAiImageProvider` - DALL-E 3 image generation
 //! - `OpenAiTtsProvider` - OpenAI Text-to-Speech
 //! - `OpenAiCompatProvider` - Generic OpenAI-compatible API for third-party proxies
+//! - `StabilityImageProvider` - Stability AI (Stable Diffusion XL) image generation
+//! - `ReplicateProvider` - Replicate API for Flux, SDXL, MusicGen, and more
+//! - `ElevenLabsProvider` - ElevenLabs high-quality Text-to-Speech
 //!
 //! # Factory Function
 //!
@@ -27,13 +30,19 @@
 //! let provider = create_provider("dalle", &config)?;
 //! ```
 
+pub mod elevenlabs;
 pub mod openai_compat;
 pub mod openai_image;
 pub mod openai_tts;
+pub mod replicate;
+pub mod stability;
 
+pub use elevenlabs::ElevenLabsProvider;
 pub use openai_compat::{OpenAiCompatProvider, OpenAiCompatProviderBuilder};
 pub use openai_image::OpenAiImageProvider;
 pub use openai_tts::OpenAiTtsProvider;
+pub use replicate::{ReplicateProvider, ReplicateProviderBuilder};
+pub use stability::StabilityImageProvider;
 
 use crate::config::GenerationProviderConfig;
 use crate::generation::{GenerationError, GenerationProvider, GenerationResult};
@@ -56,6 +65,9 @@ use std::sync::Arc;
 /// - `"openai"` or `"openai_image"` or `"dalle"` - OpenAI DALL-E image generation
 /// - `"openai_tts"` or `"tts"` - OpenAI Text-to-Speech
 /// - `"openai_compat"` - Generic OpenAI-compatible API
+/// - `"stability"` or `"stability_image"` or `"sdxl"` - Stability AI image generation
+/// - `"replicate"` - Replicate API for various models
+/// - `"elevenlabs"` - ElevenLabs Text-to-Speech
 ///
 /// # Example
 ///
@@ -106,21 +118,17 @@ pub fn create_provider(
     })?;
 
     let provider: Arc<dyn GenerationProvider> = match config.provider_type.as_str() {
-        "openai" | "openai_image" | "dalle" => {
-            Arc::new(OpenAiImageProvider::new(
-                api_key,
-                config.base_url.clone(),
-                config.model.clone(),
-            ))
-        }
-        "openai_tts" | "tts" => {
-            Arc::new(OpenAiTtsProvider::new(
-                api_key,
-                config.base_url.clone(),
-                config.model.clone(),
-                config.defaults.voice.clone(),
-            )?)
-        }
+        "openai" | "openai_image" | "dalle" => Arc::new(OpenAiImageProvider::new(
+            api_key,
+            config.base_url.clone(),
+            config.model.clone(),
+        )),
+        "openai_tts" | "tts" => Arc::new(OpenAiTtsProvider::new(
+            api_key,
+            config.base_url.clone(),
+            config.model.clone(),
+            config.defaults.voice.clone(),
+        )?),
         "openai_compat" => {
             let base_url = config.base_url.clone().ok_or_else(|| {
                 GenerationError::invalid_parameters(
@@ -144,10 +152,40 @@ pub fn create_provider(
 
             Arc::new(builder.build()?)
         }
+        "stability" | "stability_image" | "sdxl" => Arc::new(StabilityImageProvider::new(
+            api_key,
+            config.base_url.clone(),
+            config.model.clone(),
+        )),
+        "replicate" => {
+            let mut builder = ReplicateProvider::builder(&api_key);
+
+            if let Some(base_url) = &config.base_url {
+                builder = builder.endpoint(base_url);
+            }
+
+            // Add model as "default" alias if specified
+            if let Some(model) = &config.model {
+                builder = builder.add_model("default", model);
+            }
+
+            // Add model mappings from config
+            for (alias, version) in &config.models {
+                builder = builder.add_model(alias, version);
+            }
+
+            Arc::new(builder.build())
+        }
+        "elevenlabs" => Arc::new(ElevenLabsProvider::new(
+            api_key,
+            config.base_url.clone(),
+            config.model.clone(),
+            config.defaults.voice.clone(),
+        )?),
         other => {
             return Err(GenerationError::invalid_parameters(
                 format!(
-                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_compat",
+                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_compat, stability, stability_image, sdxl, replicate, elevenlabs",
                     other
                 ),
                 Some("provider_type".to_string()),
@@ -403,5 +441,165 @@ mod tests {
 
         // Provider can be used across threads
         let _: Box<dyn Send + Sync> = Box::new(provider);
+    }
+
+    // === Stability AI provider tests ===
+
+    #[test]
+    fn test_create_stability_provider() {
+        let config = GenerationProviderConfig {
+            provider_type: "stability".to_string(),
+            api_key: Some("sk-stability-key".to_string()),
+            model: Some("stable-diffusion-xl-1024-v1-0".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("stability", &config).unwrap();
+
+        assert_eq!(provider.name(), "stability-image");
+        assert!(provider.supports(GenerationType::Image));
+        assert_eq!(
+            provider.default_model(),
+            Some("stable-diffusion-xl-1024-v1-0")
+        );
+    }
+
+    #[test]
+    fn test_create_stability_provider_with_sdxl_type() {
+        let config = GenerationProviderConfig {
+            provider_type: "sdxl".to_string(),
+            api_key: Some("sk-test".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("sdxl", &config).unwrap();
+
+        assert_eq!(provider.name(), "stability-image");
+        assert!(provider.supports(GenerationType::Image));
+    }
+
+    #[test]
+    fn test_create_stability_provider_with_stability_image_type() {
+        let config = GenerationProviderConfig {
+            provider_type: "stability_image".to_string(),
+            api_key: Some("sk-test".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("stability", &config).unwrap();
+
+        assert_eq!(provider.name(), "stability-image");
+    }
+
+    // === Replicate provider tests ===
+
+    #[test]
+    fn test_create_replicate_provider() {
+        let config = GenerationProviderConfig {
+            provider_type: "replicate".to_string(),
+            api_key: Some("r8_replicate_key".to_string()),
+            model: Some("black-forest-labs/flux-schnell".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("replicate", &config).unwrap();
+
+        assert_eq!(provider.name(), "replicate");
+        assert!(provider.supports(GenerationType::Image));
+        assert!(provider.supports(GenerationType::Audio));
+        assert!(!provider.supports(GenerationType::Video)); // Video not in default
+        assert_eq!(
+            provider.default_model(),
+            Some("black-forest-labs/flux-schnell")
+        );
+    }
+
+    #[test]
+    fn test_create_replicate_provider_with_model_mappings() {
+        use std::collections::HashMap;
+
+        let mut models = HashMap::new();
+        models.insert("flux".to_string(), "black-forest-labs/flux-schnell".to_string());
+        models.insert("sdxl".to_string(), "stability-ai/sdxl".to_string());
+
+        let config = GenerationProviderConfig {
+            provider_type: "replicate".to_string(),
+            api_key: Some("r8_replicate_key".to_string()),
+            models,
+            ..Default::default()
+        };
+
+        let provider = create_provider("replicate", &config).unwrap();
+
+        assert_eq!(provider.name(), "replicate");
+    }
+
+    #[test]
+    fn test_create_replicate_provider_with_custom_base_url() {
+        let config = GenerationProviderConfig {
+            provider_type: "replicate".to_string(),
+            api_key: Some("r8_test".to_string()),
+            base_url: Some("https://custom.replicate.com".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("replicate", &config).unwrap();
+
+        assert_eq!(provider.name(), "replicate");
+    }
+
+    // === ElevenLabs provider tests ===
+
+    #[test]
+    fn test_create_elevenlabs_provider() {
+        let config = GenerationProviderConfig {
+            provider_type: "elevenlabs".to_string(),
+            api_key: Some("xi_elevenlabs_key".to_string()),
+            model: Some("eleven_multilingual_v2".to_string()),
+            defaults: GenerationDefaults {
+                voice: Some("rachel".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let provider = create_provider("elevenlabs", &config).unwrap();
+
+        assert_eq!(provider.name(), "elevenlabs");
+        assert!(provider.supports(GenerationType::Speech));
+        assert_eq!(provider.default_model(), Some("eleven_multilingual_v2"));
+    }
+
+    #[test]
+    fn test_create_elevenlabs_provider_default_model() {
+        let config = GenerationProviderConfig {
+            provider_type: "elevenlabs".to_string(),
+            api_key: Some("xi_test".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("elevenlabs", &config).unwrap();
+
+        assert_eq!(provider.name(), "elevenlabs");
+        assert!(provider.supports(GenerationType::Speech));
+        // Default model should be eleven_monolingual_v1
+        assert_eq!(provider.default_model(), Some("eleven_monolingual_v1"));
+    }
+
+    #[test]
+    fn test_create_elevenlabs_provider_with_voice_id() {
+        let config = GenerationProviderConfig {
+            provider_type: "elevenlabs".to_string(),
+            api_key: Some("xi_test".to_string()),
+            defaults: GenerationDefaults {
+                voice: Some("21m00Tcm4TlvDq8ikWAM".to_string()), // Rachel's ID
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let provider = create_provider("elevenlabs", &config).unwrap();
+
+        assert_eq!(provider.name(), "elevenlabs");
     }
 }
