@@ -105,6 +105,12 @@ impl AetherCore {
         let memory_path = self.memory_path.clone();
         let input_for_memory = input.clone();
 
+        // Clone keyword policy for enhanced L2 intent matching
+        let keyword_policy = {
+            let full_config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
+            full_config.policies.keyword.clone()
+        };
+
         // Clone conversation histories for multi-turn support
         let conversation_histories = Arc::clone(&self.conversation_histories);
 
@@ -155,7 +161,7 @@ impl AetherCore {
                 format!("{}\n\n---\n\n用户请求: {}", agent_prompt, task_input)
             } else {
                 // Automatic classification for non-explicit inputs
-                let classifier = IntentClassifier::new();
+                let classifier = IntentClassifier::with_keyword_policy(&keyword_policy);
                 let intent = runtime.block_on(classifier.classify(&task_input));
                 debug!(intent = ?intent, "Intent classification result");
 
