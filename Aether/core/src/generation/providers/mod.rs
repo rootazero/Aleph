@@ -14,6 +14,7 @@
 //! - `ReplicateProvider` - Replicate API for Flux, SDXL, MusicGen, and more
 //! - `ElevenLabsProvider` - ElevenLabs high-quality Text-to-Speech
 //! - `MidjourneyProvider` - T8Star Midjourney API proxy for high-quality image generation
+//! - `T8StarVeoProvider` - T8Star Veo API proxy for video generation (Google Veo models)
 //!
 //! # Factory Function
 //!
@@ -42,6 +43,7 @@ pub mod openai_image;
 pub mod openai_tts;
 pub mod replicate;
 pub mod stability;
+pub mod t8star_veo;
 
 pub use elevenlabs::ElevenLabsProvider;
 pub use google_imagen::GoogleImagenProvider;
@@ -52,6 +54,7 @@ pub use openai_image::OpenAiImageProvider;
 pub use openai_tts::OpenAiTtsProvider;
 pub use replicate::{ReplicateProvider, ReplicateProviderBuilder};
 pub use stability::StabilityImageProvider;
+pub use t8star_veo::{T8StarVeoProvider, T8StarVeoProviderBuilder};
 
 use crate::config::GenerationProviderConfig;
 use crate::generation::{GenerationError, GenerationProvider, GenerationResult};
@@ -227,10 +230,25 @@ pub fn create_provider(
 
             Arc::new(builder.build())
         }
+        "t8star_veo" | "t8star-veo" => {
+            let base_url = config.base_url.clone().unwrap_or_else(|| "https://ai.t8star.cn".to_string());
+
+            let mut builder = T8StarVeoProvider::builder(&api_key, &base_url);
+
+            if let Some(model) = &config.model {
+                builder = builder.model(model);
+            }
+
+            if !config.color.is_empty() {
+                builder = builder.color(&config.color);
+            }
+
+            Arc::new(builder.build()?)
+        }
         other => {
             return Err(GenerationError::invalid_parameters(
                 format!(
-                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj",
+                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj, t8star_veo",
                     other
                 ),
                 Some("provider_type".to_string()),
@@ -828,5 +846,79 @@ mod tests {
 
         assert_eq!(provider.name(), "midjourney");
         assert_eq!(provider.color(), "#FF0000");
+    }
+
+    // === T8Star Veo provider tests ===
+
+    #[test]
+    fn test_create_t8star_veo_provider() {
+        let config = GenerationProviderConfig {
+            provider_type: "t8star_veo".to_string(),
+            api_key: Some("veo-api-key".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("t8star-veo", &config).unwrap();
+
+        assert_eq!(provider.name(), "t8star-veo");
+        assert!(provider.supports(GenerationType::Video));
+        assert_eq!(provider.default_model(), Some("veo3.1-fast"));
+    }
+
+    #[test]
+    fn test_create_t8star_veo_provider_with_hyphen() {
+        let config = GenerationProviderConfig {
+            provider_type: "t8star-veo".to_string(),
+            api_key: Some("veo-api-key".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("t8star-veo", &config).unwrap();
+
+        assert_eq!(provider.name(), "t8star-veo");
+    }
+
+    #[test]
+    fn test_create_t8star_veo_provider_with_model() {
+        let config = GenerationProviderConfig {
+            provider_type: "t8star_veo".to_string(),
+            api_key: Some("veo-api-key".to_string()),
+            model: Some("veo3.1-pro".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("t8star-veo", &config).unwrap();
+
+        assert_eq!(provider.name(), "t8star-veo");
+        assert_eq!(provider.default_model(), Some("veo3.1-pro"));
+    }
+
+    #[test]
+    fn test_create_t8star_veo_provider_with_custom_endpoint() {
+        let config = GenerationProviderConfig {
+            provider_type: "t8star_veo".to_string(),
+            api_key: Some("veo-api-key".to_string()),
+            base_url: Some("https://custom.api.com".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("t8star-veo", &config).unwrap();
+
+        assert_eq!(provider.name(), "t8star-veo");
+    }
+
+    #[test]
+    fn test_create_t8star_veo_provider_with_color() {
+        let config = GenerationProviderConfig {
+            provider_type: "t8star_veo".to_string(),
+            api_key: Some("veo-api-key".to_string()),
+            color: "#00FF00".to_string(),
+            ..Default::default()
+        };
+
+        let provider = create_provider("t8star-veo", &config).unwrap();
+
+        assert_eq!(provider.name(), "t8star-veo");
+        assert_eq!(provider.color(), "#00FF00");
     }
 }

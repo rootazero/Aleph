@@ -228,7 +228,7 @@ enum GenerationPresetProviders {
             name: "T8Star Veo",
             iconName: "sparkles.rectangle.stack",
             color: "#FF6B35",
-            providerType: "openai_compat",
+            providerType: "t8star_veo",
             supportedTypes: [.video],
             defaultModel: "veo3.1-fast",
             description: "Google Veo video generation via T8Star API",
