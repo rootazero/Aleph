@@ -794,12 +794,11 @@ impl AetherCore {
             }
         };
 
-        // Test by generating a simple image with "test" prompt (minimal cost)
+        // Test by generating a simple image with minimal prompt
+        // Don't specify size - let the API use its default (more compatible with different models)
         let test_request = GenerationRequest::new(GenerationType::Image, "a white dot")
             .with_params(
                 crate::generation::GenerationParams::builder()
-                    .width(256)
-                    .height(256)
                     .n(1)
                     .build(),
             );
