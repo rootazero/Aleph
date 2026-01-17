@@ -212,11 +212,18 @@ impl ClaudeProvider {
             })?;
 
         // Build API endpoint
-        let base_url = config
+        // Normalize URL: remove trailing slash and /v1 suffix, then append /v1/messages
+        // This ensures consistent behavior whether user provides URL with or without /v1
+        let raw_base_url = config
             .base_url
             .as_ref()
-            .map(|s| s.trim_end_matches('/').to_string())
+            .map(|s| s.to_string())
             .unwrap_or_else(|| "https://api.anthropic.com".to_string());
+        let base_url = raw_base_url
+            .trim_end_matches('/')
+            .trim_end_matches("/v1")
+            .trim_end_matches('/')
+            .to_string();
         let endpoint = format!("{}/v1/messages", base_url);
 
         info!(
@@ -857,6 +864,38 @@ mod tests {
     #[test]
     fn test_default_base_url() {
         let config = create_test_config();
+        let provider = ClaudeProvider::new("claude".to_string(), config).unwrap();
+        assert_eq!(provider.endpoint, "https://api.anthropic.com/v1/messages");
+    }
+
+    #[test]
+    fn test_url_normalization_with_v1() {
+        // User provides URL with /v1 - should NOT produce duplicate /v1
+        let mut config = create_test_config();
+        config.base_url = Some("https://api.anthropic.com/v1".to_string());
+
+        let provider = ClaudeProvider::new("claude".to_string(), config).unwrap();
+        assert_eq!(provider.endpoint, "https://api.anthropic.com/v1/messages");
+    }
+
+    #[test]
+    fn test_url_normalization_without_v1() {
+        // User provides URL without /v1 - should still work
+        let mut config = create_test_config();
+        config.base_url = Some("https://custom.anthropic.com".to_string());
+
+        let provider = ClaudeProvider::new("claude".to_string(), config).unwrap();
+        assert_eq!(
+            provider.endpoint,
+            "https://custom.anthropic.com/v1/messages"
+        );
+    }
+
+    #[test]
+    fn test_url_normalization_with_v1_and_trailing_slash() {
+        let mut config = create_test_config();
+        config.base_url = Some("https://api.anthropic.com/v1/".to_string());
+
         let provider = ClaudeProvider::new("claude".to_string(), config).unwrap();
         assert_eq!(provider.endpoint, "https://api.anthropic.com/v1/messages");
     }
