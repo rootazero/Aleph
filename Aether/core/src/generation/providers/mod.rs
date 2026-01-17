@@ -13,6 +13,7 @@
 //! - `GoogleVeoProvider` - Google Veo 2/3 video generation
 //! - `ReplicateProvider` - Replicate API for Flux, SDXL, MusicGen, and more
 //! - `ElevenLabsProvider` - ElevenLabs high-quality Text-to-Speech
+//! - `MidjourneyProvider` - T8Star Midjourney API proxy for high-quality image generation
 //!
 //! # Factory Function
 //!
@@ -35,6 +36,7 @@
 pub mod elevenlabs;
 pub mod google_imagen;
 pub mod google_veo;
+pub mod midjourney;
 pub mod openai_compat;
 pub mod openai_image;
 pub mod openai_tts;
@@ -44,6 +46,7 @@ pub mod stability;
 pub use elevenlabs::ElevenLabsProvider;
 pub use google_imagen::GoogleImagenProvider;
 pub use google_veo::GoogleVeoProvider;
+pub use midjourney::{MidjourneyMode, MidjourneyProvider, MidjourneyProviderBuilder};
 pub use openai_compat::{OpenAiCompatProvider, OpenAiCompatProviderBuilder};
 pub use openai_image::OpenAiImageProvider;
 pub use openai_tts::OpenAiTtsProvider;
@@ -76,6 +79,7 @@ use std::sync::Arc;
 /// - `"google_veo"` or `"veo"` - Google Veo video generation
 /// - `"replicate"` - Replicate API for various models
 /// - `"elevenlabs"` - ElevenLabs Text-to-Speech
+/// - `"midjourney"` or `"mj"` - T8Star Midjourney API proxy
 ///
 /// # Example
 ///
@@ -200,10 +204,33 @@ pub fn create_provider(
             config.model.clone(),
             config.defaults.voice.clone(),
         )?),
+        "midjourney" | "mj" => {
+            let mut builder = MidjourneyProvider::builder(&api_key);
+
+            if let Some(base_url) = &config.base_url {
+                builder = builder.endpoint(base_url);
+            }
+
+            // Check for mode in extra config or model field
+            if let Some(model) = &config.model {
+                let mode = match model.to_lowercase().as_str() {
+                    "fast" | "mj-fast" => MidjourneyMode::Fast,
+                    "relax" | "mj-relax" => MidjourneyMode::Relax,
+                    _ => MidjourneyMode::Fast,
+                };
+                builder = builder.mode(mode);
+            }
+
+            if !config.color.is_empty() {
+                builder = builder.color(&config.color);
+            }
+
+            Arc::new(builder.build())
+        }
         other => {
             return Err(GenerationError::invalid_parameters(
                 format!(
-                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs",
+                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj",
                     other
                 ),
                 Some("provider_type".to_string()),
@@ -711,5 +738,95 @@ mod tests {
 
         assert_eq!(provider.name(), "google-veo");
         assert_eq!(provider.default_model(), Some("veo-3.1-generate-preview"));
+    }
+
+    // === Midjourney provider tests ===
+
+    #[test]
+    fn test_create_midjourney_provider() {
+        let config = GenerationProviderConfig {
+            provider_type: "midjourney".to_string(),
+            api_key: Some("mj-api-key".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("midjourney", &config).unwrap();
+
+        assert_eq!(provider.name(), "midjourney");
+        assert!(provider.supports(GenerationType::Image));
+        assert_eq!(provider.default_model(), Some("midjourney"));
+    }
+
+    #[test]
+    fn test_create_midjourney_provider_with_mj_type() {
+        let config = GenerationProviderConfig {
+            provider_type: "mj".to_string(),
+            api_key: Some("mj-api-key".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("mj", &config).unwrap();
+
+        assert_eq!(provider.name(), "midjourney");
+        assert!(provider.supports(GenerationType::Image));
+    }
+
+    #[test]
+    fn test_create_midjourney_provider_fast_mode() {
+        let config = GenerationProviderConfig {
+            provider_type: "midjourney".to_string(),
+            api_key: Some("mj-api-key".to_string()),
+            model: Some("fast".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("midjourney", &config).unwrap();
+
+        assert_eq!(provider.name(), "midjourney");
+        assert!(provider.supports(GenerationType::Image));
+    }
+
+    #[test]
+    fn test_create_midjourney_provider_relax_mode() {
+        let config = GenerationProviderConfig {
+            provider_type: "midjourney".to_string(),
+            api_key: Some("mj-api-key".to_string()),
+            model: Some("relax".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("midjourney", &config).unwrap();
+
+        assert_eq!(provider.name(), "midjourney");
+        assert!(provider.supports(GenerationType::Image));
+    }
+
+    #[test]
+    fn test_create_midjourney_provider_with_custom_endpoint() {
+        let config = GenerationProviderConfig {
+            provider_type: "midjourney".to_string(),
+            api_key: Some("mj-api-key".to_string()),
+            base_url: Some("https://custom.api.com".to_string()),
+            ..Default::default()
+        };
+
+        let provider = create_provider("midjourney", &config).unwrap();
+
+        assert_eq!(provider.name(), "midjourney");
+    }
+
+    #[test]
+    fn test_create_midjourney_provider_with_color() {
+        let config = GenerationProviderConfig {
+            provider_type: "midjourney".to_string(),
+            api_key: Some("mj-api-key".to_string()),
+            color: "#FF0000".to_string(),
+            ..Default::default()
+        };
+
+        let provider = create_provider("midjourney", &config).unwrap();
+
+        assert_eq!(provider.name(), "midjourney");
+        assert_eq!(provider.color(), "#FF0000");
     }
 }
