@@ -84,6 +84,7 @@ mod title_generator; // Title generation for conversation topics
 pub mod vision; // NEW: Vision capability (screen OCR, image understanding)
 pub mod cowork; // NEW: Cowork task orchestration (Phase 1)
 pub mod cowork_ffi; // NEW: Cowork FFI bindings
+pub mod generation; // NEW: Media generation providers (image, video, audio, speech)
 
 // Integration tests module
 #[cfg(test)]
