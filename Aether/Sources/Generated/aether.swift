@@ -748,6 +748,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func setLogLevel(level: LogLevel) throws 
     
+    func testGenerationProviderConnection(providerType: String, apiKey: String, baseUrl: String?, model: String?)  -> TestConnectionResult
+    
     func testProviderConnectionWithConfig(providerName: String, providerConfig: ProviderConfig)  -> TestConnectionResult
     
     func testSearchProviderWithConfig(config: SearchProviderTestConfig) throws  -> ProviderTestResult
@@ -1405,6 +1407,17 @@ open func setLogLevel(level: LogLevel)throws  {try rustCallWithError(FfiConverte
         FfiConverterTypeLogLevel.lower(level),$0
     )
 }
+}
+    
+open func testGenerationProviderConnection(providerType: String, apiKey: String, baseUrl: String?, model: String?) -> TestConnectionResult {
+    return try!  FfiConverterTypeTestConnectionResult.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_test_generation_provider_connection(self.uniffiClonePointer(),
+        FfiConverterString.lower(providerType),
+        FfiConverterString.lower(apiKey),
+        FfiConverterOptionString.lower(baseUrl),
+        FfiConverterOptionString.lower(model),$0
+    )
+})
 }
     
 open func testProviderConnectionWithConfig(providerName: String, providerConfig: ProviderConfig) -> TestConnectionResult {
@@ -14242,6 +14255,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_set_log_level() != 28527) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_test_generation_provider_connection() != 23525) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_test_provider_connection_with_config() != 26018) {

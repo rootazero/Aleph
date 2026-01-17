@@ -1181,6 +1181,14 @@ interface AetherCore {
     // Check if a provider supports image editing
     boolean provider_supports_image_editing(string provider_name);
 
+    // Test a generation provider connection (for validating before saving)
+    TestConnectionResult test_generation_provider_connection(
+        string provider_type,
+        string api_key,
+        string? base_url,
+        string? model
+    );
+
     // ===== COWORK TASK ORCHESTRATION =====
 
     // Get Cowork configuration
