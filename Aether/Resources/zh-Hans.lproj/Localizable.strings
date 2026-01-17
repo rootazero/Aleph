@@ -157,6 +157,10 @@
 "provider.t8star.name" = "T8Star";
 "provider.t8star.description" = "OpenAI 兼容 API 中转，支持多种 AI 模型";
 
+// T8Star Midjourney Provider
+"provider.t8star_midjourney.name" = "T8Star Midjourney";
+"provider.t8star_midjourney.description" = "通过 T8Star API 使用 Midjourney 图像生成";
+
 // MARK: - Provider Default Selection (NEW for default provider management)
 "provider.badge.default" = "默认";
 "provider.action.set_default" = "设为默认";

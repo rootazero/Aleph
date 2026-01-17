@@ -157,6 +157,10 @@
 "provider.t8star.name" = "T8Star";
 "provider.t8star.description" = "OpenAI-compatible API proxy supporting multiple AI models";
 
+// T8Star Midjourney Provider
+"provider.t8star_midjourney.name" = "T8Star Midjourney";
+"provider.t8star_midjourney.description" = "Midjourney image generation via T8Star API";
+
 // MARK: - Provider Default Selection (NEW for default provider management)
 "provider.badge.default" = "Default";
 "provider.action.set_default" = "Set as Default";

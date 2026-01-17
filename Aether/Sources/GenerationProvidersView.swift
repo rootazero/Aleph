@@ -146,6 +146,18 @@ enum GenerationPresetProviders {
             category: .image
         ),
         GenerationPresetProvider(
+            id: "t8star-midjourney",
+            name: "T8Star Midjourney",
+            iconName: "wand.and.stars",
+            color: "#FF6B35",
+            providerType: "midjourney",
+            supportedTypes: [.image],
+            defaultModel: "midjourney",
+            description: "Midjourney image generation via T8Star API",
+            baseUrl: "https://ai.t8star.cn",
+            category: .image
+        ),
+        GenerationPresetProvider(
             id: "custom-image",
             name: "Custom Image",
             iconName: "puzzlepiece.extension.fill",
