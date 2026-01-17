@@ -5,7 +5,9 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 
+use super::keyword::{KeywordIndex, KeywordMatchMode, KeywordRule};
 use super::task_category::TaskCategory;
+use crate::config::{KeywordPolicy, PolicyKeywordRule};
 
 /// Regex patterns for L1 classification (Chinese + English)
 static EXECUTABLE_PATTERNS: Lazy<Vec<(Regex, TaskCategory)>> = Lazy::new(|| {
@@ -155,6 +157,8 @@ pub struct IntentClassifier {
     /// Confidence threshold for L2/L3 classification
     #[allow(dead_code)]
     confidence_threshold: f32,
+    /// Keyword index for enhanced L2 matching
+    keyword_index: KeywordIndex,
 }
 
 impl IntentClassifier {
@@ -162,6 +166,35 @@ impl IntentClassifier {
     pub fn new() -> Self {
         Self {
             confidence_threshold: 0.7,
+            keyword_index: KeywordIndex::new(),
+        }
+    }
+
+    /// Create classifier with keyword policy from config
+    pub fn with_keyword_policy(policy: &KeywordPolicy) -> Self {
+        let mut classifier = Self::new();
+        if policy.enabled {
+            classifier.load_keyword_rules(&policy.rules);
+        }
+        classifier
+    }
+
+    /// Load keyword rules from config
+    fn load_keyword_rules(&mut self, rules: &[PolicyKeywordRule]) {
+        for rule_config in rules {
+            let mode = match rule_config.match_mode.as_str() {
+                "all" => KeywordMatchMode::All,
+                "weighted" => KeywordMatchMode::Weighted,
+                _ => KeywordMatchMode::Any,
+            };
+
+            let mut rule = KeywordRule::new(&rule_config.id, &rule_config.intent_type);
+            for kw in &rule_config.keywords {
+                rule = rule.with_keyword(&kw.word, kw.weight);
+            }
+            rule = rule.with_match_mode(mode).with_min_score(rule_config.min_score);
+
+            self.keyword_index.add_rule(rule);
         }
     }
 
@@ -225,8 +258,42 @@ impl IntentClassifier {
         EXCLUSION_VERBS.iter().any(|v| input.contains(v))
     }
 
+    /// L2 Enhanced: Use KeywordIndex for weighted matching
+    pub fn match_keywords_enhanced(&self, input: &str) -> Option<ExecutableTask> {
+        // Check exclusion patterns first
+        if self.contains_exclusion_verb(&input.to_lowercase()) {
+            return None;
+        }
+
+        // Try keyword index
+        if let Some(km) = self.keyword_index.best_match(input, 0.5) {
+            if let Some(category) = self.intent_type_to_category(&km.intent_type) {
+                let target = self.extract_path(input);
+                return Some(ExecutableTask {
+                    category,
+                    action: input.to_string(),
+                    target,
+                    confidence: km.score,
+                });
+            }
+        }
+        None
+    }
+
+    /// Convert intent type string to TaskCategory
+    fn intent_type_to_category(&self, intent_type: &str) -> Option<TaskCategory> {
+        match intent_type {
+            "FileOrganize" => Some(TaskCategory::FileOrganize),
+            "FileTransfer" => Some(TaskCategory::FileTransfer),
+            "FileCleanup" => Some(TaskCategory::FileCleanup),
+            "CodeExecution" => Some(TaskCategory::CodeExecution),
+            "DocumentGenerate" => Some(TaskCategory::DocumentGenerate),
+            _ => None,
+        }
+    }
+
     /// Main classification entry point
-    /// Tries L1 → L2 → L3 in order, returns first match
+    /// Tries L1 → L2 Enhanced → L2 Fallback → L3 in order, returns first match
     pub async fn classify(&self, input: &str) -> ExecutionIntent {
         // Skip very short inputs
         if input.trim().len() < 3 {
@@ -238,7 +305,12 @@ impl IntentClassifier {
             return ExecutionIntent::Executable(task);
         }
 
-        // L2: Keyword matching (<20ms)
+        // L2 Enhanced: KeywordIndex matching
+        if let Some(task) = self.match_keywords_enhanced(input) {
+            return ExecutionIntent::Executable(task);
+        }
+
+        // L2 Fallback: Static keyword matching
         if let Some(task) = self.match_keywords(input) {
             return ExecutionIntent::Executable(task);
         }
@@ -539,5 +611,93 @@ mod tests {
         let result = classifier.match_keywords("清理一下缓存文件");
         assert!(result.is_some(), "Clear file cleanup requests should still work");
         assert_eq!(result.unwrap().category, TaskCategory::FileCleanup);
+    }
+
+    // Tests for KeywordIndex integration (enhanced L2 matching)
+
+    #[test]
+    fn test_with_keyword_policy() {
+        use crate::config::KeywordPolicy;
+        let policy = KeywordPolicy::with_builtin_rules();
+        let classifier = IntentClassifier::with_keyword_policy(&policy);
+
+        // Test enhanced matching works
+        let result = classifier.match_keywords_enhanced("帮我整理文件");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().category, TaskCategory::FileOrganize);
+    }
+
+    #[test]
+    fn test_enhanced_keywords_exclusion() {
+        use crate::config::KeywordPolicy;
+        let policy = KeywordPolicy::with_builtin_rules();
+        let classifier = IntentClassifier::with_keyword_policy(&policy);
+
+        // Analysis should NOT trigger
+        let result = classifier.match_keywords_enhanced("分析这个文件");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_enhanced_keywords_file_cleanup() {
+        use crate::config::KeywordPolicy;
+        let policy = KeywordPolicy::with_builtin_rules();
+        let classifier = IntentClassifier::with_keyword_policy(&policy);
+
+        // File cleanup should work
+        let result = classifier.match_keywords_enhanced("删除这些文件");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().category, TaskCategory::FileCleanup);
+    }
+
+    #[test]
+    fn test_enhanced_keywords_code_execution() {
+        use crate::config::KeywordPolicy;
+        let policy = KeywordPolicy::with_builtin_rules();
+        let classifier = IntentClassifier::with_keyword_policy(&policy);
+
+        // Code execution should work
+        let result = classifier.match_keywords_enhanced("运行这个脚本");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().category, TaskCategory::CodeExecution);
+    }
+
+    #[test]
+    fn test_enhanced_keywords_disabled_policy() {
+        use crate::config::KeywordPolicy;
+        let mut policy = KeywordPolicy::with_builtin_rules();
+        policy.enabled = false;
+        let classifier = IntentClassifier::with_keyword_policy(&policy);
+
+        // When disabled, enhanced matching should not work
+        let result = classifier.match_keywords_enhanced("帮我整理文件");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_intent_type_to_category() {
+        let classifier = IntentClassifier::new();
+
+        assert_eq!(
+            classifier.intent_type_to_category("FileOrganize"),
+            Some(TaskCategory::FileOrganize)
+        );
+        assert_eq!(
+            classifier.intent_type_to_category("FileTransfer"),
+            Some(TaskCategory::FileTransfer)
+        );
+        assert_eq!(
+            classifier.intent_type_to_category("FileCleanup"),
+            Some(TaskCategory::FileCleanup)
+        );
+        assert_eq!(
+            classifier.intent_type_to_category("CodeExecution"),
+            Some(TaskCategory::CodeExecution)
+        );
+        assert_eq!(
+            classifier.intent_type_to_category("DocumentGenerate"),
+            Some(TaskCategory::DocumentGenerate)
+        );
+        assert_eq!(classifier.intent_type_to_category("Unknown"), None);
     }
 }
