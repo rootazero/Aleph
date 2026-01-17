@@ -27,7 +27,7 @@ chrono = "0.4"
 # For HTTP client
 # Use native-tls instead of rustls to trust system CA certificates
 # This is required when HTTPS interception (e.g., Kaspersky, corporate proxies) is present
-reqwest = { version = "0.11", features = ["json", "native-tls", "stream"] }
+reqwest = { version = "0.11", features = ["json", "native-tls", "stream", "multipart"] }
 serde_json = "1.0"
 toml = "0.8"
 dirs = "5.0"

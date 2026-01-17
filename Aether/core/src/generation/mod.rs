@@ -259,6 +259,70 @@ pub trait GenerationProvider: Send + Sync {
             ))
         })
     }
+
+    /// Edit an existing image using a prompt (optional)
+    ///
+    /// This method supports image-to-image generation where an input image
+    /// is modified based on a text prompt. Some providers call this "inpainting"
+    /// or "image editing".
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - The edit request containing the prompt and parameters
+    ///   - `params.reference_image`: Required - base64-encoded input image or URL
+    ///   - `prompt`: The edit instructions
+    ///   - `params.mask`: Optional - base64-encoded mask image (transparent areas = edit regions)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(GenerationOutput)` - The edited image
+    /// * `Err(GenerationError)` - Various errors including UnsupportedFeatureError
+    ///
+    /// # Default Implementation
+    ///
+    /// Returns an error indicating the feature is not supported.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use aethecore::generation::{GenerationProvider, GenerationRequest, GenerationParams};
+    ///
+    /// async fn edit_image(provider: &dyn GenerationProvider) {
+    ///     let request = GenerationRequest::image("Add a hat to the person")
+    ///         .with_params(
+    ///             GenerationParams::builder()
+    ///                 .reference_image("base64_encoded_image_data")
+    ///                 .build()
+    ///         );
+    ///     let output = provider.edit_image(request).await.unwrap();
+    ///     println!("Edited: {:?}", output.data);
+    /// }
+    /// ```
+    fn edit_image(
+        &self,
+        _request: GenerationRequest,
+    ) -> Pin<Box<dyn Future<Output = GenerationResult<GenerationOutput>> + Send + '_>> {
+        Box::pin(async {
+            Err(GenerationError::unsupported_feature(
+                "Image editing is not supported by this provider",
+                "edit_image",
+                self.name(),
+            ))
+        })
+    }
+
+    /// Check if this provider supports image editing
+    ///
+    /// # Returns
+    ///
+    /// `true` if the provider supports the `edit_image` method
+    ///
+    /// # Default Implementation
+    ///
+    /// Returns `false`.
+    fn supports_image_editing(&self) -> bool {
+        false
+    }
 }
 
 /// Mock generation provider for testing

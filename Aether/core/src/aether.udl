@@ -871,6 +871,9 @@ dictionary GenerationParamsFFI {
   // Reference inputs
   string? reference_image;
   string? reference_audio;
+
+  // Image editing - mask for inpainting (transparent areas = edit regions)
+  string? mask;
 };
 
 // Generation data type enum
@@ -1169,6 +1172,14 @@ interface AetherCore {
 
     // Get providers that support a specific generation type
     sequence<GenerationProviderInfoFFI> get_providers_for_type(GenerationTypeFFI generation_type);
+
+    // Edit an existing image using a prompt (image-to-image / inpainting)
+    // Requires reference_image in params
+    [Throws=AetherFfiError]
+    GenerationOutputFFI edit_image(string provider_name, string prompt, GenerationParamsFFI params);
+
+    // Check if a provider supports image editing
+    boolean provider_supports_image_editing(string provider_name);
 
     // ===== COWORK TASK ORCHESTRATION =====
 

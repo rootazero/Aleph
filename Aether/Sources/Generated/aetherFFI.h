@@ -593,6 +593,11 @@ void uniffi_aethecore_fn_method_aethercore_delete_provider(void*_Nonnull ptr, Ru
 void uniffi_aethecore_fn_method_aethercore_delete_skill(void*_Nonnull ptr, RustBuffer skill_id, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EDIT_IMAGE
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EDIT_IMAGE
+RustBuffer uniffi_aethecore_fn_method_aethercore_edit_image(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer prompt, RustBuffer params, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EXPORT_MCP_CONFIG_JSON
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_EXPORT_MCP_CONFIG_JSON
 RustBuffer uniffi_aethecore_fn_method_aethercore_export_mcp_config_json(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -761,6 +766,11 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_load_config(void*_Nonnull ptr, 
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROCESS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROCESS
 void uniffi_aethecore_fn_method_aethercore_process(void*_Nonnull ptr, RustBuffer input, RustBuffer options, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROVIDER_SUPPORTS_IMAGE_EDITING
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_PROVIDER_SUPPORTS_IMAGE_EDITING
+int8_t uniffi_aethecore_fn_method_aethercore_provider_supports_image_editing(void*_Nonnull ptr, RustBuffer provider_name, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_REFRESH_SKILLS
@@ -1465,6 +1475,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_delete_skill(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_EDIT_IMAGE
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_EDIT_IMAGE
+uint16_t uniffi_aethecore_checksum_method_aethercore_edit_image(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_EXPORT_MCP_CONFIG_JSON
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_EXPORT_MCP_CONFIG_JSON
 uint16_t uniffi_aethecore_checksum_method_aethercore_export_mcp_config_json(void
@@ -1666,6 +1682,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_load_config(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_PROCESS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_PROCESS
 uint16_t uniffi_aethecore_checksum_method_aethercore_process(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_PROVIDER_SUPPORTS_IMAGE_EDITING
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_PROVIDER_SUPPORTS_IMAGE_EDITING
+uint16_t uniffi_aethecore_checksum_method_aethercore_provider_supports_image_editing(void
     
 );
 #endif

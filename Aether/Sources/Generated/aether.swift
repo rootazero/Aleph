@@ -664,6 +664,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func deleteSkill(skillId: String) throws 
     
+    func editImage(providerName: String, prompt: String, params: GenerationParamsFfi) throws  -> GenerationOutputFfi
+    
     func exportMcpConfigJson()  -> String
     
     func extractText(imageData: [UInt8]) throws  -> String
@@ -731,6 +733,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func loadConfig() throws  -> FullConfig
     
     func process(input: String, options: ProcessOptions?) throws 
+    
+    func providerSupportsImageEditing(providerName: String)  -> Bool
     
     func refreshSkills() 
     
@@ -1075,6 +1079,16 @@ open func deleteSkill(skillId: String)throws  {try rustCallWithError(FfiConverte
 }
 }
     
+open func editImage(providerName: String, prompt: String, params: GenerationParamsFfi)throws  -> GenerationOutputFfi {
+    return try  FfiConverterTypeGenerationOutputFFI.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_edit_image(self.uniffiClonePointer(),
+        FfiConverterString.lower(providerName),
+        FfiConverterString.lower(prompt),
+        FfiConverterTypeGenerationParamsFFI.lower(params),$0
+    )
+})
+}
+    
 open func exportMcpConfigJson() -> String {
     return try!  FfiConverterString.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_export_mcp_config_json(self.uniffiClonePointer(),$0
@@ -1338,6 +1352,14 @@ open func process(input: String, options: ProcessOptions?)throws  {try rustCallW
         FfiConverterOptionTypeProcessOptions.lower(options),$0
     )
 }
+}
+    
+open func providerSupportsImageEditing(providerName: String) -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_provider_supports_image_editing(self.uniffiClonePointer(),
+        FfiConverterString.lower(providerName),$0
+    )
+})
 }
     
 open func refreshSkills() {try! rustCall() {
@@ -4196,10 +4218,11 @@ public struct GenerationParamsFfi {
     public var steps: UInt32?
     public var referenceImage: String?
     public var referenceAudio: String?
+    public var mask: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(width: UInt32?, height: UInt32?, aspectRatio: String?, quality: String?, style: String?, n: UInt32?, seed: Int64?, format: String?, durationSeconds: Float?, fps: UInt32?, voice: String?, speed: Float?, language: String?, model: String?, negativePrompt: String?, guidanceScale: Float?, steps: UInt32?, referenceImage: String?, referenceAudio: String?) {
+    public init(width: UInt32?, height: UInt32?, aspectRatio: String?, quality: String?, style: String?, n: UInt32?, seed: Int64?, format: String?, durationSeconds: Float?, fps: UInt32?, voice: String?, speed: Float?, language: String?, model: String?, negativePrompt: String?, guidanceScale: Float?, steps: UInt32?, referenceImage: String?, referenceAudio: String?, mask: String?) {
         self.width = width
         self.height = height
         self.aspectRatio = aspectRatio
@@ -4219,6 +4242,7 @@ public struct GenerationParamsFfi {
         self.steps = steps
         self.referenceImage = referenceImage
         self.referenceAudio = referenceAudio
+        self.mask = mask
     }
 }
 
@@ -4283,6 +4307,9 @@ extension GenerationParamsFfi: Equatable, Hashable {
         if lhs.referenceAudio != rhs.referenceAudio {
             return false
         }
+        if lhs.mask != rhs.mask {
+            return false
+        }
         return true
     }
 
@@ -4306,6 +4333,7 @@ extension GenerationParamsFfi: Equatable, Hashable {
         hasher.combine(steps)
         hasher.combine(referenceImage)
         hasher.combine(referenceAudio)
+        hasher.combine(mask)
     }
 }
 
@@ -4335,7 +4363,8 @@ public struct FfiConverterTypeGenerationParamsFFI: FfiConverterRustBuffer {
                 guidanceScale: FfiConverterOptionFloat.read(from: &buf), 
                 steps: FfiConverterOptionUInt32.read(from: &buf), 
                 referenceImage: FfiConverterOptionString.read(from: &buf), 
-                referenceAudio: FfiConverterOptionString.read(from: &buf)
+                referenceAudio: FfiConverterOptionString.read(from: &buf), 
+                mask: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -4359,6 +4388,7 @@ public struct FfiConverterTypeGenerationParamsFFI: FfiConverterRustBuffer {
         FfiConverterOptionUInt32.write(value.steps, into: &buf)
         FfiConverterOptionString.write(value.referenceImage, into: &buf)
         FfiConverterOptionString.write(value.referenceAudio, into: &buf)
+        FfiConverterOptionString.write(value.mask, into: &buf)
     }
 }
 
@@ -14088,6 +14118,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_delete_skill() != 64856) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_edit_image() != 50812) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_export_mcp_config_json() != 17811) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -14188,6 +14221,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_process() != 36139) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_provider_supports_image_editing() != 59293) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_refresh_skills() != 30751) {
