@@ -187,6 +187,7 @@ pub use crate::cowork_ffi::{
 };
 
 // Generation exports (media generation providers)
+// Note: providers module is accessible via aethecore::generation::providers
 pub use crate::generation::{
     GenerationData, GenerationError, GenerationMetadata, GenerationOutput, GenerationParams,
     GenerationProgress, GenerationProvider, GenerationProviderRegistry, GenerationRequest,

@@ -36,6 +36,7 @@ use std::pin::Pin;
 
 // Sub-modules
 pub mod error;
+pub mod providers;
 pub mod registry;
 pub mod types;
 
