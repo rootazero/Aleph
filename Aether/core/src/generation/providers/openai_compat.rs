@@ -399,8 +399,14 @@ impl OpenAiCompatProviderBuilder {
             .build()
             .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
 
-        // Normalize base URL (remove trailing slash)
-        let endpoint = self.base_url.trim_end_matches('/').to_string();
+        // Normalize base URL (remove trailing slash and /v1 suffix)
+        // This prevents duplicate /v1 in the final URL when user provides "https://api.example.com/v1"
+        let endpoint = self
+            .base_url
+            .trim_end_matches('/')
+            .trim_end_matches("/v1")
+            .trim_end_matches('/')
+            .to_string();
 
         Ok(OpenAiCompatProvider {
             name: self.name,
@@ -935,6 +941,30 @@ mod tests {
     fn test_generations_url_with_trailing_slash() {
         let provider =
             OpenAiCompatProvider::new("proxy", "key", "https://api.example.com/", None).unwrap();
+
+        assert_eq!(
+            provider.generations_url(),
+            "https://api.example.com/v1/images/generations"
+        );
+    }
+
+    #[test]
+    fn test_generations_url_with_v1_suffix() {
+        // User provides URL with /v1 suffix (common pattern for OpenAI-compatible APIs)
+        let provider =
+            OpenAiCompatProvider::new("proxy", "key", "https://ai.t8star.cn/v1", None).unwrap();
+
+        // Should NOT produce duplicate /v1
+        assert_eq!(
+            provider.generations_url(),
+            "https://ai.t8star.cn/v1/images/generations"
+        );
+    }
+
+    #[test]
+    fn test_generations_url_with_v1_and_trailing_slash() {
+        let provider =
+            OpenAiCompatProvider::new("proxy", "key", "https://api.example.com/v1/", None).unwrap();
 
         assert_eq!(
             provider.generations_url(),
