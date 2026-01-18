@@ -4,83 +4,121 @@
 
 Aether acts as an invisible "ether" connecting your intent with AI models through a frictionless, native interface. No webviews, no dock icon, no windows - just press a hotkey and let AI transform your selected text.
 
-![Phase](https://img.shields.io/badge/Phase-6%20(Settings%20UI)-blue)
+![Phase](https://img.shields.io/badge/Phase-8%20(Runtime%20Manager)-success)
 ![Platform](https://img.shields.io/badge/Platform-macOS%2013%2B-lightgrey)
 ![Swift](https://img.shields.io/badge/Swift-5.0-orange)
 ![Rust](https://img.shields.io/badge/Rust-1.70%2B-red)
+![rig-core](https://img.shields.io/badge/rig--core-0.28-blue)
 
-## ✨ Core Philosophy: "Ghost" Aesthetic
+## Core Philosophy: "Ghost" Aesthetic
 
 - **Invisible First**: No dock icon, no permanent window. Only background process + menu bar
 - **De-GUI**: Ephemeral UI that appears at cursor, then dissolves
 - **Frictionless**: Brings AI directly to your cursor without context switching
 - **Native-First**: 100% native code - Rust core with SwiftUI, zero webviews
 
-## 🎯 Features
+## Features
 
-### Transmutation Workflow
+### Core Capabilities
 
+**Transmutation Workflow**:
 1. **Select** text/image in ANY app
 2. **Press** global hotkey (Cmd+~ by default)
 3. **Watch** beautiful "Halo" overlay appear at your cursor
 4. **Receive** AI-transformed result pasted back instantly
 
-### Multi-Model Orchestration
+**Multi-Turn Conversation**:
+- Raycast-style unified input interface
+- Context-aware multi-turn conversations
+- Focus detection and command completion
 
-- **Smart Routing**: Automatically route requests to different AI providers based on input patterns
+**Agentic Loop**:
+- Event-driven AI execution with rig-core 0.28
+- Multi-step task planning with DAG orchestration
+- Automatic tool selection and execution
+
+**Runtime Auto-Management**:
+- Automatic Python (uv), Node.js (fnm), yt-dlp installation
+- Background update checking
+- Zero configuration required
+
+### AI Integration
+
+- **Multi-Model Orchestration**: Smart routing to optimal models
 - **Supported Providers**:
-  - OpenAI (GPT-4o, GPT-4o-mini)
-  - Anthropic Claude (Claude 3.5 Sonnet, Opus)
+  - OpenAI (GPT-4o, GPT-4o-mini, o1, o3)
+  - Anthropic Claude (Claude 4 Opus, Sonnet, Haiku)
+  - Google Gemini (Gemini 2.0 Flash, Pro)
   - Local Ollama (Llama 3.2, CodeLlama, Mistral, etc.)
   - Custom OpenAI-compatible APIs (DeepSeek, Moonshot, Azure OpenAI)
 - **Provider Colors**: Visual feedback with provider-specific Halo colors
 
-### Context-Aware Memory (Local RAG)
+### Advanced Features
 
-- **App/Window-Based Memory**: Aether remembers past interactions per application and window
-- **Automatic Context Injection**: Retrieved memories are seamlessly injected into AI prompts
-- **Privacy-First**: All memory data stored locally, never synced to cloud
-- **Configurable Retention**: Auto-delete memories after N days
+**Phantom Flow (Clarification)**:
+- AI asks clarifying questions when intent is ambiguous
+- Interactive confirmation before irreversible actions
 
-### Full Configuration UI
+**Agent Execution Modes**:
+- Single-step for quick tasks
+- Multi-step planning for complex workflows
+- Sub-agent orchestration for specialized tasks
+
+**Skills Integration**:
+- Pattern-based skill activation
+- Extensible skill library
+- Multi-turn conversation support
+
+**Media Generation**:
+- 10+ generation providers (Replicate, Recraft, Ideogram, Kimi, etc.)
+- Image and video generation
+- Provider-specific prompt optimization
+
+### Memory System (Local RAG)
+
+- **Dual-Layer Architecture**:
+  - Layer 1 (Raw): Complete conversation history
+  - Layer 2 (Facts): AI-extracted insights for efficient retrieval
+- **App/Window-Based Memory**: Remembers context per application and window
+- **Automatic Compression**: SessionCompactor for memory efficiency
+- **Privacy-First**: All data stored locally, never synced to cloud
+
+### Settings UI (10+ Tabs)
 
 **Modern macOS 26 Design Language:**
-- **Integrated Traffic Lights**: Custom red/yellow/green buttons embedded in rounded sidebar
-- **Content-First Layout**: Hidden title bar with content extending to window edge
-- **Continuous Curves**: 18pt rounded corners for refined, native appearance
-- **Adaptive Materials**: Self-adjusting Dark/Light mode backgrounds
+- NSPanel-based settings (keyboard support without Dock activation)
+- Integrated traffic lights with continuous curves
+- Adaptive Dark/Light mode
 
 **Settings Tabs:**
-- **Providers Tab**: Add/edit/delete AI providers, test connections, manage API keys
-- **Routing Tab**: Create rules with drag-to-reorder, import/export as JSON
-- **Shortcuts Tab**: Customize hotkeys with visual recorder and conflict detection
-- **Behavior Tab**: Configure input/output modes, typing speed, PII scrubbing
-- **Memory Tab**: View/delete memories, configure retention policies
-- **General Tab**: Theme selection, version info, check for updates
+| Tab | Purpose |
+|-----|---------|
+| **General** | Theme, version, updates |
+| **Providers** | AI provider configuration, API key management |
+| **Routing** | Rule editor with drag-to-reorder |
+| **Shortcuts** | Hotkey recorder with conflict detection |
+| **Behavior** | Input/output modes, typing speed |
+| **Memory** | View/delete history, retention policies |
+| **MCP** | MCP server configuration |
+| **Skills** | Skill management |
+| **Cowork** | Task orchestration, model routing |
+| **Policies** | System behavior fine-tuning |
+| **Runtimes** | Runtime version management |
 
 ### Security & Privacy
 
-- **Keychain Integration**: API keys stored securely in macOS Keychain (not in config files)
-- **PII Scrubbing**: Automatically redact sensitive information (emails, phone numbers, SSN, credit cards)
-- **Local-First Memory**: Raw memory data never leaves your device
+- **Keychain Integration**: API keys stored securely in macOS Keychain
+- **PII Scrubbing**: Automatic redaction of sensitive information
+- **Local-First Memory**: Raw data never leaves your device
 - **Zero Telemetry**: No tracking, no analytics
 
 ### Internationalization (i18n)
 
-- **Supported Languages**:
-  - 🇬🇧 English (en) - Base language
-  - 🇨🇳 Simplified Chinese (zh-Hans) - 简体中文 (100% translated, 249 keys)
-- **System Language Detection**: Automatically follows your macOS system language
-- **Graceful Fallback**: Unsupported languages fallback to English
-- **Complete Coverage**: All UI text, error messages, alerts, and system prompts localized
-- **Contribute Translations**: See [docs/LOCALIZATION.md](docs/LOCALIZATION.md) for guidelines
-- **Fully Localized**:
-  - Settings UI (all tabs: General, Providers, Routing, Shortcuts, Behavior, Memory)
-  - Menu bar items and tooltips
-  - Permission prompts and system dialogs
-  - Error messages and alerts
+- **Supported Languages**: English, Simplified Chinese (100% translated)
+- **System Language Detection**: Follows macOS system language
+- **Complete Coverage**: All UI text, error messages, and prompts localized
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -88,7 +126,6 @@ Aether acts as an invisible "ether" connecting your intent with AI models throug
 - Xcode 14+ (for building from source)
 - Rust 1.70+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
 - XcodeGen (`brew install xcodegen`)
-- Python 3.x with `uniffi-bindgen` (`pip3 install uniffi-bindgen`)
 
 ### Building from Source
 
@@ -111,23 +148,44 @@ open Aether.xcodeproj
 
 ### First Run
 
-1. **Launch Aether** (no dock icon - check menu bar for ✨ icon)
+1. **Launch Aether** (no dock icon - check menu bar for icon)
 2. **Grant Accessibility Permission**:
    - System Settings → Privacy & Security → Accessibility
    - Click "+" and add Aether
-   - This allows hotkey detection and keyboard simulation
 3. **Open Settings** (Cmd+, or click menu bar icon → Settings)
 4. **Add AI Provider**:
    - Go to Providers tab
-   - Click "Configure" for OpenAI
-   - Enter your API key from https://platform.openai.com
-   - Click "Save"
+   - Configure OpenAI, Claude, or other providers
+   - Enter your API key
 5. **Test It**:
-   - Select text in any app: "What is the capital of France?"
+   - Select text in any app
    - Press `Cmd+~`
-   - Watch the magic happen! ✨
+   - Watch the magic happen!
 
-## ⚙️ Configuration
+### Test Examples
+
+**Transmutation (Selection-based)**:
+```
+Select: "What is the capital of France?"
+Press: Cmd+~
+Result: "Paris is the capital of France."
+```
+
+**Multi-Turn Conversation**:
+```
+Press: Cmd+Space (Unified Input)
+Type: "Help me write a Python function to sort a list"
+Continue: "Now add type hints"
+```
+
+**Slash Commands**:
+```
+/search latest news about AI
+/youtube how to make pasta
+/draw a sunset over mountains
+```
+
+## Configuration
 
 ### Config File Location
 
@@ -137,147 +195,106 @@ open Aether.xcodeproj
 
 Open Settings (Cmd+,) and use the native UI to configure everything visually.
 
-### Manual Configuration
+### Runtime Configuration
 
-For advanced users, you can edit `config.toml` directly. See [`config.example.toml`](Aether/config.example.toml) for detailed documentation.
+Runtimes are managed automatically. On first use:
+- **Python (uv)**: Auto-installed for MCP servers and scripts
+- **Node.js (fnm)**: Auto-installed for JavaScript MCP servers
+- **yt-dlp**: Auto-installed for video download
+
+Check runtime status in Settings → Runtimes tab.
+
+### Advanced Configuration
+
+For detailed configuration options, see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 **Hot-Reload**: Changes to `config.toml` take effect within 1 second (no restart needed)
 
-### Example Configuration
+## Architecture
 
-```toml
-# Shortcuts
-[shortcuts]
-summon = "Command+Grave"    # Cmd+~ to trigger
-cancel = "Escape"           # Esc to cancel
-
-# Behavior
-[behavior]
-input_mode = "cut"          # cut | copy
-output_mode = "typewriter"  # typewriter | instant
-typing_speed = 50           # 10-200 chars/sec
-pii_scrubbing_enabled = false
-
-# Providers
-[providers.openai]
-api_key = "sk-..."          # Stored in Keychain, not here
-model = "gpt-4o"
-color = "#10a37f"
-
-[providers.claude]
-api_key = "sk-ant-..."
-model = "claude-3-5-sonnet-20241022"
-color = "#d97757"
-
-# Routing Rules
-[[rules]]
-regex = "^/code"            # Prefix with /code for coding
-provider = "claude"
-system_prompt = "You are a senior engineer. Output code only."
-
-[[rules]]
-regex = ".*"                # Catch-all
-provider = "openai"
-```
-
-### API Key Security
-
-⚠️ **API keys are stored in macOS Keychain, NOT in `config.toml`**
-
-When you add a provider via Settings UI:
-1. API key is saved to Keychain as "Aether:provider-name"
-2. Config file only contains provider metadata (model, color, etc.)
-3. Keys are encrypted and protected by macOS security
-
-**Never commit `config.toml` with API keys to version control!**
-
-## 📖 Documentation
-
-- **[Settings UI Guide](docs/settings-ui-guide.md)**: Complete guide to all settings tabs with screenshots
-- **[Configuration Reference](Aether/config.example.toml)**: Detailed config file documentation
-- **[Manual Testing Checklist](docs/manual-testing-checklist.md)**: Comprehensive testing guide
-- **[Development Guide](CLAUDE.md)**: Architecture, build instructions, development phases
-
-## 🏗️ Architecture
-
-### The New Architecture: Rust Core + UniFFI + Native UI
+### The Architecture: Rust Core + rig-core + UniFFI + Native UI
 
 **NO WEBVIEWS. NO TAURI. NO ELECTRON.**
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                     macOS Native UI                     │
-│              (Swift + SwiftUI + NSWindow)               │
-│  Settings │ Menu Bar │ Halo Overlay (Transparent)      │
-└──────────────────────┬──────────────────────────────────┘
-                       │ UniFFI Bindings
+┌─────────────────────────────────────────────────────────────┐
+│                     macOS Native UI                          │
+│              (Swift + SwiftUI + NSPanel/NSWindow)            │
+│  Settings │ Menu Bar │ Halo Overlay │ Conversation Window   │
+└──────────────────────┬───────────────────────────────────────┘
+                       │ UniFFI Bindings (CallbackBridge)
                        │ (Auto-generated FFI)
-┌──────────────────────┴──────────────────────────────────┐
-│                     Rust Core Library                    │
-│                    (cdylib + staticlib)                  │
-│                                                           │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────────────┐ │
-│  │  Clipboard  │  │  Input Sim   │  │  Global Hotkey │ │
-│  │  (arboard)  │  │   (enigo)    │  │    (rdev)      │ │
-│  └─────────────┘  └──────────────┘  └────────────────┘ │
-│                                                           │
-│  ┌─────────────────────────────────────────────────────┐│
-│  │          Smart Router (Regex-based Rules)           ││
-│  └─────────────────────────────────────────────────────┘│
-│                                                           │
-│  ┌──────────────┐  ┌────────────┐  ┌──────────────────┐│
-│  │   OpenAI     │  │   Claude   │  │   Ollama (Local) ││
-│  │  (reqwest)   │  │ (reqwest)  │  │  (Command::spawn)││
-│  └──────────────┘  └────────────┘  └──────────────────┘│
-│                                                           │
-│  ┌─────────────────────────────────────────────────────┐│
-│  │        Memory Module (Local RAG with SQLite-vec)    ││
-│  │  Embedding: bge-small-zh-v1.5 (local, no cloud)    ││
-│  └─────────────────────────────────────────────────────┘│
-│                                                           │
-│  ┌─────────────────────────────────────────────────────┐│
-│  │     Config (TOML + Keychain + Hot-Reload Watcher)  ││
-│  └─────────────────────────────────────────────────────┘│
-└───────────────────────────────────────────────────────────┘
+┌──────────────────────┴───────────────────────────────────────┐
+│                     Rust Core Library                         │
+│                    (cdylib + staticlib)                       │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │              Event-Driven Agentic Loop                   │ │
+│  │  IntentAnalyzer │ TaskPlanner │ ToolExecutor │ Loop     │ │
+│  └─────────────────────────────────────────────────────────┘ │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │                    rig-core 0.28                         │ │
+│  │  OpenAI │ Claude │ Gemini │ Ollama │ Custom Providers   │ │
+│  └─────────────────────────────────────────────────────────┘ │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │              Cowork DAG + Model Router                   │ │
+│  │  Task Graph │ Parallel Execution │ Model Selection      │ │
+│  └─────────────────────────────────────────────────────────┘ │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │         Dual-Layer Memory (SQLite-vec + fastembed)      │ │
+│  │  Layer 1: Raw History │ Layer 2: AI-Extracted Facts     │ │
+│  └─────────────────────────────────────────────────────────┘ │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │              Runtime Managers (Phase 8)                  │ │
+│  │  UvRuntime (Python) │ FnmRuntime (Node) │ YtDlpRuntime  │ │
+│  └─────────────────────────────────────────────────────────┘ │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │     Config (TOML + Keychain + Hot-Reload + Policies)    │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Technologies
 
-- **Rust Core**: `tokio`, `reqwest`, `arboard`, `enigo`, `rdev`, `lancedb`, `ort`
-- **Swift UI**: SwiftUI, AppKit (NSWindow, NSStatusBar)
+- **Rust Core**: `tokio`, `reqwest`, `rig-core`, `rig-sqlite`, `rusqlite`, `sqlite-vec`
+- **Swift UI**: SwiftUI, AppKit (NSPanel, NSWindow, NSStatusBar)
 - **FFI Bridge**: UniFFI (auto-generates Swift bindings from `.udl` file)
-- **Config**: TOML (`serde`), Keychain (Security.framework), FSEvents watcher
-- **Memory**: Vector DB (LanceDB/SQLite+vec), Embedding model (ONNX Runtime)
+- **Memory**: SQLite + sqlite-vec, fastembed (bge-small-zh-v1.5)
+- **Runtimes**: uv (Python), fnm (Node.js), yt-dlp (Video)
 
-## 🛠️ Development
+## Development
 
 ### Project Structure
 
 ```
 aether/
 ├── project.yml                # XcodeGen config (source of truth)
-├── Aether.xcodeproj/          # Generated by XcodeGen (not in git)
 ├── Aether/
 │   ├── Sources/               # Swift source files
-│   │   ├── SettingsView.swift
-│   │   ├── ProvidersView.swift
-│   │   ├── RoutingView.swift
-│   │   ├── HaloWindow.swift
+│   │   ├── main.swift         # App entry point (NSApplicationMain)
+│   │   ├── Atoms/             # Atomic design: basic elements
+│   │   ├── Molecules/         # Atomic design: composed components
+│   │   ├── Organisms/         # Atomic design: complex sections
+│   │   ├── Window/            # Window controllers
+│   │   ├── Settings/          # Settings tabs (10+ views)
+│   │   ├── Coordinators/      # Input/Output/MultiTurn coordinators
 │   │   └── Generated/         # UniFFI bindings (auto-gen)
 │   ├── Frameworks/
 │   │   └── libaethecore.dylib # Rust library
-│   └── core/                  # Rust core library
-│       ├── Cargo.toml
+│   └── core/                  # Rust core library (44 modules)
 │       ├── src/
-│       │   ├── lib.rs         # UniFFI exports
-│       │   ├── aether.udl     # UniFFI interface definition
-│       │   ├── core.rs
-│       │   ├── router/
-│       │   ├── providers/
-│       │   ├── memory/
-│       │   └── config/
+│       │   ├── ffi/           # 9 FFI sub-modules
+│       │   ├── agent/         # Agent execution
+│       │   ├── components/    # 8 core components
+│       │   ├── generation/    # 10+ media providers
+│       │   ├── runtimes/      # Runtime managers
+│       │   └── ...
 │       └── uniffi.toml
-├── AetherTests/               # Unit tests (Swift)
 ├── docs/                      # Documentation
 └── config.example.toml        # Config template
 ```
@@ -285,9 +302,9 @@ aether/
 ### Running Tests
 
 ```bash
-# Rust core tests (32 tests)
+# Rust core tests
 cd Aether/core
-cargo test config:: --lib
+cargo test
 
 # Swift integration tests
 xcodegen generate
@@ -298,21 +315,23 @@ xcodebuild test -project Aether.xcodeproj -scheme AetherTests
 
 - **Rust**: Use `cargo fmt` and `cargo clippy`
 - **Swift**: Follow SwiftUI best practices
-- **Comments**: English for code, Chinese for user-facing messages (if needed)
+- **Comments**: English for code, Chinese for user-facing messages
 
-## 📋 Development Phases
+## Development Status
 
-- ✅ **Phase 1**: Core Infrastructure (Rust + UniFFI + Swift integration)
+- ✅ **Phase 1**: Core Infrastructure (Rust + UniFFI + Swift)
 - ✅ **Phase 2**: Hotkey & Clipboard Integration
 - ✅ **Phase 3**: Halo Overlay (Transparent native window)
-- ✅ **Phase 4**: Memory Module (Local RAG with context-aware retrieval)
-- ✅ **Phase 5**: AI Integration (OpenAI, Claude, Ollama)
-- ✅ **Phase 6**: Settings UI (Full configuration management) ← **CURRENT**
-- ⏳ **Phase 7**: Polish & Optimization (Image support, PII scrubbing, typewriter effect)
+- ✅ **Phase 4**: Memory Module (Dual-layer RAG)
+- ✅ **Phase 5**: AI Integration (rig-core 0.28)
+- ✅ **Phase 6**: Settings UI (10+ tabs, NSPanel)
+- ✅ **Phase 7**: Event-Driven Agentic Loop (8 components)
+- ✅ **Phase 8**: Runtime Manager (uv, fnm, yt-dlp)
+- ⏳ **Phase 9**: Production Hardening (Planned)
 
-See [CLAUDE.md](CLAUDE.md) for detailed phase breakdown.
+See [docs/DEVELOPMENT_PHASES.md](docs/DEVELOPMENT_PHASES.md) for detailed phase breakdown.
 
-## 🔒 Security Considerations
+## Security Considerations
 
 ### Accessibility Permissions
 
@@ -332,7 +351,6 @@ Aether requires Accessibility permission to:
 1. **Never hardcode API keys** in code or config files
 2. **Always use Keychain** for storage (Settings UI handles this)
 3. **Never commit `config.toml`** with API keys to version control
-4. **Use `.gitignore`** to exclude config files with secrets
 
 ### PII Scrubbing
 
@@ -342,9 +360,16 @@ When enabled, Aether automatically redacts:
 - SSN → `[SSN_REDACTED]`
 - Credit cards → `[CARD_REDACTED]`
 
-This prevents sensitive information from being sent to cloud AI providers.
+## Documentation
 
-## 🤝 Contributing
+- **[CLAUDE.md](CLAUDE.md)**: Architecture, build instructions, development guide
+- **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**: Complete config.toml reference
+- **[docs/DEVELOPMENT_PHASES.md](docs/DEVELOPMENT_PHASES.md)**: Project roadmap
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**: Technical architecture
+- **[docs/COWORK.md](docs/COWORK.md)**: DAG task orchestration
+- **[docs/manual-testing-checklist.md](docs/manual-testing-checklist.md)**: Testing guide
+
+## Contributing
 
 Contributions welcome! Here's how:
 
@@ -359,28 +384,28 @@ Contributions welcome! Here's how:
 - Format code: `cargo fmt` and `cargo clippy`
 - Update documentation if needed
 
-## 🐛 Known Issues
+## Known Issues
 
-- **Hot-Reload**: File watcher may not detect changes in vim's in-place edit mode (use `:w` not `:wq`)
+- **Hot-Reload**: File watcher may not detect changes in vim's in-place edit mode
 - **Ollama**: First request may be slow (model loading time)
 - **Typewriter**: Very fast speeds (>150 cps) may be choppy on older Macs
 
 See [GitHub Issues](https://github.com/your-repo/aether/issues) for full list.
 
-## 📜 License
+## License
 
 [MIT License](LICENSE)
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
+- **rig-core**: AI agent framework for Rust
 - **UniFFI**: Seamless Rust ↔ Swift FFI
-- **rdev**: Cross-platform global hotkey detection
-- **arboard**: Clipboard management
-- **enigo**: Keyboard simulation
-- **LanceDB**: Fast vector database for local RAG
-- **ONNX Runtime**: Efficient embedding model inference
+- **sqlite-vec**: Vector search extension for SQLite
+- **fastembed**: Fast embedding model inference
+- **uv**: Fast Python package manager
+- **fnm**: Fast Node.js version manager
 
-## 📞 Support
+## Support
 
 - **Documentation**: See `docs/` directory
 - **Issues**: [GitHub Issues](https://github.com/your-repo/aether/issues)
@@ -388,6 +413,6 @@ See [GitHub Issues](https://github.com/your-repo/aether/issues) for full list.
 
 ---
 
-**Made with ❤️ by the Aether team**
+**Made with Rust + Swift by the Aether team**
 
 *Bringing AI to your fingertips, one hotkey at a time.*

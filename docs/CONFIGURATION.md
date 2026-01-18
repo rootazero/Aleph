@@ -578,4 +578,98 @@ final_system_prompt = slash_command_prompt + keyword_rule1_prompt + keyword_rule
 
 ---
 
-**Last Updated**: 2026-01-16
+## [generation]
+
+Configure media generation providers for image, video, audio, and speech generation.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `default_image_provider` | String | `null` | Default provider for image generation |
+| `default_video_provider` | String | `null` | Default provider for video generation |
+| `default_audio_provider` | String | `null` | Default provider for audio generation |
+| `default_speech_provider` | String | `null` | Default provider for speech/TTS |
+| `output_dir` | String | `~/Downloads/aether-gen` | Output directory for generated files |
+| `auto_paste_threshold_mb` | Integer | `5` | Files larger than this are saved to disk |
+| `background_task_threshold_seconds` | Integer | `30` | Duration threshold for background tasks |
+| `smart_routing_enabled` | Boolean | `true` | Enable smart routing based on capabilities |
+
+### [generation.providers.*]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `provider_type` | String | Required | Provider type (openai, replicate, recraft, ideogram, kimi, etc.) |
+| `model` | String | Required | Model name for generation |
+| `api_key` | String | Required | API key for the provider |
+| `enabled` | Boolean | `true` | Enable/disable this provider |
+| `color` | String | Provider default | UI color for this provider |
+| `capabilities` | Array | `[]` | Supported generation types: image, video, audio, speech |
+
+**Supported Providers**:
+- `openai` - DALL-E 3 (image)
+- `replicate` - Flux, SDXL (image), Various video models
+- `recraft` - Recraft V3 (image)
+- `ideogram` - Ideogram V2 (image)
+- `kimi` - Kimi Visions (image)
+- `gemini` - Imagen (image)
+- `elevenlabs` - Text-to-Speech
+
+**Example**:
+```toml
+[generation]
+default_image_provider = "dalle"
+output_dir = "~/Downloads/aether-gen"
+auto_paste_threshold_mb = 5
+smart_routing_enabled = true
+
+[generation.providers.dalle]
+provider_type = "openai"
+model = "dall-e-3"
+enabled = true
+color = "#10a37f"
+capabilities = ["image"]
+
+[generation.providers.replicate]
+provider_type = "replicate"
+model = "flux-schnell"
+api_key = "r8_..."
+enabled = true
+capabilities = ["image", "video"]
+
+[generation.providers.recraft]
+provider_type = "recraft"
+model = "recraft-v3"
+api_key = "..."
+enabled = true
+capabilities = ["image"]
+```
+
+---
+
+## Runtime Management
+
+Runtimes (Python, Node.js, yt-dlp) are managed automatically by Aether. No user configuration is required.
+
+**Auto-Installed Runtimes**:
+| Runtime | Tool | Purpose |
+|---------|------|---------|
+| Python | uv | MCP servers, scripts |
+| Node.js | fnm | JavaScript MCP servers |
+| yt-dlp | yt-dlp | Video download |
+
+**Features**:
+- Automatic installation on first use
+- Background update checking
+- Version management via Settings → Runtimes tab
+
+**Runtime Requirements in MCP Config**:
+```toml
+[mcp.servers.my-server]
+name = "my-server"
+command = "npx"
+args = ["-y", "my-mcp-server"]
+requires_runtime = "node"  # Ensures Node.js is installed before running
+```
+
+---
+
+**Last Updated**: 2026-01-18

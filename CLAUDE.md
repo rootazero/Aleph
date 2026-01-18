@@ -25,6 +25,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Aether** is a system-level AI middleware for macOS (primary), Windows, and Linux. It acts as an invisible "ether" connecting user intent with AI models through a frictionless, native interface with zero webview dependencies.
 
+**Current Status**: Phase 8 Completed (Runtime Manager) | Phase 9 Planned (Production Hardening)
+
 ### Core Philosophy: "Ghost" Aesthetic
 
 - **Invisible First**: No dock icon, no permanent window. Only background process + menu bar/system tray
@@ -38,31 +40,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 1. User selects text/image in ANY app, presses global hotkey (default: ` key)
 2. Aether simulates Cut (Cmd+X) - content "disappears" for physical feedback
 3. "Halo" appears at cursor location (native transparent overlay)
-4. Backend routes request to appropriate AI provider
+4. Backend routes request to appropriate AI provider via rig-core
 5. Halo dissolves, result is pasted back or typed character-by-character
 
-**Unified Input Flow**: Raycast-style interface with focus detection, command completion, and multi-turn conversation. See `UnifiedInputCoordinator.swift`.
+**Unified Input Flow**: Raycast-style interface with focus detection, command completion, and multi-turn conversation. See `UnifiedInputCoordinator.swift` and `UnifiedConversationWindow.swift`.
 
 ---
 
 ## Technical Stack
 
-### Architecture: "Rust Core + UniFFI + Native UI"
+### Architecture: "Rust Core + rig-core + UniFFI + Native UI"
 
 **NO WEBVIEWS. NO TAURI. NO ELECTRON.**
 
 1. **Rust Core (Library)**: Headless service compiled as `cdylib` + `staticlib`
-   - Global hotkeys (`rdev`), Clipboard (`arboard`), Input simulation (`enigo`)
-   - Async runtime (`tokio`), HTTP client (`reqwest`)
+   - **rig-core 0.28**: AI agent framework for provider abstraction
+   - **rig-sqlite 0.1.31**: Conversation persistence
    - **UniFFI**: Generates Swift/Kotlin/C# bindings automatically
+   - Async runtime (`tokio`), HTTP client (`reqwest`)
    - **Memory Module**: `rusqlite` + `sqlite-vec` + `fastembed` (bge-small-zh-v1.5)
+   - **Note**: Hotkey, clipboard, input simulation migrated to Swift layer
 
 2. **Native UIs (Platform-Specific)**:
-   - **macOS**: Swift + SwiftUI (NSWindow for Halo overlay, NSStatusBar for menu)
+   - **macOS**: Swift + SwiftUI with NSApplicationMain() entry point
+   - **Settings**: NSPanel (keyboard support without Dock activation)
+   - **Halo**: NSWindow (transparent overlay, click-through)
    - **Windows** (Future): C# + WinUI 3
    - **Linux** (Future): Rust + GTK4
 
-3. **Communication Pattern**: Rust → UniFFI → Swift (callback-based)
+3. **Communication Pattern**: Rust → UniFFI → Swift (callback-based via `CallbackBridge`)
 
 See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for complete technical documentation.
 
@@ -77,10 +83,14 @@ aether/
 ├── project.yml                    # XcodeGen configuration (source of truth)
 ├── Aether/
 │   ├── Sources/                   # Swift source files
-│   │   ├── AetherApp.swift        # App entry point
+│   │   ├── main.swift             # App entry point (NSApplicationMain)
 │   │   ├── AppDelegate.swift      # Menu bar lifecycle + Rust core integration
-│   │   ├── HaloWindow.swift       # Transparent overlay (NSWindow)
-│   │   ├── EventHandler.swift     # Implements AetherEventHandler
+│   │   ├── Atoms/                 # Atomic design: basic UI elements
+│   │   ├── Molecules/             # Atomic design: composed components
+│   │   ├── Organisms/             # Atomic design: complex UI sections
+│   │   ├── Window/                # Window controllers (Halo, Settings, Conversation)
+│   │   ├── Settings/              # Settings tabs (10+ views)
+│   │   ├── Coordinators/          # Input/Output/MultiTurn/PermissionCoordinator
 │   │   └── Generated/aether.swift # UniFFI-generated bindings
 │   ├── Frameworks/
 │   │   └── libaethecore.dylib     # Rust library (embedded in app)
@@ -89,14 +99,49 @@ aether/
 │       ├── src/
 │       │   ├── lib.rs             # UniFFI exports and public API
 │       │   ├── aether.udl         # UniFFI interface definition
+│       │   ├── ffi/               # 9 FFI sub-modules
+│       │   ├── agent/             # Agent execution engine
+│       │   ├── agents/            # Specialized agents
+│       │   ├── capability/        # Capability definitions
+│       │   ├── components/        # 8 core components
+│       │   ├── config/            # 10 config type modules + policies
+│       │   ├── conversation/      # Conversation management
+│       │   ├── cowork/            # DAG task orchestration
+│       │   ├── dispatcher/        # Multi-layer routing
+│       │   ├── event/             # Event system
+│       │   ├── generation/        # 10+ media generation providers
+│       │   ├── intent/            # 3-layer intent detection
+│       │   ├── mcp/               # MCP integration (stdio transport)
+│       │   ├── memory/            # Dual-layer memory system
+│       │   ├── payload/           # Request payload building
+│       │   ├── providers/         # AI provider implementations
+│       │   ├── rig_tools/         # rig-core tool definitions
 │       │   ├── router/            # Smart routing logic
-│       │   ├── providers/         # AI provider clients
-│       │   ├── memory/            # Memory module (Local RAG)
-│       │   └── dispatcher/        # Dispatcher Layer (multi-layer routing)
+│       │   ├── runtimes/          # Runtime managers (uv, fnm, yt-dlp)
+│       │   ├── search/            # 6 search providers
+│       │   ├── services/          # Background services
+│       │   ├── skills/            # Skill system
+│       │   ├── video/             # Video processing
+│       │   ├── vision/            # OCR + image understanding
+│       │   └── clarification/     # Phantom Flow (user clarification)
 │       └── uniffi.toml
 ├── docs/                          # Documentation
 └── config.toml                    # User config (~/.config/aether/config.toml)
 ```
+
+### Rust Core Module Count: 44 Modules
+
+| Category | Modules |
+|----------|---------|
+| **FFI** | 9 sub-modules |
+| **Agent** | agent/, agents/, components/ (8 modules) |
+| **Config** | 10 type modules + policies |
+| **AI** | generation/ (10+ providers), providers/, rig_tools/ |
+| **Memory** | Dual-layer (Raw + Facts), compression |
+| **Routing** | dispatcher/, intent/ (3 layers), router/ |
+| **Tools** | mcp/, skills/, search/ (6 providers), video/, vision/ |
+| **Runtime** | runtimes/ (uv, fnm, yt-dlp) |
+| **Infra** | services/, event/, conversation/, cowork/, payload/ |
 
 ---
 
@@ -142,106 +187,122 @@ cargo test router                  # Module-specific tests
 
 ## Key Architecture Components
 
-### Structured Context Protocol
+### 1. Event-Driven Agentic Loop (8 Components)
 
-Aether uses a **payload-based architecture** for intelligent request processing:
+The core AI execution engine using rig-core 0.28:
 
-```
-User Input → Router → PayloadBuilder → CapabilityExecutor → PromptAssembler → Provider
-```
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| **IntentAnalyzer** | `intent/` | 3-layer intent detection (L1 Regex, L2 Semantic, L3 LLM) |
+| **TaskPlanner** | `agent/` | Multi-step task planning with DAG execution |
+| **ToolExecutor** | `components/tool_executor.rs` | Unified tool dispatch system |
+| **LoopController** | `components/loop_controller.rs` | Agentic loop state management |
+| **SessionRecorder** | `components/session_recorder.rs` | Conversation history tracking |
+| **SessionCompactor** | `components/session_compactor.rs` | Memory compression |
+| **SubAgentHandler** | `components/subagent_handler.rs` | Sub-agent orchestration |
+| **CallbackBridge** | `components/callback_bridge.rs` | Rust-Swift communication |
 
-**Key Features**:
-- **AgentPayload**: Type-safe data structure replaces string concatenation
-- **Dynamic Capabilities**: Memory, Search, Tool execution
-- **Intent Classification**: BuiltinSearch, Custom, Skills, GeneralChat
-
-See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for details.
-
-### Unified Tool Architecture
-
-Aether implements a **unified tool dispatch system** with five independent tool categories and priority-based routing.
-
-#### Five Tool Categories (Priority Order)
-
-| Priority | Category | Description | Examples |
-|----------|----------|-------------|----------|
-| 5 (Highest) | **Builtin** | System commands with routing config | `/search`, `/youtube`, `/chat`, `/webfetch` |
-| 4 | **Native** | Built-in AgentTool implementations | `web_fetch`, `screen_capture`, `file_read` |
-| 3 | **Custom** | User-defined routing rules | Custom regex patterns in config.toml |
-| 2 | **MCP** | External MCP server tools | Context7, filesystem servers |
-| 1 (Lowest) | **Skill** | Agent skills | Future implementation |
-
-#### Tool Execution Flow
-
-```
-AI sees tools via ToolRegistry.to_prompt_block()
-    → Shows all 5 types with priority badges: [Builtin-Preferred], [Native-Preferred], [MCP:xxx], etc.
-    ↓
-AI requests tool via capability: {"capability": "mcp", "parameters": {"tool": "web_fetch", "args": {...}}}
-    ↓
-execute_tool_and_continue() in processing.rs
-    ↓
-UnifiedToolExecutor.execute() in tool_executor.rs
-    ↓
-Routes to correct backend:
-    - ToolSource::Native → NativeToolRegistry.execute()
-    - ToolSource::Mcp → McpClient.call_tool()
-    - ToolSource::Builtin → CapabilityExecutor (Search/Video/Memory)
-```
-
-#### Key Files
-
-| File | Purpose |
-|------|---------|
-| `core/tool_executor.rs` | `UnifiedToolExecutor` - unified execution entry point |
-| `core/processing.rs` | `execute_tool_and_continue()` - AI tool request handler |
-| `core/tools.rs` | `get_tool_prompt_block()` - generates tool list for AI |
-| `dispatcher/types.rs` | `ToolSource`, `ToolPriority` - type definitions |
-| `dispatcher/registry.rs` | `ToolRegistry` - tool registration and lookup |
-| `payload/assembler.rs` | `format_available_tools()` - prompt formatting |
-
-#### Tool Registration
+### 2. rig-core AI Agent Integration
 
 ```rust
-// Tools are registered in ToolRegistry with proper sources
-ToolSource::Builtin           // System commands (sort_order: 10-40)
-ToolSource::Native            // AgentTool implementations
-ToolSource::Mcp { server }    // External MCP server tools
-ToolSource::Skill { id }      // Agent skills
-ToolSource::Custom { rule }   // User-defined rules
+// AI providers via rig-core
+rig_core::providers::openai::Client
+rig_core::providers::anthropic::Client
+rig_core::providers::gemini::Client
+
+// Conversation persistence
+rig_sqlite::SqliteStore  // Conversation history
 ```
 
-#### Adding New Tools
+### 3. Runtime Managers (Phase 8)
 
-1. **Native Tool**: Implement `AgentTool` trait in `tools/` module
-2. **Builtin Command**: Add to `register_builtin_tools()` in `dispatcher/registry.rs`
-3. **MCP Tool**: Configure external server in `config.toml` under `[mcp.servers]`
-4. **Custom Rule**: Add routing rule in `config.toml` under `[[routing.rules]]`
+Automatic runtime environment management:
 
-#### Important Design Principles
+| Runtime | Purpose | Auto-Install |
+|---------|---------|--------------|
+| **UvRuntime** | Python environment (uv) | Yes |
+| **FnmRuntime** | Node.js environment (fnm) | Yes |
+| **YtDlpRuntime** | Video download (yt-dlp) | Yes |
 
-- **Never wrap tools in MCP**: Each category is independent, not nested
-- **Priority resolves conflicts**: Higher priority wins when names collide
-- **Unified execution**: All tools route through `UnifiedToolExecutor`
-- **Source badges in prompts**: AI sees `[Native - Preferred]` etc. to guide selection
+```rust
+// Common interface
+pub trait RuntimeManager: Send + Sync {
+    async fn is_installed(&self) -> bool;
+    async fn install(&self) -> Result<()>;
+    async fn check_updates(&self) -> Result<Option<String>>;
+    async fn update(&self) -> Result<()>;
+}
+```
 
-### Dispatcher Layer
+### 4. Dual-Layer Memory System
 
-Multi-layer routing with confidence-based confirmation:
-- **L1**: Regex pattern match (<10ms, confidence 1.0)
-- **L2**: Semantic keyword match (200-500ms, confidence 0.7)
-- **L3**: LLM inference (>1s, confidence 0.5-0.9)
+- **Layer 1 (Raw)**: Complete conversation history with full context
+- **Layer 2 (Facts)**: AI-extracted facts and insights for efficient retrieval
+- **SessionCompactor**: Background compression of old conversations
 
-See [docs/DISPATCHER.md](./docs/DISPATCHER.md) for details.
+### 5. Cowork DAG Orchestration + Model Router
 
-### Permission System
+```
+User Request → TaskPlanner → DAG Graph → ModelRouter → Parallel Execution
+                                              ↓
+                              Route each task to optimal model
+                              (claude-opus for reasoning,
+                               claude-haiku for quick tasks)
+```
 
-Three-layer protection architecture:
-1. **Swift UI Layer** - Passive monitoring + waterfall guidance
-2. **Rust Core Layer** - Panic protection + permission pre-check
-3. **System Integration** - Deep links + macOS native prompts
+See [docs/COWORK.md](./docs/COWORK.md) for details.
 
-See [docs/PERMISSIONS.md](./docs/PERMISSIONS.md) for details.
+### 6. Media Generation (10+ Providers)
+
+| Provider | Type | Models |
+|----------|------|--------|
+| Replicate | Image/Video | Flux, SDXL |
+| Recraft | Image | V3 |
+| Ideogram | Image | V2 |
+| Kimi | Image | Visions |
+| OpenAI | Image | DALL-E 3 |
+| Gemini | Image | Imagen |
+| ... | ... | ... |
+
+### 7. MCP Integration
+
+Model Context Protocol for external tool integration:
+- Transport: stdio (subprocess)
+- Configuration: `[mcp.servers]` in config.toml
+
+### 8. Skills System
+
+Automatic skill matching based on input patterns:
+- Skill definitions in `skills/`
+- Pattern-based activation
+- Multi-turn conversation support
+
+### 9. Vision Capability
+
+- **OCR**: Text extraction from images
+- **Image Understanding**: Visual content analysis via AI providers
+
+### 10. Phantom Flow (Clarification System)
+
+When user intent is ambiguous, Aether can ask clarifying questions before proceeding.
+
+---
+
+## Settings UI Tabs (10+)
+
+| Tab | Purpose |
+|-----|---------|
+| **General** | Theme, version, updates |
+| **Providers** | AI provider configuration |
+| **Routing** | Rule editor with drag-to-reorder |
+| **Shortcuts** | Hotkey recorder |
+| **Behavior** | Input/output modes |
+| **Memory** | View/delete history, retention policies |
+| **MCP** | MCP server configuration |
+| **Skills** | Skill management |
+| **Cowork** | Task orchestration settings |
+| **Policies** | System behavior fine-tuning |
+| **Runtimes** | Runtime version management |
 
 ---
 
@@ -250,10 +311,19 @@ See [docs/PERMISSIONS.md](./docs/PERMISSIONS.md) for details.
 ### Modularity Requirements
 
 Use trait-based abstractions for all core components:
-- `ClipboardManager`, `InputSimulator`, `AiProvider`, `Router`
-- `MemoryStore`, `EmbeddingModel`, `SearchProvider`
+- `AiProvider`, `Router`, `MemoryStore`
+- `EmbeddingModel`, `SearchProvider`
+- `RuntimeManager`
 
 ### Critical UI Behavior
+
+**macOS Application Entry**:
+- Use `main.swift` + `NSApplicationMain()` (macOS 26 bug workaround)
+- Do NOT use SwiftUI `@main App` lifecycle on macOS 26+
+
+**macOS Settings Window**:
+- Use `NSPanel` (not NSWindow) for keyboard support without Dock activation
+- Configure: `styleMask: [.titled, .closable, .resizable, .nonactivatingPanel]`
 
 **macOS Halo Window**:
 - `NSWindow` with `styleMask: .borderless`, `level: .floating`
@@ -272,16 +342,29 @@ Use trait-based abstractions for all core components:
 
 ## Anti-Patterns to Avoid
 
+### Architecture
 - DO NOT use webviews (violates native-first principle)
 - DO NOT create permanent GUI windows (violates "Ghost" philosophy)
 - DO NOT hardcode AI providers (must be config-driven)
-- DO NOT ignore permissions errors (especially Accessibility)
+- DO NOT bypass RigAgentManager for AI calls
+- DO NOT manually manage runtime installations (use RuntimeRegistry)
+
+### macOS Specific
+- DO NOT use SwiftUI App lifecycle on macOS 26+ (use main.swift + NSApplicationMain)
+- DO NOT create Settings as NSWindow (use NSPanel)
+- DO NOT call `makeKeyAndOrderFront()` on Halo window
+
+### Concurrency
 - DO NOT block main thread during API calls (use tokio async)
 - DO NOT put business logic in Swift (belongs in Rust core only)
+
+### FFI
 - DO NOT manually write FFI bindings (use UniFFI)
-- DO NOT wrap Native/Custom/Skill tools inside MCP capability (each tool type is independent)
-- DO NOT bypass UnifiedToolExecutor for tool calls (all tools route through it)
-- DO NOT convert tool types (e.g., NativeToolDef → McpToolInfo) - show each type with its proper badge
+- DO NOT ignore FFI boundary safety (use proper error handling)
+
+### Permissions
+- DO NOT ignore permissions errors (especially Accessibility)
+- DO NOT skip permission pre-check in Rust core
 
 ---
 
@@ -293,6 +376,7 @@ Use trait-based abstractions for all core components:
 4. **Robust Permissions**: Clear UX for granting Accessibility access
 5. **Memory Safety**: No crashes at FFI boundary
 6. **Smooth Animations**: 60fps Halo transitions
+7. **Auto Runtime**: Runtimes install/update without user intervention
 
 ---
 
@@ -306,7 +390,7 @@ Use trait-based abstractions for all core components:
 - [Permissions](./docs/PERMISSIONS.md) - Permission authorization architecture
 
 ### Development Guides
-- [Development Phases](./docs/DEVELOPMENT_PHASES.md) - Project roadmap
+- [Development Phases](./docs/DEVELOPMENT_PHASES.md) - Project roadmap (Phase 1-8 complete)
 - [Platform Notes](./docs/PLATFORM_NOTES.md) - macOS/Windows/Linux setup
 - [Debugging Guide](./docs/DEBUGGING_GUIDE.md) - Rust and Swift debugging
 - [Localization Guide](./docs/LOCALIZATION.md) - i18n implementation
@@ -320,6 +404,21 @@ Use trait-based abstractions for all core components:
 - [UI Design Guide](./docs/ui-design-guide.md) - Design system
 - [Component Index](./docs/ComponentsIndex.md) - SwiftUI component catalog
 - [macOS 26 Window Design](./docs/MACOS26_WINDOW_DESIGN.md) - Modern window architecture
+
+---
+
+## HaloState Machine (21 States)
+
+```swift
+enum HaloState {
+    case idle, hidden, appearing, listening, thinking, processing
+    case streaming, success, error, disappearing
+    case multiTurnActive, multiTurnThinking, multiTurnStreaming
+    case toolExecuting, toolSuccess, toolError
+    case clarificationNeeded, clarificationReceived
+    case agentPlanning, agentExecuting, agentComplete
+}
+```
 
 ---
 
