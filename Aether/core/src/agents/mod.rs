@@ -10,6 +10,9 @@ mod registry;
 mod task_tool;
 mod types;
 
+#[cfg(test)]
+mod integration_test;
+
 pub use registry::{builtin_agents, AgentRegistry};
 pub use task_tool::{TaskTool, TaskToolError, TaskToolResult};
 pub use types::{AgentDef, AgentMode};
