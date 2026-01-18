@@ -76,17 +76,40 @@ impl Default for PathPermissionChecker {
 }
 
 impl PathPermissionChecker {
-    /// Default denied paths for security
-    pub const DEFAULT_DENIED_PATHS: &'static [&'static str] = &[
-        "~/.ssh/**",
-        "~/.gnupg/**",
-        "~/.config/aether/**",
-        "~/.aws/**",
-        "~/.kube/**",
-        "/etc/passwd",
-        "/etc/shadow",
-        "/etc/sudoers",
-    ];
+    /// Get default denied paths for security (platform-aware)
+    ///
+    /// Returns a list of sensitive paths that should always be denied,
+    /// including platform-specific paths for Windows.
+    pub fn default_denied_paths() -> Vec<String> {
+        let mut paths = vec![
+            "~/.ssh/**".to_string(),
+            "~/.gnupg/**".to_string(),
+            "~/.aws/**".to_string(),
+            "~/.kube/**".to_string(),
+        ];
+
+        // Add Aether config directory dynamically (cross-platform)
+        if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
+            paths.push(format!("{}/**", config_dir.display()));
+        }
+
+        // Platform-specific paths
+        #[cfg(unix)]
+        paths.extend([
+            "/etc/passwd".to_string(),
+            "/etc/shadow".to_string(),
+            "/etc/sudoers".to_string(),
+        ]);
+
+        #[cfg(target_os = "windows")]
+        paths.extend([
+            "%APPDATA%\\Microsoft\\Credentials\\**".to_string(),
+            "%LOCALAPPDATA%\\Microsoft\\Credentials\\**".to_string(),
+            "C:\\Windows\\System32\\config\\**".to_string(),
+        ]);
+
+        paths
+    }
 
     /// Create a new permission checker
     pub fn new(allowed_paths: Vec<String>, denied_paths: Vec<String>, max_file_size: u64) -> Self {
@@ -98,14 +121,9 @@ impl PathPermissionChecker {
 
         let denied_expanded: Vec<String> = denied_paths
             .iter()
-            .chain(
-                Self::DEFAULT_DENIED_PATHS
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect::<Vec<_>>()
-                    .iter(),
-            )
-            .map(|p| Self::expand_and_canonicalize(p))
+            .cloned()
+            .chain(Self::default_denied_paths())
+            .map(|p| Self::expand_and_canonicalize(&p))
             .collect();
 
         // Compile patterns

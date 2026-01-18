@@ -95,9 +95,9 @@ impl AetherCore {
 
         // If memory is being enabled, ensure memory_path is set
         if new_config.enabled && !was_enabled {
-            let db_path = dirs::home_dir()
-                .map(|h| h.join(".config/aether/memory.db"))
-                .unwrap_or_else(|| std::path::PathBuf::from("memory.db"));
+            let db_path = crate::utils::paths::get_config_dir()
+                .map(|d| d.join("memory.db"))
+                .unwrap_or_else(|_| std::path::PathBuf::from("memory.db"));
 
             let mut memory_path = self.memory_path.write().unwrap_or_else(|e| e.into_inner());
             *memory_path = Some(db_path.to_string_lossy().to_string());

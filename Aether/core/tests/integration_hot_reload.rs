@@ -70,6 +70,7 @@ impl AetherEventHandler for MockEventHandler {
     fn on_session_completed(&self, _session_id: String, _summary: String) {}
     fn on_subagent_started(&self, _parent_session_id: String, _child_session_id: String, _agent_id: String) {}
     fn on_subagent_completed(&self, _child_session_id: String, _success: bool, _summary: String) {}
+    fn on_runtime_updates_available(&self, _updates: Vec<aethecore::RuntimeUpdateInfo>) {}
 }
 
 /// Create a test MCP server configuration
@@ -315,5 +316,8 @@ impl AetherEventHandler for MockEventHandlerWrapper {
     }
     fn on_subagent_completed(&self, child_session_id: String, success: bool, summary: String) {
         self.0.on_subagent_completed(child_session_id, success, summary)
+    }
+    fn on_runtime_updates_available(&self, updates: Vec<aethecore::RuntimeUpdateInfo>) {
+        self.0.on_runtime_updates_available(updates)
     }
 }

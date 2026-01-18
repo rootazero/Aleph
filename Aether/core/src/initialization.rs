@@ -78,15 +78,11 @@ pub fn is_fresh_install() -> Result<bool> {
 /// checks if fastembed can initialize successfully, which triggers
 /// automatic download if needed.
 pub fn check_embedding_model_exists() -> Result<bool> {
-    // fastembed handles model caching automatically in ~/.cache/huggingface
+    // fastembed handles model caching automatically
     // We just check if the cache directory exists as a hint
-    let home_dir = std::env::var("HOME")
-        .map_err(|_| AetherError::config("Failed to get HOME environment variable"))?;
+    use crate::utils::paths::get_huggingface_cache_dir;
 
-    let cache_dir = PathBuf::from(home_dir)
-        .join(".cache")
-        .join("huggingface")
-        .join("hub");
+    let cache_dir = get_huggingface_cache_dir()?;
 
     // Check if HuggingFace cache exists (fastembed will download on first use)
     if cache_dir.exists() {
@@ -150,12 +146,12 @@ pub fn download_embedding_model_standalone(
     }
 }
 
-/// Get the config directory path
+/// Get the config directory path (cross-platform)
+///
+/// This is a re-export of `crate::utils::paths::get_config_dir()` for
+/// backward compatibility within this module.
 pub fn get_config_dir() -> Result<PathBuf> {
-    let home_dir = std::env::var("HOME")
-        .map_err(|_| AetherError::config("Failed to get HOME environment variable"))?;
-
-    Ok(PathBuf::from(home_dir).join(".config").join("aether"))
+    crate::utils::paths::get_config_dir()
 }
 
 /// Get the model directory path
@@ -756,7 +752,8 @@ mod tests {
     #[test]
     fn test_get_config_dir() {
         let dir = get_config_dir().unwrap();
-        assert!(dir.to_string_lossy().contains(".config/aether"));
+        // Cross-platform: check for "aether" in path instead of ".config/aether"
+        assert!(dir.to_string_lossy().contains("aether"));
     }
 
     #[test]
@@ -768,55 +765,40 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_create_directory_structure() {
-        use tempfile::TempDir;
-
-        // Save original HOME
-        let original_home = std::env::var("HOME").ok();
-
-        // Create temp directory
-        let temp_dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", temp_dir.path());
+        // Get the config directory using platform-aware function
+        let config_dir = get_config_dir().unwrap();
 
         // Run directory creation
         create_directory_structure().await.unwrap();
 
-        // Verify directories exist
-        let config_dir = temp_dir.path().join(".config").join("aether");
-        assert!(config_dir.exists());
-        assert!(config_dir.join("models").join("bge-small-zh-v1.5").exists());
-        assert!(config_dir.join("logs").exists());
-
-        // Restore original HOME
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
+        // Verify directories exist using platform-aware paths
+        assert!(config_dir.exists(), "Config dir should exist: {:?}", config_dir);
+        assert!(
+            config_dir.join("models").join("bge-small-zh-v1.5").exists(),
+            "Model dir should exist"
+        );
+        assert!(config_dir.join("logs").exists(), "Logs dir should exist");
+        assert!(config_dir.join("skills").exists(), "Skills dir should exist");
     }
 
     #[tokio::test]
     #[serial]
     async fn test_create_default_config() {
-        use tempfile::TempDir;
+        // Get the config directory using platform-aware function
+        let config_dir = get_config_dir().unwrap();
+        let config_file = config_dir.join("config.toml");
 
-        // Save original HOME
-        let original_home = std::env::var("HOME").ok();
+        // Skip test if we can't write to config directory
+        if let Err(_) = std::fs::create_dir_all(&config_dir) {
+            eprintln!("Skipping test: cannot create config directory");
+            return;
+        }
 
-        let temp_dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", temp_dir.path());
-
-        // Create directory structure first
-        create_directory_structure().await.unwrap();
-
-        // Verify config_file path
-        let config_file = temp_dir
-            .path()
-            .join(".config")
-            .join("aether")
-            .join("config.toml");
-
-        // Ensure config file doesn't exist before creation
-        if config_file.exists() {
+        // Backup existing config if present
+        let backup_path = config_file.with_extension("toml.bak");
+        let had_config = config_file.exists();
+        if had_config {
+            std::fs::copy(&config_file, &backup_path).unwrap();
             std::fs::remove_file(&config_file).unwrap();
         }
 
@@ -834,11 +816,10 @@ mod tests {
         let config = Config::load_from_file(&config_file).unwrap();
         assert_eq!(config.default_hotkey, "Grave");
 
-        // Restore original HOME
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
+        // Cleanup: remove test config and restore backup if existed
+        std::fs::remove_file(&config_file).ok();
+        if had_config {
+            std::fs::rename(&backup_path, &config_file).ok();
         }
     }
 }

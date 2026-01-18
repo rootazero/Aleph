@@ -1,15 +1,22 @@
 //! Common download utilities for runtime installation
 //!
-//! Provides functions for downloading binaries from GitHub releases
-//! and setting executable permissions.
+//! Provides functions for downloading binaries from GitHub releases,
+//! extracting archives, and setting executable permissions.
+//!
+//! Cross-platform support:
+//! - Uses Rust native libraries for archive extraction (no external tools)
+//! - Works on macOS, Linux, and Windows
 
 use crate::error::{AetherError, Result};
+use std::fs::File;
+use std::io::BufReader;
 use std::path::Path;
 use tracing::{debug, info};
 
 /// Download a file from URL to the specified path
 ///
-/// Uses curl for compatibility with macOS (built-in) and handles redirects.
+/// Uses reqwest for cross-platform HTTP downloads without external dependencies.
+/// Handles redirects automatically.
 pub async fn download_file(url: &str, dest: &Path) -> Result<()> {
     info!(url = %url, dest = ?dest, "Downloading file");
 
@@ -23,28 +30,185 @@ pub async fn download_file(url: &str, dest: &Path) -> Result<()> {
         })?;
     }
 
-    // Use curl for download (available on macOS by default)
-    let output = std::process::Command::new("curl")
-        .args([
-            "-L",                              // Follow redirects
-            "-f",                              // Fail on HTTP errors
-            "--progress-bar",                  // Show progress
-            "-o",
-            dest.to_str().unwrap_or(""),
-            url,
-        ])
-        .output()
-        .map_err(|e| AetherError::runtime("download", format!("Failed to run curl: {}", e)))?;
+    // Use reqwest for cross-platform download
+    let client = reqwest::Client::builder()
+        .user_agent("Aether/1.0")
+        .build()
+        .map_err(|e| {
+            AetherError::runtime("download", format!("Failed to create HTTP client: {}", e))
+        })?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| AetherError::runtime("download", format!("Download request failed: {}", e)))?;
+
+    if !response.status().is_success() {
         return Err(AetherError::runtime(
             "download",
-            format!("Download failed: {}", stderr),
+            format!("Download failed with status: {}", response.status()),
         ));
     }
 
-    debug!(dest = ?dest, "Download completed");
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| AetherError::runtime("download", format!("Failed to read response: {}", e)))?;
+
+    std::fs::write(dest, &bytes).map_err(|e| {
+        AetherError::runtime("download", format!("Failed to write file {:?}: {}", dest, e))
+    })?;
+
+    debug!(dest = ?dest, size = bytes.len(), "Download completed");
+    Ok(())
+}
+
+/// Extract a tar.gz archive to the specified directory
+///
+/// This uses Rust native libraries (flate2 + tar) for cross-platform support.
+/// Does not require external tools like `tar`.
+///
+/// # Arguments
+/// * `archive_path` - Path to the .tar.gz file
+/// * `dest_dir` - Directory to extract files into
+/// * `strip_components` - Number of leading path components to strip (like tar --strip-components)
+pub fn extract_tar_gz(archive_path: &Path, dest_dir: &Path, strip_components: usize) -> Result<()> {
+    info!(archive = ?archive_path, dest = ?dest_dir, "Extracting tar.gz archive");
+
+    let file = File::open(archive_path).map_err(|e| {
+        AetherError::runtime("extract", format!("Failed to open archive: {}", e))
+    })?;
+
+    let buf_reader = BufReader::new(file);
+    let gz_decoder = flate2::read::GzDecoder::new(buf_reader);
+    let mut archive = tar::Archive::new(gz_decoder);
+
+    // Create destination directory if it doesn't exist
+    std::fs::create_dir_all(dest_dir).map_err(|e| {
+        AetherError::runtime("extract", format!("Failed to create directory: {}", e))
+    })?;
+
+    // Extract each entry, stripping path components as needed
+    for entry in archive.entries().map_err(|e| {
+        AetherError::runtime("extract", format!("Failed to read archive entries: {}", e))
+    })? {
+        let mut entry = entry.map_err(|e| {
+            AetherError::runtime("extract", format!("Failed to read entry: {}", e))
+        })?;
+
+        let entry_path = entry.path().map_err(|e| {
+            AetherError::runtime("extract", format!("Failed to get entry path: {}", e))
+        })?;
+
+        // Strip leading components from path
+        let stripped_path: std::path::PathBuf = entry_path
+            .components()
+            .skip(strip_components)
+            .collect();
+
+        // Skip if path is empty after stripping
+        if stripped_path.as_os_str().is_empty() {
+            continue;
+        }
+
+        let dest_path = dest_dir.join(&stripped_path);
+
+        // Create parent directories
+        if let Some(parent) = dest_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                AetherError::runtime("extract", format!("Failed to create parent dir: {}", e))
+            })?;
+        }
+
+        // Extract based on entry type
+        let entry_type = entry.header().entry_type();
+        if entry_type.is_dir() {
+            std::fs::create_dir_all(&dest_path).map_err(|e| {
+                AetherError::runtime("extract", format!("Failed to create directory: {}", e))
+            })?;
+        } else if entry_type.is_file() || entry_type.is_symlink() {
+            entry.unpack(&dest_path).map_err(|e| {
+                AetherError::runtime("extract", format!("Failed to extract file: {}", e))
+            })?;
+        }
+    }
+
+    debug!(dest = ?dest_dir, "tar.gz extraction completed");
+    Ok(())
+}
+
+/// Extract a ZIP archive to the specified directory
+///
+/// This uses Rust native library (zip) for cross-platform support.
+/// Does not require external tools like `unzip`.
+///
+/// # Arguments
+/// * `archive_path` - Path to the .zip file
+/// * `dest_dir` - Directory to extract files into
+pub fn extract_zip(archive_path: &Path, dest_dir: &Path) -> Result<()> {
+    info!(archive = ?archive_path, dest = ?dest_dir, "Extracting ZIP archive");
+
+    let file = File::open(archive_path).map_err(|e| {
+        AetherError::runtime("extract", format!("Failed to open archive: {}", e))
+    })?;
+
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| {
+        AetherError::runtime("extract", format!("Failed to read ZIP archive: {}", e))
+    })?;
+
+    // Create destination directory if it doesn't exist
+    std::fs::create_dir_all(dest_dir).map_err(|e| {
+        AetherError::runtime("extract", format!("Failed to create directory: {}", e))
+    })?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| {
+            AetherError::runtime("extract", format!("Failed to read ZIP entry: {}", e))
+        })?;
+
+        // Get the entry name (handling both forward and back slashes)
+        let entry_name = match entry.enclosed_name() {
+            Some(name) => name.to_path_buf(),
+            None => continue, // Skip invalid entries
+        };
+
+        let dest_path = dest_dir.join(&entry_name);
+
+        if entry.is_dir() {
+            std::fs::create_dir_all(&dest_path).map_err(|e| {
+                AetherError::runtime("extract", format!("Failed to create directory: {}", e))
+            })?;
+        } else {
+            // Create parent directories
+            if let Some(parent) = dest_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    AetherError::runtime("extract", format!("Failed to create parent dir: {}", e))
+                })?;
+            }
+
+            // Extract file
+            let mut outfile = File::create(&dest_path).map_err(|e| {
+                AetherError::runtime("extract", format!("Failed to create file: {}", e))
+            })?;
+
+            std::io::copy(&mut entry, &mut outfile).map_err(|e| {
+                AetherError::runtime("extract", format!("Failed to write file: {}", e))
+            })?;
+
+            // Preserve executable permissions on Unix
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Some(mode) = entry.unix_mode() {
+                    let permissions = std::fs::Permissions::from_mode(mode);
+                    std::fs::set_permissions(&dest_path, permissions).ok();
+                }
+            }
+        }
+    }
+
+    debug!(dest = ?dest_dir, "ZIP extraction completed");
     Ok(())
 }
 

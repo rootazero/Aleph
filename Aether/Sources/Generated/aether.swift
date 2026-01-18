@@ -604,6 +604,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func checkGenerationProgress(providerName: String, jobId: String) throws  -> GenerationProgressFfi
     
+    func checkRuntimeUpdates() throws  -> [RuntimeUpdateInfo]
+    
     func clearFacts() throws  -> UInt64
     
     func clearMemories(appBundleId: String?, windowTitle: String?) throws  -> UInt64
@@ -714,19 +716,31 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func getMemoryStats() throws  -> MemoryStats
     
+    func getNodePath()  -> String?
+    
+    func getNpmPath()  -> String?
+    
     func getProvidersForType(generationType: GenerationTypeFfi)  -> [GenerationProviderInfoFfi]
+    
+    func getPythonPath()  -> String?
     
     func getRootCommandsFromRegistry()  -> [CommandNode]
     
     func getSkillsDir() throws  -> String
     
+    func getYtdlpPath()  -> String?
+    
     func importMcpConfigJson(json: String) throws 
+    
+    func installRuntime(runtimeId: String) throws 
     
     func installSkill(url: String) throws  -> SkillInfo
     
     func installSkillsFromZip(zipPath: String) throws  -> [String]
     
     func isCancelled()  -> Bool
+    
+    func isRuntimeInstalled(runtimeId: String)  -> Bool
     
     func listBuiltinTools()  -> [UnifiedToolInfo]
     
@@ -735,6 +749,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func listMcpServers()  -> [McpServerConfig]
     
     func listRecentSessions(limit: UInt32)  -> [SessionSummary]
+    
+    func listRuntimes()  -> [RuntimeInfo]
     
     func listSkills() throws  -> [SkillInfo]
     
@@ -785,6 +801,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func updateProvider(name: String, provider: ProviderConfig) throws 
     
     func updateRoutingRules(rules: [RoutingRuleConfig]) throws 
+    
+    func updateRuntime(runtimeId: String) throws 
     
     func updateSearchConfig(search: SearchConfig) throws 
     
@@ -879,6 +897,13 @@ open func checkGenerationProgress(providerName: String, jobId: String)throws  ->
     uniffi_aethecore_fn_method_aethercore_check_generation_progress(self.uniffiClonePointer(),
         FfiConverterString.lower(providerName),
         FfiConverterString.lower(jobId),$0
+    )
+})
+}
+    
+open func checkRuntimeUpdates()throws  -> [RuntimeUpdateInfo] {
+    return try  FfiConverterSequenceTypeRuntimeUpdateInfo.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_check_runtime_updates(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -1297,10 +1322,31 @@ open func getMemoryStats()throws  -> MemoryStats {
 })
 }
     
+open func getNodePath() -> String? {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_node_path(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func getNpmPath() -> String? {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_npm_path(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func getProvidersForType(generationType: GenerationTypeFfi) -> [GenerationProviderInfoFfi] {
     return try!  FfiConverterSequenceTypeGenerationProviderInfoFFI.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_get_providers_for_type(self.uniffiClonePointer(),
         FfiConverterTypeGenerationTypeFFI.lower(generationType),$0
+    )
+})
+}
+    
+open func getPythonPath() -> String? {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_python_path(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -1319,9 +1365,23 @@ open func getSkillsDir()throws  -> String {
 })
 }
     
+open func getYtdlpPath() -> String? {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_ytdlp_path(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func importMcpConfigJson(json: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
     uniffi_aethecore_fn_method_aethercore_import_mcp_config_json(self.uniffiClonePointer(),
         FfiConverterString.lower(json),$0
+    )
+}
+}
+    
+open func installRuntime(runtimeId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_install_runtime(self.uniffiClonePointer(),
+        FfiConverterString.lower(runtimeId),$0
     )
 }
 }
@@ -1345,6 +1405,14 @@ open func installSkillsFromZip(zipPath: String)throws  -> [String] {
 open func isCancelled() -> Bool {
     return try!  FfiConverterBool.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_is_cancelled(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func isRuntimeInstalled(runtimeId: String) -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_is_runtime_installed(self.uniffiClonePointer(),
+        FfiConverterString.lower(runtimeId),$0
     )
 })
 }
@@ -1374,6 +1442,13 @@ open func listRecentSessions(limit: UInt32) -> [SessionSummary] {
     return try!  FfiConverterSequenceTypeSessionSummary.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_list_recent_sessions(self.uniffiClonePointer(),
         FfiConverterUInt32.lower(limit),$0
+    )
+})
+}
+    
+open func listRuntimes() -> [RuntimeInfo] {
+    return try!  FfiConverterSequenceTypeRuntimeInfo.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_list_runtimes(self.uniffiClonePointer(),$0
     )
 })
 }
@@ -1563,6 +1638,13 @@ open func updateProvider(name: String, provider: ProviderConfig)throws  {try rus
 open func updateRoutingRules(rules: [RoutingRuleConfig])throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
     uniffi_aethecore_fn_method_aethercore_update_routing_rules(self.uniffiClonePointer(),
         FfiConverterSequenceTypeRoutingRuleConfig.lower(rules),$0
+    )
+}
+}
+    
+open func updateRuntime(runtimeId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_update_runtime(self.uniffiClonePointer(),
+        FfiConverterString.lower(runtimeId),$0
     )
 }
 }
@@ -8005,6 +8087,170 @@ public func FfiConverterTypeRoutingRuleConfig_lower(_ value: RoutingRuleConfig) 
 }
 
 
+public struct RuntimeInfo {
+    public var id: String
+    public var name: String
+    public var description: String
+    public var version: String?
+    public var installed: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, name: String, description: String, version: String?, installed: Bool) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.version = version
+        self.installed = installed
+    }
+}
+
+
+
+extension RuntimeInfo: Equatable, Hashable {
+    public static func ==(lhs: RuntimeInfo, rhs: RuntimeInfo) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.version != rhs.version {
+            return false
+        }
+        if lhs.installed != rhs.installed {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(name)
+        hasher.combine(description)
+        hasher.combine(version)
+        hasher.combine(installed)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRuntimeInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RuntimeInfo {
+        return
+            try RuntimeInfo(
+                id: FfiConverterString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                description: FfiConverterString.read(from: &buf), 
+                version: FfiConverterOptionString.read(from: &buf), 
+                installed: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RuntimeInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.description, into: &buf)
+        FfiConverterOptionString.write(value.version, into: &buf)
+        FfiConverterBool.write(value.installed, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRuntimeInfo_lift(_ buf: RustBuffer) throws -> RuntimeInfo {
+    return try FfiConverterTypeRuntimeInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRuntimeInfo_lower(_ value: RuntimeInfo) -> RustBuffer {
+    return FfiConverterTypeRuntimeInfo.lower(value)
+}
+
+
+public struct RuntimeUpdateInfo {
+    public var runtimeId: String
+    public var currentVersion: String
+    public var latestVersion: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(runtimeId: String, currentVersion: String, latestVersion: String) {
+        self.runtimeId = runtimeId
+        self.currentVersion = currentVersion
+        self.latestVersion = latestVersion
+    }
+}
+
+
+
+extension RuntimeUpdateInfo: Equatable, Hashable {
+    public static func ==(lhs: RuntimeUpdateInfo, rhs: RuntimeUpdateInfo) -> Bool {
+        if lhs.runtimeId != rhs.runtimeId {
+            return false
+        }
+        if lhs.currentVersion != rhs.currentVersion {
+            return false
+        }
+        if lhs.latestVersion != rhs.latestVersion {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(runtimeId)
+        hasher.combine(currentVersion)
+        hasher.combine(latestVersion)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRuntimeUpdateInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RuntimeUpdateInfo {
+        return
+            try RuntimeUpdateInfo(
+                runtimeId: FfiConverterString.read(from: &buf), 
+                currentVersion: FfiConverterString.read(from: &buf), 
+                latestVersion: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RuntimeUpdateInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.runtimeId, into: &buf)
+        FfiConverterString.write(value.currentVersion, into: &buf)
+        FfiConverterString.write(value.latestVersion, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRuntimeUpdateInfo_lift(_ buf: RustBuffer) throws -> RuntimeUpdateInfo {
+    return try FfiConverterTypeRuntimeUpdateInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRuntimeUpdateInfo_lower(_ value: RuntimeUpdateInfo) -> RustBuffer {
+    return FfiConverterTypeRuntimeUpdateInfo.lower(value)
+}
+
+
 public struct SearchBackendConfig {
     public var providerType: String
     public var apiKey: String?
@@ -12291,6 +12537,8 @@ public protocol AetherEventHandler : AnyObject {
     
     func onMcpStartupComplete(report: McpStartupReportFfi) 
     
+    func onRuntimeUpdatesAvailable(updates: [RuntimeUpdateInfo]) 
+    
     func onSessionStarted(sessionId: String) 
     
     func onToolCallStarted(callId: String, toolName: String) 
@@ -12552,6 +12800,30 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
                 }
                 return uniffiObj.onMcpStartupComplete(
                      report: try FfiConverterTypeMcpStartupReportFFI.lift(report)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onRuntimeUpdatesAvailable: { (
+            uniffiHandle: UInt64,
+            updates: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onRuntimeUpdatesAvailable(
+                     updates: try FfiConverterSequenceTypeRuntimeUpdateInfo.lift(updates)
                 )
             }
 
@@ -14298,6 +14570,56 @@ fileprivate struct FfiConverterSequenceTypeRoutingRuleConfig: FfiConverterRustBu
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeRuntimeInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [RuntimeInfo]
+
+    public static func write(_ value: [RuntimeInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeRuntimeInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [RuntimeInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [RuntimeInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeRuntimeInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeRuntimeUpdateInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [RuntimeUpdateInfo]
+
+    public static func write(_ value: [RuntimeUpdateInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeRuntimeUpdateInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [RuntimeUpdateInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [RuntimeUpdateInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeRuntimeUpdateInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeSearchBackendEntry: FfiConverterRustBuffer {
     typealias SwiftType = [SearchBackendEntry]
 
@@ -14626,6 +14948,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_check_generation_progress() != 39952) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_check_runtime_updates() != 20961) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_clear_facts() != 49121) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -14791,7 +15116,16 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_get_memory_stats() != 37731) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_get_node_path() != 8236) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_npm_path() != 60063) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_get_providers_for_type() != 30953) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_get_python_path() != 27989) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_get_root_commands_from_registry() != 64284) {
@@ -14800,7 +15134,13 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_get_skills_dir() != 34566) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_get_ytdlp_path() != 24869) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_import_mcp_config_json() != 22743) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_install_runtime() != 21593) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_install_skill() != 24959) {
@@ -14810,6 +15150,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_is_cancelled() != 61008) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_is_runtime_installed() != 20271) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_list_builtin_tools() != 62441) {
@@ -14822,6 +15165,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_list_recent_sessions() != 13544) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_list_runtimes() != 3574) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_list_skills() != 34455) {
@@ -14899,6 +15245,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_update_routing_rules() != 6793) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_update_runtime() != 58790) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_update_search_config() != 32911) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -14939,6 +15288,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_mcp_startup_complete() != 1232) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_runtime_updates_available() != 49394) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_session_started() != 832) {

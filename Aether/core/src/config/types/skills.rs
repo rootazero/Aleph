@@ -48,9 +48,13 @@ impl Default for SkillsConfig {
 }
 
 impl SkillsConfig {
-    /// Get the full path to the skills directory
+    /// Get the full path to the skills directory (cross-platform)
     ///
-    /// If skills_dir is relative, it's relative to ~/.config/aether/
+    /// If skills_dir is relative, it's relative to the platform-specific config directory:
+    /// - macOS: ~/Library/Application Support/aether/
+    /// - Windows: %APPDATA%\aether\
+    /// - Linux: ~/.config/aether/
+    ///
     /// If absolute, use as-is
     pub fn get_skills_dir_path(&self) -> std::path::PathBuf {
         let path = std::path::Path::new(&self.skills_dir);
@@ -58,12 +62,10 @@ impl SkillsConfig {
         if path.is_absolute() {
             path.to_path_buf()
         } else {
-            // Relative to config directory
-            if let Some(home) = dirs::home_dir() {
-                home.join(".config").join("aether").join(&self.skills_dir)
-            } else {
-                path.to_path_buf()
-            }
+            // Relative to config directory (platform-aware)
+            crate::utils::paths::get_config_dir()
+                .map(|d| d.join(&self.skills_dir))
+                .unwrap_or_else(|_| path.to_path_buf())
         }
     }
 }

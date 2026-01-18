@@ -122,16 +122,40 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
 
     /// Create a new FileOpsTool with default settings
     pub fn new() -> Self {
-        Self {
-            max_read_size: 100 * 1024 * 1024, // 100MB
-            denied_paths: vec![
-                "~/.ssh".to_string(),
-                "~/.gnupg".to_string(),
-                "~/.aws".to_string(),
-                "~/.config/aether".to_string(),
+        let mut denied_paths = vec![
+            // Unix sensitive directories
+            "~/.ssh".to_string(),
+            "~/.gnupg".to_string(),
+            "~/.aws".to_string(),
+        ];
+
+        // Add Aether config directory dynamically (cross-platform)
+        if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
+            denied_paths.push(config_dir.to_string_lossy().to_string());
+        }
+
+        // Add Unix-specific paths
+        #[cfg(unix)]
+        {
+            denied_paths.extend([
                 "/etc/passwd".to_string(),
                 "/etc/shadow".to_string(),
-            ],
+            ]);
+        }
+
+        // Add Windows-specific sensitive paths
+        #[cfg(target_os = "windows")]
+        {
+            denied_paths.extend([
+                "%APPDATA%\\Microsoft\\Credentials".to_string(),
+                "%LOCALAPPDATA%\\Microsoft\\Credentials".to_string(),
+                "C:\\Windows\\System32\\config".to_string(),
+            ]);
+        }
+
+        Self {
+            max_read_size: 100 * 1024 * 1024, // 100MB
+            denied_paths,
         }
     }
 

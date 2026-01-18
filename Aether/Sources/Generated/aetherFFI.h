@@ -330,7 +330,7 @@ typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod10)(uint64_t, Rust
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD11
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD11
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod11)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod11)(uint64_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
@@ -344,21 +344,21 @@ typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod12)(uint64_t, Rust
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD13
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD13
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod13)(uint64_t, RustBuffer, RustBuffer, int8_t, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod13)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD14
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD14
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod14)(uint64_t, RustBuffer, uint32_t, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod14)(uint64_t, RustBuffer, RustBuffer, int8_t, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD15
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD15
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod15)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod15)(uint64_t, RustBuffer, uint32_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
@@ -372,14 +372,21 @@ typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod16)(uint64_t, Rust
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD17
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD17
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod17)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod17)(uint64_t, RustBuffer, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
 #endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD18
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD18
-typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod18)(uint64_t, RustBuffer, int8_t, RustBuffer, void* _Nonnull, 
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod18)(uint64_t, RustBuffer, RustBuffer, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD19
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AETHER_EVENT_HANDLER_METHOD19
+typedef void (*UniffiCallbackInterfaceAetherEventHandlerMethod19)(uint64_t, RustBuffer, int8_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
 
@@ -446,15 +453,16 @@ typedef struct UniffiVTableCallbackInterfaceAetherEventHandler {
     UniffiCallbackInterfaceAetherEventHandlerMethod7 _Nonnull onAgentModeDetected;
     UniffiCallbackInterfaceAetherEventHandlerMethod8 _Nonnull onToolsChanged;
     UniffiCallbackInterfaceAetherEventHandlerMethod9 _Nonnull onMcpStartupComplete;
-    UniffiCallbackInterfaceAetherEventHandlerMethod10 _Nonnull onSessionStarted;
-    UniffiCallbackInterfaceAetherEventHandlerMethod11 _Nonnull onToolCallStarted;
-    UniffiCallbackInterfaceAetherEventHandlerMethod12 _Nonnull onToolCallCompleted;
-    UniffiCallbackInterfaceAetherEventHandlerMethod13 _Nonnull onToolCallFailed;
-    UniffiCallbackInterfaceAetherEventHandlerMethod14 _Nonnull onLoopProgress;
-    UniffiCallbackInterfaceAetherEventHandlerMethod15 _Nonnull onPlanCreated;
-    UniffiCallbackInterfaceAetherEventHandlerMethod16 _Nonnull onSessionCompleted;
-    UniffiCallbackInterfaceAetherEventHandlerMethod17 _Nonnull onSubagentStarted;
-    UniffiCallbackInterfaceAetherEventHandlerMethod18 _Nonnull onSubagentCompleted;
+    UniffiCallbackInterfaceAetherEventHandlerMethod10 _Nonnull onRuntimeUpdatesAvailable;
+    UniffiCallbackInterfaceAetherEventHandlerMethod11 _Nonnull onSessionStarted;
+    UniffiCallbackInterfaceAetherEventHandlerMethod12 _Nonnull onToolCallStarted;
+    UniffiCallbackInterfaceAetherEventHandlerMethod13 _Nonnull onToolCallCompleted;
+    UniffiCallbackInterfaceAetherEventHandlerMethod14 _Nonnull onToolCallFailed;
+    UniffiCallbackInterfaceAetherEventHandlerMethod15 _Nonnull onLoopProgress;
+    UniffiCallbackInterfaceAetherEventHandlerMethod16 _Nonnull onPlanCreated;
+    UniffiCallbackInterfaceAetherEventHandlerMethod17 _Nonnull onSessionCompleted;
+    UniffiCallbackInterfaceAetherEventHandlerMethod18 _Nonnull onSubagentStarted;
+    UniffiCallbackInterfaceAetherEventHandlerMethod19 _Nonnull onSubagentCompleted;
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceAetherEventHandler;
 
@@ -513,6 +521,11 @@ int8_t uniffi_aethecore_fn_method_aethercore_cancel_session(void*_Nonnull ptr, R
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CHECK_GENERATION_PROGRESS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CHECK_GENERATION_PROGRESS
 RustBuffer uniffi_aethecore_fn_method_aethercore_check_generation_progress(void*_Nonnull ptr, RustBuffer provider_name, RustBuffer job_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CHECK_RUNTIME_UPDATES
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CHECK_RUNTIME_UPDATES
+RustBuffer uniffi_aethecore_fn_method_aethercore_check_runtime_updates(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_CLEAR_FACTS
@@ -790,9 +803,24 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_config(void*_Nonnull
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_memory_stats(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_NODE_PATH
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_NODE_PATH
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_node_path(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_NPM_PATH
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_NPM_PATH
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_npm_path(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PROVIDERS_FOR_TYPE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PROVIDERS_FOR_TYPE
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_providers_for_type(void*_Nonnull ptr, RustBuffer generation_type, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PYTHON_PATH
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_PYTHON_PATH
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_python_path(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_ROOT_COMMANDS_FROM_REGISTRY
@@ -805,9 +833,19 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_get_root_commands_from_registry
 RustBuffer uniffi_aethecore_fn_method_aethercore_get_skills_dir(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_YTDLP_PATH
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_GET_YTDLP_PATH
+RustBuffer uniffi_aethecore_fn_method_aethercore_get_ytdlp_path(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IMPORT_MCP_CONFIG_JSON
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IMPORT_MCP_CONFIG_JSON
 void uniffi_aethecore_fn_method_aethercore_import_mcp_config_json(void*_Nonnull ptr, RustBuffer json, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_RUNTIME
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_RUNTIME
+void uniffi_aethecore_fn_method_aethercore_install_runtime(void*_Nonnull ptr, RustBuffer runtime_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_INSTALL_SKILL
@@ -823,6 +861,11 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_install_skills_from_zip(void*_N
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IS_CANCELLED
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IS_CANCELLED
 int8_t uniffi_aethecore_fn_method_aethercore_is_cancelled(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IS_RUNTIME_INSTALLED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_IS_RUNTIME_INSTALLED
+int8_t uniffi_aethecore_fn_method_aethercore_is_runtime_installed(void*_Nonnull ptr, RustBuffer runtime_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_BUILTIN_TOOLS
@@ -843,6 +886,11 @@ RustBuffer uniffi_aethecore_fn_method_aethercore_list_mcp_servers(void*_Nonnull 
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_RECENT_SESSIONS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_RECENT_SESSIONS
 RustBuffer uniffi_aethecore_fn_method_aethercore_list_recent_sessions(void*_Nonnull ptr, uint32_t limit, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_RUNTIMES
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_RUNTIMES
+RustBuffer uniffi_aethecore_fn_method_aethercore_list_runtimes(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_LIST_SKILLS
@@ -968,6 +1016,11 @@ void uniffi_aethecore_fn_method_aethercore_update_provider(void*_Nonnull ptr, Ru
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_ROUTING_RULES
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_ROUTING_RULES
 void uniffi_aethecore_fn_method_aethercore_update_routing_rules(void*_Nonnull ptr, RustBuffer rules, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_RUNTIME
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_RUNTIME
+void uniffi_aethecore_fn_method_aethercore_update_runtime(void*_Nonnull ptr, RustBuffer runtime_id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_FN_METHOD_AETHERCORE_UPDATE_SEARCH_CONFIG
@@ -1407,6 +1460,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_check_generation_progress(v
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CHECK_RUNTIME_UPDATES
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CHECK_RUNTIME_UPDATES
+uint16_t uniffi_aethecore_checksum_method_aethercore_check_runtime_updates(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEAR_FACTS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_CLEAR_FACTS
 uint16_t uniffi_aethecore_checksum_method_aethercore_clear_facts(void
@@ -1737,9 +1796,27 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_get_memory_stats(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_NODE_PATH
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_NODE_PATH
+uint16_t uniffi_aethecore_checksum_method_aethercore_get_node_path(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_NPM_PATH
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_NPM_PATH
+uint16_t uniffi_aethecore_checksum_method_aethercore_get_npm_path(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PROVIDERS_FOR_TYPE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PROVIDERS_FOR_TYPE
 uint16_t uniffi_aethecore_checksum_method_aethercore_get_providers_for_type(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PYTHON_PATH
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_PYTHON_PATH
+uint16_t uniffi_aethecore_checksum_method_aethercore_get_python_path(void
     
 );
 #endif
@@ -1755,9 +1832,21 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_get_skills_dir(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_YTDLP_PATH
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_GET_YTDLP_PATH
+uint16_t uniffi_aethecore_checksum_method_aethercore_get_ytdlp_path(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_IMPORT_MCP_CONFIG_JSON
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_IMPORT_MCP_CONFIG_JSON
 uint16_t uniffi_aethecore_checksum_method_aethercore_import_mcp_config_json(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_INSTALL_RUNTIME
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_INSTALL_RUNTIME
+uint16_t uniffi_aethecore_checksum_method_aethercore_install_runtime(void
     
 );
 #endif
@@ -1776,6 +1865,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_install_skills_from_zip(voi
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_IS_CANCELLED
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_IS_CANCELLED
 uint16_t uniffi_aethecore_checksum_method_aethercore_is_cancelled(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_IS_RUNTIME_INSTALLED
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_IS_RUNTIME_INSTALLED
+uint16_t uniffi_aethecore_checksum_method_aethercore_is_runtime_installed(void
     
 );
 #endif
@@ -1800,6 +1895,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_list_mcp_servers(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_RECENT_SESSIONS
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_RECENT_SESSIONS
 uint16_t uniffi_aethecore_checksum_method_aethercore_list_recent_sessions(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_RUNTIMES
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_LIST_RUNTIMES
+uint16_t uniffi_aethecore_checksum_method_aethercore_list_runtimes(void
     
 );
 #endif
@@ -1953,6 +2054,12 @@ uint16_t uniffi_aethecore_checksum_method_aethercore_update_routing_rules(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_RUNTIME
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_RUNTIME
+uint16_t uniffi_aethecore_checksum_method_aethercore_update_runtime(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_SEARCH_CONFIG
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHERCORE_UPDATE_SEARCH_CONFIG
 uint16_t uniffi_aethecore_checksum_method_aethercore_update_search_config(void
@@ -2034,6 +2141,12 @@ uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_tools_changed(vo
 #ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_MCP_STARTUP_COMPLETE
 #define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_MCP_STARTUP_COMPLETE
 uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_mcp_startup_complete(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_RUNTIME_UPDATES_AVAILABLE
+#define UNIFFI_FFIDEF_UNIFFI_AETHECORE_CHECKSUM_METHOD_AETHEREVENTHANDLER_ON_RUNTIME_UPDATES_AVAILABLE
+uint16_t uniffi_aethecore_checksum_method_aethereventhandler_on_runtime_updates_available(void
     
 );
 #endif
