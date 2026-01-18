@@ -1335,6 +1335,44 @@ interface AetherCore {
     // Cancel the current session
     [Throws=AetherFfiError]
     boolean cancel_session();
+
+    // ===== RUNTIME MANAGEMENT (add-runtime-manager) =====
+
+    // List all registered runtimes with their status
+    sequence<RuntimeInfo> list_runtimes();
+
+    // Check if a specific runtime is installed
+    boolean is_runtime_installed(string runtime_id);
+
+    // Install a runtime (lazy installation)
+    // Returns immediately if already installed
+    [Throws=AetherFfiError]
+    void install_runtime(string runtime_id);
+
+    // Check for available updates across all runtimes
+    // Returns list of runtimes with available updates
+    [Throws=AetherFfiError]
+    sequence<RuntimeUpdateInfo> check_runtime_updates();
+
+    // Update a specific runtime to latest version
+    [Throws=AetherFfiError]
+    void update_runtime(string runtime_id);
+
+    // Get Node.js runtime path (via fnm)
+    // Returns None if fnm/Node.js is not installed
+    string? get_node_path();
+
+    // Get npm runtime path (via fnm)
+    // Returns None if fnm/Node.js is not installed
+    string? get_npm_path();
+
+    // Get Python runtime path (via uv)
+    // Returns None if uv/Python is not installed
+    string? get_python_path();
+
+    // Get yt-dlp runtime path
+    // Returns None if yt-dlp is not installed
+    string? get_ytdlp_path();
 };
 
 // Session summary for FFI (Phase 5)
@@ -1434,6 +1472,24 @@ dictionary TaskParametersFFI {
 };
 
 // ===== END AGENT EXECUTION MODE =====
+
+// ===== RUNTIME MANAGER TYPES (add-runtime-manager) =====
+
+// Runtime information for UI display
+dictionary RuntimeInfo {
+  string id;              // Runtime ID (e.g., "fnm", "uv", "yt-dlp")
+  string name;            // Human-readable name (e.g., "fnm (Node.js)")
+  string description;     // Description of the runtime
+  string? version;        // Installed version (None if not installed)
+  boolean installed;      // Whether the runtime is installed
+};
+
+// Update information for available updates
+dictionary RuntimeUpdateInfo {
+  string runtime_id;        // Runtime ID
+  string current_version;   // Currently installed version
+  string latest_version;    // Latest available version
+};
 
 // ===== MODEL ROUTER TYPES (add-cowork-model-router) =====
 

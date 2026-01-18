@@ -19,6 +19,7 @@ mod generation;
 mod mcp;
 mod memory;
 mod processing;
+mod runtime;
 mod session;
 mod skills;
 mod tools;
@@ -41,6 +42,7 @@ pub use self::generation::{
     GenerationProviderInfoFFI, GenerationTypeFFI,
 };
 pub use self::processing::ProcessOptions;
+pub use self::runtime::{RuntimeInfo, RuntimeUpdateInfo};
 pub use self::session::SessionSummary;
 
 /// Error type for FFI boundary
