@@ -64,6 +64,7 @@ pub mod cowork; // NEW: Cowork task orchestration (Phase 1)
 pub mod cowork_ffi; // NEW: Cowork FFI bindings
 pub mod dispatcher; // NEW: Intelligent tool routing (Dispatcher Layer)
 mod error;
+pub mod event; // NEW: Event-driven architecture for agentic loop
 mod event_handler;
 pub mod ffi; // FFI module - split AetherCore implementation
 pub mod generation;
@@ -277,6 +278,18 @@ pub use crate::generation::{
     GenerationData, GenerationError, GenerationMetadata, GenerationOutput, GenerationParams,
     GenerationProgress, GenerationProvider, GenerationProviderRegistry, GenerationRequest,
     GenerationType, MockGenerationProvider,
+};
+
+// Event system exports (event-driven agentic loop)
+pub use crate::event::{
+    AetherEvent, EventBus, EventBusConfig, EventContext, EventHandler,
+    EventHandlerRegistry, EventSubscriber, EventType, HandlerError, TimestampedEvent,
+    // Event payload types
+    AiResponse, CompactionInfo, ErrorKind, InputContext, InputEvent, LoopState,
+    PlanRequest, PlanStep, SessionDiff, SessionInfo, StepStatus, StopReason,
+    SubAgentRequest, SubAgentResult, TaskPlan, TokenUsage, ToolCallError,
+    ToolCallRequest, ToolCallResult, ToolCallRetry, ToolCallStarted,
+    UserQuestion, UserResponse,
 };
 
 // Core interface exports (rig-core based architecture)

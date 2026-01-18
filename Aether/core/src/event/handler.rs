@@ -132,7 +132,11 @@ impl EventHandlerRegistry {
     /// This spawns a tokio task for each handler that listens for events
     /// and dispatches them to the handler.
     pub async fn start(&self, ctx: EventContext) -> Vec<tokio::task::JoinHandle<()>> {
-        if self.running.swap(true, Ordering::SeqCst) {
+        if self
+            .running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
             debug!("Registry already running");
             return vec![];
         }
