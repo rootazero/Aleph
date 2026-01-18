@@ -11,7 +11,7 @@ use crate::event::{
     AetherEvent, EventContext, EventHandler, EventType, HandlerError, InputEvent, PlanRequest,
     ToolCallRequest,
 };
-use crate::intent::classifier::{ExecutableTask, ExecutionIntent, IntentClassifier};
+use crate::intent::classifier::{ExecutionIntent, IntentClassifier};
 
 use super::Complexity;
 
@@ -107,22 +107,8 @@ impl IntentAnalyzer {
     /// Check if text contains multi-step keywords (Chinese or English)
     pub fn has_multi_step_keywords(&self, text: &str) -> bool {
         let text_lower = text.to_lowercase();
-
-        // Check Chinese keywords
-        for kw in CHINESE_MULTI_STEP_KEYWORDS {
-            if text.contains(kw) {
-                return true;
-            }
-        }
-
-        // Check English keywords (case-insensitive)
-        for kw in ENGLISH_MULTI_STEP_KEYWORDS {
-            if text_lower.contains(kw) {
-                return true;
-            }
-        }
-
-        false
+        CHINESE_MULTI_STEP_KEYWORDS.iter().any(|kw| text.contains(kw))
+            || ENGLISH_MULTI_STEP_KEYWORDS.iter().any(|kw| text_lower.contains(kw))
     }
 
     /// Check if text contains multiple sentences with action verbs
@@ -235,9 +221,27 @@ impl IntentAnalyzer {
     pub fn build_direct_call(&self, intent: &ExecutionIntent, input: &InputEvent) -> ToolCallRequest {
         match intent {
             ExecutionIntent::Executable(task) => {
+                // Build tool parameters inline
+                let mut params = serde_json::json!({
+                    "action": task.action,
+                    "input_text": input.text,
+                    "confidence": task.confidence
+                });
+                if let Some(ref target) = task.target {
+                    params["target"] = serde_json::json!(target);
+                }
+                if let Some(ref ctx) = input.context {
+                    if let Some(ref app) = ctx.app_name {
+                        params["app_context"] = serde_json::json!(app);
+                    }
+                    if let Some(ref selected) = ctx.selected_text {
+                        params["selected_text"] = serde_json::json!(selected);
+                    }
+                }
+
                 ToolCallRequest {
-                    tool: task_category_to_tool(&task.category),
-                    parameters: build_tool_parameters(task, input),
+                    tool: task.category.as_str().to_string(),
+                    parameters: params,
                     plan_step_id: None,
                 }
             }
@@ -286,36 +290,6 @@ fn split_by_keyword_case_insensitive(text: &str, keyword: &str) -> Vec<String> {
     } else {
         result
     }
-}
-
-/// Convert TaskCategory to tool name
-fn task_category_to_tool(category: &crate::intent::task_category::TaskCategory) -> String {
-    // Use the as_str() method from TaskCategory to get the tool name
-    category.as_str().to_string()
-}
-
-/// Build tool parameters from task and input
-fn build_tool_parameters(task: &ExecutableTask, input: &InputEvent) -> serde_json::Value {
-    let mut params = serde_json::json!({
-        "action": task.action,
-        "input_text": input.text,
-        "confidence": task.confidence
-    });
-
-    if let Some(ref target) = task.target {
-        params["target"] = serde_json::json!(target);
-    }
-
-    if let Some(ref ctx) = input.context {
-        if let Some(ref app) = ctx.app_name {
-            params["app_context"] = serde_json::json!(app);
-        }
-        if let Some(ref selected) = ctx.selected_text {
-            params["selected_text"] = serde_json::json!(selected);
-        }
-    }
-
-    params
 }
 
 // ============================================================================
@@ -384,6 +358,7 @@ impl EventHandler for IntentAnalyzer {
 mod tests {
     use super::*;
     use crate::event::InputContext;
+    use crate::intent::classifier::ExecutableTask;
 
     fn create_test_input(text: &str) -> InputEvent {
         InputEvent {

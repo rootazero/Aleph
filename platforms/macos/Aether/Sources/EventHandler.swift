@@ -31,11 +31,6 @@ class EventHandler: AetherEventHandler {
     // Weak reference to InputCoordinator for output handling
     private weak var inputCoordinator: InputCoordinator?
 
-    // Managers accessed through DependencyContainer
-    private var conversationManager: any ConversationManagerProtocol {
-        DependencyContainer.shared.conversationManager
-    }
-
     // MARK: - State
 
     // Accumulated text for streaming responses
@@ -46,7 +41,7 @@ class EventHandler: AetherEventHandler {
 
     // Check for multi-turn conversation mode
     private var isInMultiTurnMode: Bool {
-        conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive
+        MultiTurnCoordinator.shared.isMultiTurnActive
     }
 
     // MARK: - Agentic Session State (Phase 5)

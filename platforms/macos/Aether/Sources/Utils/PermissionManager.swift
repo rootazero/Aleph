@@ -3,17 +3,17 @@
 //  Aether
 //
 //  Passive permission monitoring without auto-restart logic.
-//  Polls permission status every 1 second and updates published properties.
+//  Polls permission status every 2 seconds and updates published properties.
+//  Delegates actual permission checks to PermissionChecker.
 //
 
 import Foundation
 import SwiftUI
-import ApplicationServices
-import IOKit.hid
 import Combine
 
 /// Permission manager that passively monitors permission status
-/// without triggering automatic app restarts
+/// without triggering automatic app restarts.
+/// Uses PermissionChecker for actual permission checks.
 class PermissionManager: ObservableObject {
     // MARK: - Published Properties
 
@@ -24,16 +24,15 @@ class PermissionManager: ObservableObject {
     // MARK: - Private Properties
 
     private var statusCheckTimer: Timer?
-    private let pollingInterval: TimeInterval = 2.0  // Reduced frequency to 2 seconds to minimize TCC calls
+    private let pollingInterval: TimeInterval = 2.0
 
     // Cache for Input Monitoring check to avoid excessive IOHIDManagerOpen calls
     private var lastInputMonitoringCheck: (result: Bool, timestamp: Date)?
-    private let inputMonitoringCacheDuration: TimeInterval = 1.5  // Cache result for 1.5 seconds
+    private let inputMonitoringCacheDuration: TimeInterval = 1.5
 
     // MARK: - Lifecycle
 
     init() {
-        // Perform initial check
         checkPermissions()
     }
 
@@ -52,7 +51,6 @@ class PermissionManager: ObservableObject {
 
         print("PermissionManager: Starting permission monitoring (polling interval: \(pollingInterval)s)")
 
-        // Create timer that polls every 1 second
         statusCheckTimer = Timer.scheduledTimer(
             withTimeInterval: pollingInterval,
             repeats: true
@@ -70,115 +68,51 @@ class PermissionManager: ObservableObject {
 
     /// Request Accessibility permission
     func requestAccessibility() {
-        let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
-        AXIsProcessTrustedWithOptions(options)
+        PermissionChecker.requestAccessibilityPermission()
     }
 
     /// Request Input Monitoring permission
     func requestInputMonitoring() {
-        // Request permission via IOHIDRequestAccess
-        // Note: This will trigger macOS system dialog
-        IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+        PermissionChecker.requestInputMonitoringPermission()
     }
 
     // MARK: - Private Methods
 
     /// Check all permissions and update published properties
-    /// CRITICAL: This method only updates @Published properties,
-    /// it does NOT call exit() or NSApp.terminate()
     private func checkPermissions() {
-        let axStatus = checkAccessibility()
-        let screenStatus = checkScreenRecording()
-        let inputStatus = checkInputMonitoringViaHID()
+        let axStatus = PermissionChecker.hasAccessibilityPermission()
+        let screenStatus = PermissionChecker.hasScreenRecordingPermission()
+        let inputStatus = checkInputMonitoringCached()
 
-        // Update properties on main thread
         DispatchQueue.mainAsync(weakRef: self) { slf in
-            // Update Accessibility status
             if slf.accessibilityGranted != axStatus {
                 print("PermissionManager: Accessibility status changed: \(axStatus)")
                 slf.accessibilityGranted = axStatus
-                // ✅ NO automatic restart logic here
             }
 
-            // Update Screen Recording status
             if slf.screenRecordingGranted != screenStatus {
                 print("PermissionManager: Screen Recording status changed: \(screenStatus)")
                 slf.screenRecordingGranted = screenStatus
-                // ✅ NO automatic restart logic here
             }
 
-            // Update Input Monitoring status
             if slf.inputMonitoringGranted != inputStatus {
                 print("PermissionManager: Input Monitoring status changed: \(inputStatus)")
                 slf.inputMonitoringGranted = inputStatus
-                // ✅ NO automatic restart logic here
             }
         }
     }
 
-    /// Check Accessibility permission status
-    private func checkAccessibility() -> Bool {
-        return AXIsProcessTrusted()
-    }
-
-    /// Check Screen Recording permission status
-    private func checkScreenRecording() -> Bool {
-        return CGPreflightScreenCaptureAccess()
-    }
-
-    /// Check Input Monitoring permission via IOHIDManager
-    /// This method is more accurate than IOHIDRequestAccess because it
-    /// actually attempts to open a keyboard device stream
-    ///
-    /// OPTIMIZATION: Uses caching to avoid excessive IOHIDManagerOpen calls
-    /// which generate "TCC deny IOHIDDeviceOpen" logs when permission is not granted
-    private func checkInputMonitoringViaHID() -> Bool {
-        // Check cache first to avoid excessive TCC calls
+    /// Check Input Monitoring with caching to avoid excessive TCC calls
+    private func checkInputMonitoringCached() -> Bool {
         if let cached = lastInputMonitoringCheck {
             let age = Date().timeIntervalSince(cached.timestamp)
             if age < inputMonitoringCacheDuration {
-                // Return cached result if still fresh
                 return cached.result
             }
         }
 
-        // Cache expired or doesn't exist, perform actual check
-        let manager = IOHIDManagerCreate(
-            kCFAllocatorDefault,
-            IOOptionBits(kIOHIDOptionsTypeNone)
-        )
-
-        // Set device matching criteria (keyboard)
-        let deviceMatching: [String: Any] = [
-            kIOHIDDeviceUsagePageKey as String: kHIDPage_GenericDesktop,
-            kIOHIDDeviceUsageKey as String: kHIDUsage_GD_Keyboard
-        ]
-        IOHIDManagerSetDeviceMatching(manager, deviceMatching as CFDictionary)
-
-        // Try to open the manager
-        let result = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
-
-        // Clean up
-        let granted: Bool
-        if result == kIOReturnSuccess {
-            IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
-            granted = true
-        } else {
-            // kIOReturnNotPermitted (-536870174) indicates permission denied
-            if result == kIOReturnNotPermitted {
-                // Only log once per cache period to avoid log spam
-                if lastInputMonitoringCheck == nil || Date().timeIntervalSince(lastInputMonitoringCheck!.timestamp) >= inputMonitoringCacheDuration {
-                    print("PermissionManager: Input Monitoring permission not granted (kIOReturnNotPermitted)")
-                }
-            } else {
-                print("PermissionManager: IOHIDManagerOpen failed with error: \(result)")
-            }
-            granted = false
-        }
-
-        // Update cache
+        let granted = PermissionChecker.hasInputMonitoringPermission()
         lastInputMonitoringCheck = (result: granted, timestamp: Date())
-
         return granted
     }
 }

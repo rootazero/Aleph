@@ -67,9 +67,6 @@ final class OutputCoordinator {
     /// Clipboard manager for paste operations
     private let clipboardManager: any ClipboardManagerProtocol
 
-    /// Conversation manager for session tracking
-    private let conversationManager: any ConversationManagerProtocol
-
     // MARK: - State
 
     /// Typewriter cancellation token
@@ -87,13 +84,10 @@ final class OutputCoordinator {
     ///
     /// - Parameters:
     ///   - clipboardManager: Clipboard manager for paste operations
-    ///   - conversationManager: Conversation manager for session tracking
     init(
-        clipboardManager: any ClipboardManagerProtocol = DependencyContainer.shared.clipboardManager,
-        conversationManager: any ConversationManagerProtocol = DependencyContainer.shared.conversationManager
+        clipboardManager: any ClipboardManagerProtocol = DependencyContainer.shared.clipboardManager
     ) {
         self.clipboardManager = clipboardManager
-        self.conversationManager = conversationManager
     }
 
     /// Configure dependencies after initialization
@@ -297,8 +291,7 @@ final class OutputCoordinator {
 
         case .multiTurn:
             // Post continuation notification
-            let sessionId = context.conversationSessionId ?? conversationManager.sessionId
-            if let sessionId = sessionId {
+            if let sessionId = context.conversationSessionId {
                 print("[OutputCoordinator] 🎯 Triggering conversation input display")
                 NotificationCenter.default.post(
                     name: .conversationContinuationReady,

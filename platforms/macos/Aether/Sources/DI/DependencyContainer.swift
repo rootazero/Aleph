@@ -197,9 +197,6 @@ final class DependencyContainer: ObservableObject {
     /// Clarification flow manager
     private(set) lazy var clarificationManager: any ClarificationManagerProtocol = ClarificationManager.shared
 
-    /// Multi-turn conversation manager
-    private(set) lazy var conversationManager: any ConversationManagerProtocol = ConversationManager.shared
-
     /// Launch at login manager (accessed on main actor)
     @MainActor
     var launchAtLoginManager: LaunchAtLoginManager {
