@@ -59,6 +59,17 @@ impl AetherEventHandler for MockEventHandler {
             report.failed_servers.len()
         );
     }
+
+    // Phase 5 callbacks
+    fn on_session_started(&self, _session_id: String) {}
+    fn on_tool_call_started(&self, _call_id: String, _tool_name: String) {}
+    fn on_tool_call_completed(&self, _call_id: String, _output: String) {}
+    fn on_tool_call_failed(&self, _call_id: String, _error: String, _is_retryable: bool) {}
+    fn on_loop_progress(&self, _session_id: String, _iteration: u32, _status: String) {}
+    fn on_plan_created(&self, _session_id: String, _steps: Vec<String>) {}
+    fn on_session_completed(&self, _session_id: String, _summary: String) {}
+    fn on_subagent_started(&self, _parent_session_id: String, _child_session_id: String, _agent_id: String) {}
+    fn on_subagent_completed(&self, _child_session_id: String, _success: bool, _summary: String) {}
 }
 
 /// Create a test MCP server configuration
@@ -275,5 +286,34 @@ impl AetherEventHandler for MockEventHandlerWrapper {
     }
     fn on_mcp_startup_complete(&self, report: McpStartupReportFFI) {
         self.0.on_mcp_startup_complete(report)
+    }
+
+    // Phase 5 callbacks
+    fn on_session_started(&self, session_id: String) {
+        self.0.on_session_started(session_id)
+    }
+    fn on_tool_call_started(&self, call_id: String, tool_name: String) {
+        self.0.on_tool_call_started(call_id, tool_name)
+    }
+    fn on_tool_call_completed(&self, call_id: String, output: String) {
+        self.0.on_tool_call_completed(call_id, output)
+    }
+    fn on_tool_call_failed(&self, call_id: String, error: String, is_retryable: bool) {
+        self.0.on_tool_call_failed(call_id, error, is_retryable)
+    }
+    fn on_loop_progress(&self, session_id: String, iteration: u32, status: String) {
+        self.0.on_loop_progress(session_id, iteration, status)
+    }
+    fn on_plan_created(&self, session_id: String, steps: Vec<String>) {
+        self.0.on_plan_created(session_id, steps)
+    }
+    fn on_session_completed(&self, session_id: String, summary: String) {
+        self.0.on_session_completed(session_id, summary)
+    }
+    fn on_subagent_started(&self, parent_session_id: String, child_session_id: String, agent_id: String) {
+        self.0.on_subagent_started(parent_session_id, child_session_id, agent_id)
+    }
+    fn on_subagent_completed(&self, child_session_id: String, success: bool, summary: String) {
+        self.0.on_subagent_completed(child_session_id, success, summary)
     }
 }

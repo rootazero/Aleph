@@ -1319,6 +1319,32 @@ interface AetherCore {
     // Update default model
     [Throws=AetherFfiError]
     void cowork_update_default_model(string model_id);
+
+    // ===== SESSION MANAGEMENT (Phase 5) =====
+
+    // Resume a previously saved session
+    [Throws=AetherFfiError]
+    void resume_session(string session_id);
+
+    // Get current active session ID
+    string? get_current_session_id();
+
+    // List recent sessions
+    sequence<SessionSummary> list_recent_sessions(u32 limit);
+
+    // Cancel the current session
+    [Throws=AetherFfiError]
+    boolean cancel_session();
+};
+
+// Session summary for FFI (Phase 5)
+dictionary SessionSummary {
+    string id;
+    string agent_id;
+    string status;
+    u32 iteration_count;
+    i64 created_at;
+    i64 updated_at;
 };
 
 dictionary ProcessOptions {

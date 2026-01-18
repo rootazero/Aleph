@@ -11,6 +11,7 @@
 //! - `mcp`: MCP server management (list_mcp_servers, add_mcp_server, etc.)
 //! - `cowork`: Cowork task orchestration (cowork_plan, cowork_execute, etc.)
 //! - `generation`: Media generation (generate_image, generate_speech, etc.)
+//! - `session`: Session lifecycle management (resume, cancel, list)
 
 mod config;
 mod cowork;
@@ -18,6 +19,7 @@ mod generation;
 mod mcp;
 mod memory;
 mod processing;
+mod session;
 mod skills;
 mod tools;
 
@@ -39,6 +41,7 @@ pub use self::generation::{
     GenerationProviderInfoFFI, GenerationTypeFFI,
 };
 pub use self::processing::ProcessOptions;
+pub use self::session::SessionSummary;
 
 /// Error type for FFI boundary
 ///

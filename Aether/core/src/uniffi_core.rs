@@ -38,6 +38,8 @@ pub use crate::ffi::{
     MemoryItem,
     // Processing types
     ProcessOptions,
+    // Session types (Phase 5)
+    SessionSummary,
     // Tool types
     ToolInfoFFI,
     // Generation types

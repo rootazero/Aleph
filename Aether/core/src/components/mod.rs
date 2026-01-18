@@ -1,6 +1,6 @@
 //! Core event handler components for the agentic loop.
 //!
-//! This module provides the 7 core components:
+//! This module provides the 8 core components:
 //! - `IntentAnalyzer`: Input analysis and complexity detection
 //! - `TaskPlanner`: LLM-based task decomposition
 //! - `ToolExecutor`: Tool execution with retry logic
@@ -8,7 +8,9 @@
 //! - `SessionRecorder`: State persistence to SQLite
 //! - `SessionCompactor`: Token management and session compaction
 //! - `SubAgentHandler`: Sub-agent lifecycle management (Phase 4)
+//! - `CallbackBridge`: Forwards events to Swift via FFI (Phase 5)
 
+mod callback_bridge;
 mod intent_analyzer;
 mod loop_controller;
 mod session_compactor;
@@ -21,6 +23,7 @@ mod types;
 #[cfg(test)]
 mod integration_test;
 
+pub use callback_bridge::CallbackBridge;
 pub use intent_analyzer::IntentAnalyzer;
 pub use loop_controller::{LoopConfig, LoopController};
 pub use session_compactor::{ModelLimit, SessionCompactor, TokenTracker};

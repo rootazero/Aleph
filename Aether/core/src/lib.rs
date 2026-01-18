@@ -319,7 +319,7 @@ pub use crate::agents::{
 // Core interface exports (rig-core based architecture)
 pub use crate::uniffi_core::{
     init_core, AetherCore, AetherEventHandler, AetherFfiError, MemoryItem, ProcessOptions,
-    ToolInfoFFI,
+    SessionSummary, ToolInfoFFI,
     // Generation FFI types
     GenerationDataFFI, GenerationDataTypeFFI, GenerationMetadataFFI, GenerationOutputFFI,
     GenerationParamsFFI, GenerationProgressFFI, GenerationProviderConfigFFI,
