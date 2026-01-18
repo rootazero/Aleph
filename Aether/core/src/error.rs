@@ -144,6 +144,14 @@ pub enum AetherError {
     /// Operation was cancelled by user
     #[error("Operation cancelled")]
     Cancelled,
+
+    /// Runtime manager error (uv, fnm, yt-dlp, etc.)
+    #[error("Runtime error [{runtime_id}]: {message}")]
+    RuntimeError {
+        message: String,
+        runtime_id: String,
+        suggestion: Option<String>,
+    },
 }
 
 impl AetherError {
@@ -302,7 +310,8 @@ impl AetherError {
             | AetherError::Other { suggestion, .. }
             | AetherError::PermissionDenied { suggestion, .. }
             | AetherError::VideoError { suggestion, .. }
-            | AetherError::ToolNotFound { suggestion, .. } => suggestion.as_deref(),
+            | AetherError::ToolNotFound { suggestion, .. }
+            | AetherError::RuntimeError { suggestion, .. } => suggestion.as_deref(),
             // Simple error types without suggestion field
             AetherError::NotFound(_)
             | AetherError::IoError(_)
@@ -431,6 +440,16 @@ impl AetherError {
                 }
             }
             AetherError::Cancelled => "Operation cancelled.".to_string(),
+            AetherError::RuntimeError {
+                message,
+                runtime_id,
+                ..
+            } => {
+                format!(
+                    "Runtime '{}' error: {}. Check Settings → Runtimes for details.",
+                    runtime_id, message
+                )
+            }
         }
     }
 
@@ -466,6 +485,28 @@ impl AetherError {
     /// Used when an operation is cancelled by the user via CancellationToken.
     pub fn cancelled() -> Self {
         AetherError::Cancelled
+    }
+
+    /// Create a runtime error with a message
+    pub fn runtime<S: Into<String>, M: Into<String>>(runtime_id: S, msg: M) -> Self {
+        AetherError::RuntimeError {
+            message: msg.into(),
+            runtime_id: runtime_id.into(),
+            suggestion: Some("Check your network connection and try again. If the problem persists, try manually installing the runtime.".to_string()),
+        }
+    }
+
+    /// Create a runtime error with a custom suggestion
+    pub fn runtime_with_suggestion<S: Into<String>, M: Into<String>, T: Into<String>>(
+        runtime_id: S,
+        msg: M,
+        suggestion: T,
+    ) -> Self {
+        AetherError::RuntimeError {
+            message: msg.into(),
+            runtime_id: runtime_id.into(),
+            suggestion: Some(suggestion.into()),
+        }
     }
 }
 

@@ -79,6 +79,7 @@ pub mod metrics;
 pub mod payload; // Structured context protocol with capability support
 pub mod providers;
 pub mod rig_tools; // NEW: Rig-compatible tool wrapper
+pub mod runtimes; // NEW: Runtime manager for external tools (uv, fnm, yt-dlp)
 pub mod search; // NEW: Search capability with multiple provider support
 pub mod services; // NEW: Shared foundation services (FileOps, GitOps, SystemInfo)
 pub mod skills; // NEW: Claude Agent Skills support

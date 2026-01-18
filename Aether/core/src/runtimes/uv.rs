@@ -1,0 +1,274 @@
+//! uv Runtime Implementation
+//!
+//! Python package manager and virtual environment tool.
+//! Manages a default Python environment under runtimes/uv/envs/default/.
+
+use super::download::{download_file, get_github_latest_version, get_platform, normalize_version, set_executable};
+use super::manager::{RuntimeManager, UpdateInfo};
+use crate::error::{AetherError, Result};
+use std::path::PathBuf;
+use std::process::Command;
+use tracing::{debug, info};
+
+/// GitHub repository for uv
+const GITHUB_OWNER: &str = "astral-sh";
+const GITHUB_REPO: &str = "uv";
+
+/// uv runtime manager
+///
+/// Manages:
+/// - uv binary at runtimes/uv/uv
+/// - Default Python venv at runtimes/uv/envs/default/
+pub struct UvRuntime {
+    /// Base runtimes directory
+    runtimes_dir: PathBuf,
+}
+
+impl UvRuntime {
+    /// Create a new uv runtime manager
+    pub fn new(runtimes_dir: PathBuf) -> Self {
+        Self { runtimes_dir }
+    }
+
+    /// Get the uv directory
+    fn uv_dir(&self) -> PathBuf {
+        self.runtimes_dir.join("uv")
+    }
+
+    /// Get the path to uv binary
+    fn uv_binary(&self) -> PathBuf {
+        self.uv_dir().join("uv")
+    }
+
+    /// Get the default virtual environment directory
+    fn default_venv(&self) -> PathBuf {
+        self.uv_dir().join("envs").join("default")
+    }
+
+    /// Get the Python executable in the default venv
+    pub fn python_path(&self) -> PathBuf {
+        #[cfg(unix)]
+        {
+            self.default_venv().join("bin").join("python")
+        }
+        #[cfg(windows)]
+        {
+            self.default_venv().join("Scripts").join("python.exe")
+        }
+    }
+
+    /// Get the download URL for the current platform
+    fn get_download_url() -> Result<String> {
+        let platform = get_platform();
+
+        // uv uses format: uv-{arch}-{os}.tar.gz
+        // We need to extract just the binary after download
+        Ok(format!(
+            "https://github.com/{}/{}/releases/latest/download/uv-{}.tar.gz",
+            GITHUB_OWNER, GITHUB_REPO, platform
+        ))
+    }
+
+    /// Create the default Python virtual environment
+    async fn create_default_venv(&self) -> Result<()> {
+        let venv_path = self.default_venv();
+
+        info!(venv = ?venv_path, "Creating default Python virtual environment");
+
+        let output = Command::new(self.uv_binary())
+            .args(["venv", venv_path.to_str().unwrap_or("default")])
+            .output()
+            .map_err(|e| AetherError::runtime("uv", format!("Failed to create venv: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AetherError::runtime(
+                "uv",
+                format!("Failed to create venv: {}", stderr),
+            ));
+        }
+
+        info!("Default Python venv created");
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl RuntimeManager for UvRuntime {
+    fn id(&self) -> &'static str {
+        "uv"
+    }
+
+    fn name(&self) -> &'static str {
+        "uv (Python)"
+    }
+
+    fn description(&self) -> &'static str {
+        "Fast Python package manager with virtual environment support"
+    }
+
+    fn is_installed(&self) -> bool {
+        // Check both uv binary and default venv exist
+        self.uv_binary().exists() && self.python_path().exists()
+    }
+
+    fn executable_path(&self) -> PathBuf {
+        // Return Python path (what callers typically need)
+        self.python_path()
+    }
+
+    async fn install(&self) -> Result<()> {
+        info!("Installing uv...");
+
+        let uv_dir = self.uv_dir();
+        std::fs::create_dir_all(&uv_dir).map_err(|e| {
+            AetherError::runtime("uv", format!("Failed to create uv directory: {}", e))
+        })?;
+
+        // Download uv tarball
+        let download_url = Self::get_download_url()?;
+        let tarball_path = uv_dir.join("uv.tar.gz");
+
+        download_file(&download_url, &tarball_path).await?;
+
+        // Extract uv binary from tarball
+        let output = Command::new("tar")
+            .args([
+                "-xzf",
+                tarball_path.to_str().unwrap_or(""),
+                "-C",
+                uv_dir.to_str().unwrap_or(""),
+                "--strip-components=1",
+            ])
+            .output()
+            .map_err(|e| AetherError::runtime("uv", format!("Failed to extract: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AetherError::runtime(
+                "uv",
+                format!("Failed to extract uv: {}", stderr),
+            ));
+        }
+
+        // Clean up tarball
+        let _ = std::fs::remove_file(&tarball_path);
+
+        // Set executable permission
+        set_executable(&self.uv_binary())?;
+
+        // Create default virtual environment
+        self.create_default_venv().await?;
+
+        info!("uv installed successfully");
+        Ok(())
+    }
+
+    async fn check_update(&self) -> Option<UpdateInfo> {
+        let current = self.get_version()?;
+
+        match get_github_latest_version(GITHUB_OWNER, GITHUB_REPO).await {
+            Ok(latest_tag) => {
+                let latest = normalize_version(&latest_tag);
+                if latest != current {
+                    Some(UpdateInfo {
+                        runtime_id: self.id().to_string(),
+                        current_version: current,
+                        latest_version: latest,
+                        download_url: Self::get_download_url().ok()?,
+                    })
+                } else {
+                    None
+                }
+            }
+            Err(e) => {
+                debug!("Failed to check uv updates: {}", e);
+                None
+            }
+        }
+    }
+
+    async fn update(&self) -> Result<()> {
+        // Re-download uv binary (preserves venv)
+        let download_url = Self::get_download_url()?;
+        let uv_dir = self.uv_dir();
+        let tarball_path = uv_dir.join("uv.tar.gz");
+
+        download_file(&download_url, &tarball_path).await?;
+
+        // Extract and overwrite
+        let output = Command::new("tar")
+            .args([
+                "-xzf",
+                tarball_path.to_str().unwrap_or(""),
+                "-C",
+                uv_dir.to_str().unwrap_or(""),
+                "--strip-components=1",
+            ])
+            .output()
+            .map_err(|e| AetherError::runtime("uv", format!("Failed to extract: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AetherError::runtime(
+                "uv",
+                format!("Failed to extract uv: {}", stderr),
+            ));
+        }
+
+        let _ = std::fs::remove_file(&tarball_path);
+        set_executable(&self.uv_binary())?;
+
+        Ok(())
+    }
+
+    fn get_version(&self) -> Option<String> {
+        if !self.uv_binary().exists() {
+            return None;
+        }
+
+        let output = Command::new(self.uv_binary())
+            .arg("--version")
+            .output()
+            .ok()?;
+
+        if output.status.success() {
+            // Output format: "uv 0.5.14"
+            let version_str = String::from_utf8_lossy(&output.stdout);
+            version_str
+                .trim()
+                .strip_prefix("uv ")
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_uv_runtime_creation() {
+        let temp_dir = TempDir::new().unwrap();
+        let runtime = UvRuntime::new(temp_dir.path().to_path_buf());
+
+        assert_eq!(runtime.id(), "uv");
+        assert_eq!(runtime.name(), "uv (Python)");
+        assert!(!runtime.is_installed());
+    }
+
+    #[test]
+    fn test_paths() {
+        let temp_dir = TempDir::new().unwrap();
+        let runtime = UvRuntime::new(temp_dir.path().to_path_buf());
+
+        assert!(runtime.uv_binary().to_string_lossy().contains("uv/uv"));
+        assert!(runtime
+            .python_path()
+            .to_string_lossy()
+            .contains("envs/default"));
+    }
+}
