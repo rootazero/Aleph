@@ -11,8 +11,8 @@ use crate::memory::{ai_retrieval::AiMemoryRetriever, ContextAnchor as MemoryCont
 use crate::memory::{EmbeddingModel, MemoryRetrieval, VectorDatabase};
 use crate::payload::{AgentPayload, Capability};
 use crate::providers::AiProvider;
+use crate::utils::paths::get_embedding_model_dir;
 use async_trait::async_trait;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -80,18 +80,6 @@ impl MemoryStrategy {
         self.exclusion_set = exclusion_set;
         self
     }
-
-    /// Get embedding model directory
-    fn get_embedding_model_dir() -> Result<PathBuf> {
-        let home_dir = std::env::var("HOME")
-            .map_err(|_| AetherError::config("Failed to get HOME environment variable"))?;
-
-        Ok(PathBuf::from(home_dir)
-            .join(".config")
-            .join("aether")
-            .join("models")
-            .join("bge-small-zh-v1.5"))
-    }
 }
 
 #[async_trait]
@@ -111,7 +99,7 @@ impl CapabilityStrategy for MemoryStrategy {
     fn validate_config(&self) -> Result<()> {
         // Check if embedding model directory exists when db is configured
         if self.memory_db.is_some() {
-            match Self::get_embedding_model_dir() {
+            match get_embedding_model_dir() {
                 Ok(dir) => {
                     if !dir.exists() {
                         return Err(AetherError::config(format!(
@@ -207,7 +195,7 @@ impl CapabilityStrategy for MemoryStrategy {
         );
 
         // Initialize embedding model
-        let model_dir = Self::get_embedding_model_dir()?;
+        let model_dir = get_embedding_model_dir()?;
         let embedding_model = Arc::new(EmbeddingModel::new(model_dir).map_err(|e| {
             AetherError::config(format!("Failed to initialize embedding model: {}", e))
         })?);

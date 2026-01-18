@@ -138,6 +138,12 @@ extension Notification.Name {
     /// Posted when a sub-agent completes
     /// - UserInfo: ["childSessionId": String, "success": Bool, "summary": String]
     static let agenticSubagentCompleted = Notification.Name("AetherAgenticSubagentCompleted")
+
+    // MARK: - Runtime Manager (Phase 7)
+
+    /// Posted when runtime updates are available
+    /// - UserInfo: ["updates": [RuntimeUpdateInfo]]
+    static let runtimeUpdatesAvailable = Notification.Name("AetherRuntimeUpdatesAvailable")
 }
 
 // MARK: - UserInfo Keys

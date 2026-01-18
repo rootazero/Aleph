@@ -3,6 +3,7 @@
 /// This module provides local embedding inference for semantic similarity search
 /// using the bge-small-zh-v1.5 model optimized for Chinese text.
 use crate::error::AetherError;
+use crate::utils::paths::get_home_dir;
 use fastembed::{EmbeddingModel as FastEmbedModel, InitOptions, TextEmbedding};
 use once_cell::sync::OnceCell;
 use std::path::PathBuf;
@@ -41,11 +42,14 @@ impl EmbeddingModel {
     ///
     /// Returns the path to fastembed cache directory: ~/.config/aether/models/fastembed
     /// This is where model files will be downloaded and cached.
+    ///
+    /// Cross-platform support:
+    /// - Unix: ~/.config/aether/models/fastembed
+    /// - Windows: %USERPROFILE%\.config\aether\models\fastembed
     pub fn get_default_model_path() -> Result<PathBuf, AetherError> {
-        let home_dir = std::env::var("HOME")
-            .map_err(|_| AetherError::config("Failed to get HOME environment variable"))?;
+        let home_dir = get_home_dir()?;
 
-        Ok(PathBuf::from(home_dir)
+        Ok(home_dir
             .join(".config")
             .join("aether")
             .join("models")

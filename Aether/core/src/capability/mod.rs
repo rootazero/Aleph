@@ -42,7 +42,7 @@ use crate::mcp::McpClient;
 use crate::memory::{EmbeddingModel, FactRetrieval, FactRetrievalConfig, VectorDatabase};
 use crate::payload::{AgentPayload, Capability};
 use crate::skills::SkillsRegistry;
-use std::path::PathBuf;
+use crate::utils::paths::get_embedding_model_dir;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -173,18 +173,6 @@ impl CapabilityExecutor {
         self
     }
 
-    /// Get embedding model directory
-    fn get_embedding_model_dir() -> Result<PathBuf> {
-        let home_dir = std::env::var("HOME")
-            .map_err(|_| AetherError::config("Failed to get HOME environment variable"))?;
-
-        Ok(PathBuf::from(home_dir)
-            .join(".config")
-            .join("aether")
-            .join("models")
-            .join("bge-small-zh-v1.5"))
-    }
-
     /// Execute all capabilities in priority order
     ///
     /// Capabilities are sorted and executed in order: Memory → Search → MCP
@@ -274,7 +262,7 @@ impl CapabilityExecutor {
         );
 
         // Initialize embedding model
-        let model_dir = Self::get_embedding_model_dir()?;
+        let model_dir = get_embedding_model_dir()?;
         let embedding_model = Arc::new(EmbeddingModel::new(model_dir).map_err(|e| {
             AetherError::config(format!("Failed to initialize embedding model: {}", e))
         })?);

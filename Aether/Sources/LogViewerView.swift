@@ -495,4 +495,6 @@ class PreviewEventHandler: AetherEventHandler {
     func onSessionCompleted(sessionId: String, summary: String) {}
     func onSubagentStarted(parentSessionId: String, childSessionId: String, agentId: String) {}
     func onSubagentCompleted(childSessionId: String, success: Bool, summary: String) {}
+    // Phase 7 callbacks
+    func onRuntimeUpdatesAvailable(updates: [RuntimeUpdateInfo]) {}
 }

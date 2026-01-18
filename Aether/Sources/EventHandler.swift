@@ -306,6 +306,39 @@ class EventHandler: AetherEventHandler {
         }
     }
 
+    /// Called when runtime updates are available (Phase 7 - Runtime Manager)
+    /// - Parameter updates: List of runtimes with available updates
+    func onRuntimeUpdatesAvailable(updates: [RuntimeUpdateInfo]) {
+        print("[EventHandler] Runtime updates available: \(updates.count) updates")
+        for update in updates {
+            print("[EventHandler]   \(update.runtimeId): \(update.currentVersion) → \(update.latestVersion)")
+        }
+
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            // Post notification for UI components
+            NotificationCenter.default.post(
+                name: .runtimeUpdatesAvailable,
+                object: nil,
+                userInfo: ["updates": updates]
+            )
+
+            // Show toast notification about available updates
+            if !updates.isEmpty {
+                let runtimeNames = updates.map { $0.runtimeId }.joined(separator: ", ")
+                let message = updates.count == 1
+                    ? L("notification.runtime_update_single", updates[0].runtimeId, updates[0].latestVersion)
+                    : L("notification.runtime_updates_multiple", String(updates.count))
+
+                slf.showToast(
+                    type: .info,
+                    title: L("notification.runtime_updates_title"),
+                    message: message,
+                    autoDismiss: true
+                )
+            }
+        }
+    }
+
     // MARK: - Agentic Loop Callbacks (Phase 5)
 
     /// Called when a new session starts

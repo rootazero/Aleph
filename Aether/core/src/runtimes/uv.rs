@@ -3,7 +3,7 @@
 //! Python package manager and virtual environment tool.
 //! Manages a default Python environment under runtimes/uv/envs/default/.
 
-use super::download::{download_file, get_github_latest_version, get_platform, normalize_version, set_executable};
+use super::download::{download_file, extract_tar_gz, get_github_latest_version, get_platform, normalize_version, set_executable};
 use super::manager::{RuntimeManager, UpdateInfo};
 use crate::error::{AetherError, Result};
 use std::path::PathBuf;
@@ -182,25 +182,9 @@ impl RuntimeManager for UvRuntime {
 
         download_file(&download_url, &tarball_path).await?;
 
-        // Extract uv binary from tarball
-        let output = Command::new("tar")
-            .args([
-                "-xzf",
-                tarball_path.to_str().unwrap_or(""),
-                "-C",
-                uv_dir.to_str().unwrap_or(""),
-                "--strip-components=1",
-            ])
-            .output()
-            .map_err(|e| AetherError::runtime("uv", format!("Failed to extract: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(AetherError::runtime(
-                "uv",
-                format!("Failed to extract uv: {}", stderr),
-            ));
-        }
+        // Extract uv binary from tarball using Rust native library
+        // strip_components=1 removes the top-level directory (e.g., "uv-aarch64-apple-darwin/")
+        extract_tar_gz(&tarball_path, &uv_dir, 1)?;
 
         // Clean up tarball
         let _ = std::fs::remove_file(&tarball_path);
@@ -247,25 +231,8 @@ impl RuntimeManager for UvRuntime {
 
         download_file(&download_url, &tarball_path).await?;
 
-        // Extract and overwrite
-        let output = Command::new("tar")
-            .args([
-                "-xzf",
-                tarball_path.to_str().unwrap_or(""),
-                "-C",
-                uv_dir.to_str().unwrap_or(""),
-                "--strip-components=1",
-            ])
-            .output()
-            .map_err(|e| AetherError::runtime("uv", format!("Failed to extract: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(AetherError::runtime(
-                "uv",
-                format!("Failed to extract uv: {}", stderr),
-            ));
-        }
+        // Extract and overwrite using Rust native library
+        extract_tar_gz(&tarball_path, &uv_dir, 1)?;
 
         let _ = std::fs::remove_file(&tarball_path);
         set_executable(&self.uv_binary())?;

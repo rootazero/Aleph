@@ -3,7 +3,7 @@
 //! Fast Node Manager - Node.js version manager.
 //! Manages a default Node.js installation under runtimes/fnm/versions/default/.
 
-use super::download::{download_file, get_github_latest_version, get_os, normalize_version, set_executable};
+use super::download::{download_file, extract_zip, get_github_latest_version, get_os, normalize_version, set_executable};
 use super::manager::{RuntimeManager, UpdateInfo};
 use crate::error::{AetherError, Result};
 use std::path::PathBuf;
@@ -294,24 +294,8 @@ impl RuntimeManager for FnmRuntime {
 
         download_file(&download_url, &zip_path).await?;
 
-        // Extract fnm binary from zip
-        let output = Command::new("unzip")
-            .args([
-                "-o",                        // Overwrite
-                zip_path.to_str().unwrap_or(""),
-                "-d",
-                fnm_dir.to_str().unwrap_or(""),
-            ])
-            .output()
-            .map_err(|e| AetherError::runtime("fnm", format!("Failed to extract: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(AetherError::runtime(
-                "fnm",
-                format!("Failed to extract fnm: {}", stderr),
-            ));
-        }
+        // Extract fnm binary from zip using Rust native library
+        extract_zip(&zip_path, &fnm_dir)?;
 
         // Clean up zip
         let _ = std::fs::remove_file(&zip_path);
@@ -358,23 +342,8 @@ impl RuntimeManager for FnmRuntime {
 
         download_file(&download_url, &zip_path).await?;
 
-        let output = Command::new("unzip")
-            .args([
-                "-o",
-                zip_path.to_str().unwrap_or(""),
-                "-d",
-                fnm_dir.to_str().unwrap_or(""),
-            ])
-            .output()
-            .map_err(|e| AetherError::runtime("fnm", format!("Failed to extract: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(AetherError::runtime(
-                "fnm",
-                format!("Failed to extract fnm: {}", stderr),
-            ));
-        }
+        // Extract and overwrite using Rust native library
+        extract_zip(&zip_path, &fnm_dir)?;
 
         let _ = std::fs::remove_file(&zip_path);
         set_executable(&self.fnm_binary())?;
