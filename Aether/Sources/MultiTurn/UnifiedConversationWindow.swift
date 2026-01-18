@@ -1,0 +1,227 @@
+//
+//  UnifiedConversationWindow.swift
+//  Aether
+//
+//  Unified NSWindow for multi-turn conversation.
+//  Replaces separate input and display windows.
+//
+
+import Cocoa
+import SwiftUI
+
+// MARK: - UnifiedConversationWindow
+
+/// Unified window for multi-turn conversation
+final class UnifiedConversationWindow: NSWindow {
+
+    // MARK: - Constants
+
+    private enum Layout {
+        static let width: CGFloat = 800
+        static let inputAreaHeight: CGFloat = 60
+        static let maxContentHeight: CGFloat = 600
+        static let attachmentPreviewHeight: CGFloat = 100
+    }
+
+    // MARK: - Properties
+
+    /// View model
+    let viewModel = UnifiedConversationViewModel()
+
+    /// Hosting view
+    private var hostingView: NSHostingView<UnifiedConversationView>?
+
+    /// ESC key monitor
+    private var escapeMonitor: Any?
+
+    /// Callbacks
+    var onSubmit: ((String, [PendingAttachment]) -> Void)?
+    var onCancel: (() -> Void)?
+    var onTopicSelected: ((Topic) -> Void)?
+
+    // MARK: - Initialization
+
+    init() {
+        // Start with minimal height (just input area)
+        let initialHeight = Layout.inputAreaHeight + 32  // padding
+
+        super.init(
+            contentRect: NSRect(x: 0, y: 0, width: Layout.width, height: initialHeight),
+            styleMask: [.borderless, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+
+        setupWindow()
+        setupHostingView()
+        setupCallbacks()
+        setupEscapeHandler()
+    }
+
+    deinit {
+        if let monitor = escapeMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+    }
+
+    // MARK: - Window Setup
+
+    private func setupWindow() {
+        level = .floating
+        backgroundColor = .clear
+        isOpaque = false
+        hasShadow = true
+        alphaValue = 0  // Start hidden
+
+        collectionBehavior = [.canJoinAllSpaces, .stationary]
+        hidesOnDeactivate = false
+        isMovableByWindowBackground = true
+
+        titlebarAppearsTransparent = true
+        titleVisibility = .hidden
+    }
+
+    private func setupHostingView() {
+        let view = UnifiedConversationView(viewModel: viewModel)
+        hostingView = NSHostingView(rootView: view)
+
+        if let hostingView = hostingView {
+            hostingView.frame = contentView?.bounds ?? .zero
+            hostingView.autoresizingMask = [.width, .height]
+            contentView = hostingView
+        }
+
+        // Height change callback
+        viewModel.onHeightChanged = { [weak self] height in
+            DispatchQueue.main.async {
+                self?.updateWindowHeight(contentHeight: height)
+            }
+        }
+    }
+
+    private func setupCallbacks() {
+        viewModel.onSubmit = { [weak self] text, attachments in
+            self?.onSubmit?(text, attachments)
+        }
+        viewModel.onCancel = { [weak self] in
+            self?.onCancel?()
+        }
+        viewModel.onTopicSelected = { [weak self] topic in
+            self?.onTopicSelected?(topic)
+        }
+    }
+
+    private func setupEscapeHandler() {
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53 && self?.isVisible == true {
+                self?.viewModel.handleEscape()
+                return nil
+            }
+            return event
+        }
+    }
+
+    // MARK: - Positioning
+
+    /// Show window centered with input bottom at 70% screen height
+    func showPositioned() {
+        guard let screen = NSScreen.main else { return }
+
+        let screenFrame = screen.frame
+
+        // Input bottom at 70% from top (30% from bottom)
+        let anchorY = screenFrame.height * 0.30
+
+        // Calculate initial window height
+        let windowHeight = calculateWindowHeight()
+
+        // Position window
+        let origin = NSPoint(
+            x: screenFrame.midX - Layout.width / 2,
+            y: anchorY  // Window bottom at anchor
+        )
+
+        setFrame(NSRect(origin: origin, size: NSSize(width: Layout.width, height: windowHeight)), display: true)
+        alphaValue = 0
+
+        // Activate and show
+        NSApp.activate(ignoringOtherApps: true)
+        makeKeyAndOrderFront(nil)
+
+        // Fade in
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.15
+            self.animator().alphaValue = 1.0
+        }
+    }
+
+    /// Calculate window height based on content
+    private func calculateWindowHeight() -> CGFloat {
+        var height = Layout.inputAreaHeight + 32  // Base + padding
+
+        // Add content area height
+        if viewModel.shouldShowConversation ||
+           viewModel.displayState.isShowingCommandList {
+            height += min(viewModel.messages.count > 0 ? 200 : 0, Layout.maxContentHeight)
+        }
+
+        // Add attachment preview
+        if viewModel.shouldShowAttachmentPreview {
+            height += Layout.attachmentPreviewHeight
+        }
+
+        return height
+    }
+
+    /// Update window height and keep bottom anchored
+    private func updateWindowHeight(contentHeight: CGFloat) {
+        guard let screen = NSScreen.main else { return }
+
+        let screenFrame = screen.frame
+        let anchorY = screenFrame.height * 0.30
+
+        // Calculate new height
+        var newHeight = Layout.inputAreaHeight + 32
+
+        // Add content height (clamped)
+        newHeight += min(contentHeight, Layout.maxContentHeight)
+
+        // Add attachment preview if needed
+        if viewModel.shouldShowAttachmentPreview {
+            newHeight += Layout.attachmentPreviewHeight
+        }
+
+        // Update frame keeping bottom at anchor
+        let newFrame = NSRect(
+            x: frame.origin.x,
+            y: anchorY,  // Keep bottom at anchor
+            width: Layout.width,
+            height: newHeight
+        )
+
+        setFrame(newFrame, display: true, animate: true)
+    }
+
+    // MARK: - Hide
+
+    func hide() {
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.15
+            self.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            self?.orderOut(nil)
+            self?.viewModel.reset()
+        })
+    }
+
+    // MARK: - State
+
+    func updateTurnCount(_ count: Int) {
+        viewModel.turnCount = count
+    }
+
+    // MARK: - Focus
+
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
