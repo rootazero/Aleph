@@ -19,7 +19,7 @@ mod types;
 pub use intent_analyzer::IntentAnalyzer;
 pub use loop_controller::{LoopConfig, LoopController};
 pub use session_compactor::SessionCompactor;
-pub use session_recorder::SessionRecorder;
+pub use session_recorder::{RecorderError, SessionRecord, SessionRecorder};
 pub use task_planner::TaskPlanner;
 pub use tool_executor::{RetryPolicy, ToolExecutor};
 pub use types::*;
