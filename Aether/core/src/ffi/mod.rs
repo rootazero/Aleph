@@ -116,6 +116,12 @@ pub trait AetherEventHandler: Send + Sync {
     /// This callback provides a report of which servers started successfully and which failed.
     fn on_mcp_startup_complete(&self, report: crate::event_handler::McpStartupReportFFI);
 
+    /// Called when runtime updates are available (Phase 7)
+    ///
+    /// This callback notifies the UI that one or more runtimes have updates available.
+    /// Called once at startup after background update check completes.
+    fn on_runtime_updates_available(&self, updates: Vec<runtime::RuntimeUpdateInfo>);
+
     // ========================================================================
     // AGENTIC LOOP CALLBACKS (Phase 5)
     // ========================================================================
@@ -487,7 +493,7 @@ pub fn init_core(
     // Initialize generation provider registry from config
     let generation_registry = generation::init_generation_providers(&full_config);
 
-    Ok(Arc::new(AetherCore {
+    let core = Arc::new(AetherCore {
         config_holder,
         full_config: Arc::new(Mutex::new(full_config)),
         config_path, // Store config path for reload capability
@@ -501,5 +507,11 @@ pub fn init_core(
         cowork_engine: Arc::new(RwLock::new(None)), // Lazily initialized
         conversation_histories: Arc::new(RwLock::new(HashMap::new())), // Multi-turn support
         generation_registry,
-    }))
+    });
+
+    // Start background runtime update check (Phase 7)
+    // This checks for updates asynchronously and notifies UI if available
+    core.start_runtime_update_check();
+
+    Ok(core)
 }

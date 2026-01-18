@@ -6,7 +6,8 @@
 
 use super::{AetherCore, AetherFfiError};
 use crate::runtimes::{FnmRuntime, RuntimeManager, RuntimeRegistry, UvRuntime};
-use tracing::{debug, info};
+use std::sync::Arc;
+use tracing::{debug, info, warn};
 
 /// Runtime information for FFI (UniFFI dictionary)
 #[derive(Debug, Clone)]
@@ -187,5 +188,54 @@ impl AetherCore {
             }
             Err(_) => None,
         }
+    }
+
+    /// Start background runtime update check
+    ///
+    /// This spawns an async task that checks for updates and notifies
+    /// the UI via callback if updates are available.
+    /// Called automatically during AetherCore initialization.
+    pub(crate) fn start_runtime_update_check(&self) {
+        let handler = Arc::clone(&self.handler);
+
+        // Spawn background task for update check
+        self.runtime.spawn(async move {
+            // Create registry for update check
+            let registry = match RuntimeRegistry::new() {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(error = %e, "Failed to create RuntimeRegistry for update check");
+                    return;
+                }
+            };
+
+            // Check if we should perform update check (24-hour throttle)
+            if !registry.should_check_updates().await {
+                debug!("Skipping runtime update check (within throttle interval)");
+                return;
+            }
+
+            info!("Starting background runtime update check");
+
+            // Perform update check
+            let updates = registry.check_updates().await;
+
+            if !updates.is_empty() {
+                info!(
+                    count = updates.len(),
+                    "Runtime updates available"
+                );
+
+                // Convert to FFI types and notify UI
+                let ffi_updates: Vec<RuntimeUpdateInfo> = updates
+                    .into_iter()
+                    .map(RuntimeUpdateInfo::from)
+                    .collect();
+
+                handler.on_runtime_updates_available(ffi_updates);
+            } else {
+                debug!("All runtimes are up to date");
+            }
+        });
     }
 }
