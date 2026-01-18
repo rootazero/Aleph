@@ -715,11 +715,11 @@ Use skills from: `~/.claude/skills/build-macos-apps`
 
 ## Environment
 
-- Python path: `~/.python3/bin/python`
-- Activate python: `source ~/.python3/bin/activate`
-- Install package: `cd ~/.python3 && uv pip install <package>`
-- Xcode generation: `xcodegen generate`
-- Syntax validation: `~/.python3/bin/python verify_swift_syntax.py <file.swift>`
+- Python path: `~/.uv/python3/bin/python`
+- Activate python: `source ~/.uv/python3/bin/activate`
+- Install package: `cd ~/.uv/python3 && uv pip install <package>`
+- Xcode generation: `cd platforms/macos && xcodegen generate`
+- Syntax validation: `~/.uv/python3/bin/python Script/verify_swift_syntax.py <file.swift>`
 - Script files: `Scripts/` directory
 
 ---
