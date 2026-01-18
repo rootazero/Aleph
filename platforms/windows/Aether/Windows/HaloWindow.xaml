@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Aether.Windows.HaloWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:Aether.ViewModels"
+    Title="Halo">
+
+    <!-- Transparent background with rounded border -->
+    <Border
+        x:Name="RootBorder"
+        Background="#E0000000"
+        CornerRadius="16"
+        Padding="20"
+        BorderBrush="#40FFFFFF"
+        BorderThickness="1">
+
+        <Grid MinWidth="180" MinHeight="80">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- Halo indicator -->
+            <Grid Grid.Row="0" HorizontalAlignment="Center" Margin="0,0,0,12">
+                <Ellipse
+                    x:Name="HaloRing"
+                    Width="48"
+                    Height="48">
+                    <Ellipse.Fill>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                            <GradientStop x:Name="GradientStart" Color="#FF6B4EFF" Offset="0"/>
+                            <GradientStop x:Name="GradientEnd" Color="#FF9B6BFF" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Ellipse.Fill>
+                </Ellipse>
+
+                <!-- Thinking animation ring -->
+                <ProgressRing
+                    x:Name="ThinkingRing"
+                    Width="56"
+                    Height="56"
+                    IsActive="False"
+                    Foreground="#FF6B4EFF"/>
+            </Grid>
+
+            <!-- Content area -->
+            <StackPanel Grid.Row="1" Spacing="8" HorizontalAlignment="Center">
+                <!-- Status text -->
+                <TextBlock
+                    x:Name="StatusText"
+                    Text="Ready"
+                    Foreground="White"
+                    FontSize="14"
+                    HorizontalAlignment="Center"
+                    TextAlignment="Center"/>
+
+                <!-- Streaming text (shown during streaming) -->
+                <ScrollViewer
+                    x:Name="StreamingScrollViewer"
+                    MaxHeight="200"
+                    MaxWidth="300"
+                    Visibility="Collapsed"
+                    VerticalScrollBarVisibility="Auto">
+                    <TextBlock
+                        x:Name="StreamingText"
+                        Foreground="#E0FFFFFF"
+                        FontSize="13"
+                        TextWrapping="Wrap"
+                        IsTextSelectionEnabled="True"/>
+                </ScrollViewer>
+
+                <!-- Error message (shown on error) -->
+                <TextBlock
+                    x:Name="ErrorText"
+                    Foreground="#FFFF6B6B"
+                    FontSize="12"
+                    TextWrapping="Wrap"
+                    MaxWidth="250"
+                    Visibility="Collapsed"
+                    HorizontalAlignment="Center"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

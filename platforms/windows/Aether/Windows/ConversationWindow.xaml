@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Aether.Windows.ConversationWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Aether Conversation">
+
+    <Grid Padding="24">
+        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="16">
+            <TextBlock
+                Text="Multi-turn Conversation"
+                Style="{StaticResource TitleTextBlockStyle}"
+                HorizontalAlignment="Center"/>
+
+            <TextBlock
+                Text="Conversation UI will be implemented in Phase 3"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                HorizontalAlignment="Center"/>
+
+            <TextBlock
+                Text="Hotkey: Win + Alt + /"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                HorizontalAlignment="Center"/>
+
+            <Button
+                Content="Close"
+                Click="CloseButton_Click"
+                HorizontalAlignment="Center"/>
+        </StackPanel>
+    </Grid>
+</Window>
