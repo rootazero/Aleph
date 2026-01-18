@@ -293,6 +293,21 @@ pub use crate::event::{
     UserQuestion, UserResponse,
 };
 
+// Component exports (event handler implementations for agentic loop)
+pub use crate::components::{
+    // Session types
+    ExecutionSession, SessionStatus, SessionPart, ToolCallRecord, Complexity, Decision,
+    ComponentContext, UserInputPart, AiResponsePart, ToolCallPart, ToolCallStatus,
+    ReasoningPart, PlanPart, SubAgentPart, SummaryPart,
+    // Core components
+    IntentAnalyzer, TaskPlanner, ToolExecutor,
+    LoopController, LoopConfig,
+    SessionRecorder, SessionRecord, RecorderError,
+    SessionCompactor, ModelLimit, TokenTracker,
+};
+// Note: RetryPolicy from components is available as components::RetryPolicy
+// to avoid conflict with config::RetryPolicy (network retry policy)
+
 // Core interface exports (rig-core based architecture)
 pub use crate::uniffi_core::{
     init_core, AetherCore, AetherEventHandler, AetherFfiError, MemoryItem, ProcessOptions,

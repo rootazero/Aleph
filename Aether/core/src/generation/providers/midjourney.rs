@@ -162,6 +162,7 @@ impl MidjourneyProvider {
     ///
     /// ```rust
     /// use aethecore::generation::providers::MidjourneyProvider;
+    /// use aethecore::GenerationProvider; // Import trait for name() method
     ///
     /// let provider = MidjourneyProvider::new("your-api-key");
     /// assert_eq!(provider.name(), "midjourney");
