@@ -110,6 +110,37 @@ pub trait AetherEventHandler: Send + Sync {
     ///
     /// This callback provides a report of which servers started successfully and which failed.
     fn on_mcp_startup_complete(&self, report: crate::event_handler::McpStartupReportFFI);
+
+    // ========================================================================
+    // AGENTIC LOOP CALLBACKS (Phase 5)
+    // ========================================================================
+
+    /// Called when a new session is created
+    fn on_session_started(&self, session_id: String);
+
+    /// Called when tool execution starts (with call_id for tracking)
+    fn on_tool_call_started(&self, call_id: String, tool_name: String);
+
+    /// Called when tool execution completes
+    fn on_tool_call_completed(&self, call_id: String, output: String);
+
+    /// Called when tool execution fails
+    fn on_tool_call_failed(&self, call_id: String, error: String, is_retryable: bool);
+
+    /// Called on each loop iteration with progress update
+    fn on_loop_progress(&self, session_id: String, iteration: u32, status: String);
+
+    /// Called when a plan is created for multi-step task
+    fn on_plan_created(&self, session_id: String, steps: Vec<String>);
+
+    /// Called when session completes
+    fn on_session_completed(&self, session_id: String, summary: String);
+
+    /// Called when sub-agent is started
+    fn on_subagent_started(&self, parent_session_id: String, child_session_id: String, agent_id: String);
+
+    /// Called when sub-agent completes
+    fn on_subagent_completed(&self, child_session_id: String, success: bool, summary: String);
 }
 
 /// Tool information for UI display

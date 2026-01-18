@@ -972,6 +972,26 @@ callback interface AetherEventHandler {
     void on_tools_changed(u32 tool_count);
     // Called when MCP servers have finished starting (with startup report)
     void on_mcp_startup_complete(McpStartupReportFFI report);
+
+    // Agentic loop callbacks (Phase 5)
+    // Called when a new session is created
+    void on_session_started(string session_id);
+    // Called when tool execution starts (with call_id for tracking)
+    void on_tool_call_started(string call_id, string tool_name);
+    // Called when tool execution completes
+    void on_tool_call_completed(string call_id, string output);
+    // Called when tool execution fails
+    void on_tool_call_failed(string call_id, string error, boolean is_retryable);
+    // Called on each loop iteration with progress update
+    void on_loop_progress(string session_id, u32 iteration, string status);
+    // Called when a plan is created for multi-step task
+    void on_plan_created(string session_id, sequence<string> steps);
+    // Called when session completes
+    void on_session_completed(string session_id, string summary);
+    // Called when sub-agent is started
+    void on_subagent_started(string parent_session_id, string child_session_id, string agent_id);
+    // Called when sub-agent completes
+    void on_subagent_completed(string child_session_id, boolean success, string summary);
 };
 
 interface AetherCore {
