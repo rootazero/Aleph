@@ -1,0 +1,506 @@
+# Aether Configuration Example
+# Copy this file to ~/.config/aether/config.toml and customize
+
+# Default hotkey to summon Aether (deprecated - use [shortcuts] section below)
+default_hotkey = "Command+Grave"  # macOS: Cmd+~, Windows: Ctrl+~
+
+# ============================================================================
+# General Settings
+# ============================================================================
+[general]
+# Default provider to use when no routing rule matches
+# Must match one of the provider names defined below
+default_provider = "openai"
+
+# Log retention in days (1-30, default: 7)
+# Automatically deletes logs older than this many days
+log_retention_days = 7
+
+# Enable performance logging (default: false)
+# When enabled, logs detailed timing information for each pipeline stage
+# Useful for debugging slow operations or optimizing performance
+# WARNING: May generate large log files when enabled
+enable_performance_logging = false
+
+# Maximum image size for clipboard operations (in MB, default: 10)
+# Images larger than this will be rejected with an error
+# Range: 1-50 MB
+# Note: Large images may slow down AI processing and increase API costs
+max_image_size_mb = 10
+
+# ============================================================================
+# Shortcuts Configuration (Phase 6)
+# ============================================================================
+[shortcuts]
+# Global summon hotkey - triggers Aether to process selected text
+summon = "Command+Grave"         # macOS: Cmd+~, Windows: Ctrl+~
+                                  # Other examples: "Command+Shift+A", "Control+Space"
+
+# Cancel operation hotkey - stops processing and restores original text
+cancel = "Escape"                # Other examples: "Command+Period"
+
+# Hotkey format:
+# - macOS modifiers: Command, Option, Control, Shift
+# - Windows modifiers: Control, Alt, Shift
+# - Special keys: Escape, Space, Tab, Return, Delete, Grave (~)
+# - Regular keys: A-Z, 0-9, etc.
+# - Combine with "+": "Command+Shift+A"
+
+# ============================================================================
+# Behavior Configuration (Phase 6)
+# ============================================================================
+[behavior]
+# Input mode: How Aether captures text
+# - "cut"  : Text is removed from source (Cmd+X) - default
+# - "copy" : Text remains in source (Cmd+C)
+input_mode = "cut"
+
+# Output mode: How Aether pastes AI response
+# - "typewriter" : Types character-by-character with animation (default)
+# - "instant"    : Pastes entire response immediately
+output_mode = "typewriter"
+
+# Typing speed (only applies when output_mode = "typewriter")
+# Range: 10-200 characters per second
+# - 10  : Very slow (dramatic effect)
+# - 50  : Default (balanced, readable)
+# - 100 : Fast (quick results)
+# - 200 : Very fast (minimal delay)
+typing_speed = 50
+
+# PII (Personally Identifiable Information) scrubbing
+# When enabled, Aether automatically removes sensitive information
+# before sending to AI providers
+pii_scrubbing_enabled = false
+
+# PII types to scrub (when pii_scrubbing_enabled = true):
+# - Email addresses: john@example.com → [EMAIL_REDACTED]
+# - Phone numbers: (555) 123-4567 → [PHONE_REDACTED]
+# - SSN: 123-45-6789 → [SSN_REDACTED]
+# - Credit cards: 4111-1111-1111-1111 → [CARD_REDACTED]
+#
+# Note: PII scrubbing is implemented in Rust core
+# Custom patterns can be configured in the UI
+
+# ============================================================================
+# AI Providers Configuration
+# ============================================================================
+# You can define multiple providers with different configurations.
+# Each provider needs a unique name (the key in square brackets).
+#
+# Supported provider types:
+# - "openai"  : OpenAI and OpenAI-compatible APIs (DeepSeek, Moonshot, etc.)
+# - "claude"  : Anthropic Claude API
+# - "gemini"  : Google Gemini API
+# - "ollama"  : Local Ollama models
+#
+# Provider type inference:
+# - If not specified, automatically inferred from provider name
+# - Names containing "claude" → claude provider
+# - Names containing "gemini" or "google" → gemini provider
+# - Names containing "ollama" → ollama provider
+# - Everything else → openai provider (including custom APIs)
+
+# ----------------------------------------------------------------------------
+# OpenAI Official
+# ----------------------------------------------------------------------------
+[providers.openai]
+provider_type = "openai"  # Optional, inferred from name
+api_key = "sk-..."        # Get from https://platform.openai.com
+model = "gpt-4o"          # Options: gpt-4o, gpt-4o-mini, gpt-3.5-turbo
+color = "#10a37f"         # Brand color for UI
+timeout_seconds = 30
+
+# Common generation parameters (optional)
+max_tokens = 4096         # Maximum response length
+temperature = 0.7         # Randomness (0.0-2.0, 0=deterministic, higher=creative)
+top_p = 1.0               # Nucleus sampling (0.0-1.0)
+
+# OpenAI-specific parameters (optional)
+frequency_penalty = 0.0   # Reduce repetition (-2.0 to 2.0)
+presence_penalty = 0.0    # Encourage new topics (-2.0 to 2.0)
+
+# ----------------------------------------------------------------------------
+# Anthropic Claude
+# ----------------------------------------------------------------------------
+[providers.claude]
+provider_type = "claude"  # Optional, inferred from name
+api_key = "sk-ant-..."    # Get from https://console.anthropic.com
+model = "claude-3-5-sonnet-20241022"  # Options: claude-3-5-sonnet, claude-3-opus, etc.
+color = "#d97757"
+timeout_seconds = 30
+
+# Common generation parameters (optional)
+max_tokens = 4096         # Maximum response length
+temperature = 0.7         # Randomness (0.0-1.0 for Claude)
+top_p = 1.0               # Nucleus sampling (0.0-1.0)
+top_k = 40                # Top-K sampling (integer > 0)
+
+# Claude-specific parameters (optional)
+stop_sequences = "END,STOP"  # Comma-separated stop sequences
+
+# ----------------------------------------------------------------------------
+# Google Gemini
+# ----------------------------------------------------------------------------
+[providers.gemini]
+provider_type = "gemini"  # Optional, inferred from name
+api_key = "..."           # Get from https://makersuite.google.com/app/apikey
+model = "gemini-3-flash"  # Options: gemini-3-flash, gemini-3-pro
+base_url = "https://generativelanguage.googleapis.com/v1beta"
+color = "#4285F4"         # Google Blue
+timeout_seconds = 30
+
+# Common generation parameters (optional)
+max_tokens = 2048         # Maximum response length (maxOutputTokens)
+temperature = 1.0         # Randomness (0.0-2.0)
+top_p = 0.95              # Nucleus sampling (0.0-1.0)
+top_k = 40                # Top-K sampling (integer > 0)
+
+# Gemini-specific parameters (optional)
+thinking_level = "HIGH"   # Depth of reasoning: LOW or HIGH
+media_resolution = "MEDIUM"  # Image/video resolution: LOW, MEDIUM, or HIGH
+stop_sequences = "END"    # Comma-separated stop sequences
+
+# ----------------------------------------------------------------------------
+# Local Ollama
+# ----------------------------------------------------------------------------
+[providers.ollama]
+provider_type = "ollama"  # Optional, inferred from name
+# No API key needed for local Ollama
+model = "llama3.2"        # Options: llama3.2, codellama, mistral, etc.
+color = "#0000ff"
+timeout_seconds = 60      # Longer timeout for local models
+
+# Common generation parameters (optional)
+max_tokens = 512          # Maximum response length (num_predict)
+temperature = 0.8         # Randomness (0.0+)
+top_p = 0.9               # Nucleus sampling (0.0-1.0)
+top_k = 40                # Top-K sampling (integer > 0)
+
+# Ollama-specific parameters (optional)
+repeat_penalty = 1.1      # Penalty for repeating tokens (>= 1.0)
+stop_sequences = "END"    # Comma-separated stop sequences
+
+# Note: Ollama must be installed and running
+# Install: https://ollama.ai/download
+# Pull model: ollama pull llama3.2
+
+# ----------------------------------------------------------------------------
+# Custom Provider: DeepSeek (OpenAI-compatible)
+# ----------------------------------------------------------------------------
+[providers.deepseek]
+provider_type = "openai"           # Use OpenAI-compatible interface
+api_key = "sk-..."                 # Get from https://platform.deepseek.com
+model = "deepseek-chat"
+base_url = "https://api.deepseek.com"  # Custom API endpoint
+color = "#0066cc"
+timeout_seconds = 30
+max_tokens = 4096
+temperature = 0.7
+
+# ----------------------------------------------------------------------------
+# Custom Provider: Moonshot (OpenAI-compatible)
+# ----------------------------------------------------------------------------
+[providers.moonshot]
+provider_type = "openai"           # Use OpenAI-compatible interface
+api_key = "sk-..."                 # Get from https://platform.moonshot.cn
+model = "moonshot-v1-8k"          # Options: moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k
+base_url = "https://api.moonshot.cn/v1"
+color = "#ff6b6b"
+timeout_seconds = 30
+max_tokens = 8192
+temperature = 0.7
+
+# ----------------------------------------------------------------------------
+# Custom Provider: Azure OpenAI
+# ----------------------------------------------------------------------------
+[providers.azure]
+provider_type = "openai"
+api_key = "your-azure-key"
+model = "gpt-4o"                   # Your deployment name
+base_url = "https://your-resource.openai.azure.com"
+color = "#0078d4"
+timeout_seconds = 30
+max_tokens = 4096
+temperature = 0.7
+
+# ============================================================================
+# Routing Rules
+# ============================================================================
+# Define rules to automatically route requests to different providers
+# based on the input content (using regex patterns).
+#
+# Rules are matched in order from top to bottom.
+# First matching rule wins.
+
+[[rules]]
+regex = "^/code|rust|python|javascript"  # Code-related requests
+provider = "claude"                       # Use Claude for coding
+system_prompt = "You are a senior software engineer. Output clean, production-ready code with minimal comments."
+
+[[rules]]
+regex = "^/draw|image|picture"           # Image generation requests
+provider = "openai"
+system_prompt = "You are DALL-E. Generate detailed image descriptions."
+
+[[rules]]
+regex = "^/local"                        # Explicitly use local model
+provider = "ollama"
+system_prompt = "You are a helpful AI assistant running locally."
+
+[[rules]]
+regex = "^/deep"                         # Explicitly use DeepSeek
+provider = "deepseek"
+system_prompt = "You are a helpful AI assistant."
+
+[[rules]]
+regex = "^/moon"                         # Explicitly use Moonshot
+provider = "moonshot"
+system_prompt = "You are a helpful AI assistant."
+
+[[rules]]
+regex = ".*"                             # Catch-all: matches everything
+provider = "openai"                      # Default to OpenAI
+# No system_prompt = use model's default behavior
+
+# ============================================================================
+# Memory Module Configuration
+# ============================================================================
+[memory]
+enabled = true                           # Enable/disable memory system
+embedding_model = "bge-small-zh-v1.5"   # Local embedding model (Chinese-optimized, 512-dim)
+max_context_items = 5                    # Max past interactions to retrieve
+retention_days = 90                      # Auto-delete old memories (0 = never)
+vector_db = "sqlite-vec"                 # Options: sqlite-vec, lancedb
+similarity_threshold = 0.7               # Minimum similarity score (0.0-1.0)
+
+# App bundle IDs to exclude from memory storage
+# (e.g., password managers, banking apps)
+excluded_apps = [
+    "com.apple.keychainaccess",
+    "com.agilebits.onepassword7",
+    "com.lastpass.LastPass",
+    "com.bitwarden.desktop",
+]
+
+# ============================================================================
+# Usage Examples
+# ============================================================================
+#
+# Example 1: Use OpenAI by default
+# - Select text in any app
+# - Press Cmd+~ (or Ctrl+~ on Windows)
+# - Text is sent to OpenAI GPT-4o
+# - Response is pasted back
+#
+# Example 2: Use Claude for code
+# - Select: "/code write a function to check if a number is prime"
+# - Press Cmd+~
+# - Routed to Claude 3.5 Sonnet (matches /code rule)
+#
+# Example 3: Use local Ollama
+# - Select: "/local explain quantum computing"
+# - Press Cmd+~
+# - Routed to local Llama 3.2 (no API costs)
+#
+# Example 4: Use custom provider
+# - Select: "/deep write a poem about AI"
+# - Press Cmd+~
+# - Routed to DeepSeek (custom OpenAI-compatible provider)
+#
+# Example 5: Custom hotkey (Phase 6)
+# - Set summon = "Command+Shift+A" in [shortcuts]
+# - Press Cmd+Shift+A to trigger Aether
+# - Useful to avoid conflicts with other apps
+#
+# Example 6: Typewriter effect (Phase 6)
+# - Set output_mode = "typewriter" and typing_speed = 100
+# - Response types out at 100 chars/sec (faster than default)
+# - Creates smooth, readable animation
+#
+# Example 7: PII scrubbing (Phase 6)
+# - Set pii_scrubbing_enabled = true
+# - Select: "Contact me at john@example.com or (555) 123-4567"
+# - AI receives: "Contact me at [EMAIL_REDACTED] or [PHONE_REDACTED]"
+# - Protects sensitive information from cloud providers
+#
+# Example 8: Image clipboard support (Phase 7)
+# - Copy an image (screenshot, photo, etc.)
+# - Press Cmd+~
+# - Image is sent to vision-capable AI (GPT-4 Vision or Claude 3 Opus)
+# - Get image descriptions, OCR, visual analysis
+# - Supports PNG, JPEG, GIF formats up to max_image_size_mb
+#
+# Example 9: Typewriter animation control (Phase 7)
+# - Set output_mode = "typewriter" and typing_speed = 150
+# - AI response types out character-by-character at 150 chars/sec
+# - Press Escape during animation to skip and paste instantly
+# - Creates smooth, cinematic effect for AI responses
+#
+# Example 10: Performance profiling (Phase 7)
+# - Set enable_performance_logging = true
+# - Check logs at ~/.config/aether/logs/aether-YYYY-MM-DD.log
+# - Logs show timing for: clipboard, memory, AI, paste stages
+# - Useful for debugging slow operations or API latency issues
+#
+# ============================================================================
+# Tips
+# ============================================================================
+#
+# 1. Multiple Custom Providers:
+#    - You can add as many custom providers as you want
+#    - Each must have a unique name
+#    - Use `provider_type = "openai"` for OpenAI-compatible APIs
+#
+# 2. Provider Colors:
+#    - Colors are shown in the Halo UI during processing
+#    - Use hex colors like "#10a37f" (OpenAI green)
+#
+# 3. Timeouts:
+#    - Cloud APIs: 30 seconds is usually sufficient
+#    - Local models: 60-120 seconds for larger models
+#
+# 4. Max Tokens:
+#    - Controls response length
+#    - Larger = longer responses but higher cost
+#    - OpenAI: 4096 tokens ≈ 3000 words
+#
+# 5. Temperature:
+#    - 0.0 = Deterministic, focused
+#    - 1.0 = Creative, diverse
+#    - 0.7 is a good default
+#
+# 6. Base URL:
+#    - Required for custom providers
+#    - Must be OpenAI-compatible API
+#    - Include version if needed (e.g., /v1)
+#
+# 7. Routing Rules:
+#    - Use regex for flexible matching
+#    - Prefix commands like /code for convenience
+#    - Catch-all rule (.*) should be last
+#
+# 8. Memory System:
+#    - Automatically remembers past interactions
+#    - Context is filtered by app and window
+#    - Excluded apps are never stored
+#
+# 9. Hotkey Customization (Phase 6):
+#    - Avoid conflicts with system shortcuts
+#    - Aether warns about common conflicts in UI
+#    - Use Cmd+Shift combinations for safety
+#    - Cancel hotkey must be different from summon
+#
+# 10. Input/Output Modes (Phase 6):
+#     - Cut mode (default): Original text disappears (dramatic effect)
+#     - Copy mode: Original text stays (safer, less intrusive)
+#     - Typewriter mode: Character-by-character (cinematic feel)
+#     - Instant mode: Immediate paste (fastest, no animation)
+#
+# 11. API Key Security:
+#     - API keys are stored directly in this config file
+#     - File permissions are automatically set to 600 (owner read/write only)
+#     - NEVER commit config.toml with API keys to version control
+#     - Add config.toml to .gitignore for repositories
+#     - Keep API keys in a secure location (e.g., password manager)
+#
+# 12. Config Hot-Reload (Phase 6):
+#     - Changes to this file take effect within 1 second
+#     - No need to restart Aether
+#     - Invalid changes are ignored (app continues with old config)
+#     - UI shows notification when config reloads
+#
+# 13. Image Clipboard (Phase 7):
+#     - Automatically detects images in clipboard
+#     - Routes to vision-capable models only (GPT-4V, Claude Opus)
+#     - Respects max_image_size_mb limit
+#     - Base64-encoded for API transmission
+#     - Supported formats: PNG, JPEG, GIF
+#
+# 14. Logging & Privacy (Phase 7):
+#     - Logs stored in ~/.config/aether/logs/
+#     - Automatic daily rotation
+#     - Old logs deleted after log_retention_days
+#     - PII automatically scrubbed (emails, phones, API keys)
+#     - View/export logs via Settings UI
+#
+# 15. Performance Monitoring (Phase 7):
+#     - Enable via enable_performance_logging = true
+#     - Logs timing for: clipboard (target <50ms), memory (<100ms), AI (<500ms)
+#     - Slow operations (>2x target) trigger warnings
+#     - Helps identify bottlenecks and optimize pipeline
+#
+# 16. Error Feedback (Phase 7):
+#     - All errors include actionable suggestions
+#     - Examples: "Check API key in Settings", "Verify internet connection"
+#     - Halo displays suggestions below error message
+#     - Retry, Settings, Dismiss buttons for recovery
+#
+# ============================================================================
+# Troubleshooting
+# ============================================================================
+#
+# "Invalid API key" error:
+# - Check that api_key is correct
+# - Ensure no extra spaces or quotes
+# - Verify key is active on provider website
+#
+# "Rate limit exceeded" error:
+# - Wait a few minutes and try again
+# - Consider upgrading your API plan
+# - Use local Ollama to avoid rate limits
+#
+# "Timeout" error:
+# - Increase timeout_seconds
+# - Check network connection
+# - Try a different provider
+#
+# "Model not found" error (Ollama):
+# - Run: ollama pull <model-name>
+# - Verify Ollama is running: ollama list
+#
+# "Unknown provider" error:
+# - Check provider name in routing rules matches [providers.xxx]
+# - Ensure provider is properly configured
+#
+# "Hotkey not working" (Phase 6):
+# - Check Accessibility permissions in System Settings
+# - Try a different hotkey (may conflict with another app)
+# - Use Settings UI to test and detect conflicts
+#
+# "Config not saving" (Phase 6):
+# - File permissions are automatically set to 600 on save
+# - Verify config directory exists: mkdir -p ~/.config/aether
+# - Check for TOML syntax errors (use Settings UI validation)
+#
+# "Hot-reload not working" (Phase 6):
+# - File watcher requires macOS FSEvents support
+# - Edit config with text editor (not vim in-place mode)
+# - Save changes fully before expecting reload
+#
+# "Image too large" error (Phase 7):
+# - Check image size (must be < max_image_size_mb)
+# - Compress or resize image before copying
+# - Consider increasing max_image_size_mb (warning: higher API costs)
+#
+# "No vision model available" error (Phase 7):
+# - Image requests require GPT-4 Vision or Claude 3 Opus
+# - Check routing rules - Ollama doesn't support vision
+# - Configure at least one vision-capable provider
+#
+# "Typewriter skipped" (Phase 7):
+# - Press Escape during animation to skip intentionally
+# - If auto-skipping: check for conflicting keyboard events
+# - Verify output_mode = "typewriter" in config
+#
+# "Logs not appearing" (Phase 7):
+# - Check ~/.config/aether/logs/ directory exists
+# - Verify log_retention_days > 0 (0 = logs disabled)
+# - Check disk space (logs auto-delete when full)
+#
+# "PII not scrubbed" (Phase 7):
+# - Verify pii_scrubbing_enabled = true in config
+# - Check logs: PII should show as [EMAIL_REDACTED], [PHONE_REDACTED]
+# - Some formats may not be detected (false negatives)
+#
+# For more help, see: https://github.com/your-repo/aether/docs

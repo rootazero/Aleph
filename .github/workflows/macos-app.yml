@@ -1,0 +1,66 @@
+name: macOS App
+
+on:
+  push:
+    paths:
+      - 'platforms/macos/**'
+      - 'core/**'
+      - '.github/workflows/macos-app.yml'
+  pull_request:
+    paths:
+      - 'platforms/macos/**'
+      - 'core/**'
+
+jobs:
+  build:
+    name: Build macOS App
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: Build Rust Core
+        run: |
+          cd core
+          cargo build --release --features uniffi
+
+      - name: Copy Library
+        run: |
+          cp core/target/release/libaethecore.dylib \
+            platforms/macos/Aether/Frameworks/
+          install_name_tool -id "@rpath/libaethecore.dylib" \
+            platforms/macos/Aether/Frameworks/libaethecore.dylib
+
+      - name: Generate UniFFI Bindings
+        run: |
+          cd core
+          cargo run --bin uniffi-bindgen generate \
+            --library target/release/libaethecore.dylib \
+            --language swift \
+            --out-dir ../platforms/macos/Aether/Sources/Generated/
+
+      - name: Generate Xcode Project
+        working-directory: platforms/macos
+        run: xcodegen generate
+
+      - name: Build App
+        working-directory: platforms/macos
+        run: |
+          xcodebuild -project Aether.xcodeproj \
+            -scheme Aether \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Aether-macOS
+          path: platforms/macos/build/Release/Aether.app

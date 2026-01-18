@@ -1,0 +1,78 @@
+name: Rust Core
+
+on:
+  push:
+    paths:
+      - 'core/**'
+      - 'Cargo.toml'
+      - '.github/workflows/rust-core.yml'
+  pull_request:
+    paths:
+      - 'core/**'
+      - 'Cargo.toml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Run tests
+        run: cargo test --workspace
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace -- -D warnings
+
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Build with UniFFI
+        run: cargo build --release --features uniffi
+        working-directory: core
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libaethecore-macos
+          path: core/target/release/libaethecore.dylib
+
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Build with C ABI
+        run: cargo build --release --features cabi
+        working-directory: core
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aethecore-windows
+          path: core/target/release/aethecore.dll

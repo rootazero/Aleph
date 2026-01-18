@@ -1,0 +1,91 @@
+# Aether Workspace Configuration
+# This workspace manages the shared Rust core library for cross-platform builds
+
+[workspace]
+resolver = "2"
+members = ["core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/user/aether"
+rust-version = "1.92"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+toml = "0.8"
+
+# Error handling
+thiserror = "1.0"
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Utilities
+uuid = { version = "1.7", features = ["v4", "serde"] }
+regex = "1.10"
+chrono = "0.4"
+dirs = "5.0"
+once_cell = "1.19"
+
+# HTTP
+reqwest = { version = "0.11", features = ["json", "native-tls", "stream", "multipart"] }
+
+# Logging
+log = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-appender = "0.2"
+
+# File watching
+notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
+notify-debouncer-full = "0.3"
+
+# Image processing
+image = { version = "0.24", default-features = false, features = ["png", "jpeg", "gif"] }
+base64 = "0.21"
+
+# Async utilities
+async-trait = "0.1"
+futures = "0.3"
+
+# Embedding
+fastembed = "4"
+
+# Archive handling
+zip = "2.2"
+flate2 = "1.0"
+tar = "0.4"
+
+# Git operations
+git2 = "0.19"
+glob = "0.3"
+
+# System info
+hostname = "0.4"
+whoami = "1.5"
+
+# Schema generation
+schemars = "0.8"
+
+# Web scraping
+scraper = "0.22"
+url = "2.5"
+
+# AI framework
+rig-core = "0.28"
+rig-sqlite = "0.1.31"
+
+# Caching
+lru = "0.12"
+
+# UniFFI (optional, macOS only)
+uniffi = { version = "0.28", features = ["cli"] }

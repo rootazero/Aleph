@@ -1,0 +1,50 @@
+name: Windows App
+
+on:
+  push:
+    paths:
+      - 'platforms/windows/**'
+      - 'core/**'
+      - '.github/workflows/windows-app.yml'
+  pull_request:
+    paths:
+      - 'platforms/windows/**'
+      - 'core/**'
+
+jobs:
+  build:
+    name: Build Windows App
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - name: Build Rust Core
+        run: |
+          cd core
+          cargo build --release --features cabi
+
+      - name: Copy DLL
+        run: |
+          New-Item -ItemType Directory -Path platforms/windows/Aether/libs -Force
+          Copy-Item core/target/release/aethecore.dll `
+            -Destination platforms/windows/Aether/libs/
+
+      - name: Build .NET App
+        working-directory: platforms/windows
+        run: dotnet build -c Release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Aether-Windows
+          path: platforms/windows/Aether/bin/Release/
