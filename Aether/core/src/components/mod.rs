@@ -16,6 +16,9 @@ mod task_planner;
 mod tool_executor;
 mod types;
 
+#[cfg(test)]
+mod integration_test;
+
 pub use intent_analyzer::IntentAnalyzer;
 pub use loop_controller::{LoopConfig, LoopController};
 pub use session_compactor::{ModelLimit, SessionCompactor, TokenTracker};
