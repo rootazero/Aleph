@@ -7,107 +7,21 @@
 
 use crate::config::VideoConfig;
 use crate::error::{AetherError, Result};
+use crate::runtimes::RuntimeRegistry;
 use crate::video::transcript::{TranscriptSegment, VideoTranscript};
 use regex::Regex;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::time::Duration;
 use tracing::{debug, info};
 
-/// Get yt-dlp path in Aether config directory
-fn get_ytdlp_config_path() -> std::path::PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    std::path::PathBuf::from(home)
-        .join(".config")
-        .join("aether")
-        .join("yt-dlp")
-}
-
-/// Find yt-dlp executable path, auto-installing if needed
-fn which_ytdlp() -> Option<std::path::PathBuf> {
-    // First check Aether's config directory
-    let config_path = get_ytdlp_config_path();
-    if config_path.exists() {
-        return Some(config_path);
-    }
-
-    // Check common system paths as fallback
-    let paths = [
-        "/opt/homebrew/bin/yt-dlp",
-        "/usr/local/bin/yt-dlp",
-        "/usr/bin/yt-dlp",
-    ];
-
-    for path in paths {
-        let p = std::path::PathBuf::from(path);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-
-    // Try PATH
-    std::process::Command::new("which")
-        .arg("yt-dlp")
-        .output()
-        .ok()
-        .and_then(|output| {
-            if output.status.success() {
-                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !path.is_empty() {
-                    return Some(std::path::PathBuf::from(path));
-                }
-            }
-            None
-        })
-}
-
-/// Auto-install yt-dlp to ~/.config/yt-dlp using curl
-fn install_ytdlp() -> Result<std::path::PathBuf> {
-    use std::fs;
-    use std::process::Command;
-
-    let config_path = get_ytdlp_config_path();
-
-    // Ensure ~/.config directory exists
-    if let Some(parent) = config_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| AetherError::video(format!("Failed to create config directory: {}", e)))?;
-    }
-
-    info!("Installing yt-dlp to {:?}", config_path);
-
-    // Download yt-dlp using curl (built-in on macOS)
-    let download_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
-    let output = Command::new("curl")
-        .args([
-            "-L",         // Follow redirects
-            "--insecure", // Skip SSL verification (for environments with SSL issues)
-            "-o",
-            config_path.to_str().unwrap_or(""),
-            download_url,
-        ])
-        .output()
-        .map_err(|e| AetherError::video(format!("Failed to run curl: {}", e)))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AetherError::video(format!(
-            "Failed to download yt-dlp: {}",
-            stderr
-        )));
-    }
-
-    // Make it executable
-    let chmod_output = Command::new("chmod")
-        .args(["a+rx", config_path.to_str().unwrap_or("")])
-        .output()
-        .map_err(|e| AetherError::video(format!("Failed to chmod yt-dlp: {}", e)))?;
-
-    if !chmod_output.status.success() {
-        return Err(AetherError::video("Failed to make yt-dlp executable"));
-    }
-
-    info!("yt-dlp installed successfully");
-    Ok(config_path)
+/// Get yt-dlp executable path using RuntimeRegistry
+///
+/// Auto-installs yt-dlp if not present (lazy installation).
+async fn get_ytdlp_path() -> Result<PathBuf> {
+    let registry = RuntimeRegistry::new()?;
+    let ytdlp = registry.require("yt-dlp").await?;
+    Ok(ytdlp.executable_path())
 }
 
 /// Regex pattern for matching YouTube URLs and extracting video IDs
@@ -326,14 +240,8 @@ impl YouTubeExtractor {
         use std::fs;
         use std::process::Command;
 
-        // Check if yt-dlp is available, auto-install if not
-        let ytdlp = match which_ytdlp() {
-            Some(path) => path,
-            None => {
-                info!("yt-dlp not found, attempting auto-install...");
-                install_ytdlp()?
-            }
-        };
+        // Get yt-dlp path (auto-installs if not present)
+        let ytdlp = get_ytdlp_path().await?;
         let temp_dir = std::env::temp_dir();
         let output_template = temp_dir.join(format!("aether_sub_{}", video_id));
         let url = format!("https://www.youtube.com/watch?v={}", video_id);
