@@ -485,4 +485,14 @@ class PreviewEventHandler: AetherEventHandler {
     func onAgentModeDetected(task: ExecutableTaskFfi) {}
     func onToolsChanged(toolCount: UInt32) {}
     func onMcpStartupComplete(report: McpStartupReportFfi) {}
+    // Phase 5 callbacks
+    func onSessionStarted(sessionId: String) {}
+    func onToolCallStarted(callId: String, toolName: String) {}
+    func onToolCallCompleted(callId: String, output: String) {}
+    func onToolCallFailed(callId: String, error: String, isRetryable: Bool) {}
+    func onLoopProgress(sessionId: String, iteration: UInt32, status: String) {}
+    func onPlanCreated(sessionId: String, steps: [String]) {}
+    func onSessionCompleted(sessionId: String, summary: String) {}
+    func onSubagentStarted(parentSessionId: String, childSessionId: String, agentId: String) {}
+    func onSubagentCompleted(childSessionId: String, success: Bool, summary: String) {}
 }

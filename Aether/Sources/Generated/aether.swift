@@ -600,6 +600,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func cancelGeneration(providerName: String, jobId: String) throws 
     
+    func cancelSession() throws  -> Bool
+    
     func checkGenerationProgress(providerName: String, jobId: String) throws  -> GenerationProgressFfi
     
     func clearFacts() throws  -> UInt64
@@ -686,6 +688,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func getCompressionStats() throws  -> CompressionStats
     
+    func getCurrentSessionId()  -> String?
+    
     func getDefaultProvider()  -> String?
     
     func getEnabledProviders()  -> [String]
@@ -730,6 +734,8 @@ public protocol AetherCoreProtocol : AnyObject {
     
     func listMcpServers()  -> [McpServerConfig]
     
+    func listRecentSessions(limit: UInt32)  -> [SessionSummary]
+    
     func listSkills() throws  -> [SkillInfo]
     
     func listTools()  -> [ToolInfoFfi]
@@ -743,6 +749,8 @@ public protocol AetherCoreProtocol : AnyObject {
     func refreshSkills() 
     
     func reloadConfig() throws 
+    
+    func resumeSession(sessionId: String) throws 
     
     func searchMemories(appBundleId: String?, windowTitle: String?, limit: UInt32) throws  -> [MemoryEntry]
     
@@ -857,6 +865,13 @@ open func cancelGeneration(providerName: String, jobId: String)throws  {try rust
         FfiConverterString.lower(jobId),$0
     )
 }
+}
+    
+open func cancelSession()throws  -> Bool {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_cancel_session(self.uniffiClonePointer(),$0
+    )
+})
 }
     
 open func checkGenerationProgress(providerName: String, jobId: String)throws  -> GenerationProgressFfi {
@@ -1186,6 +1201,13 @@ open func getCompressionStats()throws  -> CompressionStats {
 })
 }
     
+open func getCurrentSessionId() -> String? {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_get_current_session_id(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func getDefaultProvider() -> String? {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
     uniffi_aethecore_fn_method_aethercore_get_default_provider(self.uniffiClonePointer(),$0
@@ -1348,6 +1370,14 @@ open func listMcpServers() -> [McpServerConfig] {
 })
 }
     
+open func listRecentSessions(limit: UInt32) -> [SessionSummary] {
+    return try!  FfiConverterSequenceTypeSessionSummary.lift(try! rustCall() {
+    uniffi_aethecore_fn_method_aethercore_list_recent_sessions(self.uniffiClonePointer(),
+        FfiConverterUInt32.lower(limit),$0
+    )
+})
+}
+    
 open func listSkills()throws  -> [SkillInfo] {
     return try  FfiConverterSequenceTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
     uniffi_aethecore_fn_method_aethercore_list_skills(self.uniffiClonePointer(),$0
@@ -1393,6 +1423,13 @@ open func refreshSkills() {try! rustCall() {
     
 open func reloadConfig()throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
     uniffi_aethecore_fn_method_aethercore_reload_config(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+open func resumeSession(sessionId: String)throws  {try rustCallWithError(FfiConverterTypeAetherFfiError.lift) {
+    uniffi_aethecore_fn_method_aethercore_resume_session(self.uniffiClonePointer(),
+        FfiConverterString.lower(sessionId),$0
     )
 }
 }
@@ -8304,6 +8341,104 @@ public func FfiConverterTypeSearchProviderTestConfig_lower(_ value: SearchProvid
 }
 
 
+public struct SessionSummary {
+    public var id: String
+    public var agentId: String
+    public var status: String
+    public var iterationCount: UInt32
+    public var createdAt: Int64
+    public var updatedAt: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, agentId: String, status: String, iterationCount: UInt32, createdAt: Int64, updatedAt: Int64) {
+        self.id = id
+        self.agentId = agentId
+        self.status = status
+        self.iterationCount = iterationCount
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+
+
+extension SessionSummary: Equatable, Hashable {
+    public static func ==(lhs: SessionSummary, rhs: SessionSummary) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.agentId != rhs.agentId {
+            return false
+        }
+        if lhs.status != rhs.status {
+            return false
+        }
+        if lhs.iterationCount != rhs.iterationCount {
+            return false
+        }
+        if lhs.createdAt != rhs.createdAt {
+            return false
+        }
+        if lhs.updatedAt != rhs.updatedAt {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(agentId)
+        hasher.combine(status)
+        hasher.combine(iterationCount)
+        hasher.combine(createdAt)
+        hasher.combine(updatedAt)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSessionSummary: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SessionSummary {
+        return
+            try SessionSummary(
+                id: FfiConverterString.read(from: &buf), 
+                agentId: FfiConverterString.read(from: &buf), 
+                status: FfiConverterString.read(from: &buf), 
+                iterationCount: FfiConverterUInt32.read(from: &buf), 
+                createdAt: FfiConverterInt64.read(from: &buf), 
+                updatedAt: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SessionSummary, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.agentId, into: &buf)
+        FfiConverterString.write(value.status, into: &buf)
+        FfiConverterUInt32.write(value.iterationCount, into: &buf)
+        FfiConverterInt64.write(value.createdAt, into: &buf)
+        FfiConverterInt64.write(value.updatedAt, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionSummary_lift(_ buf: RustBuffer) throws -> SessionSummary {
+    return try FfiConverterTypeSessionSummary.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionSummary_lower(_ value: SessionSummary) -> RustBuffer {
+    return FfiConverterTypeSessionSummary.lower(value)
+}
+
+
 public struct ShortcutsConfig {
     public var summon: String
     public var cancel: String?
@@ -12156,6 +12291,24 @@ public protocol AetherEventHandler : AnyObject {
     
     func onMcpStartupComplete(report: McpStartupReportFfi) 
     
+    func onSessionStarted(sessionId: String) 
+    
+    func onToolCallStarted(callId: String, toolName: String) 
+    
+    func onToolCallCompleted(callId: String, output: String) 
+    
+    func onToolCallFailed(callId: String, error: String, isRetryable: Bool) 
+    
+    func onLoopProgress(sessionId: String, iteration: UInt32, status: String) 
+    
+    func onPlanCreated(sessionId: String, steps: [String]) 
+    
+    func onSessionCompleted(sessionId: String, summary: String) 
+    
+    func onSubagentStarted(parentSessionId: String, childSessionId: String, agentId: String) 
+    
+    func onSubagentCompleted(childSessionId: String, success: Bool, summary: String) 
+    
 }
 
 // Magic number for the Rust proxy to call using the same mechanism as every other method,
@@ -12399,6 +12552,246 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
                 }
                 return uniffiObj.onMcpStartupComplete(
                      report: try FfiConverterTypeMcpStartupReportFFI.lift(report)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onSessionStarted: { (
+            uniffiHandle: UInt64,
+            sessionId: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onSessionStarted(
+                     sessionId: try FfiConverterString.lift(sessionId)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onToolCallStarted: { (
+            uniffiHandle: UInt64,
+            callId: RustBuffer,
+            toolName: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onToolCallStarted(
+                     callId: try FfiConverterString.lift(callId),
+                     toolName: try FfiConverterString.lift(toolName)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onToolCallCompleted: { (
+            uniffiHandle: UInt64,
+            callId: RustBuffer,
+            output: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onToolCallCompleted(
+                     callId: try FfiConverterString.lift(callId),
+                     output: try FfiConverterString.lift(output)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onToolCallFailed: { (
+            uniffiHandle: UInt64,
+            callId: RustBuffer,
+            error: RustBuffer,
+            isRetryable: Int8,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onToolCallFailed(
+                     callId: try FfiConverterString.lift(callId),
+                     error: try FfiConverterString.lift(error),
+                     isRetryable: try FfiConverterBool.lift(isRetryable)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onLoopProgress: { (
+            uniffiHandle: UInt64,
+            sessionId: RustBuffer,
+            iteration: UInt32,
+            status: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onLoopProgress(
+                     sessionId: try FfiConverterString.lift(sessionId),
+                     iteration: try FfiConverterUInt32.lift(iteration),
+                     status: try FfiConverterString.lift(status)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onPlanCreated: { (
+            uniffiHandle: UInt64,
+            sessionId: RustBuffer,
+            steps: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onPlanCreated(
+                     sessionId: try FfiConverterString.lift(sessionId),
+                     steps: try FfiConverterSequenceString.lift(steps)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onSessionCompleted: { (
+            uniffiHandle: UInt64,
+            sessionId: RustBuffer,
+            summary: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onSessionCompleted(
+                     sessionId: try FfiConverterString.lift(sessionId),
+                     summary: try FfiConverterString.lift(summary)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onSubagentStarted: { (
+            uniffiHandle: UInt64,
+            parentSessionId: RustBuffer,
+            childSessionId: RustBuffer,
+            agentId: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onSubagentStarted(
+                     parentSessionId: try FfiConverterString.lift(parentSessionId),
+                     childSessionId: try FfiConverterString.lift(childSessionId),
+                     agentId: try FfiConverterString.lift(agentId)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onSubagentCompleted: { (
+            uniffiHandle: UInt64,
+            childSessionId: RustBuffer,
+            success: Int8,
+            summary: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAetherEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onSubagentCompleted(
+                     childSessionId: try FfiConverterString.lift(childSessionId),
+                     success: try FfiConverterBool.lift(success),
+                     summary: try FfiConverterString.lift(summary)
                 )
             }
 
@@ -13930,6 +14323,31 @@ fileprivate struct FfiConverterSequenceTypeSearchBackendEntry: FfiConverterRustB
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeSessionSummary: FfiConverterRustBuffer {
+    typealias SwiftType = [SessionSummary]
+
+    public static func write(_ value: [SessionSummary], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSessionSummary.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SessionSummary] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SessionSummary]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSessionSummary.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeSkillInfo: FfiConverterRustBuffer {
     typealias SwiftType = [SkillInfo]
 
@@ -14202,6 +14620,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_cancel_generation() != 17817) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_cancel_session() != 42621) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_check_generation_progress() != 39952) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -14331,6 +14752,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_get_compression_stats() != 49764) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_get_current_session_id() != 4611) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_get_default_provider() != 56435) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -14397,6 +14821,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_aethercore_list_mcp_servers() != 29913) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_aethecore_checksum_method_aethercore_list_recent_sessions() != 13544) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_aethecore_checksum_method_aethercore_list_skills() != 34455) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -14416,6 +14843,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_reload_config() != 43589) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethercore_resume_session() != 14295) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_search_memories() != 43084) {
@@ -14509,6 +14939,33 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethereventhandler_on_mcp_startup_complete() != 1232) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_session_started() != 832) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tool_call_started() != 726) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tool_call_completed() != 18157) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_tool_call_failed() != 62649) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_loop_progress() != 13748) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_plan_created() != 21041) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_session_completed() != 32678) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_subagent_started() != 8514) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_method_aethereventhandler_on_subagent_completed() != 6747) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_coworkprogresshandler_on_progress_event() != 54161) {

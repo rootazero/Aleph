@@ -284,6 +284,85 @@ class EventHandler: AetherEventHandler {
         }
     }
 
+    // MARK: - Agentic Loop Callbacks (Phase 5)
+
+    /// Called when a new session starts
+    /// - Parameter sessionId: Unique identifier for the session
+    func onSessionStarted(sessionId: String) {
+        print("[EventHandler] Session started: \(sessionId)")
+    }
+
+    /// Called when a tool call begins
+    /// - Parameters:
+    ///   - callId: Unique identifier for this call
+    ///   - toolName: Name of the tool being called
+    func onToolCallStarted(callId: String, toolName: String) {
+        print("[EventHandler] Tool call started: \(toolName) (id: \(callId))")
+    }
+
+    /// Called when a tool call completes successfully
+    /// - Parameters:
+    ///   - callId: Unique identifier for this call
+    ///   - output: Output from the tool
+    func onToolCallCompleted(callId: String, output: String) {
+        print("[EventHandler] Tool call completed: \(callId) - \(output.prefix(100))...")
+    }
+
+    /// Called when a tool call fails
+    /// - Parameters:
+    ///   - callId: Unique identifier for this call
+    ///   - error: Error message
+    ///   - isRetryable: Whether the call can be retried
+    func onToolCallFailed(callId: String, error: String, isRetryable: Bool) {
+        print("[EventHandler] Tool call failed: \(callId) - \(error) (retryable: \(isRetryable))")
+    }
+
+    /// Called when the agentic loop progresses
+    /// - Parameters:
+    ///   - sessionId: Session identifier
+    ///   - iteration: Current iteration number
+    ///   - status: Status message
+    func onLoopProgress(sessionId: String, iteration: UInt32, status: String) {
+        print("[EventHandler] Loop progress: session=\(sessionId), iteration=\(iteration), status=\(status)")
+    }
+
+    /// Called when a task plan is created
+    /// - Parameters:
+    ///   - sessionId: Session identifier
+    ///   - steps: List of step descriptions
+    func onPlanCreated(sessionId: String, steps: [String]) {
+        print("[EventHandler] Plan created: session=\(sessionId), \(steps.count) steps")
+        for (index, step) in steps.enumerated() {
+            print("[EventHandler]   Step \(index + 1): \(step)")
+        }
+    }
+
+    /// Called when a session completes
+    /// - Parameters:
+    ///   - sessionId: Session identifier
+    ///   - summary: Completion summary
+    func onSessionCompleted(sessionId: String, summary: String) {
+        print("[EventHandler] Session completed: \(sessionId) - \(summary)")
+    }
+
+    /// Called when a sub-agent starts
+    /// - Parameters:
+    ///   - parentSessionId: Parent session identifier
+    ///   - childSessionId: Child session identifier
+    ///   - agentId: Agent identifier
+    func onSubagentStarted(parentSessionId: String, childSessionId: String, agentId: String) {
+        print("[EventHandler] Sub-agent started: agent=\(agentId), parent=\(parentSessionId), child=\(childSessionId)")
+    }
+
+    /// Called when a sub-agent completes
+    /// - Parameters:
+    ///   - childSessionId: Child session identifier
+    ///   - success: Whether it succeeded
+    ///   - summary: Completion summary
+    func onSubagentCompleted(childSessionId: String, success: Bool, summary: String) {
+        print("[EventHandler] Sub-agent completed: \(childSessionId) - success=\(success), summary=\(summary)")
+    }
+
     // MARK: - Error Notification
 
     private func showErrorNotification(message: String) {
