@@ -100,6 +100,44 @@ extension Notification.Name {
     /// Posted when agent loop completes (success or failure)
     /// - UserInfo: ["planId": String, "success": Bool, "totalDurationMs": UInt64, "finalResponse": String]
     static let agentCompleted = Notification.Name("AetherAgentCompleted")
+
+    // MARK: - Agentic Session (Phase 5)
+
+    /// Posted when an agentic session starts
+    /// - UserInfo: ["sessionId": String]
+    static let agenticSessionStarted = Notification.Name("AetherAgenticSessionStarted")
+
+    /// Posted when a tool call starts within an agentic session
+    /// - UserInfo: ["sessionId": String, "callId": String, "toolName": String]
+    static let agenticToolCallStarted = Notification.Name("AetherAgenticToolCallStarted")
+
+    /// Posted when a tool call completes successfully
+    /// - UserInfo: ["sessionId": String, "callId": String, "toolName": String, "output": String]
+    static let agenticToolCallCompleted = Notification.Name("AetherAgenticToolCallCompleted")
+
+    /// Posted when a tool call fails
+    /// - UserInfo: ["sessionId": String, "callId": String, "toolName": String, "error": String, "isRetryable": Bool]
+    static let agenticToolCallFailed = Notification.Name("AetherAgenticToolCallFailed")
+
+    /// Posted when the agentic loop progresses to a new iteration
+    /// - UserInfo: ["sessionId": String, "iteration": UInt32, "status": String]
+    static let agenticLoopProgress = Notification.Name("AetherAgenticLoopProgress")
+
+    /// Posted when a task plan is created
+    /// - UserInfo: ["sessionId": String, "steps": [String]]
+    static let agenticPlanCreated = Notification.Name("AetherAgenticPlanCreated")
+
+    /// Posted when an agentic session completes
+    /// - UserInfo: ["sessionId": String, "summary": String]
+    static let agenticSessionCompleted = Notification.Name("AetherAgenticSessionCompleted")
+
+    /// Posted when a sub-agent starts
+    /// - UserInfo: ["parentSessionId": String, "childSessionId": String, "agentId": String]
+    static let agenticSubagentStarted = Notification.Name("AetherAgenticSubagentStarted")
+
+    /// Posted when a sub-agent completes
+    /// - UserInfo: ["childSessionId": String, "success": Bool, "summary": String]
+    static let agenticSubagentCompleted = Notification.Name("AetherAgenticSubagentCompleted")
 }
 
 // MARK: - UserInfo Keys

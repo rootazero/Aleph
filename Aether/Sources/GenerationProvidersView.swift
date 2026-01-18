@@ -823,6 +823,12 @@ struct GenerationProviderEditPanel: View {
     @State private var model: String = ""
     @State private var baseURL: String = ""
 
+    // Saved state for change detection (baseline values loaded from config)
+    @State private var savedProviderName: String = ""
+    @State private var savedApiKey: String = ""
+    @State private var savedModel: String = ""
+    @State private var savedBaseURL: String = ""
+
     // Test state (local)
     @State private var localTestResult: GenerationProvidersView.TestResult?
     @State private var localIsTesting: Bool = false
@@ -839,17 +845,15 @@ struct GenerationProviderEditPanel: View {
         !apiKey.isEmpty && !model.isEmpty && (isCustomProvider ? !baseURL.isEmpty : true)
     }
 
-    /// Check if the form has unsaved changes
+    /// Check if the form has unsaved changes by comparing with saved values
     private var hasUnsavedFormChanges: Bool {
         guard selectedPreset != nil else { return false }
 
-        // For custom provider: require name, API key, model, and base URL
-        if isCustomProvider {
-            return !providerName.isEmpty && !apiKey.isEmpty && !model.isEmpty && !baseURL.isEmpty
-        }
-
-        // For preset providers: require API key and model
-        return !apiKey.isEmpty && !model.isEmpty
+        // Compare current form values with saved baseline values
+        return providerName != savedProviderName ||
+               apiKey != savedApiKey ||
+               model != savedModel ||
+               baseURL != savedBaseURL
     }
 
     /// Check if form is valid for saving
@@ -951,6 +955,9 @@ struct GenerationProviderEditPanel: View {
                     isSaving = false
                     isAddingNew = false
                     localTestResult = .success(L("provider.save.success"))
+
+                    // Update saved state after successful save
+                    saveSavedState()
                     updateSaveBarState()
 
                     // Notify that configuration was saved
@@ -1164,12 +1171,12 @@ struct GenerationProviderEditPanel: View {
 
         // Try to load saved configuration first
         let providerKey = preset.isCustom ? providerName : preset.id
-        if !providerKey.isEmpty, let savedConfig = core.getGenerationProviderConfig(name: providerKey) {
+        if !providerKey.isEmpty, let config = core.getGenerationProviderConfig(name: providerKey) {
             // Use saved configuration values
             providerName = preset.isCustom ? providerKey : preset.name
-            apiKey = savedConfig.apiKey ?? ""
-            model = savedConfig.model ?? preset.defaultModel
-            baseURL = savedConfig.baseUrl ?? preset.baseUrl ?? ""
+            apiKey = config.apiKey ?? ""
+            model = config.model ?? preset.defaultModel
+            baseURL = config.baseUrl ?? preset.baseUrl ?? ""
         } else {
             // No saved config, use preset defaults
             if preset.isCustom {
@@ -1183,7 +1190,19 @@ struct GenerationProviderEditPanel: View {
             }
             apiKey = ""
         }
+
+        // Save current state as baseline for change detection
+        saveSavedState()
+
         localTestResult = nil
+    }
+
+    /// Save current form state as the baseline for change detection
+    private func saveSavedState() {
+        savedProviderName = providerName
+        savedApiKey = apiKey
+        savedModel = model
+        savedBaseURL = baseURL
     }
 
     private func testGenerationConnection() {

@@ -49,6 +49,28 @@ class EventHandler: AetherEventHandler {
         conversationManager.sessionId != nil || MultiTurnCoordinator.shared.isMultiTurnActive
     }
 
+    // MARK: - Agentic Session State (Phase 5)
+
+    /// Current agentic session ID
+    private var currentAgenticSessionId: String?
+
+    /// Current iteration in the agentic loop
+    private var currentIteration: UInt32 = 0
+
+    /// Current plan steps (for progress tracking)
+    private var currentPlanSteps: [String] = []
+
+    /// Completed step count
+    private var completedStepCount: Int = 0
+
+    /// Active tool calls being tracked
+    private var activeToolCalls: Set<String> = []
+
+    /// Whether we're in an active agentic session
+    private var isInAgenticSession: Bool {
+        currentAgenticSessionId != nil
+    }
+
     // MARK: - Initialization
 
     init(haloWindow: HaloWindow?) {
@@ -290,6 +312,29 @@ class EventHandler: AetherEventHandler {
     /// - Parameter sessionId: Unique identifier for the session
     func onSessionStarted(sessionId: String) {
         print("[EventHandler] Session started: \(sessionId)")
+
+        // Track session state
+        currentAgenticSessionId = sessionId
+        currentIteration = 0
+        currentPlanSteps = []
+        completedStepCount = 0
+        activeToolCalls.removeAll()
+
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            // Post notification for UI components
+            NotificationCenter.default.post(
+                name: .agenticSessionStarted,
+                object: nil,
+                userInfo: ["sessionId": sessionId]
+            )
+
+            // Skip Halo in multi-turn mode
+            guard !slf.isInMultiTurnMode else { return }
+
+            // Show processing state
+            slf.haloWindow?.updateState(.processingWithAI(providerName: L("halo.agentic_session")))
+            slf.haloWindow?.showAtCurrentPosition()
+        }
     }
 
     /// Called when a tool call begins
@@ -298,6 +343,42 @@ class EventHandler: AetherEventHandler {
     ///   - toolName: Name of the tool being called
     func onToolCallStarted(callId: String, toolName: String) {
         print("[EventHandler] Tool call started: \(toolName) (id: \(callId))")
+
+        // Track active tool call
+        activeToolCalls.insert(callId)
+        currentToolName = toolName
+
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            // Post notification
+            NotificationCenter.default.post(
+                name: .agenticToolCallStarted,
+                object: nil,
+                userInfo: [
+                    "sessionId": slf.currentAgenticSessionId ?? "",
+                    "callId": callId,
+                    "toolName": toolName
+                ]
+            )
+
+            // Skip Halo in multi-turn mode
+            guard !slf.isInMultiTurnMode else { return }
+
+            // Update Halo to show tool execution
+            if slf.isInAgenticSession {
+                // Show agent progress with current tool
+                let progress = slf.currentPlanSteps.isEmpty ? 0.0 :
+                    Float(slf.completedStepCount) / Float(slf.currentPlanSteps.count)
+                slf.haloWindow?.updateState(.agentProgress(
+                    planId: slf.currentAgenticSessionId ?? "",
+                    progress: progress,
+                    currentOperation: toolName,
+                    completedCount: slf.completedStepCount,
+                    totalCount: slf.currentPlanSteps.count
+                ))
+            } else {
+                slf.haloWindow?.updateState(.processing(streamingText: "🔧 \(toolName)"))
+            }
+        }
     }
 
     /// Called when a tool call completes successfully
@@ -306,6 +387,41 @@ class EventHandler: AetherEventHandler {
     ///   - output: Output from the tool
     func onToolCallCompleted(callId: String, output: String) {
         print("[EventHandler] Tool call completed: \(callId) - \(output.prefix(100))...")
+
+        // Update tracking
+        activeToolCalls.remove(callId)
+        completedStepCount += 1
+        let toolName = currentToolName ?? "tool"
+        currentToolName = nil
+
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            // Post notification
+            NotificationCenter.default.post(
+                name: .agenticToolCallCompleted,
+                object: nil,
+                userInfo: [
+                    "sessionId": slf.currentAgenticSessionId ?? "",
+                    "callId": callId,
+                    "toolName": toolName,
+                    "output": String(output.prefix(500))
+                ]
+            )
+
+            // Skip Halo in multi-turn mode
+            guard !slf.isInMultiTurnMode else { return }
+
+            // Update progress
+            if slf.isInAgenticSession && !slf.currentPlanSteps.isEmpty {
+                let progress = Float(slf.completedStepCount) / Float(slf.currentPlanSteps.count)
+                slf.haloWindow?.updateState(.agentProgress(
+                    planId: slf.currentAgenticSessionId ?? "",
+                    progress: progress,
+                    currentOperation: "✓ \(toolName)",
+                    completedCount: slf.completedStepCount,
+                    totalCount: slf.currentPlanSteps.count
+                ))
+            }
+        }
     }
 
     /// Called when a tool call fails
@@ -315,6 +431,42 @@ class EventHandler: AetherEventHandler {
     ///   - isRetryable: Whether the call can be retried
     func onToolCallFailed(callId: String, error: String, isRetryable: Bool) {
         print("[EventHandler] Tool call failed: \(callId) - \(error) (retryable: \(isRetryable))")
+
+        // Update tracking
+        activeToolCalls.remove(callId)
+        let toolName = currentToolName ?? "tool"
+
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            // Post notification
+            NotificationCenter.default.post(
+                name: .agenticToolCallFailed,
+                object: nil,
+                userInfo: [
+                    "sessionId": slf.currentAgenticSessionId ?? "",
+                    "callId": callId,
+                    "toolName": toolName,
+                    "error": error,
+                    "isRetryable": isRetryable
+                ]
+            )
+
+            // Skip Halo in multi-turn mode
+            guard !slf.isInMultiTurnMode else { return }
+
+            // Show error in progress (if retryable, indicate retry)
+            if slf.isInAgenticSession {
+                let statusText = isRetryable ? "⟳ \(toolName) (retrying...)" : "✗ \(toolName)"
+                let progress = slf.currentPlanSteps.isEmpty ? 0.0 :
+                    Float(slf.completedStepCount) / Float(slf.currentPlanSteps.count)
+                slf.haloWindow?.updateState(.agentProgress(
+                    planId: slf.currentAgenticSessionId ?? "",
+                    progress: progress,
+                    currentOperation: statusText,
+                    completedCount: slf.completedStepCount,
+                    totalCount: slf.currentPlanSteps.count
+                ))
+            }
+        }
     }
 
     /// Called when the agentic loop progresses
@@ -324,6 +476,38 @@ class EventHandler: AetherEventHandler {
     ///   - status: Status message
     func onLoopProgress(sessionId: String, iteration: UInt32, status: String) {
         print("[EventHandler] Loop progress: session=\(sessionId), iteration=\(iteration), status=\(status)")
+
+        // Update iteration count
+        currentIteration = iteration
+
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            // Post notification
+            NotificationCenter.default.post(
+                name: .agenticLoopProgress,
+                object: nil,
+                userInfo: [
+                    "sessionId": sessionId,
+                    "iteration": iteration,
+                    "status": status
+                ]
+            )
+
+            // Skip Halo in multi-turn mode
+            guard !slf.isInMultiTurnMode else { return }
+
+            // Update Halo with iteration info
+            if slf.isInAgenticSession {
+                let progress = slf.currentPlanSteps.isEmpty ? 0.0 :
+                    Float(slf.completedStepCount) / Float(slf.currentPlanSteps.count)
+                slf.haloWindow?.updateState(.agentProgress(
+                    planId: sessionId,
+                    progress: progress,
+                    currentOperation: status,
+                    completedCount: slf.completedStepCount,
+                    totalCount: slf.currentPlanSteps.count
+                ))
+            }
+        }
     }
 
     /// Called when a task plan is created
@@ -335,6 +519,49 @@ class EventHandler: AetherEventHandler {
         for (index, step) in steps.enumerated() {
             print("[EventHandler]   Step \(index + 1): \(step)")
         }
+
+        // Store plan steps for progress tracking
+        currentPlanSteps = steps
+        completedStepCount = 0
+
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            // Post notification
+            NotificationCenter.default.post(
+                name: .agenticPlanCreated,
+                object: nil,
+                userInfo: [
+                    "sessionId": sessionId,
+                    "steps": steps
+                ]
+            )
+
+            // Skip Halo in multi-turn mode
+            guard !slf.isInMultiTurnMode else { return }
+
+            // Show plan progress view
+            let stepProgress = steps.enumerated().map { index, description in
+                PlanStepProgressInfo(
+                    index: UInt32(index + 1),
+                    toolName: "",
+                    description: description,
+                    status: .pending,
+                    resultPreview: nil,
+                    errorMessage: nil
+                )
+            }
+
+            slf.haloWindow?.updateState(.planProgress(progressInfo: PlanProgressInfo(
+                planId: sessionId,
+                description: L("halo.executing_plan"),
+                totalSteps: UInt32(steps.count),
+                currentStep: 0,
+                currentStepName: steps.first ?? "",
+                stepProgress: stepProgress,
+                status: .running,
+                errorMessage: nil
+            )))
+            slf.haloWindow?.showAtCurrentPosition()
+        }
     }
 
     /// Called when a session completes
@@ -343,6 +570,39 @@ class EventHandler: AetherEventHandler {
     ///   - summary: Completion summary
     func onSessionCompleted(sessionId: String, summary: String) {
         print("[EventHandler] Session completed: \(sessionId) - \(summary)")
+
+        // Clear session state
+        let wasInSession = currentAgenticSessionId == sessionId
+        currentAgenticSessionId = nil
+        currentIteration = 0
+        currentPlanSteps = []
+        completedStepCount = 0
+        activeToolCalls.removeAll()
+
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            // Post notification
+            NotificationCenter.default.post(
+                name: .agenticSessionCompleted,
+                object: nil,
+                userInfo: [
+                    "sessionId": sessionId,
+                    "summary": summary
+                ]
+            )
+
+            // Skip Halo in multi-turn mode
+            guard !slf.isInMultiTurnMode else { return }
+
+            // Show success toast if we were tracking this session
+            if wasInSession {
+                slf.haloWindow?.updateState(.success(message: summary))
+
+                // Auto-hide after brief display
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak slf] in
+                    slf?.haloWindow?.hide()
+                }
+            }
+        }
     }
 
     /// Called when a sub-agent starts
@@ -352,6 +612,35 @@ class EventHandler: AetherEventHandler {
     ///   - agentId: Agent identifier
     func onSubagentStarted(parentSessionId: String, childSessionId: String, agentId: String) {
         print("[EventHandler] Sub-agent started: agent=\(agentId), parent=\(parentSessionId), child=\(childSessionId)")
+
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            // Post notification
+            NotificationCenter.default.post(
+                name: .agenticSubagentStarted,
+                object: nil,
+                userInfo: [
+                    "parentSessionId": parentSessionId,
+                    "childSessionId": childSessionId,
+                    "agentId": agentId
+                ]
+            )
+
+            // Skip Halo in multi-turn mode
+            guard !slf.isInMultiTurnMode else { return }
+
+            // Show sub-agent indicator in progress
+            if slf.isInAgenticSession {
+                let progress = slf.currentPlanSteps.isEmpty ? 0.0 :
+                    Float(slf.completedStepCount) / Float(slf.currentPlanSteps.count)
+                slf.haloWindow?.updateState(.agentProgress(
+                    planId: parentSessionId,
+                    progress: progress,
+                    currentOperation: "🤖 \(agentId)",
+                    completedCount: slf.completedStepCount,
+                    totalCount: slf.currentPlanSteps.count
+                ))
+            }
+        }
     }
 
     /// Called when a sub-agent completes
@@ -361,6 +650,37 @@ class EventHandler: AetherEventHandler {
     ///   - summary: Completion summary
     func onSubagentCompleted(childSessionId: String, success: Bool, summary: String) {
         print("[EventHandler] Sub-agent completed: \(childSessionId) - success=\(success), summary=\(summary)")
+
+        DispatchQueue.mainAsync(weakRef: self) { slf in
+            // Post notification
+            NotificationCenter.default.post(
+                name: .agenticSubagentCompleted,
+                object: nil,
+                userInfo: [
+                    "childSessionId": childSessionId,
+                    "success": success,
+                    "summary": summary
+                ]
+            )
+
+            // Skip Halo in multi-turn mode
+            guard !slf.isInMultiTurnMode else { return }
+
+            // Update progress with sub-agent result
+            if slf.isInAgenticSession {
+                let statusIcon = success ? "✓" : "✗"
+                let truncatedSummary = summary.count > 30 ? String(summary.prefix(30)) + "..." : summary
+                let progress = slf.currentPlanSteps.isEmpty ? 0.0 :
+                    Float(slf.completedStepCount) / Float(slf.currentPlanSteps.count)
+                slf.haloWindow?.updateState(.agentProgress(
+                    planId: slf.currentAgenticSessionId ?? "",
+                    progress: progress,
+                    currentOperation: "\(statusIcon) \(truncatedSummary)",
+                    completedCount: slf.completedStepCount,
+                    totalCount: slf.currentPlanSteps.count
+                ))
+            }
+        }
     }
 
     // MARK: - Error Notification
@@ -407,6 +727,13 @@ class EventHandler: AetherEventHandler {
     func reset() {
         accumulatedText = ""
         currentToolName = nil
+
+        // Reset agentic session state
+        currentAgenticSessionId = nil
+        currentIteration = 0
+        currentPlanSteps = []
+        completedStepCount = 0
+        activeToolCalls.removeAll()
     }
 
     // MARK: - Toast Display

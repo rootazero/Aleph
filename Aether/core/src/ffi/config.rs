@@ -116,26 +116,48 @@ impl AetherCore {
     }
 
     /// Update provider configuration
+    ///
+    /// This method updates the provider configuration and automatically refreshes
+    /// the agent config holder so changes take effect immediately for conversations.
     pub fn update_provider(
         &self,
         name: String,
         provider: ProviderConfig,
     ) -> Result<(), AetherFfiError> {
-        let mut config = self.lock_config();
-        config.providers.insert(name, provider);
-        config
-            .save()
-            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        {
+            let mut config = self.lock_config();
+            config.providers.insert(name.clone(), provider);
+            config
+                .save()
+                .map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        }
+
+        // Refresh config_holder so changes take effect immediately for conversations
+        // This is critical: without this, the agent would still use the old API key
+        info!(provider = %name, "Provider updated, refreshing agent config");
+        self.reload_config()?;
+
         Ok(())
     }
 
     /// Delete provider configuration
+    ///
+    /// This method removes a provider and refreshes the agent config holder.
+    /// If the deleted provider was the default, conversations will fail until
+    /// a new default is set.
     pub fn delete_provider(&self, name: String) -> Result<(), AetherFfiError> {
-        let mut config = self.lock_config();
-        config.providers.remove(&name);
-        config
-            .save()
-            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        {
+            let mut config = self.lock_config();
+            config.providers.remove(&name);
+            config
+                .save()
+                .map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        }
+
+        // Refresh config_holder in case the default provider changed
+        info!(provider = %name, "Provider deleted, refreshing agent config");
+        self.reload_config()?;
+
         Ok(())
     }
 
@@ -562,15 +584,24 @@ impl AetherCore {
     }
 
     /// Set the default provider (validates that provider exists and is enabled)
+    ///
+    /// This method sets the default provider and refreshes the agent config holder
+    /// so conversations immediately use the new provider.
     pub fn set_default_provider(&self, provider_name: String) -> Result<(), AetherFfiError> {
-        let mut config = self.lock_config();
-        config
-            .set_default_provider(&provider_name)
-            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
-        config
-            .save()
-            .map_err(|e| AetherFfiError::Config(e.to_string()))?;
-        info!(provider = %provider_name, "Default provider updated");
+        {
+            let mut config = self.lock_config();
+            config
+                .set_default_provider(&provider_name)
+                .map_err(|e| AetherFfiError::Config(e.to_string()))?;
+            config
+                .save()
+                .map_err(|e| AetherFfiError::Config(e.to_string()))?;
+        }
+
+        // Refresh config_holder so conversations use the new default provider
+        info!(provider = %provider_name, "Default provider updated, refreshing agent config");
+        self.reload_config()?;
+
         Ok(())
     }
 
