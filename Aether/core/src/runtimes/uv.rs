@@ -57,6 +57,57 @@ impl UvRuntime {
         }
     }
 
+    /// Get the uv binary path (for direct uv commands)
+    ///
+    /// Use this when you need to run uv commands directly (e.g., `uv pip install`).
+    pub fn uv_binary_path(&self) -> PathBuf {
+        self.uv_binary()
+    }
+
+    /// Get the pip executable path in the default venv
+    pub fn pip_path(&self) -> PathBuf {
+        #[cfg(unix)]
+        {
+            self.default_venv().join("bin").join("pip")
+        }
+        #[cfg(windows)]
+        {
+            self.default_venv().join("Scripts").join("pip.exe")
+        }
+    }
+
+    /// Install a Python package into the default venv
+    ///
+    /// Uses `uv pip install` for fast package installation.
+    pub async fn install_package(&self, package: &str) -> Result<()> {
+        if !self.is_installed() {
+            return Err(AetherError::runtime("uv", "uv is not installed"));
+        }
+
+        info!(package = %package, "Installing Python package");
+
+        let output = Command::new(self.uv_binary())
+            .args(["pip", "install", "--python", self.python_path().to_str().unwrap_or("python"), package])
+            .output()
+            .map_err(|e| AetherError::runtime("uv", format!("Failed to install package: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AetherError::runtime(
+                "uv",
+                format!("Failed to install {}: {}", package, stderr),
+            ));
+        }
+
+        info!(package = %package, "Package installed successfully");
+        Ok(())
+    }
+
+    /// Check if uv binary is installed (without venv)
+    pub fn is_uv_binary_installed(&self) -> bool {
+        self.uv_binary().exists()
+    }
+
     /// Get the download URL for the current platform
     fn get_download_url() -> Result<String> {
         let platform = get_platform();
@@ -266,9 +317,68 @@ mod tests {
         let runtime = UvRuntime::new(temp_dir.path().to_path_buf());
 
         assert!(runtime.uv_binary().to_string_lossy().contains("uv/uv"));
+        assert!(runtime.uv_binary_path().to_string_lossy().contains("uv/uv"));
         assert!(runtime
             .python_path()
             .to_string_lossy()
             .contains("envs/default"));
+        assert!(runtime
+            .pip_path()
+            .to_string_lossy()
+            .contains("envs/default"));
+    }
+
+    #[test]
+    fn test_download_url() {
+        let url = UvRuntime::get_download_url();
+        assert!(url.is_ok());
+        let url = url.unwrap();
+        assert!(url.contains("astral-sh/uv"));
+        assert!(url.contains(".tar.gz"));
+    }
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+
+    /// Test actual uv installation
+    /// Run with: cargo test test_uv_install_real -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "Downloads uv binary from GitHub (run manually)"]
+    async fn test_uv_install_real() {
+        use crate::runtimes::get_runtimes_dir;
+
+        let runtimes_dir = get_runtimes_dir().unwrap();
+        let runtime = UvRuntime::new(runtimes_dir);
+
+        println!("uv directory: {:?}", runtime.uv_dir());
+        println!("uv binary path: {:?}", runtime.uv_binary_path());
+        println!("Python path: {:?}", runtime.python_path());
+
+        // Install if not already installed
+        if !runtime.is_installed() {
+            println!("Installing uv...");
+            runtime.install().await.unwrap();
+        }
+
+        // Verify installation
+        assert!(runtime.is_uv_binary_installed(), "uv binary should exist");
+        assert!(runtime.is_installed(), "uv and venv should be installed");
+
+        // Check version
+        let version = runtime.get_version();
+        println!("Installed uv version: {:?}", version);
+        assert!(version.is_some(), "Should be able to get uv version");
+
+        // Verify Python works
+        let output = std::process::Command::new(runtime.python_path())
+            .args(["--version"])
+            .output()
+            .expect("Failed to run Python");
+
+        assert!(output.status.success(), "Python should run successfully");
+        let python_version = String::from_utf8_lossy(&output.stdout);
+        println!("Python version: {}", python_version.trim());
     }
 }
