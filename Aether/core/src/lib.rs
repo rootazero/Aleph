@@ -56,6 +56,7 @@ pub mod agent; // NEW: Agent loop for tool calling
 pub mod capability;
 pub mod clarification; // NEW: Phantom Flow interaction types
 mod clipboard;
+pub mod components; // NEW: Core event handler components for agentic loop
 pub mod command; // NEW: Command completion system
 mod config;
 pub mod conversation; // NEW: Multi-turn conversation support
