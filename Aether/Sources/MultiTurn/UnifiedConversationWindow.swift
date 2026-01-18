@@ -159,10 +159,26 @@ final class UnifiedConversationWindow: NSWindow {
     private func calculateWindowHeight() -> CGFloat {
         var height = Layout.inputAreaHeight + 32  // Base + padding
 
-        // Add content area height
-        if viewModel.shouldShowConversation ||
-           viewModel.displayState.isShowingCommandList {
-            height += min(viewModel.messages.count > 0 ? 200 : 0, Layout.maxContentHeight)
+        // Add content area height based on display state
+        switch viewModel.displayState {
+        case .empty:
+            break  // No additional height
+        case .conversation:
+            if viewModel.messages.count > 0 {
+                height += min(200, Layout.maxContentHeight)
+            }
+        case .commandList(let prefix):
+            // Command/Topic list should always have minimum height
+            let itemHeight: CGFloat = 44  // Approximate height per row
+            if prefix == "//" {
+                let topicCount = viewModel.filteredTopics.count
+                let listHeight = min(CGFloat(max(topicCount, 1)) * itemHeight + 20, Layout.maxContentHeight)
+                height += max(listHeight, 120)  // Minimum 120px for empty state
+            } else {
+                let commandCount = viewModel.commands.count
+                let listHeight = min(CGFloat(max(commandCount, 1)) * itemHeight + 20, Layout.maxContentHeight)
+                height += max(listHeight, 120)  // Minimum 120px for empty state
+            }
         }
 
         // Add attachment preview

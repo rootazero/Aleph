@@ -21,6 +21,9 @@ struct CommandListView: View {
                     .font(.subheadline)
                     .foregroundColor(.primary.opacity(0.7))
                     .padding()
+                    .onAppear {
+                        viewModel.reportHeightChange(60)  // Report empty state height
+                    }
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -35,6 +38,19 @@ struct CommandListView: View {
                                 .id("cmd-\(index)")
                             }
                         }
+                        .background(
+                            GeometryReader { geometry in
+                                Color.clear
+                                    .onChange(of: geometry.size.height) { _, newHeight in
+                                        viewModel.reportHeightChange(newHeight)
+                                    }
+                                    .onAppear {
+                                        DispatchQueue.main.async {
+                                            viewModel.reportHeightChange(geometry.size.height)
+                                        }
+                                    }
+                            }
+                        )
                     }
                     .frame(maxHeight: maxHeight)
                     .onChange(of: viewModel.selectedCommandIndex) { _, newIndex in
@@ -44,6 +60,11 @@ struct CommandListView: View {
                     }
                 }
             }
+        }
+        .onChange(of: viewModel.commands.count) { _, newCount in
+            // Report height when command count changes
+            let estimatedHeight = max(CGFloat(newCount) * 44 + 20, 60)
+            viewModel.reportHeightChange(min(estimatedHeight, maxHeight))
         }
     }
 }
@@ -62,6 +83,9 @@ struct TopicListView: View {
                     .font(.subheadline)
                     .foregroundColor(.primary.opacity(0.7))
                     .padding()
+                    .onAppear {
+                        viewModel.reportHeightChange(60)  // Report empty state height
+                    }
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -77,6 +101,19 @@ struct TopicListView: View {
                                 .id("topic-\(index)")
                             }
                         }
+                        .background(
+                            GeometryReader { geometry in
+                                Color.clear
+                                    .onChange(of: geometry.size.height) { _, newHeight in
+                                        viewModel.reportHeightChange(newHeight)
+                                    }
+                                    .onAppear {
+                                        DispatchQueue.main.async {
+                                            viewModel.reportHeightChange(geometry.size.height)
+                                        }
+                                    }
+                            }
+                        )
                     }
                     .frame(maxHeight: maxHeight)
                     .onChange(of: viewModel.selectedTopicIndex) { _, newIndex in
@@ -86,6 +123,11 @@ struct TopicListView: View {
                     }
                 }
             }
+        }
+        .onChange(of: viewModel.filteredTopics.count) { _, newCount in
+            // Report height when topic count changes
+            let estimatedHeight = max(CGFloat(newCount) * 44 + 20, 60)
+            viewModel.reportHeightChange(min(estimatedHeight, maxHeight))
         }
     }
 }

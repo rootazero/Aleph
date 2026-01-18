@@ -95,6 +95,16 @@ struct ConversationAreaView: View {
                                     (viewModel.isLoading ? 30 : 0)
                                 viewModel.reportHeightChange(total)
                             }
+                            .onAppear {
+                                // Report initial height when view appears
+                                // (e.g., switching back from command list)
+                                DispatchQueue.main.async {
+                                    contentHeight = geometry.size.height
+                                    let total = titleBarHeight + 1 + geometry.size.height +
+                                        (viewModel.isLoading ? 30 : 0)
+                                    viewModel.reportHeightChange(total)
+                                }
+                            }
                     }
                 )
             }

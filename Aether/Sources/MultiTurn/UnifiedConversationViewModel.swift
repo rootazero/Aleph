@@ -129,7 +129,17 @@ final class UnifiedConversationViewModel {
     // MARK: - Display State Management
 
     /// Update display state based on input
+    ///
+    /// Priority (high → low):
+    /// 1. `//` prefix → Topic list
+    /// 2. `/` prefix → Command list
+    /// 3. Has messages → Conversation
+    /// 4. No messages → Empty
+    ///
+    /// Attachment preview is independent and can overlay any state.
     private func updateDisplayState() {
+        let previousState = displayState
+
         if inputText.hasPrefix("//") {
             displayState = .commandList(prefix: "//")
             loadTopics()
@@ -141,6 +151,12 @@ final class UnifiedConversationViewModel {
             displayState = .conversation
         } else {
             displayState = .empty
+        }
+
+        // When transitioning to empty state, report zero content height
+        // to collapse window to input-only
+        if displayState == .empty && previousState != .empty {
+            onHeightChanged?(0)
         }
     }
 
@@ -178,11 +194,16 @@ final class UnifiedConversationViewModel {
     }
 
     /// Handle ESC key with layered exit
+    ///
+    /// Exit priority (high → low):
+    /// 1. Close command/topic list → restore to conversation or empty
+    /// 2. Close window
     func handleEscape() {
         if displayState.isShowingCommandList {
             // Layer 1: Close command/topic list
+            // Setting inputText = "" triggers updateDisplayState() via didSet,
+            // which automatically restores to .conversation or .empty
             inputText = ""
-            displayState = hasMessages ? .conversation : .empty
         } else {
             // Layer 2: Close window
             cancel()
