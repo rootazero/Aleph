@@ -18,8 +18,6 @@ struct UnifiedConversationView: View {
     /// Maximum height for content area (conversation or command list)
     private let maxContentHeight: CGFloat = 600
 
-    /// Height for attachment preview
-    private let attachmentPreviewHeight: CGFloat = 100
 
     var body: some View {
         VStack(spacing: 0) {
@@ -41,20 +39,10 @@ struct UnifiedConversationView: View {
             // Content area (mutually exclusive)
             contentArea
 
-            // Attachment preview (if any)
-            if viewModel.shouldShowAttachmentPreview {
-                Divider().opacity(0.3)
-                AttachmentPreviewView(
-                    attachments: viewModel.pendingAttachments,
-                    onRemove: viewModel.removeAttachment
-                )
-            }
-
             // Divider before input
             if viewModel.shouldShowConversation ||
                viewModel.shouldShowCommandList ||
-               viewModel.shouldShowTopicList ||
-               viewModel.shouldShowAttachmentPreview {
+               viewModel.shouldShowTopicList {
                 Divider().opacity(0.3)
             }
 
@@ -64,7 +52,6 @@ struct UnifiedConversationView: View {
         .frame(width: 800)
         .adaptiveGlass()
         .animation(.smooth(duration: 0.25), value: viewModel.displayState)
-        .animation(.smooth(duration: 0.25), value: viewModel.shouldShowAttachmentPreview)
     }
 
     // MARK: - Content Area (Mutually Exclusive)

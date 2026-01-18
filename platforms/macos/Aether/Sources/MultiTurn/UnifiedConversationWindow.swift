@@ -20,7 +20,6 @@ final class UnifiedConversationWindow: NSWindow {
         static let width: CGFloat = 800
         static let inputAreaHeight: CGFloat = 60
         static let maxContentHeight: CGFloat = 600
-        static let attachmentPreviewHeight: CGFloat = 100
     }
 
     // MARK: - Properties
@@ -181,11 +180,6 @@ final class UnifiedConversationWindow: NSWindow {
             }
         }
 
-        // Add attachment preview
-        if viewModel.shouldShowAttachmentPreview {
-            height += Layout.attachmentPreviewHeight
-        }
-
         return height
     }
 
@@ -201,11 +195,6 @@ final class UnifiedConversationWindow: NSWindow {
 
         // Add content height (clamped)
         newHeight += min(contentHeight, Layout.maxContentHeight)
-
-        // Add attachment preview if needed
-        if viewModel.shouldShowAttachmentPreview {
-            newHeight += Layout.attachmentPreviewHeight
-        }
 
         // Update frame keeping bottom at anchor
         let newFrame = NSRect(

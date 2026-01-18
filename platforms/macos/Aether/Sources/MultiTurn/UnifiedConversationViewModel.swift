@@ -121,11 +121,6 @@ final class UnifiedConversationViewModel {
         displayState.isShowingTopicList
     }
 
-    /// Whether to show attachment preview
-    var shouldShowAttachmentPreview: Bool {
-        !pendingAttachments.isEmpty
-    }
-
     // MARK: - Display State Management
 
     /// Update display state based on input
@@ -135,8 +130,6 @@ final class UnifiedConversationViewModel {
     /// 2. `/` prefix → Command list
     /// 3. Has messages → Conversation
     /// 4. No messages → Empty
-    ///
-    /// Attachment preview is independent and can overlay any state.
     private func updateDisplayState() {
         let previousState = displayState
 

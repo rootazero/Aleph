@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 
 // MARK: - InputAreaView
 
-/// Input area with text field, attachment button, and send button
+/// Input area with text field, inline attachments, attachment button, and send button
 struct InputAreaView: View {
     @Bindable var viewModel: UnifiedConversationViewModel
 
@@ -27,23 +27,41 @@ struct InputAreaView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 4))
             }
 
-            // Text field
-            IMETextField(
-                text: $viewModel.inputText,
-                placeholder: NSLocalizedString("multiturn.input.placeholder", comment: ""),
-                font: .systemFont(ofSize: 16),
-                textColor: .labelColor,
-                placeholderColor: NSColor.secondaryLabelColor,
-                backgroundColor: .clear,
-                autoFocus: true,
-                onSubmit: { viewModel.submit() },
-                onEscape: { viewModel.handleEscape() },
-                onTextChange: { _ in viewModel.refreshDisplayState() },
-                onArrowUp: { viewModel.moveSelectionUp() },
-                onArrowDown: { viewModel.moveSelectionDown() },
-                onTab: { viewModel.handleTab() }
+            // Input container (text field + inline attachments)
+            HStack(spacing: 4) {
+                // Text field
+                IMETextField(
+                    text: $viewModel.inputText,
+                    placeholder: NSLocalizedString("multiturn.input.placeholder", comment: ""),
+                    font: .systemFont(ofSize: 16),
+                    textColor: .labelColor,
+                    placeholderColor: NSColor.secondaryLabelColor,
+                    backgroundColor: .clear,
+                    autoFocus: true,
+                    onSubmit: { viewModel.submit() },
+                    onEscape: { viewModel.handleEscape() },
+                    onTextChange: { _ in viewModel.refreshDisplayState() },
+                    onArrowUp: { viewModel.moveSelectionUp() },
+                    onArrowDown: { viewModel.moveSelectionDown() },
+                    onTab: { viewModel.handleTab() }
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: 24)
+
+                // Inline attachments (right side of input)
+                if !viewModel.pendingAttachments.isEmpty {
+                    InlineAttachmentView(
+                        attachments: viewModel.pendingAttachments,
+                        onRemove: viewModel.removeAttachment
+                    )
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.primary.opacity(0.05))
             )
-            .frame(height: 24)
 
             // Attachment button
             AttachmentButton(onFilesSelected: viewModel.addAttachments)
