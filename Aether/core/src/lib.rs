@@ -305,9 +305,16 @@ pub use crate::components::{
     LoopController, LoopConfig,
     SessionRecorder, SessionRecord, RecorderError,
     SessionCompactor, ModelLimit, TokenTracker,
+    SubAgentHandler,
 };
 // Note: RetryPolicy from components is available as components::RetryPolicy
 // to avoid conflict with config::RetryPolicy (network retry policy)
+
+// Agent system exports (Phase 4 sub-agent system)
+pub use crate::agents::{
+    builtin_agents, AgentDef, AgentMode, AgentRegistry,
+    TaskTool, TaskToolError, TaskToolResult,
+};
 
 // Core interface exports (rig-core based architecture)
 pub use crate::uniffi_core::{
