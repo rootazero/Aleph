@@ -76,57 +76,78 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for complete technical docume
 
 ## Project Structure
 
-**Note**: This project uses [XcodeGen](https://github.com/yonaskolb/XcodeGen). The `.xcodeproj` is generated from `project.yml`.
+**Note**: This is a Monorepo with platform-specific directories. macOS uses [XcodeGen](https://github.com/yonaskolb/XcodeGen).
 
 ```
 aether/
-├── project.yml                    # XcodeGen configuration (source of truth)
-├── Aether/
-│   ├── Sources/                   # Swift source files
-│   │   ├── main.swift             # App entry point (NSApplicationMain)
-│   │   ├── AppDelegate.swift      # Menu bar lifecycle + Rust core integration
-│   │   ├── Atoms/                 # Atomic design: basic UI elements
-│   │   ├── Molecules/             # Atomic design: composed components
-│   │   ├── Organisms/             # Atomic design: complex UI sections
-│   │   ├── Window/                # Window controllers (Halo, Settings, Conversation)
-│   │   ├── Settings/              # Settings tabs (10+ views)
-│   │   ├── Coordinators/          # Input/Output/MultiTurn/PermissionCoordinator
-│   │   └── Generated/aether.swift # UniFFI-generated bindings
-│   ├── Frameworks/
-│   │   └── libaethecore.dylib     # Rust library (embedded in app)
-│   └── core/                      # Rust core library
-│       ├── Cargo.toml
-│       ├── src/
-│       │   ├── lib.rs             # UniFFI exports and public API
-│       │   ├── aether.udl         # UniFFI interface definition
-│       │   ├── ffi/               # 9 FFI sub-modules
-│       │   ├── agent/             # Agent execution engine
-│       │   ├── agents/            # Specialized agents
-│       │   ├── capability/        # Capability definitions
-│       │   ├── components/        # 8 core components
-│       │   ├── config/            # 10 config type modules + policies
-│       │   ├── conversation/      # Conversation management
-│       │   ├── cowork/            # DAG task orchestration
-│       │   ├── dispatcher/        # Multi-layer routing
-│       │   ├── event/             # Event system
-│       │   ├── generation/        # 10+ media generation providers
-│       │   ├── intent/            # 3-layer intent detection
-│       │   ├── mcp/               # MCP integration (stdio transport)
-│       │   ├── memory/            # Dual-layer memory system
-│       │   ├── payload/           # Request payload building
-│       │   ├── providers/         # AI provider implementations
-│       │   ├── rig_tools/         # rig-core tool definitions
-│       │   ├── router/            # Smart routing logic
-│       │   ├── runtimes/          # Runtime managers (uv, fnm, yt-dlp)
-│       │   ├── search/            # 6 search providers
-│       │   ├── services/          # Background services
-│       │   ├── skills/            # Skill system
-│       │   ├── video/             # Video processing
-│       │   ├── vision/            # OCR + image understanding
-│       │   └── clarification/     # Phantom Flow (user clarification)
-│       └── uniffi.toml
+├── Cargo.toml                     # Workspace root configuration
+├── VERSION                        # Single version source of truth
+│
+├── core/                          # 🦀 Shared Rust Core Library
+│   ├── Cargo.toml                 # Feature flags: uniffi (macOS), cabi (Windows)
+│   ├── src/
+│   │   ├── lib.rs                 # UniFFI/C ABI exports and public API
+│   │   ├── aether.udl             # UniFFI interface definition
+│   │   ├── ffi_cabi.rs            # Windows C ABI exports (csbindgen)
+│   │   ├── ffi/                   # 9 FFI sub-modules
+│   │   ├── agent/                 # Agent execution engine
+│   │   ├── agents/                # Specialized agents
+│   │   ├── capability/            # Capability definitions
+│   │   ├── components/            # 8 core components
+│   │   ├── config/                # 10 config type modules + policies
+│   │   ├── conversation/          # Conversation management
+│   │   ├── cowork/                # DAG task orchestration
+│   │   ├── dispatcher/            # Multi-layer routing
+│   │   ├── event/                 # Event system
+│   │   ├── generation/            # 10+ media generation providers
+│   │   ├── intent/                # 3-layer intent detection
+│   │   ├── mcp/                   # MCP integration (stdio transport)
+│   │   ├── memory/                # Dual-layer memory system
+│   │   ├── payload/               # Request payload building
+│   │   ├── providers/             # AI provider implementations
+│   │   ├── rig_tools/             # rig-core tool definitions
+│   │   ├── router/                # Smart routing logic
+│   │   ├── runtimes/              # Runtime managers (uv, fnm, yt-dlp)
+│   │   ├── search/                # 6 search providers
+│   │   ├── services/              # Background services
+│   │   ├── skills/                # Skill system
+│   │   ├── video/                 # Video processing
+│   │   ├── vision/                # OCR + image understanding
+│   │   └── clarification/         # Phantom Flow (user clarification)
+│   └── uniffi.toml
+│
+├── platforms/                     # 📱 Platform-Specific Code
+│   ├── macos/                     # 🍎 macOS Application
+│   │   ├── project.yml            # XcodeGen configuration
+│   │   ├── Aether/
+│   │   │   ├── Sources/           # Swift source files
+│   │   │   ├── Frameworks/        # libaethecore.dylib
+│   │   │   └── Resources/         # Assets, localization
+│   │   ├── AetherTests/
+│   │   └── AetherUITests/
+│   │
+│   └── windows/                   # 🪟 Windows Application
+│       ├── Aether.sln             # Visual Studio solution
+│       ├── Aether/
+│       │   ├── Aether.csproj      # .NET 8.0 WinUI 3 project
+│       │   ├── App.xaml           # Application entry
+│       │   ├── Interop/           # csbindgen P/Invoke bindings
+│       │   └── libs/              # aethecore.dll
+│       └── Aether.Tests/
+│
+├── shared/                        # 📦 Cross-Platform Resources
+│   ├── config/                    # Default configuration templates
+│   ├── locales/                   # Master localization files
+│   └── docs/                      # Shared documentation
+│
+├── scripts/                       # 🔧 Build Scripts
+│   ├── build-core.sh              # Build Rust core (multi-target)
+│   ├── build-macos.sh             # macOS full build
+│   ├── build-windows.ps1          # Windows full build
+│   └── generate-bindings.sh       # FFI binding generation
+│
 ├── docs/                          # Documentation
-└── config.toml                    # User config (~/.config/aether/config.toml)
+└── .github/workflows/             # CI/CD pipelines
 ```
 
 ### Rust Core Module Count: 44 Modules
@@ -150,29 +171,53 @@ aether/
 ### Building Rust Core
 
 ```bash
-cd Aether/core/
+# From repository root
+cd core/
 
-# Development build
+# Development build (default: UniFFI for macOS)
 cargo build
 
 # Release build
 cargo build --release
 
-# Generate UniFFI bindings
-cargo run --bin uniffi-bindgen generate src/aether.udl \
-  --language swift --out-dir ../Sources/Generated/
+# Build for Windows (C ABI)
+cargo build --release --no-default-features --features cabi
 
-# Copy library
-cp target/release/libaethecore.dylib ../Frameworks/
+# Generate UniFFI bindings (macOS)
+cargo run --bin uniffi-bindgen generate \
+  --library target/release/libaethecore.dylib \
+  --language swift \
+  --out-dir ../platforms/macos/Aether/Sources/Generated/
 ```
 
 ### Building macOS Client
 
 ```bash
+cd platforms/macos/
 xcodegen generate                  # Generate Xcode project
 open Aether.xcodeproj              # Open in Xcode
 # Or:
 xcodebuild -project Aether.xcodeproj -scheme Aether -configuration Release build
+```
+
+### Building Windows Client (on Windows)
+
+```powershell
+cd platforms/windows/
+dotnet build -c Release
+```
+
+### Using Build Scripts
+
+```bash
+# Build core for all platforms
+./scripts/build-core.sh all
+
+# Build macOS app
+./scripts/build-macos.sh release
+
+# Build Windows app (on Windows)
+.\scripts\build-windows.ps1 -Config Release
 ```
 
 ### Testing

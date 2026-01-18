@@ -122,16 +122,17 @@ targets:
         script: |
           # Build Rust core library if needed
           CARGO_PATH="${HOME}/.cargo/bin/cargo"
+          CORE_DIR="${PROJECT_DIR}/../../core"
 
           if [ "${CONFIGURATION}" = "Debug" ]; then
-              cd "${PROJECT_DIR}/Aether/core"
+              cd "${CORE_DIR}"
               "${CARGO_PATH}" build
               # Copy debug library
               cp target/debug/libaethecore.dylib "${PROJECT_DIR}/Aether/Frameworks/"
               # Fix install_name to use @rpath for portability across machines
               install_name_tool -id "@rpath/libaethecore.dylib" "${PROJECT_DIR}/Aether/Frameworks/libaethecore.dylib"
           else
-              cd "${PROJECT_DIR}/Aether/core"
+              cd "${CORE_DIR}"
               "${CARGO_PATH}" build --release
               # Copy release library
               cp target/release/libaethecore.dylib "${PROJECT_DIR}/Aether/Frameworks/"
@@ -143,7 +144,8 @@ targets:
         script: |
           # Generate Swift bindings from Rust using Cargo uniffi-bindgen
           CARGO_PATH="${HOME}/.cargo/bin/cargo"
-          cd "${PROJECT_DIR}/Aether/core"
+          CORE_DIR="${PROJECT_DIR}/../../core"
+          cd "${CORE_DIR}"
 
           # Determine which library to use based on configuration
           if [ "${CONFIGURATION}" = "Debug" ]; then

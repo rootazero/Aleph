@@ -8,14 +8,25 @@ rust-version = "1.92"
 crate-type = ["cdylib", "staticlib", "rlib"]
 name = "aethecore"
 
+[features]
+# Default includes UniFFI for backward compatibility with existing macOS builds
+default = ["uniffi"]
+# macOS: UniFFI for Swift bindings
+uniffi = ["dep:uniffi"]
+# Windows: C ABI for csbindgen P/Invoke bindings
+cabi = []
+
 [dependencies]
-uniffi = { version = "0.28", features = ["cli"] }
+# UniFFI (optional, enabled by default for macOS)
+uniffi = { version = "0.28", features = ["cli"], optional = true }
+
 # REMOVED: System API dependencies (rdev, arboard, enigo) - now handled by Swift layer
 # See: refactor-native-api-separation proposal
 # - rdev → Swift GlobalHotkeyMonitor (CGEventTap)
 # - arboard → Swift ClipboardManager (NSPasteboard)
 # - enigo → Swift KeyboardSimulator (CGEvent)
 # - core-foundation/core-graphics → no longer needed
+
 tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -80,10 +91,13 @@ tar = "0.4"
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }
+# csbindgen for Windows C# bindings (only used when cabi feature enabled)
+# csbindgen = { version = "1.9", optional = true }  # Will be enabled in Phase 4
 
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/bin/uniffi_bindgen.rs"
+required-features = ["uniffi"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }

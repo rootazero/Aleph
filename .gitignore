@@ -5,9 +5,11 @@
 *.pdb
 *.rlib
 *.so
-*.dylib
-*.dll
 *.a
+
+# Platform libraries (built from Rust, not committed)
+platforms/macos/Aether/Frameworks/*.dylib
+platforms/windows/Aether/libs/*.dll
 
 # Cargo files
 Cargo.lock
@@ -52,6 +54,19 @@ DerivedData/
 
 # XcodeGen backup
 *.xcodeproj.backup
+
+# .NET / Windows
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+packages/
+*.nupkg
+project.lock.json
+*.nuget.props
+*.nuget.targets
 
 # UniFFI generated files (keep these in Git for now)
 # **/Generated/

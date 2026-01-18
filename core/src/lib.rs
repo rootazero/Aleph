@@ -379,6 +379,11 @@ pub fn init_logging() {
     }
 }
 
-// Include UniFFI scaffolding
+// Include UniFFI scaffolding (macOS only)
 // This generates all the FFI glue code at compile time
+#[cfg(feature = "uniffi")]
 uniffi::include_scaffolding!("aether");
+
+// C ABI exports for Windows (csbindgen)
+#[cfg(feature = "cabi")]
+pub mod ffi_cabi;
