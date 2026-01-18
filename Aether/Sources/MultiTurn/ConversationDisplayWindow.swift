@@ -5,6 +5,9 @@
 //  Floating window for displaying multi-turn conversation history.
 //  Positioned at top-right corner, draggable, with fixed width and adaptive height.
 //
+//  ⚠️ DEPRECATED: This file is deprecated and will be removed in a future version.
+//  Use UnifiedConversationWindow instead, which combines input and display functionality.
+//
 
 import Cocoa
 import SwiftUI

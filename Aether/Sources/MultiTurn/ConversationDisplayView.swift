@@ -5,6 +5,9 @@
 //  SwiftUI view for displaying conversation history.
 //  Updated to use Liquid Glass design language (macOS 26+).
 //
+//  ⚠️ DEPRECATED: This file is deprecated and will be removed in a future version.
+//  Use UnifiedConversationView and ConversationAreaView instead.
+//
 
 import SwiftUI
 

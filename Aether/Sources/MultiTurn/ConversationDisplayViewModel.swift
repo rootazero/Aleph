@@ -4,6 +4,9 @@
 //
 //  View model for conversation display window.
 //
+//  ⚠️ DEPRECATED: This file is deprecated and will be removed in a future version.
+//  Use UnifiedConversationViewModel instead.
+//
 
 import Foundation
 import SwiftUI

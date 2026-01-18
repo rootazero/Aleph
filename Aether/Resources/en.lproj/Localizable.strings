@@ -653,6 +653,11 @@
 "halo.state.success" = "Success";
 "halo.state.error" = "Error";
 
+// MARK: - Halo Agentic Session (Phase 5)
+"halo.agentic_session" = "Agentic Session";
+"halo.executing_plan" = "Executing Plan";
+"halo.retrieving_memory" = "Retrieving Memory";
+
 // MARK: - Settings Window - Unsaved Changes
 "settings.unsaved_changes.title" = "Unsaved Changes";
 "settings.unsaved_changes.message" = "You have unsaved changes. Do you want to save them before leaving?";
@@ -733,6 +738,17 @@
 "conversation.continue_placeholder" = "Continue the conversation...";
 "conversation.enter_to_send" = "Enter to send";
 "conversation.chat_command" = "Start multi-turn conversation";
+"conversation.empty" = "Start a conversation";
+"conversation.copy.all" = "Copy all messages";
+
+// MARK: - Multi-turn Input Area
+"multiturn.input.placeholder" = "Enter message or /command...";
+"multiturn.attachment.add" = "Add attachment";
+"multiturn.attachment.remove" = "Remove attachment";
+
+// MARK: - Command/Topic Lists
+"commands.empty" = "No matching commands";
+"topics.empty" = "No topics found";
 
 // MARK: - Clarification
 "clarification.enter_to_confirm" = "Enter to confirm";

@@ -5,6 +5,9 @@
 //  Input window for multi-turn conversation mode.
 //  Centered on screen, supports text input and // command for topic list.
 //
+//  ⚠️ DEPRECATED: This file is deprecated and will be removed in a future version.
+//  Use UnifiedConversationWindow instead, which combines input and display functionality.
+//
 
 import Cocoa
 import SwiftUI

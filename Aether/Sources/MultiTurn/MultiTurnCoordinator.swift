@@ -3,7 +3,7 @@
 //  Aether
 //
 //  Coordinator for multi-turn conversation mode.
-//  Manages input window, display window, persistence, and AI interaction.
+//  Manages unified conversation window, persistence, and AI interaction.
 //
 
 import AppKit
@@ -27,12 +27,12 @@ final class MultiTurnCoordinator {
     private var pendingUserInput: String?
     private var pendingIsFirstMessage: Bool = false
 
-    // MARK: - Windows
+    // MARK: - Window
 
-    private lazy var inputWindow: MultiTurnInputWindow = {
-        let window = MultiTurnInputWindow()
-        window.onSubmit = { [weak self] text in
-            self?.handleInput(text)
+    private lazy var unifiedWindow: UnifiedConversationWindow = {
+        let window = UnifiedConversationWindow()
+        window.onSubmit = { [weak self] text, attachments in
+            self?.handleInput(text, attachments: attachments)
         }
         window.onCancel = { [weak self] in
             self?.exit()
@@ -41,10 +41,6 @@ final class MultiTurnCoordinator {
             self?.loadTopic(topic)
         }
         return window
-    }()
-
-    private lazy var displayWindow: ConversationDisplayWindow = {
-        ConversationDisplayWindow()
     }()
 
     // MARK: - State
@@ -98,13 +94,11 @@ final class MultiTurnCoordinator {
             return
         }
 
-        // Show windows
-        displayWindow.viewModel.clear()
-        displayWindow.viewModel.loadTopic(topic)
-        displayWindow.show()
-
-        inputWindow.updateTurnCount(0)
-        inputWindow.showCentered()
+        // Reset and configure unified window
+        unifiedWindow.viewModel.reset()
+        unifiedWindow.viewModel.loadTopic(topic)
+        unifiedWindow.updateTurnCount(0)
+        unifiedWindow.showPositioned()
 
         print("[MultiTurnCoordinator] Session started, topic: \(topic.id)")
     }
@@ -118,8 +112,7 @@ final class MultiTurnCoordinator {
         typewriterTask?.cancel()
         typewriterTask = nil
 
-        inputWindow.hide()
-        displayWindow.hide()
+        unifiedWindow.hide()
         currentTopic = nil
     }
 
@@ -130,64 +123,45 @@ final class MultiTurnCoordinator {
         print("[MultiTurnCoordinator] Loading topic: \(topic.title)")
         currentTopic = topic
 
-        displayWindow.viewModel.loadTopic(topic)
+        unifiedWindow.viewModel.loadTopic(topic)
 
         let messageCount = ConversationStore.shared.getMessageCount(topicId: topic.id)
-        inputWindow.updateTurnCount(messageCount / 2)  // User + Assistant = 1 turn
+        unifiedWindow.updateTurnCount(messageCount / 2)  // User + Assistant = 1 turn
     }
 
     // MARK: - Input Handling
 
-    /// Handle user input
-    private func handleInput(_ text: String) {
+    /// Handle user input with attachments
+    /// - Parameters:
+    ///   - text: User input text
+    ///   - attachments: Pending attachments from the input area
+    private func handleInput(_ text: String, attachments: [PendingAttachment]) {
         guard let topic = currentTopic, core != nil else {
             print("[MultiTurnCoordinator] No active topic or core")
             return
         }
 
-        print("[MultiTurnCoordinator] Processing input: \(text.prefix(50))...")
+        print("[MultiTurnCoordinator] Processing input: \(text.prefix(50))... with \(attachments.count) attachment(s)")
 
-        // Get clipboard content (text + attachments like images) if recent (within 10 seconds)
-        var finalText = text
-        var clipboardAttachments: [MediaAttachment] = []
+        // Convert PendingAttachment to MediaAttachment
+        let mediaAttachments = attachments.map { $0.toMediaAttachment() }
 
-        if ClipboardMonitor.shared.isClipboardRecent() {
-            // Get mixed content from clipboard (text + images)
-            let (clipboardText, attachments, _) = ClipboardManager.shared.getMixedContent()
-
-            // Append text context if different from user input
-            if let recentText = clipboardText {
-                let trimmedClipboard = recentText.trimmingCharacters(in: .whitespacesAndNewlines)
-                let trimmedInput = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmedClipboard.isEmpty && trimmedClipboard != trimmedInput {
-                    finalText = text + "\n\n---\n[剪切板内容]\n" + recentText
-                    print("[MultiTurnCoordinator] Appended recent clipboard text (\(recentText.count) chars)")
-                }
-            }
-
-            // Capture attachments (images, etc.)
-            if !attachments.isEmpty {
-                clipboardAttachments = attachments
-                print("[MultiTurnCoordinator] Found \(attachments.count) clipboard attachment(s)")
-            }
-        }
-
-        // Add user message to UI and store (show original text to user)
-        displayWindow.viewModel.addUserMessage(text)
-        displayWindow.viewModel.setLoading(true)
+        // Add user message to UI
+        unifiedWindow.viewModel.addUserMessage(text)
+        unifiedWindow.viewModel.setLoading(true)
 
         // Check if this is the first message (for title generation)
-        let messageCount = displayWindow.viewModel.messages.count
+        let messageCount = unifiedWindow.viewModel.messages.count
         let isFirstMessage = messageCount == 1
         print("[MultiTurnCoordinator] handleInput: messageCount=\(messageCount), isFirstMessage=\(isFirstMessage)")
 
-        // Process in background (use finalText which may include clipboard content)
+        // Process in background
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.processWithAI(
-                text: finalText,
+                text: text,
                 topic: topic,
                 userDisplayText: text,
-                attachments: clipboardAttachments,
+                attachments: mediaAttachments,
                 isFirstMessage: isFirstMessage
             )
         }
@@ -230,7 +204,7 @@ final class MultiTurnCoordinator {
             print("[MultiTurnCoordinator] AI error: \(error)")
             clearPendingContext()
             DispatchQueue.main.async { [weak self] in
-                self?.displayWindow.viewModel.setError(error.localizedDescription)
+                self?.unifiedWindow.viewModel.setError(error.localizedDescription)
             }
         }
     }
@@ -260,7 +234,7 @@ final class MultiTurnCoordinator {
             startTypewriterOutput(response: response, topic: topic, userInput: userInput, isFirstMessage: isFirstMessage, speed: typingSpeed)
         } else {
             // Instant mode - add full message at once
-            displayWindow.viewModel.addAssistantMessage(response)
+            unifiedWindow.viewModel.addAssistantMessage(response)
             finishResponse(topic: topic, userInput: userInput, aiResponse: response, isFirstMessage: isFirstMessage)
         }
     }
@@ -271,7 +245,7 @@ final class MultiTurnCoordinator {
         typewriterTask?.cancel()
 
         // Start streaming message placeholder
-        guard displayWindow.viewModel.startStreamingMessage() != nil else {
+        guard unifiedWindow.viewModel.startStreamingMessage() != nil else {
             print("[MultiTurnCoordinator] Failed to start streaming message")
             return
         }
@@ -290,14 +264,14 @@ final class MultiTurnCoordinator {
                 }
 
                 currentText.append(char)
-                displayWindow.viewModel.updateStreamingText(currentText)
+                unifiedWindow.viewModel.updateStreamingText(currentText)
 
                 // Wait for next character
                 try? await Task.sleep(nanoseconds: UInt64(charDelay * 1_000_000_000))
             }
 
             // Finish streaming
-            displayWindow.viewModel.finishStreamingMessage()
+            unifiedWindow.viewModel.finishStreamingMessage()
             finishResponse(topic: topic, userInput: userInput, aiResponse: response, isFirstMessage: isFirstMessage)
         }
     }
@@ -306,7 +280,7 @@ final class MultiTurnCoordinator {
     private func finishResponse(topic: Topic, userInput: String, aiResponse: String, isFirstMessage: Bool) {
         // Update turn count
         let messageCount = ConversationStore.shared.getMessageCount(topicId: topic.id)
-        inputWindow.updateTurnCount(messageCount / 2)
+        unifiedWindow.updateTurnCount(messageCount / 2)
 
         print("[MultiTurnCoordinator] finishResponse: isFirstMessage=\(isFirstMessage), messageCount=\(messageCount)")
 
@@ -341,9 +315,9 @@ final class MultiTurnCoordinator {
 
                 // Update UI on main thread
                 DispatchQueue.main.async {
-                    if var updatedTopic = self?.displayWindow.viewModel.topic {
+                    if var updatedTopic = self?.unifiedWindow.viewModel.topic {
                         updatedTopic.title = title
-                        self?.displayWindow.viewModel.topic = updatedTopic
+                        self?.unifiedWindow.viewModel.topic = updatedTopic
                     }
                     print("[MultiTurnCoordinator] Title updated: \(title)")
                 }
@@ -390,7 +364,7 @@ final class MultiTurnCoordinator {
         clearPendingContext()
 
         DispatchQueue.main.async { [weak self] in
-            self?.displayWindow.viewModel.setError(message)
+            self?.unifiedWindow.viewModel.setError(message)
         }
     }
 

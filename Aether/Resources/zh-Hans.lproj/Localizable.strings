@@ -655,6 +655,11 @@
 "halo.state.success" = "成功";
 "halo.state.error" = "错误";
 
+// MARK: - Halo Agentic Session (Phase 5)
+"halo.agentic_session" = "智能体会话";
+"halo.executing_plan" = "执行计划中";
+"halo.retrieving_memory" = "检索记忆中";
+
 // MARK: - Settings Window - Unsaved Changes
 "settings.unsaved_changes.title" = "未保存的更改";
 "settings.unsaved_changes.message" = "您有未保存的更改。离开前是否要保存它们？";
@@ -735,6 +740,17 @@
 "conversation.continue_placeholder" = "继续对话...";
 "conversation.enter_to_send" = "按 Enter 发送";
 "conversation.chat_command" = "开始多轮对话";
+"conversation.empty" = "开始对话";
+"conversation.copy.all" = "复制所有消息";
+
+// MARK: - Multi-turn Input Area
+"multiturn.input.placeholder" = "输入消息或 /命令...";
+"multiturn.attachment.add" = "添加附件";
+"multiturn.attachment.remove" = "删除附件";
+
+// MARK: - Command/Topic Lists
+"commands.empty" = "无匹配命令";
+"topics.empty" = "未找到话题";
 
 // MARK: - Clarification
 "clarification.enter_to_confirm" = "按 Enter 确认";
