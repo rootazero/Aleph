@@ -53,6 +53,7 @@
 // NOTE: clipboard module retained for ImageData/ImageFormat types (used by AI providers)
 // Clipboard operations are handled by Swift ClipboardManager
 pub mod agent; // NEW: Agent loop for tool calling
+pub mod agents; // NEW: Sub-agent system (Phase 4)
 pub mod capability;
 pub mod clarification; // NEW: Phantom Flow interaction types
 mod clipboard;
