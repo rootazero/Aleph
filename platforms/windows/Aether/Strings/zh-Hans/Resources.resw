@@ -34,13 +34,13 @@
     <value>通用</value>
   </data>
   <data name="NavItem_Providers.Content" xml:space="preserve">
-    <value>服务商</value>
+    <value>提供商</value>
   </data>
   <data name="NavItem_Generation.Content" xml:space="preserve">
     <value>生成</value>
   </data>
   <data name="NavItem_Routing.Content" xml:space="preserve">
-    <value>路由</value>
+    <value>路由规则</value>
   </data>
   <data name="NavItem_Shortcuts.Content" xml:space="preserve">
     <value>快捷键</value>
@@ -49,22 +49,22 @@
     <value>行为</value>
   </data>
   <data name="NavItem_Memory.Content" xml:space="preserve">
-    <value>记忆</value>
+    <value>记忆管理</value>
   </data>
   <data name="NavItem_Search.Content" xml:space="preserve">
-    <value>搜索</value>
+    <value>搜索引擎</value>
   </data>
   <data name="NavItem_MCP.Content" xml:space="preserve">
-    <value>MCP</value>
+    <value>MCP 工具</value>
   </data>
   <data name="NavItem_Skills.Content" xml:space="preserve">
-    <value>技能</value>
+    <value>Claude 技能</value>
   </data>
   <data name="NavItem_Cowork.Content" xml:space="preserve">
-    <value>协作</value>
+    <value>协作模式</value>
   </data>
   <data name="NavItem_Policies.Content" xml:space="preserve">
-    <value>策略</value>
+    <value>策略配置</value>
   </data>
   <data name="Settings_UnsavedChanges.Text" xml:space="preserve">
     <value>您有未保存的更改</value>
