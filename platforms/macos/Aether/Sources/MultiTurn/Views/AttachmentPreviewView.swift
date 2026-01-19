@@ -51,14 +51,14 @@ struct AttachmentThumbnailView: View {
 
                 Text(attachment.fileName)
                     .font(.caption2)
-                    .foregroundColor(.primary.opacity(0.7))
+                    .foregroundColor(.white.opacity(0.7))
                     .lineLimit(1)
                     .frame(maxWidth: thumbnailSize + 16)
             }
             .padding(4)
             .background(
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(.primary.opacity(isHovering ? 0.1 : 0.05))
+                    .fill(Color.white.opacity(isHovering ? 0.12 : 0.06))
             )
 
             // Remove button
@@ -66,8 +66,8 @@ struct AttachmentThumbnailView: View {
                 Button(action: onRemove) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 18))
-                        .foregroundColor(.primary.opacity(0.7))
-                        .background(Circle().fill(.background))
+                        .foregroundColor(.white.opacity(0.8))
+                        .background(Circle().fill(Color.black.opacity(0.3)))
                 }
                 .buttonStyle(.plain)
                 .offset(x: 6, y: -6)
@@ -90,9 +90,9 @@ struct AttachmentThumbnailView: View {
         } else {
             Image(systemName: attachment.fileType.iconName)
                 .font(.system(size: 28))
-                .foregroundColor(.primary.opacity(0.6))
+                .foregroundColor(.white.opacity(0.6))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.primary.opacity(0.05))
+                .background(Color.white.opacity(0.06))
         }
     }
 }

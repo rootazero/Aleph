@@ -261,14 +261,14 @@ struct MultiTurnInputView: View {
 
     private var inputField: some View {
         HStack(spacing: 12) {
-            // Turn indicator (pure glass style - white text)
+            // Turn indicator (Liquid Glass style - white text)
             if viewModel.turnCount > 0 {
                 Text("Turn \(viewModel.turnCount + 1)")
                     .font(.caption)
-                    .foregroundColor(.primary.opacity(0.7))
+                    .foregroundColor(.white.opacity(0.8))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(.primary.opacity(0.1))
+                    .background(Color.white.opacity(0.15))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
             }
 
@@ -322,7 +322,7 @@ struct MultiTurnInputView: View {
             if viewModel.commands.isEmpty {
                 Text("No commands found")
                     .font(.subheadline)
-                    .foregroundColor(.primary.opacity(0.7))
+                    .foregroundColor(.white.opacity(0.7))
                     .padding()
             } else {
                 ScrollViewReader { proxy in
@@ -360,7 +360,7 @@ struct MultiTurnInputView: View {
             if viewModel.filteredTopics.isEmpty {
                 Text("No topics found")
                     .font(.subheadline)
-                    .foregroundColor(.primary.opacity(0.7))
+                    .foregroundColor(.white.opacity(0.7))
                     .padding()
             } else {
                 ScrollViewReader { proxy in
@@ -410,10 +410,10 @@ struct CommandRowView: View {
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 12) {
-                // Command icon (white for glass style)
+                // Command icon (Liquid Glass - white)
                 Image(systemName: command.icon.isEmpty ? "terminal" : command.icon)
                     .font(.system(size: 14))
-                    .foregroundColor(.primary.opacity(0.8))
+                    .foregroundColor(.white.opacity(0.9))
                     .frame(width: 20)
 
                 // Command info
@@ -421,22 +421,22 @@ struct CommandRowView: View {
                     HStack(spacing: 6) {
                         Text("/\(command.key)")
                             .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.primary)
+                            .foregroundColor(.white)
 
-                        // Source badge (white style)
+                        // Source badge (Liquid Glass - white)
                         Text(sourceTypeName(command.sourceType))
                             .font(.system(size: 9))
-                            .foregroundColor(.primary.opacity(0.7))
+                            .foregroundColor(.white.opacity(0.7))
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
-                            .background(.primary.opacity(0.15))
+                            .background(Color.white.opacity(0.15))
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
 
                     if !command.description.isEmpty {
                         Text(command.description)
                             .font(.caption)
-                            .foregroundColor(.primary.opacity(0.6))
+                            .foregroundColor(.white.opacity(0.6))
                             .lineLimit(1)
                     }
                 }
@@ -445,11 +445,11 @@ struct CommandRowView: View {
 
                 Image(systemName: "chevron.right")
                     .font(.caption)
-                    .foregroundColor(.primary.opacity(0.5))
+                    .foregroundColor(.white.opacity(0.5))
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background((isHovering || isSelected) ? Color.primary.opacity(0.1) : Color.clear)
+            .background((isHovering || isSelected) ? Color.white.opacity(0.12) : Color.clear)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -489,7 +489,7 @@ struct TopicRowView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background((isHovering || isSelected || isConfirmingDelete) ? Color.primary.opacity(0.1) : Color.clear)
+        .background((isHovering || isSelected || isConfirmingDelete) ? Color.white.opacity(0.12) : Color.clear)
         .onHover { hovering in
             isHovering = hovering
         }
@@ -504,12 +504,12 @@ struct TopicRowView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(topic.title)
                         .font(.system(size: 14))
-                        .foregroundColor(.primary)
+                        .foregroundColor(.white)
                         .lineLimit(1)
 
                     Text(formatDate(topic.updatedAt))
                         .font(.caption)
-                        .foregroundColor(.primary.opacity(0.6))
+                        .foregroundColor(.white.opacity(0.6))
                 }
             }
             .buttonStyle(.plain)
@@ -527,7 +527,7 @@ struct TopicRowView: View {
                     } label: {
                         Image(systemName: "pencil")
                             .font(.system(size: 12))
-                            .foregroundColor(.primary.opacity(0.7))
+                            .foregroundColor(.white.opacity(0.7))
                     }
                     .buttonStyle(.plain)
                     .help("Rename")
@@ -550,7 +550,7 @@ struct TopicRowView: View {
                 // Chevron when not hovering
                 Image(systemName: "chevron.right")
                     .font(.caption)
-                    .foregroundColor(.primary.opacity(0.5))
+                    .foregroundColor(.white.opacity(0.5))
             }
         }
         .animation(.easeInOut(duration: 0.15), value: isHovering)
@@ -566,7 +566,7 @@ struct TopicRowView: View {
 
             Text("确认删除「\(topic.title)」？")
                 .font(.system(size: 13))
-                .foregroundColor(.primary)
+                .foregroundColor(.white)
                 .lineLimit(1)
 
             Spacer()
@@ -579,7 +579,7 @@ struct TopicRowView: View {
             } label: {
                 Text("取消")
                     .font(.system(size: 12))
-                    .foregroundColor(.primary.opacity(0.6))
+                    .foregroundColor(.white.opacity(0.6))
             }
             .buttonStyle(.plain)
 
@@ -603,7 +603,7 @@ struct TopicRowView: View {
             TextField("Topic title", text: $editingTitle)
                 .textFieldStyle(.plain)
                 .font(.system(size: 14))
-                .foregroundColor(.primary)
+                .foregroundColor(.white)
                 .focused($isTextFieldFocused)
                 .onSubmit {
                     commitRename()
@@ -629,7 +629,7 @@ struct TopicRowView: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.primary.opacity(0.6))
+                    .foregroundColor(.white.opacity(0.6))
             }
             .buttonStyle(.plain)
             .help("Cancel")

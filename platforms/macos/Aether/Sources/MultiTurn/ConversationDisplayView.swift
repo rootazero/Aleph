@@ -58,11 +58,10 @@ struct ConversationDisplayView: View {
 
     private var titleBar: some View {
         HStack {
-            // Clean design without colored indicator (pure glass style)
-            // Use white color for consistent contrast on transparent glass
+            // Liquid Glass design: white text on transparent glass
             Text(viewModel.displayTitle)
                 .font(.headline)
-                .foregroundColor(.primary)
+                .liquidGlassText()
                 .lineLimit(1)
 
             Spacer()
@@ -71,7 +70,7 @@ struct ConversationDisplayView: View {
             Button(action: viewModel.copyAllMessages) {
                 Image(systemName: "doc.on.doc")
                     .font(.system(size: 12))
-                    .foregroundColor(.primary.opacity(0.7))
+                    .foregroundColor(.white.opacity(0.7))
             }
             .buttonStyle(.plain)
             .adaptiveGlassButton()
@@ -132,11 +131,11 @@ struct ConversationDisplayView: View {
         VStack(spacing: 8) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 32))
-                .foregroundColor(.primary.opacity(0.6))
+                .foregroundColor(.white.opacity(0.6))
 
             Text("Start a conversation")
                 .font(.subheadline)
-                .foregroundColor(.primary.opacity(0.7))
+                .foregroundColor(.white.opacity(0.7))
         }
         .frame(maxWidth: .infinity)
         .frame(height: 100)
@@ -154,12 +153,12 @@ struct ConversationDisplayView: View {
         HStack(spacing: 6) {
             ForEach(0..<3, id: \.self) { index in
                 Circle()
-                    .fill(.primary.opacity(0.5))
+                    .fill(Color.white.opacity(0.5))
                     .frame(width: 6, height: 6)
             }
         }
         .padding(.vertical, 10)
-        // Pure glass style: use white for visibility
+        // Liquid Glass style: white for visibility
     }
 
     // MARK: - Error Banner
@@ -196,11 +195,11 @@ struct MessageBubbleView: View {
             if isUser { Spacer(minLength: 40) }
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
-                // Message content with glass bubble effect
-                // Use white color for consistent contrast on transparent glass
+                // Message content with Liquid Glass bubble effect
+                // White text for foreground glass design
                 Text(message.content)
                     .font(.system(size: 13))
-                    .foregroundColor(.primary)
+                    .foregroundColor(.white)
                     .textSelection(.enabled)
                     .padding(12)
                     .glassBubble(isUser: isUser)
@@ -213,7 +212,7 @@ struct MessageBubbleView: View {
                             Text("Copy")
                         }
                         .font(.caption2)
-                        .foregroundColor(.primary.opacity(0.7))
+                        .foregroundColor(.white.opacity(0.7))
                     }
                     .buttonStyle(.plain)
                 }
