@@ -311,6 +311,7 @@ impl InitializationCoordinator {
 
     async fn install_runtimes(&self) -> Result<(), InitError> {
         use crate::runtimes::RuntimeRegistry;
+        use std::time::Duration;
 
         info!("Installing runtimes in parallel...");
 
@@ -343,7 +344,11 @@ impl InitializationCoordinator {
             let handle = tokio::spawn(async move {
                 // Report individual runtime start
                 if let Some(h) = &handler {
-                    h.on_download_progress(runtime_id.clone(), 0, 0);
+                    h.on_phase_progress(
+                        "runtimes".to_string(),
+                        0.0,
+                        format!("Installing {}...", runtime_id),
+                    );
                 }
 
                 let result = if runtime.is_installed() {
@@ -351,12 +356,23 @@ impl InitializationCoordinator {
                     Ok(())
                 } else {
                     info!(runtime_id = %runtime_id, "Installing runtime...");
-                    runtime.install().await
+                    // 5 minute timeout for each runtime installation
+                    match tokio::time::timeout(Duration::from_secs(300), runtime.install()).await {
+                        Ok(install_result) => install_result,
+                        Err(_) => Err(crate::error::AetherError::runtime(
+                            &runtime_id,
+                            "Installation timed out after 5 minutes",
+                        )),
+                    }
                 };
 
                 // Report completion
                 if let Some(h) = &handler {
-                    h.on_download_progress(runtime_id.clone(), 1, 1);
+                    h.on_phase_progress(
+                        "runtimes".to_string(),
+                        0.0,
+                        format!("{} installed", runtime_id),
+                    );
                 }
 
                 (runtime_id, result)
