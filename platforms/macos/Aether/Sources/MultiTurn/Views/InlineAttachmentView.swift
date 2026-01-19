@@ -19,20 +19,17 @@ struct InlineAttachmentView: View {
     private let maxWidth: CGFloat = 112  // 4 items × 28px
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: itemSpacing) {
-                ForEach(attachments) { attachment in
-                    CompactAttachmentItem(
-                        attachment: attachment,
-                        size: itemSize,
-                        onRemove: { onRemove(attachment) }
-                    )
-                }
+        HStack(spacing: itemSpacing) {
+            Spacer(minLength: 0)  // Push attachments to the right
+            ForEach(attachments) { attachment in
+                CompactAttachmentItem(
+                    attachment: attachment,
+                    size: itemSize,
+                    onRemove: { onRemove(attachment) }
+                )
             }
-            .padding(.horizontal, 2)
-            .padding(.vertical, 6)  // Space for remove button
         }
-        .frame(maxWidth: maxWidth, alignment: .trailing)  // Right-align attachments
+        .frame(width: maxWidth)
     }
 }
 
