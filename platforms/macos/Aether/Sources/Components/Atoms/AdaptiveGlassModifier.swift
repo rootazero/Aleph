@@ -44,8 +44,10 @@ struct AdaptiveGlassModifier: ViewModifier {
             let _ = print("[AdaptiveGlassModifier] Using native macOS 26 glassEffect (.regular)")
             // Use pure glassEffect without custom background layers
             // System automatically applies vibrant text colors for legibility
+            // clipShape ensures content doesn't leak outside rounded corners
             content
                 .environment(\.isInGlass, true)
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         } else {
             // Fallback for macOS 15-25
