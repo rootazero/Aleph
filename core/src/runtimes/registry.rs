@@ -6,7 +6,7 @@
 
 use super::manager::{RuntimeInfo, RuntimeManager, UpdateInfo};
 use super::manifest::Manifest;
-use super::{get_runtimes_dir, FnmRuntime, UvRuntime, YtDlpRuntime};
+use super::{get_runtimes_dir, FfmpegRuntime, FnmRuntime, UvRuntime, YtDlpRuntime};
 use crate::error::{AetherError, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -54,6 +54,7 @@ impl RuntimeRegistry {
         // Create runtime instances
         let mut runtimes: HashMap<&'static str, Arc<dyn RuntimeManager>> = HashMap::new();
 
+        let ffmpeg = Arc::new(FfmpegRuntime::new(runtimes_dir.clone()));
         let ytdlp = Arc::new(YtDlpRuntime::new(runtimes_dir.clone()));
         let uv = Arc::new(UvRuntime::new(runtimes_dir.clone()));
         let fnm = Arc::new(FnmRuntime::new(runtimes_dir.clone()));
@@ -63,6 +64,7 @@ impl RuntimeRegistry {
             warn!("Failed to migrate yt-dlp: {}", e);
         }
 
+        runtimes.insert(ffmpeg.id(), ffmpeg);
         runtimes.insert(ytdlp.id(), ytdlp);
         runtimes.insert(uv.id(), uv);
         runtimes.insert(fnm.id(), fnm);
@@ -218,7 +220,7 @@ mod tests {
 
         let registry = registry.unwrap();
         let runtimes = registry.list();
-        assert_eq!(runtimes.len(), 3); // yt-dlp, uv, fnm
+        assert_eq!(runtimes.len(), 4); // ffmpeg, yt-dlp, uv, fnm
     }
 
     #[test]

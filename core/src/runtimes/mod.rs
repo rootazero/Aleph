@@ -30,6 +30,7 @@ mod manifest;
 mod registry;
 
 // Runtime implementations
+mod ffmpeg;
 mod fnm;
 mod uv;
 mod ytdlp;
@@ -40,6 +41,7 @@ pub use manifest::Manifest;
 pub use registry::RuntimeRegistry;
 
 // Runtime implementations (for direct access if needed)
+pub use ffmpeg::FfmpegRuntime;
 pub use fnm::FnmRuntime;
 pub use uv::UvRuntime;
 pub use ytdlp::YtDlpRuntime;
