@@ -17,11 +17,17 @@
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <WindowsPackageType>None</WindowsPackageType>
 
+    <!-- Enable MSIX tooling for dotnet CLI builds -->
+    <EnableMsixTooling>true</EnableMsixTooling>
+
     <!-- Single instance application -->
     <ApplicationId>com.aether.app</ApplicationId>
 
     <!-- Localization: auto-detect system language -->
     <DefaultLanguage>en-US</DefaultLanguage>
+
+    <!-- Disable the XAML Hot Reload in-app toolbar during debugging -->
+    <EnableXamlInAppToolbar>false</EnableXamlInAppToolbar>
 
     <!-- Version from shared VERSION file -->
     <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../../../VERSION').Trim())</Version>
@@ -39,10 +45,7 @@
     <None Include="libs\aethecore.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('libs\aethecore.dll')" />
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- Localization resources -->
-    <PRIResource Include="Strings\**\*.resw" />
-  </ItemGroup>
+  <!-- Localization resources are auto-included by SDK (EnableDefaultPriItems) -->
 
   <!-- NativeMethods.g.cs is auto-included by SDK from Interop folder -->
 </Project>

@@ -23,7 +23,7 @@ public sealed partial class PoliciesSettingsPage : UserControl
     public void SetViewModel(SettingsViewModel viewModel)
     {
         ViewModel = viewModel;
-        _core = App.Current?.AetherCore;
+        _core = App.Instance.Core;
         LoadPolicies();
     }
 

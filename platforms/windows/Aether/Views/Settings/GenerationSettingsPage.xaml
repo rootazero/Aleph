@@ -6,7 +6,7 @@
 
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="240" MinWidth="200" MaxWidth="300"/>
+            <ColumnDefinition Width="280" MinWidth="240" MaxWidth="360"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
@@ -86,10 +86,11 @@
 
         <!-- Right Panel - Provider Configuration -->
         <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
-            <StackPanel x:Name="DetailPanel"
-                        Padding="24"
-                        Spacing="16"
-                        Visibility="Collapsed">
+            <Grid>
+                <StackPanel x:Name="DetailPanel"
+                            Padding="24"
+                            Spacing="16"
+                            Visibility="Collapsed">
 
                 <!-- Provider Header -->
                 <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
@@ -229,17 +230,18 @@
                 </Button>
             </StackPanel>
 
-            <!-- Empty State -->
-            <StackPanel x:Name="EmptyDetailState"
-                        Visibility="Visible"
-                        VerticalAlignment="Center"
-                        HorizontalAlignment="Center"
-                        Spacing="8">
-                <FontIcon Glyph="&#xE8B9;" FontSize="48"
-                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                <TextBlock Text="Select a provider to configure"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-            </StackPanel>
+                <!-- Empty State -->
+                <StackPanel x:Name="EmptyDetailState"
+                            Visibility="Visible"
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Center"
+                            Spacing="8">
+                    <FontIcon Glyph="&#xE8B9;" FontSize="48"
+                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <TextBlock Text="Select a provider to configure"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                </StackPanel>
+            </Grid>
         </ScrollViewer>
 
         <!-- Status InfoBar -->

@@ -12,17 +12,19 @@
 
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="*"/>     <!-- Messages -->
+            <RowDefinition Height="*"/>     <!-- Content (Messages/Commands/Topics) -->
             <RowDefinition Height="Auto"/>  <!-- Streaming Indicator -->
             <RowDefinition Height="Auto"/>  <!-- Input Area -->
         </Grid.RowDefinitions>
 
-        <!-- Messages List -->
+        <!-- Messages List - visible when DisplayState == Conversation -->
         <ScrollViewer
             x:Name="MessagesScrollViewer"
             Grid.Row="0"
+            MinHeight="0"
             VerticalScrollBarVisibility="Auto"
-            Padding="16">
+            Padding="16"
+            Visibility="{x:Bind ViewModel.IsShowingConversation, Mode=OneWay}">
             <ItemsControl
                 x:Name="MessagesContainer"
                 ItemsSource="{x:Bind ViewModel.Messages, Mode=OneWay}">
@@ -82,6 +84,125 @@
             </ItemsControl>
         </ScrollViewer>
 
+        <!-- Command List - visible when DisplayState == CommandList -->
+        <ListView
+            x:Name="CommandListView"
+            Grid.Row="0"
+            MinHeight="0"
+            Padding="16"
+            SelectionMode="Single"
+            Visibility="{x:Bind ViewModel.IsShowingCommands, Mode=OneWay}"
+            ItemsSource="{x:Bind ViewModel.FilteredCommands, Mode=OneWay}"
+            SelectedIndex="{x:Bind ViewModel.SelectedCommandIndex, Mode=TwoWay}"
+            ItemClick="CommandListView_ItemClick"
+            IsItemClickEnabled="True">
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="vm:CommandItem">
+                    <Grid Padding="8,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Command Icon -->
+                        <Border
+                            Grid.Column="0"
+                            Grid.RowSpan="2"
+                            Width="32"
+                            Height="32"
+                            Margin="0,0,12,0"
+                            CornerRadius="6"
+                            Background="{ThemeResource AccentFillColorDefaultBrush}"
+                            VerticalAlignment="Center">
+                            <FontIcon
+                                Glyph="&#xE756;"
+                                FontSize="14"
+                                Foreground="White"/>
+                        </Border>
+
+                        <!-- Command Name -->
+                        <TextBlock
+                            Grid.Column="1"
+                            Grid.Row="0"
+                            FontWeight="SemiBold">
+                            <Run Text="/"/><Run Text="{x:Bind Name}"/>
+                        </TextBlock>
+
+                        <!-- Command Description -->
+                        <TextBlock
+                            Grid.Column="1"
+                            Grid.Row="1"
+                            Text="{x:Bind Description}"
+                            FontSize="12"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+
+        <!-- Topic List - visible when DisplayState == TopicList -->
+        <ListView
+            x:Name="TopicListView"
+            Grid.Row="0"
+            MinHeight="0"
+            Padding="16"
+            SelectionMode="Single"
+            Visibility="{x:Bind ViewModel.IsShowingTopics, Mode=OneWay}"
+            ItemsSource="{x:Bind ViewModel.FilteredTopics, Mode=OneWay}"
+            SelectedIndex="{x:Bind ViewModel.SelectedTopicIndex, Mode=TwoWay}"
+            ItemClick="TopicListView_ItemClick"
+            IsItemClickEnabled="True">
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="vm:TopicItem">
+                    <Grid Padding="8,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Topic Icon -->
+                        <Border
+                            Grid.Column="0"
+                            Grid.RowSpan="2"
+                            Width="32"
+                            Height="32"
+                            Margin="0,0,12,0"
+                            CornerRadius="6"
+                            Background="{ThemeResource SystemAccentColorLight2}"
+                            VerticalAlignment="Center">
+                            <FontIcon
+                                Glyph="&#xE8BD;"
+                                FontSize="14"
+                                Foreground="White"/>
+                        </Border>
+
+                        <!-- Topic Title -->
+                        <TextBlock
+                            Grid.Column="1"
+                            Grid.Row="0"
+                            Text="{x:Bind Title}"
+                            FontWeight="SemiBold"/>
+
+                        <!-- Topic Description -->
+                        <TextBlock
+                            Grid.Column="1"
+                            Grid.Row="1"
+                            Text="{x:Bind Description}"
+                            FontSize="12"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+
         <!-- Streaming Indicator -->
         <Border
             x:Name="StreamingIndicator"
@@ -106,7 +227,7 @@
             </StackPanel>
         </Border>
 
-        <!-- Input Area (with context menu for Clear) -->
+        <!-- Input Area (macOS style: TextBox + Attachment + Send) -->
         <Border
             Grid.Row="2"
             Background="{ThemeResource LayerFillColorDefaultBrush}"
@@ -124,32 +245,46 @@
             </Border.ContextFlyout>
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>      <!-- TextBox -->
+                    <ColumnDefinition Width="Auto"/>   <!-- Attachment Button -->
+                    <ColumnDefinition Width="Auto"/>   <!-- Send Button -->
                 </Grid.ColumnDefinitions>
 
                 <TextBox
                     x:Name="InputTextBox"
                     Grid.Column="0"
-                    PlaceholderText="Type a message... (Press Enter to send)"
+                    PlaceholderText="Type a message..."
                     AcceptsReturn="False"
                     TextWrapping="Wrap"
                     MaxHeight="120"
                     KeyDown="InputTextBox_KeyDown"
                     Text="{x:Bind ViewModel.InputText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
 
+                <!-- Attachment Button (+ icon) -->
+                <Button
+                    x:Name="AttachButton"
+                    Grid.Column="1"
+                    Width="36"
+                    Height="36"
+                    Margin="8,0,0,0"
+                    VerticalAlignment="Bottom"
+                    ToolTipService.ToolTip="Add attachment">
+                    <FontIcon Glyph="&#xE710;" FontSize="16"/>
+                </Button>
+
+                <!-- Send Button (arrow up icon only) -->
                 <Button
                     x:Name="SendButton"
-                    Grid.Column="1"
-                    Margin="8,0,0,0"
+                    Grid.Column="2"
+                    Width="36"
+                    Height="36"
+                    Margin="4,0,0,0"
                     Style="{ThemeResource AccentButtonStyle}"
                     Click="SendButton_Click"
                     IsEnabled="{x:Bind ViewModel.CanSend, Mode=OneWay}"
-                    VerticalAlignment="Bottom">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <FontIcon Glyph="&#xE724;" FontSize="16"/>
-                        <TextBlock Text="Send"/>
-                    </StackPanel>
+                    VerticalAlignment="Bottom"
+                    ToolTipService.ToolTip="Send message (Enter)">
+                    <FontIcon Glyph="&#xE724;" FontSize="16"/>
                 </Button>
             </Grid>
         </Border>
