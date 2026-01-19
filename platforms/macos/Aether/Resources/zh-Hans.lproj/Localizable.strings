@@ -1119,24 +1119,6 @@
 "settings.policies.metrics.warning_multiplier" = "警告倍数";
 "settings.policies.metrics.warning_multiplier_description" = "超过目标时间多少倍触发警告";
 
-// MARK: - Settings Window - Runtimes Tab
-"settings.runtimes.title" = "运行时";
-"settings.runtimes.description" = "管理外部运行时环境，如 Python、Node.js 和 yt-dlp。";
-"settings.runtimes.info" = "运行时会在首次需要时自动安装。您也可以在此手动安装或更新。";
-"settings.runtimes.installed_runtimes" = "已安装的运行时";
-"settings.runtimes.check_updates" = "检查更新";
-"settings.runtimes.loading" = "加载中...";
-"settings.runtimes.empty_state" = "未找到运行时。它们将在需要时自动安装。";
-"settings.runtimes.version" = "v%@";
-"settings.runtimes.install" = "安装";
-"settings.runtimes.update" = "更新";
-"settings.runtimes.status_installed" = "已安装";
-"settings.runtimes.status_not_installed" = "未安装";
-"settings.runtimes.status_update_available" = "有更新";
-"settings.runtimes.install_failed" = "安装 %@ 失败：%@";
-"settings.runtimes.update_failed" = "更新 %@ 失败：%@";
-"settings.runtimes.check_updates_failed" = "检查更新失败：%@";
-
 // Runtime update notifications
 "notification.runtime_updates_title" = "运行时更新可用";
 "notification.runtime_update_single" = "%@ 可以更新到 %@";

@@ -146,8 +146,6 @@ struct RootContentView: View {
             return L("settings.cowork.title")
         case .policies:
             return L("settings.policies.title")
-        case .runtimes:
-            return L("settings.runtimes.title")
         }
     }
 
@@ -178,8 +176,6 @@ struct RootContentView: View {
             return L("settings.cowork.description")
         case .policies:
             return L("settings.policies.description")
-        case .runtimes:
-            return L("settings.runtimes.description")
         }
     }
 
@@ -320,15 +316,6 @@ struct RootContentView: View {
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Policies settings requires AetherCore initialization")
-            }
-
-        case .runtimes:
-            // core used for runtime management
-            if let core = core {
-                RuntimeSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
-                    .id(configReloadTrigger)
-            } else {
-                placeholderView("Runtime management requires AetherCore initialization")
             }
         }
     }

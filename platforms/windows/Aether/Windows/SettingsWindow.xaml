@@ -108,12 +108,6 @@
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
 
-                <!-- Runtimes -->
-                <NavigationViewItem Tag="Runtimes" x:Uid="NavItem_Runtimes">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE756;"/>
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
             </NavigationView.MenuItems>
 
             <!-- Content Area -->

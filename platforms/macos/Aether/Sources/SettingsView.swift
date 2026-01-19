@@ -24,7 +24,6 @@ enum SettingsTab: Hashable {
     case skills
     case cowork
     case policies
-    case runtimes  // External runtime management (uv, fnm, yt-dlp)
 }
 
 // MARK: - UTType Extension

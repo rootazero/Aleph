@@ -66,9 +66,6 @@
   <data name="NavItem_Policies.Content" xml:space="preserve">
     <value>Policies</value>
   </data>
-  <data name="NavItem_Runtimes.Content" xml:space="preserve">
-    <value>Runtimes</value>
-  </data>
   <data name="Settings_UnsavedChanges.Text" xml:space="preserve">
     <value>You have unsaved changes</value>
   </data>
@@ -809,79 +806,5 @@
   </data>
   <data name="Settings_Policies_Refreshed" xml:space="preserve">
     <value>Policies refreshed</value>
-  </data>
-
-  <!-- Runtimes Settings -->
-  <data name="Settings_Runtimes_Title" xml:space="preserve">
-    <value>Runtime Environments</value>
-  </data>
-  <data name="Settings_Runtimes_Description" xml:space="preserve">
-    <value>Aether manages runtime environments for code execution and media processing.</value>
-  </data>
-  <data name="Settings_Runtimes_AutoUpdate" xml:space="preserve">
-    <value>Auto-Update Runtimes</value>
-  </data>
-  <data name="Settings_Runtimes_AutoUpdateDesc" xml:space="preserve">
-    <value>Automatically update runtimes when new versions are available</value>
-  </data>
-  <data name="Settings_Runtimes_Python" xml:space="preserve">
-    <value>Python (uv)</value>
-  </data>
-  <data name="Settings_Runtimes_PythonDesc" xml:space="preserve">
-    <value>Fast Python package installer and environment manager</value>
-  </data>
-  <data name="Settings_Runtimes_NodeJS" xml:space="preserve">
-    <value>Node.js (fnm)</value>
-  </data>
-  <data name="Settings_Runtimes_NodeJSDesc" xml:space="preserve">
-    <value>Fast Node.js version manager</value>
-  </data>
-  <data name="Settings_Runtimes_YtDlp" xml:space="preserve">
-    <value>yt-dlp</value>
-  </data>
-  <data name="Settings_Runtimes_YtDlpDesc" xml:space="preserve">
-    <value>Video downloader for YouTube and other sites</value>
-  </data>
-  <data name="Settings_Runtimes_FFmpeg" xml:space="preserve">
-    <value>FFmpeg</value>
-  </data>
-  <data name="Settings_Runtimes_FFmpegDesc" xml:space="preserve">
-    <value>Media processing toolkit</value>
-  </data>
-  <data name="Settings_Runtimes_Version" xml:space="preserve">
-    <value>Version</value>
-  </data>
-  <data name="Settings_Runtimes_Location" xml:space="preserve">
-    <value>Location</value>
-  </data>
-  <data name="Settings_Runtimes_Status_Installed" xml:space="preserve">
-    <value>Installed</value>
-  </data>
-  <data name="Settings_Runtimes_Status_NotInstalled" xml:space="preserve">
-    <value>Not Installed</value>
-  </data>
-  <data name="Settings_Runtimes_Status_Optional" xml:space="preserve">
-    <value>Optional</value>
-  </data>
-  <data name="Settings_Runtimes_CheckUpdate" xml:space="preserve">
-    <value>Check Update</value>
-  </data>
-  <data name="Settings_Runtimes_Install" xml:space="preserve">
-    <value>Install</value>
-  </data>
-  <data name="Settings_Runtimes_UpdateAll" xml:space="preserve">
-    <value>Update All Runtimes</value>
-  </data>
-  <data name="Settings_Runtimes_UpToDate" xml:space="preserve">
-    <value>is up to date</value>
-  </data>
-  <data name="Settings_Runtimes_Installing" xml:space="preserve">
-    <value>Installing</value>
-  </data>
-  <data name="Settings_Runtimes_Installed" xml:space="preserve">
-    <value>installed successfully</value>
-  </data>
-  <data name="Settings_Runtimes_AllUpToDate" xml:space="preserve">
-    <value>All runtimes are up to date</value>
   </data>
 </root>

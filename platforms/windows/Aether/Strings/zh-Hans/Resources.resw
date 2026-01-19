@@ -66,9 +66,6 @@
   <data name="NavItem_Policies.Content" xml:space="preserve">
     <value>策略</value>
   </data>
-  <data name="NavItem_Runtimes.Content" xml:space="preserve">
-    <value>运行时</value>
-  </data>
   <data name="Settings_UnsavedChanges.Text" xml:space="preserve">
     <value>您有未保存的更改</value>
   </data>

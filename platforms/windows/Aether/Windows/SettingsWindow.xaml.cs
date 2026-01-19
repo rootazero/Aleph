@@ -32,7 +32,6 @@ public sealed partial class SettingsWindow : Window
     private SearchSettingsPage? _searchPage;
     private CoworkSettingsPage? _coworkPage;
     private PoliciesSettingsPage? _policiesPage;
-    private RuntimesSettingsPage? _runtimesPage;
 
     public SettingsWindow()
     {
@@ -173,12 +172,6 @@ public sealed partial class SettingsWindow : Window
                 _policiesPage ??= new PoliciesSettingsPage();
                 _policiesPage.SetViewModel(_viewModel);
                 ContentFrame.Content = _policiesPage;
-                break;
-
-            case SettingsTab.Runtimes:
-                _runtimesPage ??= new RuntimesSettingsPage();
-                _runtimesPage.SetViewModel(_viewModel);
-                ContentFrame.Content = _runtimesPage;
                 break;
         }
     }

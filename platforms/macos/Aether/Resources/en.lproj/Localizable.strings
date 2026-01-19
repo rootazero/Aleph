@@ -1087,24 +1087,6 @@
 "settings.policies.readonly" = "Read-only";
 "settings.policies.fallback_levels" = "Fallback Safety Levels";
 
-// MARK: - Settings Window - Runtimes Tab
-"settings.runtimes.title" = "Runtimes";
-"settings.runtimes.description" = "Manage external runtime environments like Python, Node.js, and yt-dlp.";
-"settings.runtimes.info" = "Runtimes are automatically installed when first needed. You can also manually install or update them here.";
-"settings.runtimes.installed_runtimes" = "Installed Runtimes";
-"settings.runtimes.check_updates" = "Check Updates";
-"settings.runtimes.loading" = "Loading runtimes...";
-"settings.runtimes.empty_state" = "No runtimes found. They will be installed automatically when needed.";
-"settings.runtimes.version" = "v%@";
-"settings.runtimes.install" = "Install";
-"settings.runtimes.update" = "Update";
-"settings.runtimes.status_installed" = "Installed";
-"settings.runtimes.status_not_installed" = "Not Installed";
-"settings.runtimes.status_update_available" = "Update Available";
-"settings.runtimes.install_failed" = "Failed to install %@: %@";
-"settings.runtimes.update_failed" = "Failed to update %@: %@";
-"settings.runtimes.check_updates_failed" = "Failed to check updates: %@";
-
 // Runtime update notifications
 "notification.runtime_updates_title" = "Runtime Updates Available";
 "notification.runtime_update_single" = "%@ can be updated to %@";

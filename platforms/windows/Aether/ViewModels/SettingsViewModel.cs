@@ -7,7 +7,7 @@ namespace Aether.ViewModels;
 /// ViewModel for SettingsWindow.
 ///
 /// Manages:
-/// - Settings navigation (12 tabs matching macOS)
+/// - Settings navigation (11 tabs matching macOS)
 /// - Configuration data binding
 /// - Save/Cancel operations
 /// </summary>
@@ -239,8 +239,7 @@ public enum SettingsTab
     Mcp,
     Skills,
     Cowork,
-    Policies,
-    Runtimes
+    Policies
 }
 
 /// <summary>
@@ -262,7 +261,6 @@ public static class SettingsTabExtensions
         SettingsTab.Skills => "Skills",
         SettingsTab.Cowork => "Cowork",
         SettingsTab.Policies => "Policies",
-        SettingsTab.Runtimes => "Runtimes",
         _ => tab.ToString()
     };
 
@@ -280,7 +278,6 @@ public static class SettingsTabExtensions
         SettingsTab.Skills => "\uE734",       // Favorite
         SettingsTab.Cowork => "\uE902",       // Flow
         SettingsTab.Policies => "\uE8D4",     // Shield
-        SettingsTab.Runtimes => "\uE756",     // Command
         _ => "\uE713"
     };
 
@@ -298,7 +295,6 @@ public static class SettingsTabExtensions
         SettingsTab.Skills => "Skill management",
         SettingsTab.Cowork => "Task orchestration settings",
         SettingsTab.Policies => "System behavior fine-tuning",
-        SettingsTab.Runtimes => "External runtime management",
         _ => ""
     };
 }
