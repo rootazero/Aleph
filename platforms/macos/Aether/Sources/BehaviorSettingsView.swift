@@ -7,11 +7,11 @@
 
 import SwiftUI
 
-/// Behavior settings view with UnifiedSaveBar pattern (example implementation)
+/// Behavior settings view with embedded UnifiedSaveBar
 struct BehaviorSettingsView: View {
     // Dependencies
     let core: AetherCore?
-    @ObservedObject var saveBarState: SettingsSaveBarState
+    @Binding var hasUnsavedChanges: Bool  // Communicate unsaved state to parent
 
     // Output settings
     @State private var outputMode: OutputMode = .typewriter
@@ -41,37 +41,47 @@ struct BehaviorSettingsView: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        // Scrollable content only (no internal save bar)
-        ScrollView {
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                outputModeCard
+        VStack(spacing: 0) {
+            // Scrollable content
+            ScrollView {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                    outputModeCard
 
-                if outputMode == .typewriter {
-                    typingSpeedCard
+                    if outputMode == .typewriter {
+                        typingSpeedCard
+                    }
+
+                    piiScrubbingCard
                 }
-
-                piiScrubbingCard
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(DesignTokens.Spacing.lg)
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(DesignTokens.Spacing.lg)
+            .scrollEdge(edges: [.top, .bottom], style: .hard())
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Embedded save bar
+            UnifiedSaveBar(
+                hasUnsavedChanges: hasLocalUnsavedChanges,
+                isSaving: isSaving,
+                statusMessage: errorMessage,
+                onSave: { await saveSettings() },
+                onCancel: { cancelEditing() }
+            )
         }
-        .scrollEdge(edges: [.top, .bottom], style: .hard())
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showingPreview) {
             TypingSpeedPreviewSheet(speed: typingSpeed)
         }
         .onAppear {
             loadSettings()
-            updateSaveBarState()
         }
-        .onChange(of: outputMode) { _, _ in updateSaveBarState() }
-        .onChange(of: typingSpeed) { _, _ in updateSaveBarState() }
-        .onChange(of: piiEnabled) { _, _ in updateSaveBarState() }
-        .onChange(of: piiScrubEmail) { _, _ in updateSaveBarState() }
-        .onChange(of: piiScrubPhone) { _, _ in updateSaveBarState() }
-        .onChange(of: piiScrubSSN) { _, _ in updateSaveBarState() }
-        .onChange(of: piiScrubCreditCard) { _, _ in updateSaveBarState() }
-        .onChange(of: isSaving) { _, _ in updateSaveBarState() }
+        .onChange(of: outputMode) { _, _ in syncUnsavedChanges() }
+        .onChange(of: typingSpeed) { _, _ in syncUnsavedChanges() }
+        .onChange(of: piiEnabled) { _, _ in syncUnsavedChanges() }
+        .onChange(of: piiScrubEmail) { _, _ in syncUnsavedChanges() }
+        .onChange(of: piiScrubPhone) { _, _ in syncUnsavedChanges() }
+        .onChange(of: piiScrubSSN) { _, _ in syncUnsavedChanges() }
+        .onChange(of: piiScrubCreditCard) { _, _ in syncUnsavedChanges() }
+        .onChange(of: isSaving) { _, _ in syncUnsavedChanges() }
     }
 
     // MARK: - View Components
@@ -259,7 +269,7 @@ struct BehaviorSettingsView: View {
     // MARK: - Computed Properties
 
     /// Check if current state differs from saved state
-    private var hasUnsavedChanges: Bool {
+    private var hasLocalUnsavedChanges: Bool {
         return outputMode != savedOutputMode ||
                abs(typingSpeed - savedTypingSpeed) > 0.1 ||
                piiEnabled != savedPiiEnabled ||
@@ -267,17 +277,6 @@ struct BehaviorSettingsView: View {
                piiScrubPhone != savedPiiScrubPhone ||
                piiScrubSSN != savedPiiScrubSSN ||
                piiScrubCreditCard != savedPiiScrubCreditCard
-    }
-
-    /// Status message for UnifiedSaveBar
-    private var statusMessage: String? {
-        if let error = errorMessage {
-            return error
-        }
-        if hasUnsavedChanges {
-            return L("settings.unsaved_changes.title")
-        }
-        return nil
     }
 
     // MARK: - Helpers
@@ -426,15 +425,9 @@ struct BehaviorSettingsView: View {
         errorMessage = nil
     }
 
-    /// Update saveBarState to reflect current state
-    private func updateSaveBarState() {
-        saveBarState.update(
-            hasUnsavedChanges: hasUnsavedChanges,
-            isSaving: isSaving,
-            statusMessage: statusMessage,
-            onSave: saveSettings,
-            onCancel: cancelEditing
-        )
+    /// Sync unsaved changes state to parent binding
+    private func syncUnsavedChanges() {
+        hasUnsavedChanges = hasLocalUnsavedChanges
     }
 }
 
@@ -607,6 +600,6 @@ struct TypingSpeedPreviewSheet: View {
 
 struct BehaviorSettingsView_Previews: PreviewProvider {
     static var previews: some View {
-        BehaviorSettingsView(core: nil, saveBarState: SettingsSaveBarState())
+        BehaviorSettingsView(core: nil, hasUnsavedChanges: .constant(false))
     }
 }

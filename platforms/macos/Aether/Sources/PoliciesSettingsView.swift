@@ -13,7 +13,7 @@ import SwiftUI
 struct PoliciesSettingsView: View {
     // Dependencies
     let core: AetherCore
-    @ObservedObject var saveBarState: SettingsSaveBarState
+    @Binding var hasUnsavedChanges: Bool
 
     // Current policy values
     @State private var policies: PoliciesConfig?
@@ -49,58 +49,68 @@ struct PoliciesSettingsView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                if let policies = policies {
-                    // Intent Detection Section
-                    policySectionCard(.intent) {
-                        intentPolicyView(policies.intent)
-                    }
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                    if let policies = policies {
+                        // Intent Detection Section
+                        policySectionCard(.intent) {
+                            intentPolicyView(policies.intent)
+                        }
 
-                    // Memory Section
-                    policySectionCard(.memory) {
-                        memoryPolicyView(policies.memory)
-                    }
+                        // Memory Section
+                        policySectionCard(.memory) {
+                            memoryPolicyView(policies.memory)
+                        }
 
-                    // Retry Section
-                    policySectionCard(.retry) {
-                        retryPolicyView(policies.retry)
-                    }
+                        // Retry Section
+                        policySectionCard(.retry) {
+                            retryPolicyView(policies.retry)
+                        }
 
-                    // Web Fetch Section
-                    policySectionCard(.webFetch) {
-                        webFetchPolicyView(policies.webFetch)
-                    }
+                        // Web Fetch Section
+                        policySectionCard(.webFetch) {
+                            webFetchPolicyView(policies.webFetch)
+                        }
 
-                    // Text Format Section
-                    policySectionCard(.text) {
-                        textPolicyView(policies.text)
-                    }
+                        // Text Format Section
+                        policySectionCard(.text) {
+                            textPolicyView(policies.text)
+                        }
 
-                    // Metrics Section
-                    policySectionCard(.metrics) {
-                        metricsPolicyView(policies.metrics)
-                    }
+                        // Metrics Section
+                        policySectionCard(.metrics) {
+                            metricsPolicyView(policies.metrics)
+                        }
 
-                    // Tool Safety Section
-                    policySectionCard(.toolSafety) {
-                        toolSafetyPolicyView(policies.toolSafety)
+                        // Tool Safety Section
+                        policySectionCard(.toolSafety) {
+                            toolSafetyPolicyView(policies.toolSafety)
+                        }
+                    } else {
+                        loadingView
                     }
-                } else {
-                    loadingView
                 }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(DesignTokens.Spacing.lg)
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(DesignTokens.Spacing.lg)
+            .scrollEdge(edges: [.top, .bottom], style: .hard())
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            UnifiedSaveBar(
+                hasUnsavedChanges: hasLocalUnsavedChanges,
+                isSaving: isSaving,
+                statusMessage: errorMessage,
+                onSave: { await saveSettings() },
+                onCancel: { cancelEditing() }
+            )
         }
-        .scrollEdge(edges: [.top, .bottom], style: .hard())
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             loadSettings()
-            updateSaveBarState()
+            syncUnsavedChanges()
         }
-        .onChange(of: policies) { _, _ in updateSaveBarState() }
-        .onChange(of: isSaving) { _, _ in updateSaveBarState() }
+        .onChange(of: policies) { _, _ in syncUnsavedChanges() }
+        .onChange(of: isSaving) { _, _ in syncUnsavedChanges() }
     }
 
     // MARK: - Section Card Builder
@@ -491,16 +501,9 @@ struct PoliciesSettingsView: View {
     // MARK: - Computed Properties
 
     /// Check if current state differs from saved state (currently read-only)
-    private var hasUnsavedChanges: Bool {
+    private var hasLocalUnsavedChanges: Bool {
         // For now, policies view is read-only
         return false
-    }
-
-    private var statusMessage: String? {
-        if let error = errorMessage {
-            return error
-        }
-        return nil
     }
 
     // MARK: - Settings Management
@@ -557,14 +560,8 @@ struct PoliciesSettingsView: View {
         errorMessage = nil
     }
 
-    private func updateSaveBarState() {
-        saveBarState.update(
-            hasUnsavedChanges: hasUnsavedChanges,
-            isSaving: isSaving,
-            statusMessage: statusMessage,
-            onSave: saveSettings,
-            onCancel: cancelEditing
-        )
+    private func syncUnsavedChanges() {
+        hasUnsavedChanges = hasLocalUnsavedChanges
     }
 }
 
@@ -572,7 +569,15 @@ struct PoliciesSettingsView: View {
 
 struct PoliciesSettingsView_Previews: PreviewProvider {
     static var previews: some View {
-        // Preview requires a mock core
-        Text("PoliciesSettingsView Preview")
+        // Preview requires a mock core - using constant binding
+        Text("PoliciesSettingsView Preview - requires AetherCore")
+            .frame(width: 600, height: 400)
     }
+}
+
+#Preview("PoliciesSettingsView") {
+    // Note: Full preview requires AetherCore instance
+    // Using placeholder with constant binding pattern
+    Text("PoliciesSettingsView requires AetherCore")
+        .frame(width: 600, height: 400)
 }

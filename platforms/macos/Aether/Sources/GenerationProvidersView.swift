@@ -381,7 +381,7 @@ struct GenerationProvidersView: View {
     // MARK: - Dependencies
 
     let core: AetherCore
-    @ObservedObject var saveBarState: SettingsSaveBarState
+    @Binding var hasUnsavedChanges: Bool
 
     // MARK: - State
 
@@ -402,7 +402,17 @@ struct GenerationProvidersView: View {
         case failure(String)
     }
 
+    // Edit panel state (passed to GenerationProviderEditPanel)
+    @State private var isSaving: Bool = false
+    @State private var errorMessage: String?
+
     // MARK: - Computed Properties
+
+    /// Local check for unsaved changes (delegated to edit panel)
+    private var hasLocalUnsavedChanges: Bool {
+        // This is managed by the edit panel through binding
+        hasUnsavedChanges
+    }
 
     private var currentCategoryPresets: [GenerationPresetProvider] {
         let presets = GenerationPresetProviders.providers(for: selectedCategory)
@@ -449,7 +459,9 @@ struct GenerationProvidersView: View {
                 // Right: Edit panel
                 GenerationProviderEditPanel(
                     core: core,
-                    saveBarState: saveBarState,
+                    hasUnsavedChanges: $hasUnsavedChanges,
+                    isSaving: $isSaving,
+                    errorMessage: $errorMessage,
                     selectedPreset: $selectedPreset,
                     isAddingNew: $isAddingNew,
                     testResult: testResults[selectedPreset?.id ?? ""],
@@ -466,7 +478,16 @@ struct GenerationProvidersView: View {
             }
             .padding(.leading, DesignTokens.Spacing.sm)
             .padding(.trailing, DesignTokens.Spacing.lg)
-            .padding(.bottom, DesignTokens.Spacing.lg)
+            .padding(.bottom, DesignTokens.Spacing.md)
+
+            // Unified save bar at bottom
+            UnifiedSaveBar(
+                hasUnsavedChanges: hasLocalUnsavedChanges,
+                isSaving: isSaving,
+                statusMessage: errorMessage,
+                onSave: { await saveSettings() },
+                onCancel: { cancelEditing() }
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
@@ -617,6 +638,28 @@ struct GenerationProvidersView: View {
     private func testConnection() {
         // Implementation in GenerationProviderEditPanel handles actual testing
     }
+
+    /// Sync unsaved changes state
+    private func syncUnsavedChanges() {
+        // hasUnsavedChanges is managed via binding from edit panel
+    }
+
+    /// Save settings - delegated to edit panel via notification
+    private func saveSettings() async {
+        NotificationCenter.default.post(name: .generationProviderSaveRequested, object: nil)
+    }
+
+    /// Cancel editing - delegated to edit panel via notification
+    private func cancelEditing() {
+        NotificationCenter.default.post(name: .generationProviderCancelRequested, object: nil)
+    }
+}
+
+// MARK: - Notification Names
+
+extension Notification.Name {
+    static let generationProviderSaveRequested = Notification.Name("generationProviderSaveRequested")
+    static let generationProviderCancelRequested = Notification.Name("generationProviderCancelRequested")
 }
 
 // MARK: - Category Tab
@@ -808,7 +851,9 @@ struct GenerationProviderCard: View {
 
 struct GenerationProviderEditPanel: View {
     let core: AetherCore
-    @ObservedObject var saveBarState: SettingsSaveBarState
+    @Binding var hasUnsavedChanges: Bool
+    @Binding var isSaving: Bool
+    @Binding var errorMessage: String?
 
     @Binding var selectedPreset: GenerationPresetProvider?
     @Binding var isAddingNew: Bool
@@ -833,10 +878,6 @@ struct GenerationProviderEditPanel: View {
     @State private var localTestResult: GenerationProvidersView.TestResult?
     @State private var localIsTesting: Bool = false
 
-    // Save state
-    @State private var isSaving: Bool = false
-    @State private var errorMessage: String?
-
     private var isCustomProvider: Bool {
         selectedPreset?.isCustom ?? false
     }
@@ -846,7 +887,7 @@ struct GenerationProviderEditPanel: View {
     }
 
     /// Check if the form has unsaved changes by comparing with saved values
-    private var hasUnsavedFormChanges: Bool {
+    private var hasLocalUnsavedChanges: Bool {
         guard selectedPreset != nil else { return false }
 
         // Compare current form values with saved baseline values
@@ -887,33 +928,26 @@ struct GenerationProviderEditPanel: View {
         .onChange(of: selectedPreset) { _, newPreset in
             loadPresetDefaults(newPreset)
         }
-        .onChange(of: providerName) { _, _ in updateSaveBarState() }
-        .onChange(of: apiKey) { _, _ in updateSaveBarState() }
-        .onChange(of: model) { _, _ in updateSaveBarState() }
-        .onChange(of: baseURL) { _, _ in updateSaveBarState() }
+        .onChange(of: providerName) { _, _ in syncUnsavedChanges() }
+        .onChange(of: apiKey) { _, _ in syncUnsavedChanges() }
+        .onChange(of: model) { _, _ in syncUnsavedChanges() }
+        .onChange(of: baseURL) { _, _ in syncUnsavedChanges() }
         .onAppear {
             loadPresetDefaults(selectedPreset)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .generationProviderSaveRequested)) { _ in
+            saveProvider()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .generationProviderCancelRequested)) { _ in
+            cancelEditing()
         }
     }
 
     // MARK: - Save Bar State
 
-    /// Update saveBarState to reflect current editing state
-    private func updateSaveBarState() {
-        saveBarState.update(
-            hasUnsavedChanges: hasUnsavedFormChanges && isFormValid,
-            isSaving: isSaving,
-            statusMessage: errorMessage,
-            onSave: { await self.saveProviderAsync() },
-            onCancel: cancelEditing
-        )
-    }
-
-    /// Async wrapper for saveProvider
-    private func saveProviderAsync() async {
-        await MainActor.run {
-            saveProvider()
-        }
+    /// Sync unsaved changes state to parent binding
+    private func syncUnsavedChanges() {
+        hasUnsavedChanges = hasLocalUnsavedChanges && isFormValid
     }
 
     /// Cancel editing and revert to defaults
@@ -921,7 +955,7 @@ struct GenerationProviderEditPanel: View {
         loadPresetDefaults(selectedPreset)
         errorMessage = nil
         localTestResult = nil
-        updateSaveBarState()
+        syncUnsavedChanges()
     }
 
     /// Save the provider configuration
@@ -930,7 +964,7 @@ struct GenerationProviderEditPanel: View {
 
         isSaving = true
         errorMessage = nil
-        updateSaveBarState()
+        syncUnsavedChanges()
 
         let finalName = isCustomProvider ? providerName : preset.id
 
@@ -958,7 +992,7 @@ struct GenerationProviderEditPanel: View {
 
                     // Update saved state after successful save
                     saveSavedState()
-                    updateSaveBarState()
+                    syncUnsavedChanges()
 
                     // Notify that configuration was saved
                     NotificationCenter.default.post(
@@ -970,7 +1004,7 @@ struct GenerationProviderEditPanel: View {
                 await MainActor.run {
                     errorMessage = "Failed to save: \(error.localizedDescription)"
                     isSaving = false
-                    updateSaveBarState()
+                    syncUnsavedChanges()
                 }
             }
         }

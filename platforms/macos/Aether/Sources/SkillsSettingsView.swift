@@ -14,43 +14,55 @@ import UniformTypeIdentifiers
 struct SkillsSettingsView: View {
     // Dependencies
     let core: AetherCore
-    @ObservedObject var saveBarState: SettingsSaveBarState
+    @Binding var hasUnsavedChanges: Bool
 
     // State
     @State private var skills: [SkillInfo] = []
     @State private var isLoading = false
+    @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var showInstallSheet = false
     @State private var skillToDelete: SkillInfo?
     @State private var showDeleteConfirmation = false
 
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                // Toolbar section
-                toolbarSection
+    // MARK: - Computed Properties
 
-                // Skills list or empty state
-                if skills.isEmpty && !isLoading {
-                    emptyStateView
-                } else {
-                    skillsListSection
+    /// Local check for unsaved changes (Skills view uses instant-save, so always false)
+    private var hasLocalUnsavedChanges: Bool {
+        false  // Skills are saved immediately when installed/deleted
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                    // Toolbar section
+                    toolbarSection
+
+                    // Skills list or empty state
+                    if skills.isEmpty && !isLoading {
+                        emptyStateView
+                    } else {
+                        skillsListSection
+                    }
                 }
+                .padding(DesignTokens.Spacing.lg)
             }
-            .padding(DesignTokens.Spacing.lg)
+            .scrollEdge(edges: [.top, .bottom], style: .hard())
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            // Unified save bar at bottom
+            UnifiedSaveBar(
+                hasUnsavedChanges: hasLocalUnsavedChanges,
+                isSaving: isSaving,
+                statusMessage: errorMessage,
+                onSave: { await saveSettings() },
+                onCancel: { cancelEditing() }
+            )
         }
-        .scrollEdge(edges: [.top, .bottom], style: .hard())
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             loadSkills()
-            // Skills view uses instant-save (no save bar needed)
-            saveBarState.update(
-                hasUnsavedChanges: false,
-                isSaving: false,
-                statusMessage: nil,
-                onSave: nil,
-                onCancel: nil
-            )
+            syncUnsavedChanges()
         }
         .alert(L("common.error"), isPresented: .constant(errorMessage != nil)) {
             Button(L("common.ok")) {
@@ -252,6 +264,23 @@ struct SkillsSettingsView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Save Bar Actions
+
+    /// Sync unsaved changes state to parent binding
+    private func syncUnsavedChanges() {
+        hasUnsavedChanges = hasLocalUnsavedChanges
+    }
+
+    /// Save settings (Skills view uses instant-save, so this is a no-op)
+    private func saveSettings() async {
+        // Skills are saved immediately when installed/deleted
+    }
+
+    /// Cancel editing (Skills view uses instant-save, so this is a no-op)
+    private func cancelEditing() {
+        // Skills are saved immediately when installed/deleted
     }
 }
 

@@ -12,7 +12,7 @@ import SwiftUI
 struct McpSettingsView: View {
     // Dependencies
     let core: AetherCore
-    @ObservedObject var saveBarState: SettingsSaveBarState
+    @Binding var hasUnsavedChanges: Bool
 
     // Server selection state
     @State private var selectedServerId: String? = nil
@@ -34,39 +34,50 @@ struct McpSettingsView: View {
     @State private var isJsonMode = false
 
     var body: some View {
-        HSplitView {
-            // Left sidebar - Server list
-            serverListView
-                .frame(minWidth: 200, maxWidth: 280)
+        VStack(spacing: 0) {
+            HSplitView {
+                // Left sidebar - Server list
+                serverListView
+                    .frame(minWidth: 200, maxWidth: 280)
 
-            // Right detail panel
-            if let config = editingConfig {
-                serverDetailView(config: config)
-            } else {
-                emptyDetailView
+                // Right detail panel
+                if let config = editingConfig {
+                    serverDetailView(config: config)
+                } else {
+                    emptyDetailView
+                }
             }
-        }
-        .onAppear {
-            loadServers()
-            selectFirstServer()
-        }
-        .sheet(isPresented: $showAddServerSheet) {
-            AddServerSheet(core: core) {
+            .onAppear {
                 loadServers()
+                selectFirstServer()
             }
-        }
-        .sheet(isPresented: $showLogsSheet) {
-            if let serverId = selectedServerId {
-                ServerLogsSheet(core: core, serverId: serverId)
+            .sheet(isPresented: $showAddServerSheet) {
+                AddServerSheet(core: core) {
+                    loadServers()
+                }
             }
-        }
-        .alert(L("settings.mcp.delete_confirm_title"), isPresented: $showDeleteConfirmation) {
-            Button(L("common.cancel"), role: .cancel) {}
-            Button(L("common.delete"), role: .destructive) {
-                deleteSelectedServer()
+            .sheet(isPresented: $showLogsSheet) {
+                if let serverId = selectedServerId {
+                    ServerLogsSheet(core: core, serverId: serverId)
+                }
             }
-        } message: {
-            Text(L("settings.mcp.delete_confirm_message"))
+            .alert(L("settings.mcp.delete_confirm_title"), isPresented: $showDeleteConfirmation) {
+                Button(L("common.cancel"), role: .cancel) {}
+                Button(L("common.delete"), role: .destructive) {
+                    deleteSelectedServer()
+                }
+            } message: {
+                Text(L("settings.mcp.delete_confirm_message"))
+            }
+
+            // Embedded save bar
+            UnifiedSaveBar(
+                hasUnsavedChanges: hasLocalUnsavedChanges,
+                isSaving: isSaving,
+                statusMessage: errorMessage,
+                onSave: { await saveSettings() },
+                onCancel: { cancelEditing() }
+            )
         }
     }
 
@@ -189,7 +200,7 @@ struct McpSettingsView: View {
                 get: { editingConfig?.enabled ?? false },
                 set: { newValue in
                     editingConfig?.enabled = newValue
-                    updateSaveBarState()
+                    syncUnsavedChanges()
                 }
             ))
             .toggleStyle(.switch)
@@ -214,7 +225,7 @@ struct McpSettingsView: View {
                         get: { editingConfig?.command ?? "" },
                         set: { newValue in
                             editingConfig?.command = newValue.isEmpty ? nil : newValue
-                            updateSaveBarState()
+                            syncUnsavedChanges()
                         }
                     ))
                     .textFieldStyle(.roundedBorder)
@@ -238,7 +249,7 @@ struct McpSettingsView: View {
                                     set: { newValue in
                                         if index < (editingConfig?.args.count ?? 0) {
                                             editingConfig?.args[index] = newValue
-                                            updateSaveBarState()
+                                            syncUnsavedChanges()
                                         }
                                     }
                                 ))
@@ -247,7 +258,7 @@ struct McpSettingsView: View {
 
                                 Button(action: {
                                     editingConfig?.args.remove(at: index)
-                                    updateSaveBarState()
+                                    syncUnsavedChanges()
                                 }) {
                                     Image(systemName: "xmark.circle.fill")
                                         .foregroundColor(.secondary)
@@ -258,7 +269,7 @@ struct McpSettingsView: View {
 
                         Button(action: {
                             editingConfig?.args.append("")
-                            updateSaveBarState()
+                            syncUnsavedChanges()
                         }) {
                             Label(L("settings.mcp.detail.add_arg"), systemImage: "plus")
                         }
@@ -275,7 +286,7 @@ struct McpSettingsView: View {
                         get: { editingConfig?.workingDirectory ?? "" },
                         set: { newValue in
                             editingConfig?.workingDirectory = newValue.isEmpty ? nil : newValue
-                            updateSaveBarState()
+                            syncUnsavedChanges()
                         }
                     ))
                     .textFieldStyle(.roundedBorder)
@@ -304,12 +315,12 @@ struct McpSettingsView: View {
                         onUpdate: { key, value in
                             if index < (editingConfig?.env.count ?? 0) {
                                 editingConfig?.env[index] = McpEnvVar(key: key, value: value)
-                                updateSaveBarState()
+                                syncUnsavedChanges()
                             }
                         },
                         onDelete: {
                             editingConfig?.env.remove(at: index)
-                            updateSaveBarState()
+                            syncUnsavedChanges()
                         }
                     )
                 }
@@ -317,7 +328,7 @@ struct McpSettingsView: View {
 
             Button(action: {
                 editingConfig?.env.append(McpEnvVar(key: "", value: ""))
-                updateSaveBarState()
+                syncUnsavedChanges()
             }) {
                 Label(L("settings.mcp.detail.add_variable"), systemImage: "plus")
             }
@@ -337,7 +348,7 @@ struct McpSettingsView: View {
                 get: { editingConfig?.permissions.requiresConfirmation ?? true },
                 set: { newValue in
                     editingConfig?.permissions.requiresConfirmation = newValue
-                    updateSaveBarState()
+                    syncUnsavedChanges()
                 }
             )) {
                 VStack(alignment: .leading) {
@@ -357,7 +368,7 @@ struct McpSettingsView: View {
                     get: { editingConfig?.permissions.allowedPaths ?? [] },
                     set: { newValue in
                         editingConfig?.permissions.allowedPaths = newValue
-                        updateSaveBarState()
+                        syncUnsavedChanges()
                     }
                 )
             )
@@ -369,7 +380,7 @@ struct McpSettingsView: View {
                     get: { editingConfig?.permissions.allowedCommands ?? [] },
                     set: { newValue in
                         editingConfig?.permissions.allowedCommands = newValue
-                        updateSaveBarState()
+                        syncUnsavedChanges()
                     }
                 )
             )
@@ -410,11 +421,13 @@ struct McpSettingsView: View {
             .pickerStyle(.segmented)
             .frame(width: 100)
 
-            Button(action: saveChanges) {
+            Button(action: {
+                Task { await saveSettings() }
+            }) {
                 Text(L("common.save"))
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!hasUnsavedChanges)
+            .disabled(!hasLocalUnsavedChanges)
         }
         .padding(DesignTokens.Spacing.md)
     }
@@ -435,7 +448,7 @@ struct McpSettingsView: View {
 
     // MARK: - Computed Properties
 
-    private var hasUnsavedChanges: Bool {
+    private var hasLocalUnsavedChanges: Bool {
         guard let editing = editingConfig, let original = originalConfig else {
             return false
         }
@@ -473,17 +486,11 @@ struct McpSettingsView: View {
         core.getMcpServerStatus(id: id).status
     }
 
-    private func updateSaveBarState() {
-        saveBarState.update(
-            hasUnsavedChanges: hasUnsavedChanges,
-            isSaving: isSaving,
-            statusMessage: errorMessage,
-            onSave: saveChanges,
-            onCancel: cancelChanges
-        )
+    private func syncUnsavedChanges() {
+        hasUnsavedChanges = hasLocalUnsavedChanges
     }
 
-    private func saveChanges() {
+    private func saveSettings() async {
         guard let config = editingConfig else { return }
 
         isSaving = true
@@ -498,12 +505,12 @@ struct McpSettingsView: View {
         }
 
         isSaving = false
-        updateSaveBarState()
+        syncUnsavedChanges()
     }
 
-    private func cancelChanges() {
+    private func cancelEditing() {
         editingConfig = originalConfig
-        updateSaveBarState()
+        syncUnsavedChanges()
     }
 
     private func deleteSelectedServer() {
@@ -529,7 +536,7 @@ struct McpSettingsView: View {
 
         if panel.runModal() == .OK, let url = panel.url {
             editingConfig?.command = url.path
-            updateSaveBarState()
+            syncUnsavedChanges()
         }
     }
 

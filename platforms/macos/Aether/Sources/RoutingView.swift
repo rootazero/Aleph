@@ -18,7 +18,7 @@ struct RuleEditorState: Identifiable {
 struct RoutingView: View {
     let core: AetherCore
     let providers: [ProviderConfigEntry]
-    @ObservedObject var saveBarState: SettingsSaveBarState
+    @Binding var hasUnsavedChanges: Bool
 
     // Rules state (only custom rules from config)
     @State private var customRules: [RoutingRuleConfig] = []
@@ -43,52 +43,71 @@ struct RoutingView: View {
     @State private var builtinTools: [UnifiedToolInfo] = []
     @State private var expandedPresetRules: Set<String> = []
 
+    // Save state (instant-save view, always false)
+    @State private var isSaving: Bool = false
+
+    /// Computed property for local unsaved changes detection
+    /// RoutingView is an instant-save view, so this is always false
+    private var hasLocalUnsavedChanges: Bool {
+        false
+    }
+
+    /// Sync local unsaved changes to binding
+    private func syncUnsavedChanges() {
+        hasUnsavedChanges = hasLocalUnsavedChanges
+    }
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xl) {
-                // Error message
-                if let error = errorMessage {
-                    HStack(spacing: DesignTokens.Spacing.sm) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(DesignTokens.Colors.warning)
-                        Text(error)
-                            .font(DesignTokens.Typography.body)
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.xl) {
+                    // Error message
+                    if let error = errorMessage {
+                        HStack(spacing: DesignTokens.Spacing.sm) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(DesignTokens.Colors.warning)
+                            Text(error)
+                                .font(DesignTokens.Typography.body)
+                        }
+                        .padding(DesignTokens.Spacing.md)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(DesignTokens.Colors.warning.opacity(0.1))
+                        .cornerRadius(DesignTokens.CornerRadius.medium)
                     }
-                    .padding(DesignTokens.Spacing.md)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(DesignTokens.Colors.warning.opacity(0.1))
-                    .cornerRadius(DesignTokens.CornerRadius.medium)
+
+                    // =============================================
+                    // SECTION 1: Preset Commands (Hardcoded, Read-only)
+                    // =============================================
+                    presetCommandsSection
+
+                    // =============================================
+                    // SECTION 2: Custom Rules (User-defined)
+                    // =============================================
+                    customRulesSection
+
+                    // Footer info
+                    footerInfoSection
                 }
-
-                // =============================================
-                // SECTION 1: Preset Commands (Hardcoded, Read-only)
-                // =============================================
-                presetCommandsSection
-
-                // =============================================
-                // SECTION 2: Custom Rules (User-defined)
-                // =============================================
-                customRulesSection
-
-                // Footer info
-                footerInfoSection
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(DesignTokens.Spacing.lg)
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(DesignTokens.Spacing.lg)
+            .scrollEdge(edges: [.top, .bottom], style: .hard())
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Unified save bar at bottom
+            UnifiedSaveBar(
+                hasUnsavedChanges: hasLocalUnsavedChanges,
+                isSaving: isSaving,
+                statusMessage: errorMessage,
+                onSave: { await saveSettings() },
+                onCancel: { cancelEditing() }
+            )
         }
-        .scrollEdge(edges: [.top, .bottom], style: .hard())
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             loadRules()
             loadBuiltinTools()
-            // Set save bar to disabled state for instant-save view
-            saveBarState.update(
-                hasUnsavedChanges: false,
-                isSaving: false,
-                statusMessage: nil,
-                onSave: nil,
-                onCancel: nil
-            )
+            // Sync save bar state for instant-save view
+            syncUnsavedChanges()
         }
         .sheet(item: $ruleEditorState) { state in
             if let rule = state.editingRule, let index = state.editingIndex {
@@ -544,6 +563,18 @@ struct RoutingView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Save/Cancel (Instant-save view - no-op implementations)
+
+    /// Save settings - no-op for instant-save view
+    private func saveSettings() async {
+        // RoutingView uses instant-save pattern, no explicit save needed
+    }
+
+    /// Cancel editing - no-op for instant-save view
+    private func cancelEditing() {
+        // RoutingView uses instant-save pattern, no cancel needed
     }
 
     // MARK: - Actions

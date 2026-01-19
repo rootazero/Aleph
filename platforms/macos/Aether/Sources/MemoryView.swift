@@ -12,7 +12,7 @@ import SwiftUI
 
 struct MemoryView: View {
     let core: AetherCore
-    @ObservedObject var saveBarState: SettingsSaveBarState
+    @Binding var hasUnsavedChanges: Bool
 
     @State private var memoryConfig: MemoryConfig
     @State private var memoryStats: MemoryStats?
@@ -33,46 +33,51 @@ struct MemoryView: View {
     @State private var isCompressing = false
     @State private var lastCompressionResult: CompressionResult?
 
-    init(core: AetherCore, saveBarState: SettingsSaveBarState) {
+    init(core: AetherCore, hasUnsavedChanges: Binding<Bool>) {
         self.core = core
-        self._saveBarState = ObservedObject(wrappedValue: saveBarState)
+        self._hasUnsavedChanges = hasUnsavedChanges
         // Load initial config
         _memoryConfig = State(initialValue: core.getMemoryConfig())
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                // Configuration Card
-                configurationCard
+        VStack(spacing: 0) {
+            // Scrollable content
+            ScrollView {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                    // Configuration Card
+                    configurationCard
 
-                // Statistics Card
-                if memoryConfig.enabled {
-                    statisticsCard
+                    // Statistics Card
+                    if memoryConfig.enabled {
+                        statisticsCard
 
-                    // Compression Card (Dual-Layer Memory Architecture)
-                    if memoryConfig.compressionEnabled {
-                        compressionCard
+                        // Compression Card (Dual-Layer Memory Architecture)
+                        if memoryConfig.compressionEnabled {
+                            compressionCard
+                        }
+
+                        // Memory Browser Card
+                        memoryBrowserCard
                     }
-
-                    // Memory Browser Card
-                    memoryBrowserCard
                 }
+                .padding(DesignTokens.Spacing.lg)
             }
-            .padding(DesignTokens.Spacing.lg)
+            .scrollEdge(edges: [.top, .bottom], style: .hard())
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            // Embedded save bar (instant-save view - always shows saved state)
+            UnifiedSaveBar(
+                hasUnsavedChanges: hasLocalUnsavedChanges,
+                isSaving: false,
+                statusMessage: errorMessage,
+                onSave: {},
+                onCancel: {}
+            )
         }
-        .scrollEdge(edges: [.top, .bottom], style: .hard())
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             refreshData()
-            // Set save bar to disabled state for instant-save view
-            saveBarState.update(
-                hasUnsavedChanges: false,
-                isSaving: false,
-                statusMessage: nil,
-                onSave: nil,
-                onCancel: nil
-            )
+            syncUnsavedChanges()
         }
         .alert(L("common.error"), isPresented: .constant(errorMessage != nil)) {
             Button(L("common.ok")) {
@@ -515,7 +520,19 @@ struct MemoryView: View {
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.ConcentricRadius.card, style: .continuous))
     }
 
+    // MARK: - Computed Properties
+
+    /// This is an instant-save view - changes are applied immediately, so there are no unsaved changes
+    private var hasLocalUnsavedChanges: Bool {
+        return false
+    }
+
     // MARK: - Helper Methods
+
+    /// Sync unsaved changes state to parent binding
+    private func syncUnsavedChanges() {
+        hasUnsavedChanges = hasLocalUnsavedChanges
+    }
 
     /// Handle memory toggle - check model and download if needed
     private func handleMemoryToggle(_ newValue: Bool) {

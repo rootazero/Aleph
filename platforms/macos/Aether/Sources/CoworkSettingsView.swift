@@ -13,7 +13,7 @@ import UniformTypeIdentifiers
 struct CoworkSettingsView: View {
     // Dependencies
     let core: AetherCore?
-    @ObservedObject var saveBarState: SettingsSaveBarState
+    @Binding var hasUnsavedChanges: Bool
 
     // Configuration state
     @State private var enabled: Bool = true
@@ -66,36 +66,46 @@ struct CoworkSettingsView: View {
     @State private var isShowingModelRouting = false
 
     var body: some View {
-        mainContent
-            .onAppear {
-                loadSettings()
-                updateSaveBarState()
-            }
-            .applyCoworkChangeTracking(
-                enabled: enabled,
-                requireConfirmation: requireConfirmation,
-                maxParallelism: maxParallelism,
-                dryRun: dryRun,
-                codeExecEnabled: codeExecEnabled,
-                sandboxEnabled: sandboxEnabled,
-                allowNetwork: allowNetwork,
-                timeoutSeconds: timeoutSeconds,
-                defaultRuntime: defaultRuntime,
-                fileOpsEnabled: fileOpsEnabled,
-                fileOpsAllowedPaths: fileOpsAllowedPaths,
-                fileOpsDeniedPaths: fileOpsDeniedPaths,
-                fileOpsMaxFileSize: fileOpsMaxFileSize,
-                fileOpsConfirmWrite: fileOpsConfirmWrite,
-                fileOpsConfirmDelete: fileOpsConfirmDelete,
+        VStack(spacing: 0) {
+            mainContent
+
+            UnifiedSaveBar(
+                hasUnsavedChanges: hasLocalUnsavedChanges,
                 isSaving: isSaving,
-                onUpdate: updateSaveBarState
+                statusMessage: errorMessage,
+                onSave: { await saveSettings() },
+                onCancel: { cancelEditing() }
             )
-            .sheet(isPresented: $isShowingModelProfiles) {
-                ModelProfilesSettingsView(core: core, isPresented: $isShowingModelProfiles)
-            }
-            .sheet(isPresented: $isShowingModelRouting) {
-                ModelRoutingSettingsView(core: core, isPresented: $isShowingModelRouting)
-            }
+        }
+        .onAppear {
+            loadSettings()
+            syncUnsavedChanges()
+        }
+        .applyCoworkChangeTracking(
+            enabled: enabled,
+            requireConfirmation: requireConfirmation,
+            maxParallelism: maxParallelism,
+            dryRun: dryRun,
+            codeExecEnabled: codeExecEnabled,
+            sandboxEnabled: sandboxEnabled,
+            allowNetwork: allowNetwork,
+            timeoutSeconds: timeoutSeconds,
+            defaultRuntime: defaultRuntime,
+            fileOpsEnabled: fileOpsEnabled,
+            fileOpsAllowedPaths: fileOpsAllowedPaths,
+            fileOpsDeniedPaths: fileOpsDeniedPaths,
+            fileOpsMaxFileSize: fileOpsMaxFileSize,
+            fileOpsConfirmWrite: fileOpsConfirmWrite,
+            fileOpsConfirmDelete: fileOpsConfirmDelete,
+            isSaving: isSaving,
+            onUpdate: syncUnsavedChanges
+        )
+        .sheet(isPresented: $isShowingModelProfiles) {
+            ModelProfilesSettingsView(core: core, isPresented: $isShowingModelProfiles)
+        }
+        .sheet(isPresented: $isShowingModelRouting) {
+            ModelRoutingSettingsView(core: core, isPresented: $isShowingModelRouting)
+        }
     }
 
     private var mainContent: some View {
@@ -633,7 +643,7 @@ struct CoworkSettingsView: View {
     // MARK: - State Management
 
     /// Check if current state differs from saved state
-    private var hasUnsavedChanges: Bool {
+    private var hasLocalUnsavedChanges: Bool {
         return enabled != savedEnabled ||
                requireConfirmation != savedRequireConfirmation ||
                maxParallelism != savedMaxParallelism ||
@@ -651,15 +661,9 @@ struct CoworkSettingsView: View {
                fileOpsConfirmDelete != savedFileOpsConfirmDelete
     }
 
-    /// Status message for UnifiedSaveBar
-    private var statusMessage: String? {
-        if let error = errorMessage {
-            return error
-        }
-        if hasUnsavedChanges {
-            return L("settings.unsaved_changes.title")
-        }
-        return nil
+    /// Sync unsaved changes state to parent binding
+    private func syncUnsavedChanges() {
+        hasUnsavedChanges = hasLocalUnsavedChanges
     }
 
     // MARK: - Data Operations
@@ -828,17 +832,6 @@ struct CoworkSettingsView: View {
         fileOpsConfirmDelete = savedFileOpsConfirmDelete
 
         errorMessage = nil
-    }
-
-    /// Update saveBarState to reflect current state
-    private func updateSaveBarState() {
-        saveBarState.update(
-            hasUnsavedChanges: hasUnsavedChanges,
-            isSaving: isSaving,
-            statusMessage: statusMessage,
-            onSave: saveSettings,
-            onCancel: cancelEditing
-        )
     }
 }
 
@@ -1057,6 +1050,6 @@ private extension View {
 #Preview {
     CoworkSettingsView(
         core: nil,
-        saveBarState: SettingsSaveBarState()
+        hasUnsavedChanges: .constant(false)
     )
 }

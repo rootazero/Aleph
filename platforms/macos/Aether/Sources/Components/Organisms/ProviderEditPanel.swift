@@ -7,11 +7,11 @@ struct ProviderEditPanel: View {
     // MARK: - Dependencies
 
     let core: AetherCore
-    @ObservedObject var saveBarState: SettingsSaveBarState
 
     // MARK: - Bindings
 
     @Binding var providers: [ProviderConfigEntry]
+    @Binding var hasUnsavedChanges: Bool  // Communicate unsaved state to parent
     @Binding var selectedProvider: String?
     @Binding var isAddingNew: Bool  // NEW: External control for adding new provider
     @Binding var selectedPreset: PresetProvider?  // NEW: Selected preset provider
@@ -143,26 +143,39 @@ struct ProviderEditPanel: View {
     // MARK: - Body
 
     var body: some View {
-        // Scrollable content only (no internal footer)
-        ScrollView {
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                if selectedProvider != nil || selectedPreset != nil {
-                    // Always show edit form when a provider is selected
-                    editModeFormContent
-                } else {
-                    // No provider selected
-                    emptyStateView
+        VStack(spacing: 0) {
+            // Scrollable content
+            ScrollView {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                    if selectedProvider != nil || selectedPreset != nil {
+                        // Always show edit form when a provider is selected
+                        editModeFormContent
+                    } else {
+                        // No provider selected
+                        emptyStateView
+                    }
                 }
+                .padding(DesignTokens.Spacing.lg)
             }
-            .padding(DesignTokens.Spacing.lg)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            // Save bar at bottom of ProviderEditPanel
+            if selectedProvider != nil || selectedPreset != nil {
+                UnifiedSaveBar(
+                    hasUnsavedChanges: hasUnsavedFormChanges,
+                    isSaving: isSaving,
+                    statusMessage: errorMessage,
+                    onSave: { await saveProviderAsync() },
+                    onCancel: { cancelEditing() }
+                )
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(DesignTokens.Colors.contentBackground)
         .onChange(of: isAddingNew) { _, newValue in
             if newValue {
                 startNewProviderFromPreset()
             }
-            updateSaveBarState()
+            syncUnsavedChanges()
         }
         .onChange(of: selectedPreset) { _, newPreset in
             // When preset changes, load provider data
@@ -175,7 +188,7 @@ struct ProviderEditPanel: View {
                     loadProviderData()
                 }
             }
-            updateSaveBarState()
+            syncUnsavedChanges()
         }
         .onChange(of: selectedProvider) { _, newProvider in
             // When selected provider changes, load provider data
@@ -188,21 +201,21 @@ struct ProviderEditPanel: View {
                     loadProviderData()
                 }
             }
-            updateSaveBarState()
+            syncUnsavedChanges()
         }
-        .onChange(of: isSaving) { _, _ in updateSaveBarState() }
-        .onChange(of: errorMessage) { _, _ in updateSaveBarState() }
+        .onChange(of: isSaving) { _, _ in syncUnsavedChanges() }
+        .onChange(of: errorMessage) { _, _ in syncUnsavedChanges() }
         // Monitor form field changes to update save bar state
-        .onChange(of: providerName) { _, _ in updateSaveBarState() }
-        .onChange(of: apiKey) { _, _ in updateSaveBarState() }
-        .onChange(of: model) { _, _ in updateSaveBarState() }
-        .onChange(of: baseURL) { _, _ in updateSaveBarState() }
-        .onChange(of: isProviderActive) { _, _ in updateSaveBarState() }
-        .onChange(of: temperature) { _, _ in updateSaveBarState() }
-        .onChange(of: maxTokens) { _, _ in updateSaveBarState() }
-        .onChange(of: systemPromptMode) { _, _ in updateSaveBarState() }
+        .onChange(of: providerName) { _, _ in syncUnsavedChanges() }
+        .onChange(of: apiKey) { _, _ in syncUnsavedChanges() }
+        .onChange(of: model) { _, _ in syncUnsavedChanges() }
+        .onChange(of: baseURL) { _, _ in syncUnsavedChanges() }
+        .onChange(of: isProviderActive) { _, _ in syncUnsavedChanges() }
+        .onChange(of: temperature) { _, _ in syncUnsavedChanges() }
+        .onChange(of: maxTokens) { _, _ in syncUnsavedChanges() }
+        .onChange(of: systemPromptMode) { _, _ in syncUnsavedChanges() }
         .onAppear {
-            updateSaveBarState()
+            syncUnsavedChanges()
         }
     }
 
@@ -591,36 +604,15 @@ struct ProviderEditPanel: View {
                isProviderActive != config.enabled
     }
 
-    /// Status message for UnifiedSaveBar
-    private var statusMessage: String? {
-        if let error = errorMessage {
-            return error
-        }
-        if hasUnsavedFormChanges {
-            return "Unsaved changes"  // Simplified message without localization for now
-        }
-        return nil
-    }
-
-    /// Update saveBarState to reflect current provider editing state
-    private func updateSaveBarState() {
-        // Only show save bar when a provider is selected
+    /// Sync unsaved changes state to parent binding
+    private func syncUnsavedChanges() {
+        // Update parent's hasUnsavedChanges binding
         let hasChanges = (selectedProvider != nil || selectedPreset != nil) && hasUnsavedFormChanges
-
-        NSLog("[ProviderEditPanel] updateSaveBarState() - hasChanges: %d, selectedProvider: %@, selectedPreset: %@, hasUnsavedFormChanges: %d", hasChanges ? 1 : 0, selectedProvider ?? "nil", selectedPreset?.id ?? "nil", hasUnsavedFormChanges ? 1 : 0)
-
-        saveBarState.update(
-            hasUnsavedChanges: hasChanges,
-            isSaving: isSaving,
-            statusMessage: statusMessage,
-            onSave: { await self.saveProviderAsync() },
-            onCancel: cancelEditing
-        )
+        hasUnsavedChanges = hasChanges
     }
 
-    /// Async wrapper for saveProvider
+    /// Async wrapper for saveProvider (kept for other settings views that may use it)
     private func saveProviderAsync() async {
-        NSLog("[ProviderEditPanel] saveProviderAsync() called")
         await MainActor.run {
             saveProvider()
         }
@@ -955,11 +947,15 @@ struct ProviderEditPanel: View {
     }
 
     private func saveProvider() {
+        NSLog("[ProviderEditPanel] saveProvider() started - providerName: %@, model: %@", providerName, model)
+
         // Validate form and show specific error messages
         if let validationError = getValidationError() {
+            NSLog("[ProviderEditPanel] saveProvider() validation failed: %@", validationError)
             errorMessage = validationError
             return
         }
+        NSLog("[ProviderEditPanel] saveProvider() validation passed, starting save...")
         isSaving = true
         errorMessage = nil
 

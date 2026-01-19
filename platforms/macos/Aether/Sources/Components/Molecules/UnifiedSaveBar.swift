@@ -89,11 +89,8 @@ struct UnifiedSaveBar: View {
 
                 // Save button
                 Button(action: {
-                    NSLog("[UnifiedSaveBar] Save button clicked, hasUnsavedChanges: %d, isSaving: %d", hasUnsavedChanges ? 1 : 0, isSaving ? 1 : 0)
                     Task {
-                        NSLog("[UnifiedSaveBar] Calling onSave...")
                         await onSave()
-                        NSLog("[UnifiedSaveBar] onSave completed")
                     }
                 }) {
                     HStack(spacing: 6) {

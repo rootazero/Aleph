@@ -39,7 +39,6 @@ extension UTType {
 
 struct GeneralSettingsView: View {
     let core: AetherCore?
-    @ObservedObject var saveBarState: SettingsSaveBarState
 
     @State private var soundEnabled = false
     @State private var showingLogViewer = false
@@ -119,15 +118,6 @@ struct GeneralSettingsView: View {
             }
         }
         .onAppear {
-            // Set save bar to disabled state for instant-save view
-            saveBarState.update(
-                hasUnsavedChanges: false,
-                isSaving: false,
-                statusMessage: nil,
-                onSave: nil,
-                onCancel: nil
-            )
-
             // Load current language setting
             loadLanguagePreference()
         }

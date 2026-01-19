@@ -12,7 +12,7 @@ import AppKit
 struct ShortcutsView: View {
     // Dependencies
     let core: AetherCore?
-    @ObservedObject var saveBarState: SettingsSaveBarState
+    @Binding var hasUnsavedChanges: Bool
 
     // Trigger hotkeys (double-tap modifier keys)
     @State private var replaceKey: ModifierKey = .leftShift
@@ -53,62 +53,72 @@ struct ShortcutsView: View {
     private let defaultOcrCharKey: OcrCharKey = .o
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                // Trigger Hotkeys Card (Replace/Append)
-                triggerHotkeyCard
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                    // Trigger Hotkeys Card (Replace/Append)
+                    triggerHotkeyCard
 
-                // Command Completion Hotkey Card
-                commandCompletionCard
+                    // Command Completion Hotkey Card
+                    commandCompletionCard
 
-                // OCR Capture Hotkey Card
-                ocrCaptureCard
+                    // OCR Capture Hotkey Card
+                    ocrCaptureCard
 
-                // Permission Card
-                permissionCard
+                    // Permission Card
+                    permissionCard
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(DesignTokens.Spacing.lg)
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(DesignTokens.Spacing.lg)
+            .scrollEdge(edges: [.top, .bottom], style: .hard())
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            UnifiedSaveBar(
+                hasUnsavedChanges: hasLocalUnsavedChanges,
+                isSaving: isSaving,
+                statusMessage: errorMessage,
+                onSave: { await saveSettings() },
+                onCancel: { cancelEditing() }
+            )
         }
-        .scrollEdge(edges: [.top, .bottom], style: .hard())
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             loadSettings()
-            updateSaveBarState()
+            syncUnsavedChanges()
         }
-        .onChange(of: replaceKey) { _, _ in updateSaveBarState() }
-        .onChange(of: appendKey) { _, _ in updateSaveBarState() }
+        .onChange(of: replaceKey) { _, _ in syncUnsavedChanges() }
+        .onChange(of: appendKey) { _, _ in syncUnsavedChanges() }
         .onChange(of: commandModifier1) { _, newValue in
             // Ensure modifier2 is different from modifier1
             if commandModifier2 == newValue {
                 commandModifier2 = CommandModifier.allCases.first { $0 != newValue } ?? .option
             }
-            updateSaveBarState()
+            syncUnsavedChanges()
         }
         .onChange(of: commandModifier2) { _, newValue in
             // Ensure modifier1 is different from modifier2
             if commandModifier1 == newValue {
                 commandModifier1 = CommandModifier.allCases.first { $0 != newValue } ?? .command
             }
-            updateSaveBarState()
+            syncUnsavedChanges()
         }
-        .onChange(of: commandCharKey) { _, _ in updateSaveBarState() }
+        .onChange(of: commandCharKey) { _, _ in syncUnsavedChanges() }
         .onChange(of: ocrModifier1) { _, newValue in
             // Ensure modifier2 is different from modifier1
             if ocrModifier2 == newValue {
                 ocrModifier2 = CommandModifier.allCases.first { $0 != newValue } ?? .option
             }
-            updateSaveBarState()
+            syncUnsavedChanges()
         }
         .onChange(of: ocrModifier2) { _, newValue in
             // Ensure modifier1 is different from modifier2
             if ocrModifier1 == newValue {
                 ocrModifier1 = CommandModifier.allCases.first { $0 != newValue } ?? .command
             }
-            updateSaveBarState()
+            syncUnsavedChanges()
         }
-        .onChange(of: ocrCharKey) { _, _ in updateSaveBarState() }
-        .onChange(of: isSaving) { _, _ in updateSaveBarState() }
+        .onChange(of: ocrCharKey) { _, _ in syncUnsavedChanges() }
+        .onChange(of: isSaving) { _, _ in syncUnsavedChanges() }
     }
 
     // MARK: - View Components
@@ -525,7 +535,7 @@ struct ShortcutsView: View {
     }
 
     /// Check if current state differs from saved state
-    private var hasUnsavedChanges: Bool {
+    private var hasLocalUnsavedChanges: Bool {
         return replaceKey != savedReplaceKey ||
                appendKey != savedAppendKey ||
                commandModifier1 != savedCommandModifier1 ||
@@ -541,7 +551,7 @@ struct ShortcutsView: View {
         if let error = errorMessage {
             return error
         }
-        if hasUnsavedChanges {
+        if hasLocalUnsavedChanges {
             return L("settings.unsaved_changes.title")
         }
         return nil
@@ -705,15 +715,9 @@ struct ShortcutsView: View {
         errorMessage = nil
     }
 
-    /// Update saveBarState to reflect current state
-    private func updateSaveBarState() {
-        saveBarState.update(
-            hasUnsavedChanges: hasUnsavedChanges,
-            isSaving: isSaving,
-            statusMessage: statusMessage,
-            onSave: saveSettings,
-            onCancel: cancelEditing
-        )
+    /// Sync local unsaved changes state to parent binding
+    private func syncUnsavedChanges() {
+        hasUnsavedChanges = hasLocalUnsavedChanges
     }
 
     private func openAccessibilitySettings() {
@@ -839,6 +843,6 @@ enum OcrCharKey: String, CaseIterable {
 
 struct ShortcutsView_Previews: PreviewProvider {
     static var previews: some View {
-        ShortcutsView(core: nil, saveBarState: SettingsSaveBarState())
+        ShortcutsView(core: nil, hasUnsavedChanges: .constant(false))
     }
 }

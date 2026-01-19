@@ -37,8 +37,8 @@ struct RootContentView: View {
     // Theme management
     @StateObject private var themeManager = ThemeManager()
 
-    // Unified save bar state (shared with all settings views)
-    @StateObject private var saveBarState = SettingsSaveBarState()
+    // Track unsaved changes for window close interception
+    @State private var hasAnyUnsavedChanges: Bool = false
 
     // Window delegate for close interception
     @State private var windowDelegate = SettingsWindowDelegate()
@@ -81,14 +81,13 @@ struct RootContentView: View {
         }
         .onChange(of: selectedTab) { oldTab, newTab in
             // Check for unsaved changes before allowing tab switch
-            if saveBarState.hasUnsavedChanges {
+            if hasAnyUnsavedChanges {
                 // Show confirmation dialog
                 Task { @MainActor in
                     let shouldProceed = showUnsavedChangesDialog(action: "switch tabs")
                     if shouldProceed {
-                        // Reset save bar state when switching tabs
-                        saveBarState.reset()
-                        // Force view recreation to ensure onAppear is called and onSave is set correctly
+                        hasAnyUnsavedChanges = false
+                        // Force view recreation to ensure onAppear is called
                         configReloadTrigger += 1
                     } else {
                         // Revert tab selection (prevent switch)
@@ -96,9 +95,7 @@ struct RootContentView: View {
                     }
                 }
             } else {
-                // No unsaved changes, reset save bar state
-                saveBarState.reset()
-                // Force view recreation to ensure onAppear is called and onSave is set correctly
+                // Force view recreation to ensure onAppear is called
                 configReloadTrigger += 1
             }
         }
@@ -107,6 +104,10 @@ struct RootContentView: View {
             if isInitialized {
                 loadProviders()
             }
+        }
+        .onChange(of: hasAnyUnsavedChanges) { _, newValue in
+            // Update window delegate's state for close interception
+            updateWindowDelegateState()
         }
         .onReceive(NotificationCenter.default.publisher(for: .aetherConfigDidChange)) { _ in
             handleExternalConfigChange()
@@ -218,26 +219,9 @@ struct RootContentView: View {
             }
             .padding(.top, 0)  // Explicitly set to 0 to ensure no top spacing
 
-            // Tab content (main scrollable area)
+            // Tab content (main scrollable area with embedded save bar)
             tabContent
                 .frame(maxHeight: .infinity)  // Allow content to expand
-
-            // Unified Save Bar at bottom of content area (always visible for design consistency)
-            UnifiedSaveBar(
-                hasUnsavedChanges: saveBarState.hasUnsavedChanges,
-                isSaving: saveBarState.isSaving,
-                statusMessage: saveBarState.statusMessage,
-                onSave: {
-                    NSLog("[RootContentView] UnifiedSaveBar onSave triggered, saveBarState.onSave is %@", saveBarState.onSave != nil ? "set" : "nil")
-                    Task {
-                        await saveBarState.onSave?()
-                        NSLog("[RootContentView] saveBarState.onSave completed")
-                    }
-                },
-                onCancel: {
-                    saveBarState.onCancel?()
-                }
-            )
         }
         .frame(maxHeight: .infinity)
         .padding(.top, 0)  // Ensure content area starts at top edge
@@ -249,12 +233,12 @@ struct RootContentView: View {
     private var tabContent: some View {
         switch selectedTab {
         case .general:
-            GeneralSettingsView(core: core, saveBarState: saveBarState)
+            GeneralSettingsView(core: core)
 
         case .providers:
             // core used for provider management
             if let core = core {
-                ProvidersView(core: core, saveBarState: saveBarState)
+                ProvidersView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Provider management requires AetherCore initialization")
@@ -263,7 +247,7 @@ struct RootContentView: View {
         case .generation:
             // core used for generation provider management
             if let core = core {
-                GenerationProvidersView(core: core, saveBarState: saveBarState)
+                GenerationProvidersView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Generation provider management requires AetherCore initialization")
@@ -272,23 +256,23 @@ struct RootContentView: View {
         case .routing:
             // core used for routing management
             if let core = core {
-                RoutingView(core: core, providers: providers, saveBarState: saveBarState)
+                RoutingView(core: core, providers: providers, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Routing management requires AetherCore initialization")
             }
 
         case .shortcuts:
-            ShortcutsView(core: core, saveBarState: saveBarState)
+            ShortcutsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
 
         case .behavior:
-            BehaviorSettingsView(core: core, saveBarState: saveBarState)
+            BehaviorSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                 .id(configReloadTrigger)
 
         case .memory:
             // core used for memory management
             if let core = core {
-                MemoryView(core: core, saveBarState: saveBarState)
+                MemoryView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
             } else {
                 placeholderView("Memory management requires AetherCore initialization")
             }
@@ -296,7 +280,7 @@ struct RootContentView: View {
         case .search:
             // core used for search settings
             if let core = core {
-                SearchSettingsView(core: core, saveBarState: saveBarState)
+                SearchSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Search settings requires AetherCore initialization")
@@ -305,7 +289,7 @@ struct RootContentView: View {
         case .mcp:
             // core used for MCP settings
             if let core = core {
-                McpSettingsView(core: core, saveBarState: saveBarState)
+                McpSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
                 placeholderView("MCP settings requires AetherCore initialization")
@@ -314,7 +298,7 @@ struct RootContentView: View {
         case .skills:
             // core used for skills management
             if let core = core {
-                SkillsSettingsView(core: core, saveBarState: saveBarState)
+                SkillsSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Skills management requires AetherCore initialization")
@@ -323,7 +307,7 @@ struct RootContentView: View {
         case .cowork:
             // core used for cowork settings
             if let core = core {
-                CoworkSettingsView(core: core, saveBarState: saveBarState)
+                CoworkSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Cowork settings requires AetherCore initialization")
@@ -332,7 +316,7 @@ struct RootContentView: View {
         case .policies:
             // core used for policies settings
             if let core = core {
-                PoliciesSettingsView(core: core, saveBarState: saveBarState)
+                PoliciesSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Policies settings requires AetherCore initialization")
@@ -341,7 +325,7 @@ struct RootContentView: View {
         case .runtimes:
             // core used for runtime management
             if let core = core {
-                RuntimeSettingsView(core: core, saveBarState: saveBarState)
+                RuntimeSettingsView(core: core, hasUnsavedChanges: $hasAnyUnsavedChanges)
                     .id(configReloadTrigger)
             } else {
                 placeholderView("Runtime management requires AetherCore initialization")
@@ -561,17 +545,20 @@ struct RootContentView: View {
     /// Set up window delegate for close interception
     private func setupWindowDelegate() {
         // Find the window and assign delegate
-        DispatchQueue.main.async { [weak windowDelegate, weak saveBarState] in
+        DispatchQueue.main.async { [windowDelegate] in
             guard let window = NSApp.windows.first(where: { $0.title == "Settings" }) else {
                 print("[RootContentView] Failed to find Settings window")
                 return
             }
 
-            // Pass save bar state to delegate
-            windowDelegate?.saveBarState = saveBarState
             window.delegate = windowDelegate
             print("[RootContentView] Window delegate configured")
         }
+    }
+
+    /// Update window delegate's unsaved changes state
+    private func updateWindowDelegateState() {
+        windowDelegate.hasUnsavedChangesValue = hasAnyUnsavedChanges
     }
 
     /// Show unsaved changes dialog and return user's decision
@@ -584,8 +571,7 @@ struct RootContentView: View {
         alert.informativeText = L("settings.unsaved_changes.message", action)
         alert.alertStyle = .warning
 
-        // Add buttons (order matters for return value)
-        alert.addButton(withTitle: L("common.save"))
+        // Only offer Discard and Cancel - each view handles its own save
         alert.addButton(withTitle: L("settings.unsaved_changes.discard"))
         alert.addButton(withTitle: L("common.cancel"))
 
@@ -593,15 +579,7 @@ struct RootContentView: View {
 
         switch response {
         case .alertFirstButtonReturn:
-            // Save button clicked
-            Task {
-                await saveBarState.onSave?()
-            }
-            return true  // Proceed after save
-
-        case .alertSecondButtonReturn:
             // Discard button clicked
-            saveBarState.onCancel?()  // Revert changes
             return true  // Proceed with discard
 
         default:
@@ -642,18 +620,15 @@ struct RootContentView: View {
 
 /// Window delegate for Settings window to intercept close events
 class SettingsWindowDelegate: NSObject, NSWindowDelegate {
-    weak var saveBarState: SettingsSaveBarState?
+    /// Current unsaved changes state (updated by RootContentView)
+    var hasUnsavedChangesValue: Bool = false
 
     /// Called when user attempts to close the window
     /// Returns false to prevent close if there are unsaved changes
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        guard let saveBarState = saveBarState else {
-            return true  // No save state, allow close
-        }
-
-        // If no unsaved changes, allow close
-        guard saveBarState.hasUnsavedChanges else {
-            return true
+        // Check if there are unsaved changes
+        guard hasUnsavedChangesValue else {
+            return true  // No unsaved changes, allow close
         }
 
         // Show confirmation dialog
@@ -662,8 +637,7 @@ class SettingsWindowDelegate: NSObject, NSWindowDelegate {
         alert.informativeText = L("settings.unsaved_changes.close_message")
         alert.alertStyle = .warning
 
-        // Add buttons (order matters for return value)
-        alert.addButton(withTitle: L("common.save"))
+        // Only offer Discard and Cancel - each view handles its own save
         alert.addButton(withTitle: L("settings.unsaved_changes.discard"))
         alert.addButton(withTitle: L("common.cancel"))
 
@@ -671,15 +645,7 @@ class SettingsWindowDelegate: NSObject, NSWindowDelegate {
 
         switch response {
         case .alertFirstButtonReturn:
-            // Save button clicked
-            Task {
-                await saveBarState.onSave?()
-            }
-            return true  // Allow close after save
-
-        case .alertSecondButtonReturn:
             // Discard button clicked
-            saveBarState.onCancel?()  // Revert changes
             return true  // Allow close
 
         default:

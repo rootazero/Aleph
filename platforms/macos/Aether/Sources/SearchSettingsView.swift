@@ -12,7 +12,7 @@ import SwiftUI
 struct SearchSettingsView: View {
     // Dependencies
     let core: AetherCore?
-    @ObservedObject var saveBarState: SettingsSaveBarState
+    @Binding var hasUnsavedChanges: Bool
 
     // Provider field values (provider_id -> [field_key -> value])
     @State private var providerFields: [String: [String: String]] = [:]
@@ -25,22 +25,32 @@ struct SearchSettingsView: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                providerConfigurationSection
-                fallbackOrderPlaceholder
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                    providerConfigurationSection
+                    fallbackOrderPlaceholder
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(DesignTokens.Spacing.lg)
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(DesignTokens.Spacing.lg)
+            .scrollEdge(edges: [.top, .bottom], style: .hard())
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            UnifiedSaveBar(
+                hasUnsavedChanges: hasLocalUnsavedChanges,
+                isSaving: isSaving,
+                statusMessage: errorMessage,
+                onSave: { await saveSettings() },
+                onCancel: { cancelEditing() }
+            )
         }
-        .scrollEdge(edges: [.top, .bottom], style: .hard())
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             loadSettings()
-            updateSaveBarState()
+            syncUnsavedChanges()
         }
-        .onChange(of: providerFields) { _, _ in updateSaveBarState() }
-        .onChange(of: isSaving) { _, _ in updateSaveBarState() }
+        .onChange(of: providerFields) { _, _ in syncUnsavedChanges() }
+        .onChange(of: isSaving) { _, _ in syncUnsavedChanges() }
     }
 
     // MARK: - View Components
@@ -90,19 +100,8 @@ struct SearchSettingsView: View {
     // MARK: - State Management
 
     /// Check if current state differs from saved state
-    private var hasUnsavedChanges: Bool {
+    private var hasLocalUnsavedChanges: Bool {
         return providerFields != savedProviderFields
-    }
-
-    /// Status message for UnifiedSaveBar
-    private var statusMessage: String? {
-        if let error = errorMessage {
-            return error
-        }
-        if hasUnsavedChanges {
-            return L("settings.unsaved_changes.title")
-        }
-        return nil
     }
 
     // MARK: - Helper Methods
@@ -273,15 +272,9 @@ struct SearchSettingsView: View {
         errorMessage = nil
     }
 
-    /// Update saveBarState to reflect current state
-    private func updateSaveBarState() {
-        saveBarState.update(
-            hasUnsavedChanges: hasUnsavedChanges,
-            isSaving: isSaving,
-            statusMessage: statusMessage,
-            onSave: saveSettings,
-            onCancel: cancelEditing
-        )
+    /// Sync local unsaved changes state to binding
+    private func syncUnsavedChanges() {
+        hasUnsavedChanges = hasLocalUnsavedChanges
     }
 }
 
@@ -290,6 +283,6 @@ struct SearchSettingsView: View {
 #Preview {
     SearchSettingsView(
         core: nil,
-        saveBarState: SettingsSaveBarState()
+        hasUnsavedChanges: .constant(false)
     )
 }

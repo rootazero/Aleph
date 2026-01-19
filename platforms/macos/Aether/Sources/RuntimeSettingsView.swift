@@ -13,10 +13,11 @@ import SwiftUI
 struct RuntimeSettingsView: View {
     // Dependencies
     let core: AetherCore
-    @ObservedObject var saveBarState: SettingsSaveBarState
+    @Binding var hasUnsavedChanges: Bool
 
     // State
     @State private var runtimes: [RuntimeInfo] = []
+    @State private var isSaving = false
     @State private var availableUpdates: [RuntimeUpdateInfo] = []
     @State private var isLoading = false
     @State private var isCheckingUpdates = false
@@ -24,39 +25,48 @@ struct RuntimeSettingsView: View {
     @State private var updatingRuntimeId: String?
     @State private var errorMessage: String?
 
+    // Runtime view uses instant-save (always returns false)
+    private var hasLocalUnsavedChanges: Bool {
+        false
+    }
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
-                // Toolbar section
-                toolbarSection
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                    // Toolbar section
+                    toolbarSection
 
-                // Description
-                Text(L("settings.runtimes.info"))
-                    .font(DesignTokens.Typography.body)
-                    .foregroundColor(DesignTokens.Colors.textSecondary)
-                    .padding(.bottom, DesignTokens.Spacing.sm)
+                    // Description
+                    Text(L("settings.runtimes.info"))
+                        .font(DesignTokens.Typography.body)
+                        .foregroundColor(DesignTokens.Colors.textSecondary)
+                        .padding(.bottom, DesignTokens.Spacing.sm)
 
-                // Runtimes list
-                if runtimes.isEmpty && !isLoading {
-                    emptyStateView
-                } else {
-                    runtimesListSection
+                    // Runtimes list
+                    if runtimes.isEmpty && !isLoading {
+                        emptyStateView
+                    } else {
+                        runtimesListSection
+                    }
                 }
+                .padding(DesignTokens.Spacing.lg)
             }
-            .padding(DesignTokens.Spacing.lg)
+            .scrollEdge(edges: [.top, .bottom], style: .hard())
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            // Save bar
+            UnifiedSaveBar(
+                hasUnsavedChanges: hasLocalUnsavedChanges,
+                isSaving: isSaving,
+                statusMessage: errorMessage,
+                onSave: { await saveSettings() },
+                onCancel: { cancelEditing() }
+            )
         }
-        .scrollEdge(edges: [.top, .bottom], style: .hard())
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             loadRuntimes()
-            // Runtime view uses instant-save (no save bar needed)
-            saveBarState.update(
-                hasUnsavedChanges: false,
-                isSaving: false,
-                statusMessage: nil,
-                onSave: nil,
-                onCancel: nil
-            )
+            syncUnsavedChanges()
         }
         .alert(L("common.error"), isPresented: .constant(errorMessage != nil)) {
             Button(L("common.ok")) {
@@ -230,6 +240,20 @@ struct RuntimeSettingsView: View {
             }
         }
     }
+
+    // MARK: - Save Bar Actions
+
+    private func syncUnsavedChanges() {
+        hasUnsavedChanges = hasLocalUnsavedChanges
+    }
+
+    private func saveSettings() async {
+        // Runtime view uses instant-save, no batch save needed
+    }
+
+    private func cancelEditing() {
+        // Runtime view uses instant-save, no cancel needed
+    }
 }
 
 // MARK: - Runtime Card
@@ -398,7 +422,7 @@ private struct RuntimeCard: View {
 // #Preview("Runtime Settings") {
 //     RuntimeSettingsView(
 //         core: <mock>,
-//         saveBarState: SettingsSaveBarState()
+//         hasUnsavedChanges: .constant(false)
 //     )
 //     .frame(width: 700, height: 500)
 // }
