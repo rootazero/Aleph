@@ -1,6 +1,12 @@
 //! FFmpeg Runtime Implementation
 //!
 //! Single-binary runtime for audio/video processing.
+//!
+//! ## Platform Support
+//!
+//! - **macOS**: Fully supported via evermeet.cx zip releases
+//! - **Windows**: TODO - Uses BtbN/FFmpeg-Builds with different archive structure
+//! - **Linux**: TODO - Uses .tar.xz format, needs tar extraction support
 
 use super::download::{download_file, set_executable};
 use super::manager::{RuntimeManager, UpdateInfo};
@@ -16,10 +22,15 @@ const DOWNLOAD_URL: &str = "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip";
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 const DOWNLOAD_URL: &str = "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip";
 
+// TODO: Windows uses BtbN/FFmpeg-Builds which has different archive structure
+// Binary is typically at ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe
+// Will need to search for *.exe and handle nested paths
 #[cfg(target_os = "windows")]
 const DOWNLOAD_URL: &str =
     "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip";
 
+// TODO: Linux uses .tar.xz format, need to add tar.xz extraction support
+// For now, Linux installation will fail with "not a zip archive" error
 #[cfg(target_os = "linux")]
 const DOWNLOAD_URL: &str =
     "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz";
@@ -52,6 +63,72 @@ impl FfmpegRuntime {
             self.install_dir().join("ffmpeg")
         }
     }
+
+    /// Extract ffmpeg binary from downloaded zip archive
+    async fn extract_ffmpeg_binary(&self, zip_path: &PathBuf) -> Result<()> {
+        use std::io::Read;
+
+        let zip_path_clone = zip_path.clone();
+        let binary_path = self.binary_path();
+
+        tokio::task::spawn_blocking(move || {
+            let file = std::fs::File::open(&zip_path_clone).map_err(|e| {
+                AetherError::runtime("ffmpeg", format!("Failed to open zip: {}", e))
+            })?;
+
+            let mut archive = zip::ZipArchive::new(file).map_err(|e| {
+                AetherError::runtime("ffmpeg", format!("Failed to read zip: {}", e))
+            })?;
+
+            // Find ffmpeg binary - handle various archive structures
+            for i in 0..archive.len() {
+                let mut entry = archive.by_index(i).map_err(|e| {
+                    AetherError::runtime("ffmpeg", format!("Failed to read zip entry: {}", e))
+                })?;
+
+                let name = entry.name().to_string();
+
+                // Match ffmpeg binary at any path level
+                if name == "ffmpeg" || name.ends_with("/ffmpeg") {
+                    // Found the binary
+                    let mut contents = Vec::new();
+                    entry.read_to_end(&mut contents).map_err(|e| {
+                        AetherError::runtime("ffmpeg", format!("Failed to extract: {}", e))
+                    })?;
+
+                    std::fs::write(&binary_path, contents).map_err(|e| {
+                        AetherError::runtime("ffmpeg", format!("Failed to write binary: {}", e))
+                    })?;
+
+                    debug!(path = ?binary_path, "Extracted ffmpeg binary");
+                    return Ok::<(), AetherError>(());
+                }
+            }
+
+            // If we get here, list what was found for debugging
+            let file_again = std::fs::File::open(&zip_path_clone).ok();
+            if let Some(f) = file_again {
+                if let Ok(mut archive) = zip::ZipArchive::new(f) {
+                    let names: Vec<_> = (0..archive.len())
+                        .filter_map(|i| archive.by_index(i).ok().map(|e| e.name().to_string()))
+                        .collect();
+                    debug!(files = ?names, "Archive contents");
+                }
+            }
+
+            Err(AetherError::runtime(
+                "ffmpeg",
+                "ffmpeg binary not found in archive",
+            ))
+        })
+        .await
+        .map_err(|e| AetherError::runtime("ffmpeg", format!("Task join error: {}", e)))??;
+
+        // Set executable permission
+        set_executable(&self.binary_path())?;
+
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -77,8 +154,6 @@ impl RuntimeManager for FfmpegRuntime {
     }
 
     async fn install(&self) -> Result<()> {
-        use std::io::Read;
-
         info!("Installing FFmpeg...");
 
         let install_dir = self.install_dir();
@@ -86,58 +161,19 @@ impl RuntimeManager for FfmpegRuntime {
             AetherError::runtime("ffmpeg", format!("Failed to create directory: {}", e))
         })?;
 
-        // Download zip file
         let zip_path = install_dir.join("ffmpeg_download.zip");
+
+        // Download zip file
         download_file(DOWNLOAD_URL, &zip_path).await?;
 
-        // Extract ffmpeg binary from zip using blocking task
-        let zip_path_clone = zip_path.clone();
-        let binary_path = self.binary_path();
+        // Extract with cleanup on any error (RAII pattern)
+        let result = self.extract_ffmpeg_binary(&zip_path).await;
 
-        tokio::task::spawn_blocking(move || {
-            let file = std::fs::File::open(&zip_path_clone).map_err(|e| {
-                AetherError::runtime("ffmpeg", format!("Failed to open zip: {}", e))
-            })?;
-
-            let mut archive = zip::ZipArchive::new(file).map_err(|e| {
-                AetherError::runtime("ffmpeg", format!("Failed to read zip: {}", e))
-            })?;
-
-            // Find and extract ffmpeg binary
-            for i in 0..archive.len() {
-                let mut entry = archive.by_index(i).map_err(|e| {
-                    AetherError::runtime("ffmpeg", format!("Failed to read zip entry: {}", e))
-                })?;
-
-                let name = entry.name().to_string();
-                // Look for ffmpeg binary (may be at root or in a subdirectory)
-                if name.ends_with("/ffmpeg") || name == "ffmpeg" {
-                    let mut contents = Vec::new();
-                    entry.read_to_end(&mut contents).map_err(|e| {
-                        AetherError::runtime("ffmpeg", format!("Failed to extract: {}", e))
-                    })?;
-
-                    std::fs::write(&binary_path, contents).map_err(|e| {
-                        AetherError::runtime("ffmpeg", format!("Failed to write binary: {}", e))
-                    })?;
-
-                    return Ok::<(), AetherError>(());
-                }
-            }
-
-            Err(AetherError::runtime(
-                "ffmpeg",
-                "ffmpeg binary not found in archive",
-            ))
-        })
-        .await
-        .map_err(|e| AetherError::runtime("ffmpeg", format!("Task join error: {}", e)))??;
-
-        // Set executable permission
-        set_executable(&self.binary_path())?;
-
-        // Clean up zip file
+        // Always cleanup zip file regardless of extraction result
         let _ = tokio::fs::remove_file(&zip_path).await;
+
+        // Propagate result after cleanup
+        result?;
 
         info!("FFmpeg installed successfully");
         Ok(())
