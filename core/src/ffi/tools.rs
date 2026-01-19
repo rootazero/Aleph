@@ -326,7 +326,7 @@ impl AetherCore {
         drop(cfg);
 
         // 4. Add Skills (from installed skills)
-        if let Ok(skills) = crate::initialization::list_installed_skills() {
+        if let Ok(skills) = crate::skills::list_installed_skills() {
             for skill in skills {
                 commands.push(crate::command::CommandNode {
                     key: skill.id.clone(),

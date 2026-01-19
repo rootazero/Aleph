@@ -70,8 +70,14 @@ pub mod event; // NEW: Event-driven architecture for agentic loop
 mod event_handler;
 pub mod ffi; // FFI module - split AetherCore implementation
 pub mod generation;
-pub mod init_unified; // NEW: Unified initialization module (will replace initialization in Task 7)
-pub mod initialization;
+pub mod initialization {
+    //! Unified initialization module
+    //!
+    //! Re-exports from the new init_unified module for backward compatibility.
+    //! The actual implementation is in init_unified/.
+    pub use crate::init_unified::*;
+}
+mod init_unified;
 pub mod intent; // NEW: Smart intent detection for conversation flow
 pub mod logging;
 pub mod mcp; // NEW: MCP (Model Context Protocol) capability
@@ -155,10 +161,14 @@ pub use crate::memory::context::CompressionResult;
 pub use crate::event_handler::{
     ErrorType, McpServerErrorFFI, McpStartupReportFFI, ProcessingState,
 };
+// Skills management exports (moved from old initialization module)
+pub use crate::skills::{
+    initialize_builtin_skills, initialize_builtin_skills_ffi, list_installed_skills,
+};
+pub use crate::utils::paths::{get_skills_dir, get_skills_dir_string};
+// Initialization exports (new unified module)
 pub use crate::initialization::{
-    check_embedding_model_exists, download_embedding_model_standalone, get_skills_dir,
-    get_skills_dir_string, initialize_builtin_skills, initialize_builtin_skills_ffi,
-    is_fresh_install, list_installed_skills, run_first_time_init, InitializationProgressHandler,
+    InitError, InitializationCoordinator, InitializationResult, InitPhase, InitProgressHandler,
 };
 // NOTE: Skill modification functions are in AetherCore to ensure automatic tool registry refresh.
 // Use AetherCore.delete_skill(), AetherCore.install_skill(), etc.

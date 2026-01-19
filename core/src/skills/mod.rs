@@ -166,6 +166,212 @@ pub struct SkillInfo {
 pub use installer::SkillsInstaller;
 pub use registry::SkillsRegistry;
 
+use crate::utils::paths::get_skills_dir;
+use std::fs;
+use std::path::PathBuf;
+use tracing::{debug, info, warn};
+
+/// Initialize built-in skills (UniFFI export wrapper)
+///
+/// Wrapper that takes a String path for UniFFI compatibility.
+///
+/// # Arguments
+/// * `bundle_skills_dir` - Path to the bundled skills directory as String
+pub fn initialize_builtin_skills_ffi(bundle_skills_dir: String) -> Result<()> {
+    let path = PathBuf::from(&bundle_skills_dir);
+    initialize_builtin_skills(&path)
+}
+
+/// Initialize built-in skills
+///
+/// Copies built-in skills from Resources/skills to user's skills directory.
+/// Never overwrites existing user skills.
+///
+/// # Arguments
+/// * `bundle_skills_dir` - Path to the bundled skills directory (in app bundle)
+pub fn initialize_builtin_skills(bundle_skills_dir: &PathBuf) -> Result<()> {
+    let skills_dir = get_skills_dir()?;
+
+    // Ensure skills directory exists
+    fs::create_dir_all(&skills_dir)
+        .map_err(|e| AetherError::config(format!("Failed to create skills directory: {}", e)))?;
+
+    // Check if bundle skills directory exists
+    if !bundle_skills_dir.exists() {
+        info!(
+            "Bundle skills directory not found at {:?}, skipping built-in skills",
+            bundle_skills_dir
+        );
+        return Ok(());
+    }
+
+    // Iterate through bundled skills
+    let entries = fs::read_dir(bundle_skills_dir).map_err(|e| {
+        AetherError::config(format!("Failed to read bundle skills directory: {}", e))
+    })?;
+
+    let mut copied_count = 0;
+    let mut skipped_count = 0;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        // Only process directories with SKILL.md
+        if path.is_dir() {
+            let skill_md = path.join("SKILL.md");
+            if skill_md.exists() {
+                let skill_id = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown");
+
+                let target_dir = skills_dir.join(skill_id);
+
+                // Never overwrite existing user skills
+                if target_dir.exists() {
+                    debug!(
+                        skill_id = %skill_id,
+                        "Skill already exists, skipping"
+                    );
+                    skipped_count += 1;
+                    continue;
+                }
+
+                // Create skill directory and copy SKILL.md
+                fs::create_dir_all(&target_dir).map_err(|e| {
+                    AetherError::config(format!(
+                        "Failed to create skill directory {}: {}",
+                        target_dir.display(),
+                        e
+                    ))
+                })?;
+
+                let target_skill_md = target_dir.join("SKILL.md");
+                fs::copy(&skill_md, &target_skill_md).map_err(|e| {
+                    AetherError::config(format!("Failed to copy SKILL.md for {}: {}", skill_id, e))
+                })?;
+
+                info!(skill_id = %skill_id, "Installed built-in skill");
+                copied_count += 1;
+            }
+        }
+    }
+
+    info!(
+        copied = copied_count,
+        skipped = skipped_count,
+        "Built-in skills initialization complete"
+    );
+
+    // Reload skills registry if it exists
+    let registry = SkillsRegistry::new(skills_dir);
+    if let Err(e) = registry.load_all() {
+        warn!("Failed to load skills after initialization: {}", e);
+    }
+
+    Ok(())
+}
+
+/// List all installed skills
+///
+/// Scans the skills directory and returns info for each valid skill.
+pub fn list_installed_skills() -> Result<Vec<SkillInfo>> {
+    let skills_dir = get_skills_dir()?;
+
+    // Ensure skills directory exists
+    if !skills_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let registry = SkillsRegistry::new(skills_dir);
+    registry.load_all()?;
+
+    let skills = registry.list_skills();
+    Ok(skills.into_iter().map(|s| s.to_info()).collect())
+}
+
+/// Delete a skill by ID (internal use only)
+///
+/// For external callers, use `AetherCore::delete_skill()` which triggers
+/// automatic tool registry refresh.
+pub(crate) fn delete_skill(skill_id: String) -> Result<()> {
+    let skills_dir = get_skills_dir()?;
+    let skill_path = skills_dir.join(&skill_id);
+
+    if !skill_path.exists() {
+        return Err(AetherError::invalid_config(format!(
+            "Skill '{}' not found",
+            skill_id
+        )));
+    }
+
+    // Remove the entire skill directory
+    fs::remove_dir_all(&skill_path).map_err(|e| {
+        AetherError::config(format!("Failed to delete skill '{}': {}", skill_id, e))
+    })?;
+
+    info!(skill_id = %skill_id, "Deleted skill");
+    Ok(())
+}
+
+/// Install a skill from URL (internal use only)
+///
+/// For external callers, use `AetherCore::install_skill()` which triggers
+/// automatic tool registry refresh.
+pub(crate) fn install_skill_from_url(url: String) -> Result<SkillInfo> {
+    let skills_dir = get_skills_dir()?;
+
+    // Ensure skills directory exists
+    fs::create_dir_all(&skills_dir)
+        .map_err(|e| AetherError::config(format!("Failed to create skills directory: {}", e)))?;
+
+    // Use the installer to download and install (synchronous)
+    let installer = SkillsInstaller::new(skills_dir);
+    let skill = installer.install_from_url_sync(&url)?;
+
+    info!(
+        skill_id = %skill.id,
+        skill_name = %skill.name(),
+        "Installed skill from URL"
+    );
+
+    Ok(skill.to_info())
+}
+
+/// Install skills from ZIP (internal use only)
+///
+/// For external callers, use `AetherCore::install_skills_from_zip()` which
+/// triggers automatic tool registry refresh.
+pub(crate) fn install_skills_from_zip(zip_path: String) -> Result<Vec<String>> {
+    let skills_dir = get_skills_dir()?;
+    let zip_path = PathBuf::from(&zip_path);
+
+    // Verify ZIP file exists
+    if !zip_path.exists() {
+        return Err(AetherError::invalid_config(format!(
+            "ZIP file not found: {}",
+            zip_path.display()
+        )));
+    }
+
+    // Ensure skills directory exists
+    fs::create_dir_all(&skills_dir)
+        .map_err(|e| AetherError::config(format!("Failed to create skills directory: {}", e)))?;
+
+    // Use the installer to extract and install
+    let installer = SkillsInstaller::new(skills_dir);
+
+    // Use tokio runtime to call async method
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|e| AetherError::config(format!("Failed to create async runtime: {}", e)))?;
+
+    let installed = runtime.block_on(installer.install_from_zip(&zip_path))?;
+
+    info!(count = installed.len(), "Installed skills from ZIP");
+
+    Ok(installed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

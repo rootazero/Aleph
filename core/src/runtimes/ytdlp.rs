@@ -5,7 +5,7 @@
 use super::download::{download_file, get_github_latest_version, normalize_version, set_executable};
 use super::manager::{RuntimeManager, UpdateInfo};
 use crate::error::{AetherError, Result};
-use crate::initialization::get_config_dir;
+use crate::utils::paths::get_config_dir;
 use std::path::PathBuf;
 use tracing::{debug, info};
 

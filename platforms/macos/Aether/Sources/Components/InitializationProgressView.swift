@@ -207,12 +207,17 @@ struct InitializationProgressView: View {
         .frame(width: 480, height: 400)
         .onAppear {
             // Auto-start initialization
+            NSLog("[Init] View onAppear - starting runInitialization()")
             runInitialization()
         }
     }
 
     private func runInitialization() {
-        guard !isInitializing else { return }
+        NSLog("[Init] runInitialization() called, isInitializing=%@", isInitializing ? "true" : "false")
+        guard !isInitializing else {
+            NSLog("[Init] Already initializing, returning")
+            return
+        }
         isInitializing = true
 
         viewModel.state = .notStarted
@@ -220,9 +225,11 @@ struct InitializationProgressView: View {
 
         let handler = InitializationProgressHandlerImpl(viewModel: viewModel)
 
+        NSLog("[Init] Starting background task for first-time init")
         // Run initialization in background
         DispatchQueue.global(qos: .userInitiated).async {
             do {
+                NSLog("[Init] Calling runFirstTimeInit FFI...")
                 print("[Init] Starting first-time initialization...")
                 try runFirstTimeInit(progressHandler: handler)
 

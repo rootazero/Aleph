@@ -124,3 +124,29 @@ pub fn get_embedding_model_dir() -> Result<PathBuf> {
 
     Ok(model_dir)
 }
+
+/// Get skills directory path
+///
+/// Returns: `<config_dir>/skills`
+pub fn get_skills_dir() -> Result<PathBuf> {
+    Ok(get_config_dir()?.join("skills"))
+}
+
+/// Get skills directory path as String (for UniFFI export)
+pub fn get_skills_dir_string() -> Result<String> {
+    Ok(get_skills_dir()?.to_string_lossy().to_string())
+}
+
+/// Get runtimes directory path
+///
+/// Returns: `<config_dir>/runtimes`
+pub fn get_runtimes_dir() -> Result<PathBuf> {
+    Ok(get_config_dir()?.join("runtimes"))
+}
+
+/// Get models directory path
+///
+/// Returns: `<config_dir>/models`
+pub fn get_models_dir() -> Result<PathBuf> {
+    Ok(get_config_dir()?.join("models"))
+}

@@ -24,6 +24,9 @@ struct ProvidersView: View {
     // Search and filter
     @State private var searchText: String = ""
 
+    // Save operation state
+    @State private var isSaving: Bool = false
+
     // Selection state - provider name (matches ProviderEditPanel's selectedProvider)
     @State private var selectedProviderId: String?
 
@@ -134,6 +137,8 @@ struct ProvidersView: View {
                     core: core,
                     providers: $configuredProviders,
                     hasUnsavedChanges: $hasUnsavedChanges,
+                    isSaving: $isSaving,
+                    errorMessage: $errorMessage,
                     selectedProvider: $selectedProviderId,
                     isAddingNew: $isAddingNew,
                     selectedPreset: $selectedPreset,

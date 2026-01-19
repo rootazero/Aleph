@@ -13,7 +13,7 @@ use tracing::info;
 impl AetherCore {
     /// List all installed skills
     pub fn list_skills(&self) -> Result<Vec<crate::skills::SkillInfo>, AetherFfiError> {
-        crate::initialization::list_installed_skills()
+        crate::skills::list_installed_skills()
             .map_err(|e| AetherFfiError::Config(e.to_string()))
     }
 
@@ -21,7 +21,7 @@ impl AetherCore {
     ///
     /// After successful installation, notifies UI of tool registry change.
     pub fn install_skill(&self, url: String) -> Result<crate::skills::SkillInfo, AetherFfiError> {
-        let skill_info = crate::initialization::install_skill_from_url(url)
+        let skill_info = crate::skills::install_skill_from_url(url)
             .map_err(|e| AetherFfiError::Config(e.to_string()))?;
 
         info!(skill_id = %skill_info.id, "Skill installed");
@@ -36,7 +36,7 @@ impl AetherCore {
     ///
     /// After successful installation, notifies UI of tool registry change.
     pub fn install_skills_from_zip(&self, zip_path: String) -> Result<Vec<String>, AetherFfiError> {
-        let skill_ids = crate::initialization::install_skills_from_zip(zip_path)
+        let skill_ids = crate::skills::install_skills_from_zip(zip_path)
             .map_err(|e| AetherFfiError::Config(e.to_string()))?;
 
         info!(count = skill_ids.len(), "Skills installed from ZIP");
@@ -51,7 +51,7 @@ impl AetherCore {
     ///
     /// After successful deletion, notifies UI of tool registry change.
     pub fn delete_skill(&self, skill_id: String) -> Result<(), AetherFfiError> {
-        crate::initialization::delete_skill(skill_id.clone())
+        crate::skills::delete_skill(skill_id.clone())
             .map_err(|e| AetherFfiError::Config(e.to_string()))?;
 
         info!(skill_id = %skill_id, "Skill deleted");
@@ -64,7 +64,7 @@ impl AetherCore {
 
     /// Get the skills directory path
     pub fn get_skills_dir(&self) -> Result<String, AetherFfiError> {
-        crate::initialization::get_skills_dir_string()
+        crate::utils::paths::get_skills_dir_string()
             .map_err(|e| AetherFfiError::Config(e.to_string()))
     }
 
@@ -77,7 +77,7 @@ impl AetherCore {
         info!("Skills refresh requested");
 
         // Reload skills from disk
-        match crate::initialization::list_installed_skills() {
+        match crate::skills::list_installed_skills() {
             Ok(skills) => {
                 info!(count = skills.len(), "Skills refreshed from disk");
             }

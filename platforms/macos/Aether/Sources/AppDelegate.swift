@@ -102,18 +102,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // Without this delay, AXIsProcessTrusted() and IOHIDRequestAccess() may return
         // cached/stale values, causing false negatives even when permissions are granted
         DispatchQueue.mainAsyncAfter(delay: 0.5, weakRef: self) { slf in
+            NSLog("[Aether] Checking permissions after startup delay...")
             print("[Aether] Checking permissions after startup delay...")
 
             // Check all required permissions (Accessibility + Input Monitoring)
             let hasAccessibility = PermissionChecker.hasAccessibilityPermission()
             let hasInputMonitoring = PermissionChecker.hasInputMonitoringPermission()
 
+            NSLog("[Aether] Permission status - Accessibility: %@, InputMonitoring: %@",
+                  hasAccessibility ? "YES" : "NO", hasInputMonitoring ? "YES" : "NO")
             print("[Aether] Permission status - Accessibility: \(hasAccessibility), InputMonitoring: \(hasInputMonitoring)")
 
             if !hasAccessibility || !hasInputMonitoring {
                 // Show mandatory permission gate if any permission is missing
+                NSLog("[Aether] Missing permissions - showing permission gate")
                 slf.showPermissionGate()
             } else {
+                NSLog("[Aether] ✅ All permissions granted, calling checkAndRunFirstTimeInit()...")
                 print("[Aether] ✅ All permissions granted, checking if first-run initialization needed...")
 
                 // Check if this is a fresh installation
@@ -774,17 +779,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func checkAndRunFirstTimeInit() {
         do {
             let isFresh = try isFreshInstall()
+            NSLog("[Aether] isFreshInstall=%@", isFresh ? "true" : "false")
 
             if isFresh {
-                print("[Aether] 🆕 Fresh installation detected - running first-time initialization...")
-                showInitializationWindow()
+                NSLog("[Aether] 🆕 Fresh install - running first-time init in background")
+                // Run initialization in background, then continue
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    do {
+                        try runFirstTimeInit(progressHandler: nil)
+                        NSLog("[Aether] ✅ First-time init completed")
+                    } catch {
+                        NSLog("[Aether] ⚠️ First-time init failed: %@", error.localizedDescription)
+                    }
+                    // Continue with app initialization regardless
+                    DispatchQueue.main.async {
+                        self?.initializeAppComponents()
+                    }
+                }
             } else {
-                print("[Aether] Existing installation detected - skipping initialization")
                 initializeAppComponents()
             }
         } catch {
-            print("[Aether] ❌ Error checking installation status: \(error)")
-            print("[Aether] Proceeding with normal initialization anyway")
+            NSLog("[Aether] ❌ isFreshInstall error: %@", error.localizedDescription)
             initializeAppComponents()
         }
     }

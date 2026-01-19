@@ -11,27 +11,7 @@ namespace aether {
   // ===== UNIFIED INITIALIZATION (init_unified module) =====
   // Note: needs_first_time_init() and run_initialization() are defined via Rust proc-macros
   // in core/src/ffi/init.rs using #[uniffi::export]. They are automatically exported.
-
-  // ===== LEGACY INITIALIZATION (initialization module) =====
-
-  // Check if this is a fresh installation
-  [Throws=AetherException]
-  boolean is_fresh_install();
-
-  // Run first-time initialization with progress callback
-  [Throws=AetherException]
-  void run_first_time_init(InitializationProgressHandler? progress_handler);
-
-  // MEMORY MODULE MANAGEMENT
-
-  // Check if embedding model files exist and are valid
-  [Throws=AetherException]
-  boolean check_embedding_model_exists();
-
-  // Download embedding model files with progress callback
-  // Returns true if download succeeded, false otherwise
-  [Throws=AetherException]
-  boolean download_embedding_model_standalone(InitializationProgressHandler? progress_handler);
+  // InitProgressHandlerFFI and InitResultFFI are also exported via proc-macros.
 
   // SKILLS MODULE MANAGEMENT (add-skills-capability)
 
@@ -206,27 +186,6 @@ dictionary McpStartupReportFFI {
 
 // Note: V1 AetherEventHandler callback interface has been removed.
 // Use AetherEventHandler for all event handling.
-
-// Callback interface for first-time initialization progress (legacy)
-callback interface InitializationProgressHandler {
-  // Called when initialization starts
-  void on_init_started();
-
-  // Called when a step begins
-  void on_step_started(string step_name, u32 current, u32 total);
-
-  // Called when download progress updates
-  void on_download_progress(u64 downloaded_bytes, u64 total_bytes);
-
-  // Called when a step completes
-  void on_step_completed(string step_name);
-
-  // Called when initialization completes successfully
-  void on_init_completed();
-
-  // Called when initialization fails
-  void on_init_failed(string error);
-};
 
 // ===== UNIFIED INITIALIZATION TYPES (init_unified module) =====
 // Note: InitProgressHandlerFFI and InitResultFFI are defined via Rust proc-macros
