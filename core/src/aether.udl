@@ -8,7 +8,11 @@ namespace aether {
   [Throws=AetherFfiError]
   AetherCore init_core(string config_path, AetherEventHandler handler);
 
-  // First-run initialization functions
+  // ===== UNIFIED INITIALIZATION (init_unified module) =====
+  // Note: needs_first_time_init() and run_initialization() are defined via Rust proc-macros
+  // in core/src/ffi/init.rs using #[uniffi::export]. They are automatically exported.
+
+  // ===== LEGACY INITIALIZATION (initialization module) =====
 
   // Check if this is a fresh installation
   [Throws=AetherException]
@@ -203,7 +207,7 @@ dictionary McpStartupReportFFI {
 // Note: V1 AetherEventHandler callback interface has been removed.
 // Use AetherEventHandler for all event handling.
 
-// Callback interface for first-time initialization progress
+// Callback interface for first-time initialization progress (legacy)
 callback interface InitializationProgressHandler {
   // Called when initialization starts
   void on_init_started();
@@ -223,6 +227,12 @@ callback interface InitializationProgressHandler {
   // Called when initialization fails
   void on_init_failed(string error);
 };
+
+// ===== UNIFIED INITIALIZATION TYPES (init_unified module) =====
+// Note: InitProgressHandlerFFI and InitResultFFI are defined via Rust proc-macros
+// in core/src/ffi/init.rs using #[uniffi::export(callback_interface)] and #[uniffi::Record]
+// They are automatically exported and available to Swift/Kotlin clients.
+// ===== END UNIFIED INITIALIZATION TYPES =====
 
 // Configuration dictionaries
 // Note: Config is not exposed as dictionary due to HashMap field

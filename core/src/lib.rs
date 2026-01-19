@@ -322,6 +322,8 @@ pub use crate::agents::{
 pub use crate::uniffi_core::{
     init_core, AetherCore, AetherEventHandler, AetherFfiError, MemoryItem, ProcessOptions,
     SessionSummary, ToolInfoFFI,
+    // Initialization FFI types (unified)
+    needs_first_time_init, run_initialization, InitProgressHandlerFFI, InitResultFFI,
     // Generation FFI types
     GenerationDataFFI, GenerationDataTypeFFI, GenerationMetadataFFI, GenerationOutputFFI,
     GenerationParamsFFI, GenerationProgressFFI, GenerationProviderConfigFFI,

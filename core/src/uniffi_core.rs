@@ -28,8 +28,13 @@
 
 // Re-export all public types from ffi module
 pub use crate::ffi::{
-    // Initialization
+    // Initialization (legacy)
     init_core,
+    // Initialization (unified - init_unified module)
+    needs_first_time_init,
+    run_initialization,
+    InitProgressHandlerFFI,
+    InitResultFFI,
     // Core types
     AetherCore,
     AetherEventHandler,

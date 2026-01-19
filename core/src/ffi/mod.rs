@@ -16,6 +16,7 @@
 mod config;
 mod cowork;
 mod generation;
+mod init;
 mod mcp;
 mod memory;
 mod processing;
@@ -42,6 +43,7 @@ pub use self::generation::{
     GenerationProviderInfoFFI, GenerationTypeFFI,
 };
 pub use self::processing::ProcessOptions;
+pub use self::init::{needs_first_time_init, run_initialization, InitProgressHandlerFFI, InitResultFFI};
 pub use self::runtime::{RuntimeInfo, RuntimeUpdateInfo};
 pub use self::session::SessionSummary;
 
