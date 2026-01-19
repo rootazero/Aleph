@@ -86,7 +86,7 @@ struct InputAreaView: View {
                 }
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.vertical, viewModel.pendingAttachments.isEmpty ? 4 : 2)  // Less padding when attachments present (they have their own)
             .background(
                 RoundedRectangle(cornerRadius: 8)
                     .fill(.primary.opacity(0.05))

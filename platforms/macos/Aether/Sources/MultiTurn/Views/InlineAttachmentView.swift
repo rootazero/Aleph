@@ -30,8 +30,9 @@ struct InlineAttachmentView: View {
                 }
             }
             .padding(.horizontal, 2)
+            .padding(.vertical, 6)  // Space for remove button
         }
-        .frame(maxWidth: maxWidth)
+        .frame(maxWidth: maxWidth, alignment: .trailing)  // Right-align attachments
     }
 }
 
