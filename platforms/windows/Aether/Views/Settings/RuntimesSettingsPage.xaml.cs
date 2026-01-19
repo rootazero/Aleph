@@ -99,7 +99,7 @@ public sealed partial class RuntimesSettingsPage : UserControl
         // Check yt-dlp
         var ytdlpInstalled = _core?.IsRuntimeInstalled("ytdlp") ?? false;
         UpdateRuntimeStatus("ytdlp", ytdlpInstalled, ytdlpInstalled ? "latest" : null, null);
-        YtdlpLocationText.Text = GetRuntimePath(".aether/bin/yt-dlp");
+        YtdlpLocationText.Text = GetRuntimePath(".config/aether/bin/yt-dlp");
 
         // Check FFmpeg
         var ffmpegInstalled = _core?.IsRuntimeInstalled("ffmpeg") ?? false;

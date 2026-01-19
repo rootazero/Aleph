@@ -82,6 +82,7 @@ struct ProviderEditPanel: View {
     @State private var testResult: TestResult?
     @State private var errorMessage: String?
     @State private var showDeleteConfirmation: Bool = false
+    @State private var justSavedProviderName: String? = nil  // Track just-saved provider to skip unnecessary reload
 
     // Section expansion states
     @State private var isConfigExpanded = true
@@ -167,7 +168,12 @@ struct ProviderEditPanel: View {
             // When preset changes, load provider data
             // Skip if we're just updating the preset after save
             if newPreset != nil && !isSaving {
-                loadProviderData()
+                // Skip reload if we just saved this provider (data is already correct)
+                if let justSaved = justSavedProviderName, justSaved == newPreset?.id {
+                    justSavedProviderName = nil  // Clear flag after skipping
+                } else {
+                    loadProviderData()
+                }
             }
             updateSaveBarState()
         }
@@ -175,7 +181,12 @@ struct ProviderEditPanel: View {
             // When selected provider changes, load provider data
             // Skip if we're in the middle of saving to prevent reload
             if newProvider != nil && !isSaving {
-                loadProviderData()
+                // Skip reload if we just saved this provider (data is already correct)
+                if let justSaved = justSavedProviderName, justSaved == newProvider {
+                    // Don't clear flag here - let selectedPreset onChange clear it
+                } else {
+                    loadProviderData()
+                }
             }
             updateSaveBarState()
         }
@@ -596,6 +607,8 @@ struct ProviderEditPanel: View {
         // Only show save bar when a provider is selected
         let hasChanges = (selectedProvider != nil || selectedPreset != nil) && hasUnsavedFormChanges
 
+        NSLog("[ProviderEditPanel] updateSaveBarState() - hasChanges: %d, selectedProvider: %@, selectedPreset: %@, hasUnsavedFormChanges: %d", hasChanges ? 1 : 0, selectedProvider ?? "nil", selectedPreset?.id ?? "nil", hasUnsavedFormChanges ? 1 : 0)
+
         saveBarState.update(
             hasUnsavedChanges: hasChanges,
             isSaving: isSaving,
@@ -607,6 +620,7 @@ struct ProviderEditPanel: View {
 
     /// Async wrapper for saveProvider
     private func saveProviderAsync() async {
+        NSLog("[ProviderEditPanel] saveProviderAsync() called")
         await MainActor.run {
             saveProvider()
         }
@@ -684,18 +698,34 @@ struct ProviderEditPanel: View {
     // MARK: - Actions
 
     /// Set current provider as default (NEW for default provider management)
+    ///
+    /// IMPORTANT: This method uses the saved provider name (currentProvider.name),
+    /// not the form field (providerName), to avoid setting an unsaved provider as default.
     private func setAsDefaultProvider() {
-        guard !providerName.isEmpty else { return }
+        // Use the saved provider name, not the form field value
+        // This prevents setting an unsaved/renamed provider as default
+        guard let savedName = currentProvider?.name else {
+            print("[ProviderEditPanel] Cannot set default: no saved provider")
+            errorMessage = L("provider.error.save_first")
+            return
+        }
+
         guard isProviderActive else {
             print("[ProviderEditPanel] Cannot set disabled provider as default")
             return
         }
 
+        // Check if there are unsaved changes - warn user if so
+        if hasUnsavedFormChanges {
+            print("[ProviderEditPanel] Warning: setting default with unsaved changes")
+            // Still proceed using the saved name, but log the warning
+        }
+
         do {
-            try core.setDefaultProvider(providerName: providerName)
+            try core.setDefaultProvider(providerName: savedName)
             // Update binding to trigger UI refresh
-            defaultProviderId?.wrappedValue = providerName
-            print("[ProviderEditPanel] Set default provider to: \(providerName)")
+            defaultProviderId?.wrappedValue = savedName
+            print("[ProviderEditPanel] Set default provider to: \(savedName)")
         } catch {
             print("[ProviderEditPanel] Error setting default provider: \(error)")
             errorMessage = "Failed to set default: \(error.localizedDescription)"
@@ -925,8 +955,11 @@ struct ProviderEditPanel: View {
     }
 
     private func saveProvider() {
-        guard isFormValid() else { return }
-
+        // Validate form and show specific error messages
+        if let validationError = getValidationError() {
+            errorMessage = validationError
+            return
+        }
         isSaving = true
         errorMessage = nil
 
@@ -941,47 +974,51 @@ struct ProviderEditPanel: View {
                 let config = try core.loadConfig()
 
                 await MainActor.run {
+                    // Set flag to skip unnecessary loadProviderData() calls
+                    // This MUST be set BEFORE any state changes that could trigger onChange
+                    justSavedProviderName = savedProviderName
+
                     // Update providers list with reloaded config
                     providers = config.providers
 
-                    // Exit add mode if we were adding a new provider
+                    // CRITICAL: Update selectedProvider BEFORE setting isAddingNew = false
+                    // This ensures currentProvider can find the saved provider when
+                    // loadProviderData() is triggered by state changes
+                    selectedProvider = savedProviderName
+
+                    // Update selectedPreset for both custom and preset providers
+                    // This ensures the UI stays on the current provider after save
+                    // Check custom provider by examining the current providerType and preset
+                    let isCustom = selectedPreset?.id == "custom" || providerType == "custom"
+                    if isCustom {
+                        // For custom providers, create a temporary PresetProvider
+                        let customPreset = PresetProvider(
+                            id: savedProviderName,
+                            name: savedProviderName,
+                            iconName: "puzzlepiece.extension",
+                            color: "#5E5CE6",  // Fixed default color
+                            providerType: providerType,
+                            defaultModel: model,
+                            description: baseURL.isEmpty ? "Custom OpenAI-compatible provider" : "OpenAI-compatible API: \(baseURL)",
+                            baseUrl: baseURL.isEmpty ? nil : baseURL
+                        )
+                        selectedPreset = customPreset
+                    } else {
+                        // For preset providers, find and update the preset
+                        if let preset = PresetProviders.find(byId: savedProviderName) {
+                            selectedPreset = preset
+                        }
+                    }
+
+                    // Exit add mode AFTER updating selectedProvider and selectedPreset
+                    // This ensures currentProvider is valid when loadProviderData() checks
                     isAddingNew = false
 
                     // Update saved state after successful save
                     saveSavedState()
 
-                    // CRITICAL: Set isSaving = false BEFORE updating selection
-                    // This allows onChange handlers to process the selection update
+                    // Set isSaving = false to allow onChange handlers to process
                     isSaving = false
-
-                    // CRITICAL: Keep the current provider selected
-                    // This prevents jumping to the first provider
-                    // Use DispatchQueue to ensure this runs after SwiftUI processes the providers update
-                    DispatchQueue.main.async {
-                        selectedProvider = savedProviderName
-
-                        // Update selectedPreset for both custom and preset providers
-                        // This ensures the UI stays on the current provider after save
-                        if isCustomProvider {
-                            // For custom providers, create a temporary PresetProvider
-                            let customPreset = PresetProvider(
-                                id: savedProviderName,
-                                name: savedProviderName,
-                                iconName: "puzzlepiece.extension",
-                                color: "#5E5CE6",  // Fixed default color
-                                providerType: providerType,
-                                defaultModel: model,
-                                description: baseURL.isEmpty ? "Custom OpenAI-compatible provider" : "OpenAI-compatible API: \(baseURL)",
-                                baseUrl: baseURL.isEmpty ? nil : baseURL
-                            )
-                            selectedPreset = customPreset
-                        } else {
-                            // For preset providers, find and update the preset
-                            if let preset = PresetProviders.find(byId: savedProviderName) {
-                                selectedPreset = preset
-                            }
-                        }
-                    }
 
                     // Notify that configuration was saved internally
                     // This prevents ConfigWatcher from triggering a full view rebuild
@@ -992,6 +1029,13 @@ struct ProviderEditPanel: View {
                 }
             } catch {
                 await MainActor.run {
+                    // DEBUG: Show error alert
+                    let errorAlert = NSAlert()
+                    errorAlert.messageText = "保存失败！"
+                    errorAlert.informativeText = error.localizedDescription
+                    errorAlert.addButton(withTitle: "确定")
+                    errorAlert.runModal()
+
                     errorMessage = "Failed to save: \(error.localizedDescription)"
                     isSaving = false
                 }
@@ -1127,6 +1171,111 @@ struct ProviderEditPanel: View {
         }
 
         return true
+    }
+
+    /// Get specific validation error message for user feedback
+    /// Returns nil if form is valid
+    private func getValidationError() -> String? {
+        // Basic required fields
+        if providerName.trimmingCharacters(in: .whitespaces).isEmpty {
+            return L("provider.error.name_required")
+        }
+        if model.trimmingCharacters(in: .whitespaces).isEmpty {
+            return L("provider.error.model_required")
+        }
+
+        // API key required for non-Ollama providers
+        if providerType != "ollama" && apiKey.trimmingCharacters(in: .whitespaces).isEmpty {
+            return L("provider.error.api_key_required")
+        }
+
+        // Base URL required for custom providers
+        if isCustomProvider && baseURL.trimmingCharacters(in: .whitespaces).isEmpty {
+            return L("provider.error.base_url_required")
+        }
+
+        // Timeout validation
+        if UInt64(timeoutSeconds) == nil || UInt64(timeoutSeconds) == 0 {
+            return L("provider.error.invalid_timeout")
+        }
+
+        // Common parameter validation
+        if !maxTokens.isEmpty {
+            if UInt32(maxTokens) == nil || UInt32(maxTokens) == 0 {
+                return L("provider.error.invalid_max_tokens")
+            }
+        }
+
+        if !temperature.isEmpty {
+            guard let temp = Float(temperature) else {
+                return L("provider.error.invalid_temperature")
+            }
+            // Provider-specific temperature range
+            switch providerType {
+            case "claude":
+                if temp < 0.0 || temp > 1.0 {
+                    return String(format: L("provider.error.temperature_range"), "0.0-1.0")
+                }
+            case "openai", "gemini":
+                if temp < 0.0 || temp > 2.0 {
+                    return String(format: L("provider.error.temperature_range"), "0.0-2.0")
+                }
+            case "ollama":
+                if temp < 0.0 {
+                    return String(format: L("provider.error.temperature_range"), "≥ 0.0")
+                }
+            default:
+                if temp < 0.0 || temp > 2.0 {
+                    return String(format: L("provider.error.temperature_range"), "0.0-2.0")
+                }
+            }
+        }
+
+        if !topP.isEmpty {
+            if let p = Float(topP), p < 0.0 || p > 1.0 {
+                return L("provider.error.invalid_top_p")
+            } else if Float(topP) == nil {
+                return L("provider.error.invalid_top_p")
+            }
+        }
+
+        if !topK.isEmpty {
+            if UInt32(topK) == nil || UInt32(topK) == 0 {
+                return L("provider.error.invalid_top_k")
+            }
+        }
+
+        // OpenAI-specific validation
+        if providerType == "openai" {
+            if !frequencyPenalty.isEmpty {
+                if let penalty = Float(frequencyPenalty), penalty < -2.0 || penalty > 2.0 {
+                    return L("provider.error.invalid_frequency_penalty")
+                } else if Float(frequencyPenalty) == nil {
+                    return L("provider.error.invalid_frequency_penalty")
+                }
+            }
+
+            if !presencePenalty.isEmpty {
+                if let penalty = Float(presencePenalty), penalty < -2.0 || penalty > 2.0 {
+                    return L("provider.error.invalid_presence_penalty")
+                } else if Float(presencePenalty) == nil {
+                    return L("provider.error.invalid_presence_penalty")
+                }
+            }
+        }
+
+        // Ollama-specific validation
+        if providerType == "ollama" {
+            if !repeatPenalty.isEmpty {
+                if let penalty = Float(repeatPenalty), penalty < 1.0 {
+                    return L("provider.error.invalid_repeat_penalty")
+                } else if Float(repeatPenalty) == nil {
+                    return L("provider.error.invalid_repeat_penalty")
+                }
+            }
+        }
+
+        return nil
     }
 
     // MARK: - Helpers

@@ -172,9 +172,11 @@ public partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     public void OpenConfigFolder()
     {
+        // Use ~/.config/aether/ for cross-platform consistency
         var configPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "Aether"
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".config",
+            "aether"
         );
 
         if (Directory.Exists(configPath))

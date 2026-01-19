@@ -252,7 +252,7 @@
                         <TextBlock Grid.Row="0" Grid.Column="1" x:Name="YtdlpVersionText" Text="2024.01.01" FontSize="12"/>
 
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="Location" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" Margin="0,4,0,0"/>
-                        <TextBlock Grid.Row="1" Grid.Column="1" x:Name="YtdlpLocationText" Text="~/.aether/bin/yt-dlp" FontSize="12" Margin="0,4,0,0" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Grid.Row="1" Grid.Column="1" x:Name="YtdlpLocationText" Text="~/.config/aether/bin/yt-dlp" FontSize="12" Margin="0,4,0,0" TextTrimming="CharacterEllipsis"/>
                     </Grid>
 
                     <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">

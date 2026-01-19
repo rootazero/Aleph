@@ -111,10 +111,10 @@ public sealed partial class PoliciesSettingsPage : UserControl
         NetworkAccessValue.Text = "Allowed";
         McpInstallValue.Text = "Allowed";
 
-        // Policy Source
+        // Policy Source - use ~/.config/aether/ for cross-platform consistency
         var configPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".aether", "config.toml"
+            ".config", "aether", "config.toml"
         );
         PolicySourceText.Text = $"Local configuration file ({configPath})";
         PolicyLastUpdatedText.Text = $"Last updated: {DateTime.Now:yyyy-MM-dd HH:mm}";
