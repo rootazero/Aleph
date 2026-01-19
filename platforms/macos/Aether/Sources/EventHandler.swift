@@ -319,7 +319,6 @@ class EventHandler: AetherEventHandler {
 
             // Show toast notification about available updates
             if !updates.isEmpty {
-                let runtimeNames = updates.map { $0.runtimeId }.joined(separator: ", ")
                 let message = updates.count == 1
                     ? L("notification.runtime_update_single", updates[0].runtimeId, updates[0].latestVersion)
                     : L("notification.runtime_updates_multiple", String(updates.count))

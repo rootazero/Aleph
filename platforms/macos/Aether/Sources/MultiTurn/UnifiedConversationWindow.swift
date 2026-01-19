@@ -87,6 +87,11 @@ final class UnifiedConversationWindow: NSWindow {
         if let hostingView = hostingView {
             hostingView.frame = contentView?.bounds ?? .zero
             hostingView.autoresizingMask = [.width, .height]
+
+            // Critical: Ensure NSHostingView is fully transparent for glassEffect
+            hostingView.wantsLayer = true
+            hostingView.layer?.backgroundColor = .clear
+
             contentView = hostingView
         }
 
@@ -228,5 +233,7 @@ final class UnifiedConversationWindow: NSWindow {
     // MARK: - Focus
 
     override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
+    // Note: Must be true for glassEffect to render in active state
+    // Otherwise glass degrades to simple blur
+    override var canBecomeMain: Bool { true }
 }
