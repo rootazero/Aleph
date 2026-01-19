@@ -44,6 +44,7 @@ public interface IInitProgressHandler
 public sealed class AetherCore : IDisposable
 {
     private static AetherCore? _instance;
+    private static IInitProgressHandler? _initHandler;
     private readonly DispatcherQueue _dispatcherQueue;
     private bool _initialized = false;
     private bool _disposed = false;
@@ -1852,6 +1853,129 @@ public sealed class AetherCore : IDisposable
             LogMessage?.Invoke(message);
         });
     }
+
+    #endregion
+
+    #region First-Time Initialization
+
+    /// <summary>
+    /// Check if first-time initialization is needed.
+    /// </summary>
+    public static bool NeedsFirstTimeInit()
+    {
+        try
+        {
+            return NativeMethods.aether_needs_first_time_init() == 1;
+        }
+        catch (DllNotFoundException)
+        {
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Check if embedding model exists.
+    /// </summary>
+    public static bool CheckEmbeddingModelExists()
+    {
+        try
+        {
+            return NativeMethods.aether_check_embedding_model_exists() == 1;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Run first-time initialization with progress handler.
+    /// This is blocking and should be called from a background thread.
+    /// </summary>
+    public static unsafe bool RunFirstTimeInit(IInitProgressHandler handler)
+    {
+        _initHandler = handler;
+
+        try
+        {
+            NativeMethods.aether_register_init_callbacks(
+                &OnInitPhaseStarted,
+                &OnInitPhaseProgress,
+                &OnInitPhaseCompleted,
+                &OnInitDownloadProgress,
+                &OnInitError
+            );
+
+            int result = NativeMethods.aether_run_first_time_init();
+            return result == 0;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[AetherCore] Init error: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            NativeMethods.aether_clear_init_callbacks();
+            _initHandler = null;
+        }
+    }
+
+    #region Init Callback Methods
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static unsafe void OnInitPhaseStarted(byte* phase, uint current, uint total)
+    {
+        var phaseStr = phase != null ? Marshal.PtrToStringUTF8((IntPtr)phase) ?? "" : "";
+        _instance?._dispatcherQueue.TryEnqueue(() =>
+        {
+            _initHandler?.OnPhaseStarted(phaseStr, current, total);
+        });
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static unsafe void OnInitPhaseProgress(byte* phase, double progress, byte* message)
+    {
+        var phaseStr = phase != null ? Marshal.PtrToStringUTF8((IntPtr)phase) ?? "" : "";
+        var msgStr = message != null ? Marshal.PtrToStringUTF8((IntPtr)message) ?? "" : "";
+        _instance?._dispatcherQueue.TryEnqueue(() =>
+        {
+            _initHandler?.OnPhaseProgress(phaseStr, progress, msgStr);
+        });
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static unsafe void OnInitPhaseCompleted(byte* phase)
+    {
+        var phaseStr = phase != null ? Marshal.PtrToStringUTF8((IntPtr)phase) ?? "" : "";
+        _instance?._dispatcherQueue.TryEnqueue(() =>
+        {
+            _initHandler?.OnPhaseCompleted(phaseStr);
+        });
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static unsafe void OnInitDownloadProgress(byte* item, ulong downloaded, ulong total)
+    {
+        var itemStr = item != null ? Marshal.PtrToStringUTF8((IntPtr)item) ?? "" : "";
+        _instance?._dispatcherQueue.TryEnqueue(() =>
+        {
+            _initHandler?.OnDownloadProgress(itemStr, downloaded, total);
+        });
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static unsafe void OnInitError(byte* phase, byte* message, int isRetryable)
+    {
+        var phaseStr = phase != null ? Marshal.PtrToStringUTF8((IntPtr)phase) ?? "" : "";
+        var msgStr = message != null ? Marshal.PtrToStringUTF8((IntPtr)message) ?? "" : "";
+        _instance?._dispatcherQueue.TryEnqueue(() =>
+        {
+            _initHandler?.OnError(phaseStr, msgStr, isRetryable != 0);
+        });
+    }
+
+    #endregion
 
     #endregion
 
