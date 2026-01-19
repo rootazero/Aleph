@@ -96,9 +96,10 @@ public sealed class AetherCore : IDisposable
     #region Initialization
 
     /// <summary>
-    /// Initialize the Rust core with config path.
+    /// Initialize the Rust core.
+    /// Assumes first-time initialization has already run (directories exist).
     /// </summary>
-    public unsafe bool Initialize(string? configPath = null)
+    public unsafe bool Initialize()
     {
         if (_initialized)
         {
@@ -111,25 +112,13 @@ public sealed class AetherCore : IDisposable
             // Register callbacks BEFORE init
             RegisterCallbacks();
 
-            // Call aether_init
+            // Call aether_init with default path
+            var configPath = GetDefaultConfigPath();
+            var pathBytes = Encoding.UTF8.GetBytes(configPath + '\0');
             int result;
-            if (string.IsNullOrEmpty(configPath))
+            fixed (byte* pathPtr = pathBytes)
             {
-                // Use default config path
-                var defaultPath = GetDefaultConfigPath();
-                var pathBytes = Encoding.UTF8.GetBytes(defaultPath + '\0');
-                fixed (byte* pathPtr = pathBytes)
-                {
-                    result = NativeMethods.aether_init(pathPtr);
-                }
-            }
-            else
-            {
-                var pathBytes = Encoding.UTF8.GetBytes(configPath + '\0');
-                fixed (byte* pathPtr = pathBytes)
-                {
-                    result = NativeMethods.aether_init(pathPtr);
-                }
+                result = NativeMethods.aether_init(pathPtr);
             }
 
             if (result == 0)
@@ -148,7 +137,6 @@ public sealed class AetherCore : IDisposable
         catch (DllNotFoundException ex)
         {
             Log($"DLL not found: {ex.Message}");
-            Log("Make sure aethecore.dll is in the application directory");
             return false;
         }
         catch (Exception ex)
