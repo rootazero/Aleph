@@ -590,7 +590,7 @@
 "permission.gate.input_monitoring_short" = "Input Monitoring";
 "permission.gate.accessibility_description" = "Aether needs Accessibility permission to capture window context and simulate keyboard input to paste AI responses into your applications.";
 "permission.gate.screen_recording_description" = "Aether needs Screen Recording permission for OCR text recognition and screen capture features.";
-"permission.gate.input_monitoring_description" = "Aether needs Input Monitoring permission to detect global hotkeys (default: ` key), allowing you to quickly summon the AI assistant in any app.\n\n⚠️ Important: After granting all permissions, click \"Enter Aether\" to restart the app.";
+"permission.gate.input_monitoring_description" = "Aether needs Input Monitoring permission to detect global hotkeys (default: double-tap Shift), allowing you to quickly summon the AI assistant in any app.\n\n⚠️ Important: After granting all permissions, click \"Enter Aether\" to restart the app.";
 "permission.gate.status_granted" = "Granted ✓";
 "permission.gate.status_waiting" = "Waiting for authorization...";
 "permission.gate.button.continue" = "Continue";
