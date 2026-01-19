@@ -117,9 +117,21 @@ impl InitProgressHandler for ProgressHandlerAdapter {
 /// - runtimes/manifest.json doesn't exist
 ///
 /// This function is safe to call at any time and doesn't modify any files.
+/// If an error occurs while checking, logs the error and returns true (safer default).
 #[uniffi::export]
 pub fn needs_first_time_init() -> bool {
-    crate::init_unified::needs_initialization().unwrap_or(true)
+    match crate::init_unified::needs_initialization() {
+        Ok(needs_init) => needs_init,
+        Err(e) => {
+            // Log the error - defaulting to true is safer as it triggers initialization
+            // which will properly report any underlying issues
+            tracing::warn!(
+                "Error checking initialization status, defaulting to needs_init=true: {}",
+                e
+            );
+            true
+        }
+    }
 }
 
 /// Run first-time initialization with progress callback
@@ -151,10 +163,22 @@ pub fn run_initialization(handler: Box<dyn InitProgressHandlerFFI>) -> InitResul
     // Create tokio runtime for async operations
     // We create a new runtime here because this function may be called
     // before AetherCore is initialized (which creates its own runtime)
-    let rt = tokio::runtime::Builder::new_multi_thread()
+    let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("Failed to create tokio runtime");
+    {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            // Return error result instead of panicking
+            tracing::error!("Failed to create tokio runtime: {}", e);
+            return InitResultFFI {
+                success: false,
+                completed_phases: vec![],
+                error_phase: Some("runtime_setup".to_string()),
+                error_message: Some(format!("Failed to create async runtime: {}", e)),
+            };
+        }
+    };
 
     let result = rt.block_on(async {
         match InitializationCoordinator::new(Some(adapter)) {
