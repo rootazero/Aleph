@@ -70,6 +70,7 @@ pub mod event; // NEW: Event-driven architecture for agentic loop
 mod event_handler;
 pub mod ffi; // FFI module - split AetherCore implementation
 pub mod generation;
+pub mod init_unified; // NEW: Unified initialization module (will replace initialization in Task 7)
 pub mod initialization;
 pub mod intent; // NEW: Smart intent detection for conversation flow
 pub mod logging;
