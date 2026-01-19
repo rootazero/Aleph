@@ -156,36 +156,45 @@ impl InitializationCoordinator {
                 "skills" => {
                     let skills_dir = self.config_dir.join("skills");
                     if skills_dir.exists() {
-                        let _ = std::fs::remove_dir_all(&skills_dir);
+                        if let Err(e) = tokio::fs::remove_dir_all(&skills_dir).await {
+                            warn!(error = %e, dir = ?skills_dir, "Failed to remove skills directory during rollback");
+                        }
                     }
                 }
                 "runtimes" => {
                     let runtimes_dir = self.config_dir.join("runtimes");
                     if runtimes_dir.exists() {
-                        let _ = std::fs::remove_dir_all(&runtimes_dir);
+                        if let Err(e) = tokio::fs::remove_dir_all(&runtimes_dir).await {
+                            warn!(error = %e, dir = ?runtimes_dir, "Failed to remove runtimes directory during rollback");
+                        }
                     }
                 }
                 "database" => {
                     let db_path = self.config_dir.join("memory.db");
                     if db_path.exists() {
-                        let _ = std::fs::remove_file(&db_path);
+                        if let Err(e) = tokio::fs::remove_file(&db_path).await {
+                            warn!(error = %e, path = ?db_path, "Failed to remove database during rollback");
+                        }
                     }
                 }
                 "embedding_model" => {
                     let models_dir = self.config_dir.join("models");
                     if models_dir.exists() {
-                        let _ = std::fs::remove_dir_all(&models_dir);
+                        if let Err(e) = tokio::fs::remove_dir_all(&models_dir).await {
+                            warn!(error = %e, dir = ?models_dir, "Failed to remove models directory during rollback");
+                        }
                     }
                 }
                 "config" => {
                     let config_path = self.config_dir.join("config.toml");
                     if config_path.exists() {
-                        let _ = std::fs::remove_file(&config_path);
+                        if let Err(e) = tokio::fs::remove_file(&config_path).await {
+                            warn!(error = %e, path = ?config_path, "Failed to remove config during rollback");
+                        }
                     }
                 }
                 "directories" => {
-                    // Only remove if we created it fresh (check if empty except for what we created)
-                    // For safety, don't remove the entire config dir as it may have user data
+                    // Don't remove entire config_dir to preserve user data
                 }
                 _ => {}
             }
@@ -200,8 +209,6 @@ impl InitializationCoordinator {
     // =========================================================================
 
     async fn create_directories(&self) -> Result<(), InitError> {
-        use std::fs;
-
         let dirs = [
             self.config_dir.clone(),
             self.config_dir.join("logs"),
@@ -212,7 +219,7 @@ impl InitializationCoordinator {
         ];
 
         for dir in &dirs {
-            fs::create_dir_all(dir).map_err(|e| {
+            tokio::fs::create_dir_all(dir).await.map_err(|e| {
                 InitError::new("directories", format!("Failed to create {:?}: {}", dir, e))
             })?;
         }
@@ -226,8 +233,6 @@ impl InitializationCoordinator {
     // =========================================================================
 
     async fn generate_config(&self) -> Result<(), InitError> {
-        use std::fs;
-
         let config_path = self.config_dir.join("config.toml");
 
         // Don't overwrite existing config
@@ -240,7 +245,8 @@ impl InitializationCoordinator {
         let toml_str = toml::to_string_pretty(&default_config)
             .map_err(|e| InitError::new("config", format!("Failed to serialize config: {}", e)))?;
 
-        fs::write(&config_path, toml_str)
+        tokio::fs::write(&config_path, toml_str)
+            .await
             .map_err(|e| InitError::new("config", format!("Failed to write config: {}", e)))?;
 
         info!(path = ?config_path, "Default config created");
