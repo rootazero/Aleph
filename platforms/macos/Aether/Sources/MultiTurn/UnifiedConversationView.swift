@@ -43,7 +43,9 @@ struct UnifiedConversationView: View {
             if viewModel.shouldShowConversation ||
                viewModel.shouldShowCommandList ||
                viewModel.shouldShowTopicList {
-                Divider().opacity(0.3)
+                Divider()
+                    .opacity(0.3)
+                    .padding(.horizontal, 12)  // Prevent divider from reaching edges
             }
 
             // Input area (always visible)

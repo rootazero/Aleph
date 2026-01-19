@@ -25,6 +25,7 @@ struct ConversationAreaView: View {
 
             Divider()
                 .opacity(0.3)
+                .padding(.horizontal, 12)  // Prevent divider from reaching edges
 
             // Messages list
             if viewModel.hasMessages {

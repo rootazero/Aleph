@@ -91,9 +91,17 @@ final class UnifiedConversationWindow: NSWindow {
             // Critical: Ensure NSHostingView is fully transparent for glassEffect
             hostingView.wantsLayer = true
             hostingView.layer?.backgroundColor = .clear
+            hostingView.layer?.borderWidth = 0
+            hostingView.layer?.borderColor = .clear
 
             contentView = hostingView
         }
+
+        // Ensure window content view has no border
+        contentView?.wantsLayer = true
+        contentView?.layer?.backgroundColor = .clear
+        contentView?.layer?.borderWidth = 0
+        contentView?.layer?.borderColor = .clear
 
         // Height change callback
         viewModel.onHeightChanged = { [weak self] height in
