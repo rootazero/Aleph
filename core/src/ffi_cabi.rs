@@ -131,6 +131,12 @@ struct Callbacks {
     error: Option<ErrorCallback>,
     tool: Option<ToolCallback>,
     memory_stored: Option<MemoryStoredCallback>,
+    // Initialization callbacks
+    init_phase_started: Option<InitPhaseStartedCallback>,
+    init_phase_progress: Option<InitPhaseProgressCallback>,
+    init_phase_completed: Option<InitPhaseCompletedCallback>,
+    init_download_progress: Option<InitDownloadProgressCallback>,
+    init_error: Option<InitErrorCallback>,
 }
 
 static CALLBACKS: Mutex<Callbacks> = Mutex::new(Callbacks {
@@ -140,6 +146,12 @@ static CALLBACKS: Mutex<Callbacks> = Mutex::new(Callbacks {
     error: None,
     tool: None,
     memory_stored: None,
+    // Initialization callbacks
+    init_phase_started: None,
+    init_phase_progress: None,
+    init_phase_completed: None,
+    init_download_progress: None,
+    init_error: None,
 });
 
 // =============================================================================
