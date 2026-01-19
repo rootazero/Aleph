@@ -3,6 +3,7 @@
 
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using Aether.Services;
 using Aether.Interop;
 using Aether.Windows;
@@ -70,6 +71,7 @@ public partial class App : Application
     private HaloWindow? _haloWindow;
     private SettingsWindow? _settingsWindow;
     private ConversationWindow? _conversationWindow;
+    private InitializationDialog? _initDialog;
 
     public HaloWindow? HaloWindow => _haloWindow;
 
@@ -106,10 +108,85 @@ public partial class App : Application
         }
     }
 
-    protected override void OnLaunched(LaunchActivatedEventArgs args)
+    protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
         _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
 
+        // Check if first-time initialization is needed
+        if (AetherCore.NeedsFirstTimeInit())
+        {
+            await RunFirstTimeInitializationAsync();
+        }
+        else
+        {
+            ContinueStartup();
+        }
+    }
+
+    private async Task RunFirstTimeInitializationAsync()
+    {
+        // Create a minimal window to host the dialog
+        var initWindow = new Microsoft.UI.Xaml.Window();
+        initWindow.Content = new Grid();
+        initWindow.Activate();
+
+        _initDialog = new InitializationDialog();
+        _initDialog.XamlRoot = initWindow.Content.XamlRoot;
+
+        bool success = false;
+        bool shouldRetry = true;
+
+        _initDialog.InitCompleted += () =>
+        {
+            success = true;
+            _initDialog.Hide();
+        };
+
+        _initDialog.QuitRequested += () =>
+        {
+            shouldRetry = false;
+            _initDialog.Hide();
+        };
+
+        _initDialog.RetryRequested += async () =>
+        {
+            // Run init again on background thread
+            await Task.Run(() => AetherCore.RunFirstTimeInit(_initDialog));
+        };
+
+        while (shouldRetry && !success)
+        {
+            // Show dialog
+            var dialogTask = _initDialog.ShowAsync();
+
+            // Run initialization on background thread
+            await Task.Run(() => AetherCore.RunFirstTimeInit(_initDialog));
+
+            // Wait for dialog to close (either success, quit, or retry)
+            await dialogTask;
+
+            if (success)
+            {
+                break;
+            }
+        }
+
+        // Close init window
+        initWindow.Close();
+
+        if (success)
+        {
+            ContinueStartup();
+        }
+        else
+        {
+            // User chose to quit
+            Exit();
+        }
+    }
+
+    private void ContinueStartup()
+    {
         // Initialize services
         InitializeServices();
 
@@ -149,8 +226,7 @@ public partial class App : Application
 
             // 4. Initialize Rust core
             _aetherCore = new AetherCore(_dispatcherQueue!);
-            var configPath = GetConfigPath();
-            if (!_aetherCore.Initialize(configPath))
+            if (!_aetherCore.Initialize())
             {
                 System.Diagnostics.Debug.WriteLine("Warning: Aether core initialization failed (DLL may be missing)");
             }
