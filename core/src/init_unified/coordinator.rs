@@ -1,10 +1,11 @@
 //! InitializationCoordinator - unified first-time setup
 
 use super::error::InitError;
+use crate::config::Config;
 use crate::utils::paths::get_config_dir;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{debug, info, warn};
 
 /// Initialization phase identifier
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,29 +62,260 @@ pub trait InitProgressHandler: Send + Sync {
 
 /// Main initialization coordinator
 pub struct InitializationCoordinator {
-    #[allow(dead_code)] // Will be used in Task 2
     config_dir: PathBuf,
-    #[allow(dead_code)] // Will be used in Task 2
     handler: Option<Arc<dyn InitProgressHandler>>,
 }
 
 impl InitializationCoordinator {
     pub fn new(handler: Option<Arc<dyn InitProgressHandler>>) -> Result<Self, InitError> {
-        let config_dir = get_config_dir()
-            .map_err(|e| InitError::non_retryable("setup", e.to_string()))?;
+        let config_dir =
+            get_config_dir().map_err(|e| InitError::non_retryable("setup", e.to_string()))?;
 
         Ok(Self { config_dir, handler })
     }
 
     /// Run the full initialization sequence
     pub async fn run(&self) -> InitializationResult {
-        // Placeholder - will be implemented in Task 2
-        info!("InitializationCoordinator::run() called");
-        InitializationResult {
-            success: false,
-            completed_phases: vec![],
-            error_phase: Some("not_implemented".to_string()),
-            error_message: Some("Not yet implemented".to_string()),
+        let phases = [
+            InitPhase::Directories,
+            InitPhase::Config,
+            InitPhase::EmbeddingModel,
+            InitPhase::Database,
+            InitPhase::Runtimes,
+            InitPhase::Skills,
+        ];
+
+        let total = phases.len() as u32;
+        let mut completed_phases = Vec::new();
+
+        for (i, phase) in phases.iter().enumerate() {
+            let current = (i + 1) as u32;
+
+            // Notify phase start
+            if let Some(h) = &self.handler {
+                h.on_phase_started(phase.name().to_string(), current, total);
+            }
+
+            // Execute phase
+            match self.run_phase(phase).await {
+                Ok(()) => {
+                    completed_phases.push(phase.name().to_string());
+                    if let Some(h) = &self.handler {
+                        h.on_phase_completed(phase.name().to_string());
+                    }
+                }
+                Err(e) => {
+                    warn!(phase = %phase.name(), error = %e, "Phase failed");
+
+                    if let Some(h) = &self.handler {
+                        h.on_error(e.phase.clone(), e.message.clone(), e.is_retryable);
+                    }
+
+                    // Rollback completed phases
+                    if let Err(rollback_err) = self.rollback(&completed_phases).await {
+                        warn!(error = %rollback_err, "Rollback failed");
+                    }
+
+                    return InitializationResult {
+                        success: false,
+                        completed_phases,
+                        error_phase: Some(e.phase),
+                        error_message: Some(e.message),
+                    };
+                }
+            }
         }
+
+        info!("Initialization completed successfully");
+        InitializationResult {
+            success: true,
+            completed_phases,
+            error_phase: None,
+            error_message: None,
+        }
+    }
+
+    /// Dispatch to the appropriate phase handler
+    async fn run_phase(&self, phase: &InitPhase) -> Result<(), InitError> {
+        match phase {
+            InitPhase::Directories => self.create_directories().await,
+            InitPhase::Config => self.generate_config().await,
+            InitPhase::EmbeddingModel => self.download_embedding_model().await,
+            InitPhase::Database => self.initialize_database().await,
+            InitPhase::Runtimes => self.install_runtimes().await,
+            InitPhase::Skills => self.install_skills().await,
+        }
+    }
+
+    /// Rollback completed phases in reverse order
+    async fn rollback(&self, completed_phases: &[String]) -> Result<(), InitError> {
+        info!(phases = ?completed_phases, "Rolling back initialization");
+
+        for phase in completed_phases.iter().rev() {
+            match phase.as_str() {
+                "skills" => {
+                    let skills_dir = self.config_dir.join("skills");
+                    if skills_dir.exists() {
+                        let _ = std::fs::remove_dir_all(&skills_dir);
+                    }
+                }
+                "runtimes" => {
+                    let runtimes_dir = self.config_dir.join("runtimes");
+                    if runtimes_dir.exists() {
+                        let _ = std::fs::remove_dir_all(&runtimes_dir);
+                    }
+                }
+                "database" => {
+                    let db_path = self.config_dir.join("memory.db");
+                    if db_path.exists() {
+                        let _ = std::fs::remove_file(&db_path);
+                    }
+                }
+                "embedding_model" => {
+                    let models_dir = self.config_dir.join("models");
+                    if models_dir.exists() {
+                        let _ = std::fs::remove_dir_all(&models_dir);
+                    }
+                }
+                "config" => {
+                    let config_path = self.config_dir.join("config.toml");
+                    if config_path.exists() {
+                        let _ = std::fs::remove_file(&config_path);
+                    }
+                }
+                "directories" => {
+                    // Only remove if we created it fresh (check if empty except for what we created)
+                    // For safety, don't remove the entire config dir as it may have user data
+                }
+                _ => {}
+            }
+        }
+
+        info!("Rollback completed");
+        Ok(())
+    }
+
+    // =========================================================================
+    // Phase 1: Create directories
+    // =========================================================================
+
+    async fn create_directories(&self) -> Result<(), InitError> {
+        use std::fs;
+
+        let dirs = [
+            self.config_dir.clone(),
+            self.config_dir.join("logs"),
+            self.config_dir.join("cache"),
+            self.config_dir.join("skills"),
+            self.config_dir.join("models"),
+            self.config_dir.join("runtimes"),
+        ];
+
+        for dir in &dirs {
+            fs::create_dir_all(dir).map_err(|e| {
+                InitError::new("directories", format!("Failed to create {:?}: {}", dir, e))
+            })?;
+        }
+
+        info!(dir = ?self.config_dir, "Directory structure created");
+        Ok(())
+    }
+
+    // =========================================================================
+    // Phase 2: Generate config
+    // =========================================================================
+
+    async fn generate_config(&self) -> Result<(), InitError> {
+        use std::fs;
+
+        let config_path = self.config_dir.join("config.toml");
+
+        // Don't overwrite existing config
+        if config_path.exists() {
+            info!("Config already exists, skipping");
+            return Ok(());
+        }
+
+        let default_config = Config::default();
+        let toml_str = toml::to_string_pretty(&default_config)
+            .map_err(|e| InitError::new("config", format!("Failed to serialize config: {}", e)))?;
+
+        fs::write(&config_path, toml_str)
+            .map_err(|e| InitError::new("config", format!("Failed to write config: {}", e)))?;
+
+        info!(path = ?config_path, "Default config created");
+        Ok(())
+    }
+
+    // =========================================================================
+    // Phase 3: Download embedding model
+    // =========================================================================
+
+    async fn download_embedding_model(&self) -> Result<(), InitError> {
+        use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+
+        info!("Downloading embedding model bge-small-zh-v1.5...");
+
+        // Report progress
+        if let Some(h) = &self.handler {
+            h.on_phase_progress(
+                "embedding_model".to_string(),
+                0.0,
+                "Initializing model download...".to_string(),
+            );
+        }
+
+        // fastembed handles download automatically
+        // Model is cached in ~/.cache/huggingface/hub/
+        let _model = TextEmbedding::try_new(
+            InitOptions::new(EmbeddingModel::BGESmallZHV15).with_show_download_progress(true),
+        )
+        .map_err(|e| {
+            InitError::new(
+                "embedding_model",
+                format!("Failed to download model: {}", e),
+            )
+        })?;
+
+        info!("Embedding model downloaded successfully");
+        Ok(())
+    }
+
+    // =========================================================================
+    // Phase 4: Initialize database
+    // =========================================================================
+
+    async fn initialize_database(&self) -> Result<(), InitError> {
+        use crate::memory::database::VectorDatabase;
+
+        let db_path = self.config_dir.join("memory.db");
+
+        info!(path = ?db_path, "Initializing memory database");
+
+        let _db = VectorDatabase::new(db_path.clone())
+            .map_err(|e| InitError::new("database", format!("Failed to create database: {}", e)))?;
+
+        info!("Memory database initialized");
+        Ok(())
+    }
+
+    // =========================================================================
+    // Phase 5: Install runtimes (placeholder - Task 4)
+    // =========================================================================
+
+    async fn install_runtimes(&self) -> Result<(), InitError> {
+        // TODO: Implement in Task 4
+        debug!("Runtime installation placeholder");
+        Ok(())
+    }
+
+    // =========================================================================
+    // Phase 6: Install skills (placeholder - Task 5)
+    // =========================================================================
+
+    async fn install_skills(&self) -> Result<(), InitError> {
+        // TODO: Implement in Task 5
+        debug!("Skills installation placeholder");
+        Ok(())
     }
 }
