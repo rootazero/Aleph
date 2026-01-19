@@ -82,6 +82,7 @@ struct ProviderEditPanel: View {
     @State private var testResult: TestResult?
     @State private var errorMessage: String?
     @State private var showDeleteConfirmation: Bool = false
+    @State private var justSavedProviderName: String? = nil  // Track just-saved provider to skip unnecessary reload
 
     // Section expansion states
     @State private var isConfigExpanded = true
@@ -167,7 +168,12 @@ struct ProviderEditPanel: View {
             // When preset changes, load provider data
             // Skip if we're just updating the preset after save
             if newPreset != nil && !isSaving {
-                loadProviderData()
+                // Skip reload if we just saved this provider (data is already correct)
+                if let justSaved = justSavedProviderName, justSaved == newPreset?.id {
+                    justSavedProviderName = nil  // Clear flag after skipping
+                } else {
+                    loadProviderData()
+                }
             }
             updateSaveBarState()
         }
@@ -175,7 +181,12 @@ struct ProviderEditPanel: View {
             // When selected provider changes, load provider data
             // Skip if we're in the middle of saving to prevent reload
             if newProvider != nil && !isSaving {
-                loadProviderData()
+                // Skip reload if we just saved this provider (data is already correct)
+                if let justSaved = justSavedProviderName, justSaved == newProvider {
+                    // Don't clear flag here - let selectedPreset onChange clear it
+                } else {
+                    loadProviderData()
+                }
             }
             updateSaveBarState()
         }
@@ -973,6 +984,10 @@ struct ProviderEditPanel: View {
                     // CRITICAL: Set isSaving = false BEFORE updating selection
                     // This allows onChange handlers to process the selection update
                     isSaving = false
+
+                    // Set flag to skip unnecessary loadProviderData() calls
+                    // This prevents the form from being reset after save
+                    justSavedProviderName = savedProviderName
 
                     // CRITICAL: Keep the current provider selected
                     // This prevents jumping to the first provider
