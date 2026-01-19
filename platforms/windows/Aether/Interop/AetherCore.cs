@@ -5,6 +5,31 @@ using Microsoft.UI.Dispatching;
 
 namespace Aether.Interop;
 
+#region Initialization Progress Interface
+
+/// <summary>
+/// Interface for receiving initialization progress updates.
+/// </summary>
+public interface IInitProgressHandler
+{
+    /// <summary>Called when a phase starts.</summary>
+    void OnPhaseStarted(string phase, uint current, uint total);
+
+    /// <summary>Called for progress updates within a phase.</summary>
+    void OnPhaseProgress(string phase, double progress, string message);
+
+    /// <summary>Called when a phase completes.</summary>
+    void OnPhaseCompleted(string phase);
+
+    /// <summary>Called for download progress.</summary>
+    void OnDownloadProgress(string item, ulong downloaded, ulong total);
+
+    /// <summary>Called when an error occurs.</summary>
+    void OnError(string phase, string message, bool isRetryable);
+}
+
+#endregion
+
 /// <summary>
 /// High-level wrapper for Aether Rust core.
 ///
