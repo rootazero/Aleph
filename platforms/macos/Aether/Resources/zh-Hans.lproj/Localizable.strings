@@ -171,7 +171,22 @@
 "provider.notification.default_changed" = "默认提供商已设为 %@";
 "provider.error.cannot_set_disabled_as_default" = "无法将已禁用的提供商设为默认";
 "provider.error.set_default_failed" = "设置默认提供商失败";
+"provider.error.save_first" = "请先保存提供商再设为默认";
+"provider.error.name_required" = "提供商名称不能为空";
+"provider.error.model_required" = "模型名称不能为空";
+"provider.error.api_key_required" = "API 密钥不能为空";
+"provider.error.base_url_required" = "自定义提供商需要填写 Base URL";
+"provider.error.invalid_timeout" = "超时值无效";
+"provider.error.invalid_max_tokens" = "最大令牌数无效";
+"provider.error.invalid_temperature" = "温度值无效";
+"provider.error.temperature_range" = "温度值必须在 %@ 范围内";
+"provider.error.invalid_top_p" = "Top P 必须在 0.0 到 1.0 之间";
+"provider.error.invalid_top_k" = "Top K 必须是正整数";
+"provider.error.invalid_frequency_penalty" = "频率惩罚必须在 -2.0 到 2.0 之间";
+"provider.error.invalid_presence_penalty" = "存在惩罚必须在 -2.0 到 2.0 之间";
+"provider.error.invalid_repeat_penalty" = "重复惩罚必须 >= 1.0";
 "provider.warning.default_disabled" = "默认提供商已禁用，正在使用备用提供商。";
+"provider.help.set_default_save_first" = "请先保存提供商再设为默认";
 
 "provider.delete.title" = "删除提供商";
 "provider.delete.message" = "您确定要删除「%@」吗？这也会从钥匙串中删除 API 密钥。";

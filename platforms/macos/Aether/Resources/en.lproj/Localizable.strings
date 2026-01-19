@@ -171,7 +171,22 @@
 "provider.notification.default_changed" = "Default provider set to %@";
 "provider.error.cannot_set_disabled_as_default" = "Cannot set disabled provider as default";
 "provider.error.set_default_failed" = "Failed to set default provider";
+"provider.error.save_first" = "Please save the provider first before setting as default";
+"provider.error.name_required" = "Provider name is required";
+"provider.error.model_required" = "Model name is required";
+"provider.error.api_key_required" = "API key is required";
+"provider.error.base_url_required" = "Base URL is required for custom providers";
+"provider.error.invalid_timeout" = "Invalid timeout value";
+"provider.error.invalid_max_tokens" = "Invalid max tokens value";
+"provider.error.invalid_temperature" = "Invalid temperature value";
+"provider.error.temperature_range" = "Temperature must be in range %@";
+"provider.error.invalid_top_p" = "Top P must be between 0.0 and 1.0";
+"provider.error.invalid_top_k" = "Top K must be a positive integer";
+"provider.error.invalid_frequency_penalty" = "Frequency penalty must be between -2.0 and 2.0";
+"provider.error.invalid_presence_penalty" = "Presence penalty must be between -2.0 and 2.0";
+"provider.error.invalid_repeat_penalty" = "Repeat penalty must be >= 1.0";
 "provider.warning.default_disabled" = "Default provider is disabled. Using fallback.";
+"provider.help.set_default_save_first" = "Save the provider first to set as default";
 
 "provider.delete.title" = "Delete Provider";
 "provider.delete.message" = "Are you sure you want to delete \"%@\"? This will also remove the API key from Keychain.";

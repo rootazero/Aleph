@@ -684,18 +684,34 @@ struct ProviderEditPanel: View {
     // MARK: - Actions
 
     /// Set current provider as default (NEW for default provider management)
+    ///
+    /// IMPORTANT: This method uses the saved provider name (currentProvider.name),
+    /// not the form field (providerName), to avoid setting an unsaved provider as default.
     private func setAsDefaultProvider() {
-        guard !providerName.isEmpty else { return }
+        // Use the saved provider name, not the form field value
+        // This prevents setting an unsaved/renamed provider as default
+        guard let savedName = currentProvider?.name else {
+            print("[ProviderEditPanel] Cannot set default: no saved provider")
+            errorMessage = L("provider.error.save_first")
+            return
+        }
+
         guard isProviderActive else {
             print("[ProviderEditPanel] Cannot set disabled provider as default")
             return
         }
 
+        // Check if there are unsaved changes - warn user if so
+        if hasUnsavedFormChanges {
+            print("[ProviderEditPanel] Warning: setting default with unsaved changes")
+            // Still proceed using the saved name, but log the warning
+        }
+
         do {
-            try core.setDefaultProvider(providerName: providerName)
+            try core.setDefaultProvider(providerName: savedName)
             // Update binding to trigger UI refresh
-            defaultProviderId?.wrappedValue = providerName
-            print("[ProviderEditPanel] Set default provider to: \(providerName)")
+            defaultProviderId?.wrappedValue = savedName
+            print("[ProviderEditPanel] Set default provider to: \(savedName)")
         } catch {
             print("[ProviderEditPanel] Error setting default provider: \(error)")
             errorMessage = "Failed to set default: \(error.localizedDescription)"
@@ -925,7 +941,11 @@ struct ProviderEditPanel: View {
     }
 
     private func saveProvider() {
-        guard isFormValid() else { return }
+        // Validate form and show specific error messages
+        if let validationError = getValidationError() {
+            errorMessage = validationError
+            return
+        }
 
         isSaving = true
         errorMessage = nil
@@ -1127,6 +1147,111 @@ struct ProviderEditPanel: View {
         }
 
         return true
+    }
+
+    /// Get specific validation error message for user feedback
+    /// Returns nil if form is valid
+    private func getValidationError() -> String? {
+        // Basic required fields
+        if providerName.trimmingCharacters(in: .whitespaces).isEmpty {
+            return L("provider.error.name_required")
+        }
+        if model.trimmingCharacters(in: .whitespaces).isEmpty {
+            return L("provider.error.model_required")
+        }
+
+        // API key required for non-Ollama providers
+        if providerType != "ollama" && apiKey.trimmingCharacters(in: .whitespaces).isEmpty {
+            return L("provider.error.api_key_required")
+        }
+
+        // Base URL required for custom providers
+        if isCustomProvider && baseURL.trimmingCharacters(in: .whitespaces).isEmpty {
+            return L("provider.error.base_url_required")
+        }
+
+        // Timeout validation
+        if UInt64(timeoutSeconds) == nil || UInt64(timeoutSeconds) == 0 {
+            return L("provider.error.invalid_timeout")
+        }
+
+        // Common parameter validation
+        if !maxTokens.isEmpty {
+            if UInt32(maxTokens) == nil || UInt32(maxTokens) == 0 {
+                return L("provider.error.invalid_max_tokens")
+            }
+        }
+
+        if !temperature.isEmpty {
+            guard let temp = Float(temperature) else {
+                return L("provider.error.invalid_temperature")
+            }
+            // Provider-specific temperature range
+            switch providerType {
+            case "claude":
+                if temp < 0.0 || temp > 1.0 {
+                    return String(format: L("provider.error.temperature_range"), "0.0-1.0")
+                }
+            case "openai", "gemini":
+                if temp < 0.0 || temp > 2.0 {
+                    return String(format: L("provider.error.temperature_range"), "0.0-2.0")
+                }
+            case "ollama":
+                if temp < 0.0 {
+                    return String(format: L("provider.error.temperature_range"), "≥ 0.0")
+                }
+            default:
+                if temp < 0.0 || temp > 2.0 {
+                    return String(format: L("provider.error.temperature_range"), "0.0-2.0")
+                }
+            }
+        }
+
+        if !topP.isEmpty {
+            if let p = Float(topP), p < 0.0 || p > 1.0 {
+                return L("provider.error.invalid_top_p")
+            } else if Float(topP) == nil {
+                return L("provider.error.invalid_top_p")
+            }
+        }
+
+        if !topK.isEmpty {
+            if UInt32(topK) == nil || UInt32(topK) == 0 {
+                return L("provider.error.invalid_top_k")
+            }
+        }
+
+        // OpenAI-specific validation
+        if providerType == "openai" {
+            if !frequencyPenalty.isEmpty {
+                if let penalty = Float(frequencyPenalty), penalty < -2.0 || penalty > 2.0 {
+                    return L("provider.error.invalid_frequency_penalty")
+                } else if Float(frequencyPenalty) == nil {
+                    return L("provider.error.invalid_frequency_penalty")
+                }
+            }
+
+            if !presencePenalty.isEmpty {
+                if let penalty = Float(presencePenalty), penalty < -2.0 || penalty > 2.0 {
+                    return L("provider.error.invalid_presence_penalty")
+                } else if Float(presencePenalty) == nil {
+                    return L("provider.error.invalid_presence_penalty")
+                }
+            }
+        }
+
+        // Ollama-specific validation
+        if providerType == "ollama" {
+            if !repeatPenalty.isEmpty {
+                if let penalty = Float(repeatPenalty), penalty < 1.0 {
+                    return L("provider.error.invalid_repeat_penalty")
+                } else if Float(repeatPenalty) == nil {
+                    return L("provider.error.invalid_repeat_penalty")
+                }
+            }
+        }
+
+        return nil
     }
 
     // MARK: - Helpers
