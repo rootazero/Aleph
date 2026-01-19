@@ -332,14 +332,18 @@ pub use crate::agents::{
 pub use crate::uniffi_core::{
     init_core, AetherCore, AetherEventHandler, AetherFfiError, MemoryItem, ProcessOptions,
     SessionSummary, ToolInfoFFI,
-    // Initialization FFI types (unified)
-    needs_first_time_init, run_initialization, InitProgressHandlerFFI, InitResultFFI,
     // Generation FFI types
     GenerationDataFFI, GenerationDataTypeFFI, GenerationMetadataFFI, GenerationOutputFFI,
     GenerationParamsFFI, GenerationProgressFFI, GenerationProviderConfigFFI,
     GenerationProviderInfoFFI, GenerationTypeFFI,
     // Runtime FFI types
     RuntimeInfo, RuntimeUpdateInfo,
+};
+
+// Initialization FFI types (unified) - UniFFI only
+#[cfg(feature = "uniffi")]
+pub use crate::uniffi_core::{
+    needs_first_time_init, run_initialization, InitProgressHandlerFFI, InitResultFFI,
 };
 
 // Test-only exports

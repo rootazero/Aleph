@@ -16,6 +16,7 @@
 mod config;
 mod cowork;
 mod generation;
+#[cfg(feature = "uniffi")]
 mod init;
 mod mcp;
 mod memory;
@@ -43,6 +44,7 @@ pub use self::generation::{
     GenerationProviderInfoFFI, GenerationTypeFFI,
 };
 pub use self::processing::ProcessOptions;
+#[cfg(feature = "uniffi")]
 pub use self::init::{needs_first_time_init, run_initialization, InitProgressHandlerFFI, InitResultFFI};
 pub use self::runtime::{RuntimeInfo, RuntimeUpdateInfo};
 pub use self::session::SessionSummary;

@@ -30,11 +30,6 @@
 pub use crate::ffi::{
     // Initialization (legacy)
     init_core,
-    // Initialization (unified - init_unified module)
-    needs_first_time_init,
-    run_initialization,
-    InitProgressHandlerFFI,
-    InitResultFFI,
     // Core types
     AetherCore,
     AetherEventHandler,
@@ -60,4 +55,13 @@ pub use crate::ffi::{
     GenerationProviderConfigFFI,
     GenerationProviderInfoFFI,
     GenerationTypeFFI,
+};
+
+// Initialization (unified - init_unified module) - UniFFI only
+#[cfg(feature = "uniffi")]
+pub use crate::ffi::{
+    needs_first_time_init,
+    run_initialization,
+    InitProgressHandlerFFI,
+    InitResultFFI,
 };

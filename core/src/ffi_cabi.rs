@@ -87,6 +87,38 @@ pub type ToolCallback = extern "C" fn(tool_name: *const c_char, status: c_int, r
 pub type MemoryStoredCallback = extern "C" fn();
 
 // =============================================================================
+// Initialization Callback Types
+// =============================================================================
+
+/// Callback for initialization phase started
+/// @param phase Phase name (UTF-8, null-terminated)
+/// @param current Current phase number (1-based)
+/// @param total Total number of phases
+pub type InitPhaseStartedCallback = extern "C" fn(phase: *const c_char, current: u32, total: u32);
+
+/// Callback for initialization progress within a phase
+/// @param phase Phase name
+/// @param progress Progress 0.0 to 1.0
+/// @param message Status message (UTF-8, null-terminated)
+pub type InitPhaseProgressCallback = extern "C" fn(phase: *const c_char, progress: f64, message: *const c_char);
+
+/// Callback for initialization phase completed
+/// @param phase Phase name that completed
+pub type InitPhaseCompletedCallback = extern "C" fn(phase: *const c_char);
+
+/// Callback for download progress (e.g., embedding model)
+/// @param item Item being downloaded
+/// @param downloaded Bytes downloaded
+/// @param total Total bytes (0 if unknown)
+pub type InitDownloadProgressCallback = extern "C" fn(item: *const c_char, downloaded: u64, total: u64);
+
+/// Callback for initialization error
+/// @param phase Phase where error occurred
+/// @param message Error message
+/// @param is_retryable 1 if retry might succeed, 0 otherwise
+pub type InitErrorCallback = extern "C" fn(phase: *const c_char, message: *const c_char, is_retryable: c_int);
+
+// =============================================================================
 // Registered Callbacks (thread-safe storage)
 // =============================================================================
 
