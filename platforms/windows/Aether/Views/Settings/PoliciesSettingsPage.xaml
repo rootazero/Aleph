@@ -359,7 +359,7 @@
                                    FontSize="12"/>
                     </StackPanel>
                     <TextBlock x:Name="PolicySourceText"
-                               Text="Local configuration file (~/.aether/config.toml)"
+                               Text="Local configuration file (~/.config/aether/config.toml)"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                FontSize="11"/>
                     <TextBlock x:Name="PolicyLastUpdatedText"

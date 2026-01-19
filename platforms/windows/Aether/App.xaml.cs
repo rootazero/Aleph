@@ -405,9 +405,11 @@ public partial class App : Application
 
     private static string GetConfigPath()
     {
+        // Use ~/.config/aether/ for cross-platform consistency
         var configDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "Aether"
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".config",
+            "aether"
         );
         Directory.CreateDirectory(configDir);
         return Path.Combine(configDir, "config.toml");

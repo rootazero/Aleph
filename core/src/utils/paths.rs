@@ -50,23 +50,19 @@ pub fn get_home_dir() -> Result<PathBuf> {
 
 /// Get the Aether configuration directory in a cross-platform way
 ///
-/// Returns platform-specific path using dirs::config_dir():
-/// - macOS: ~/Library/Application Support/aether/
-/// - Windows: %APPDATA%\aether\ (e.g., C:\Users\<user>\AppData\Roaming\aether\)
-/// - Linux: ~/.config/aether/
+/// Uses a unified path across all platforms for consistency:
+/// - All platforms: ~/.config/aether/
 ///
-/// Falls back to ~/.config/aether/ if dirs::config_dir() fails.
+/// This ensures that configuration, memory database, skills, and other
+/// data are stored in a consistent location regardless of the operating system.
 ///
 /// # Returns
-/// * `Result<PathBuf>` - Path to config directory
+/// * `Result<PathBuf>` - Path to config directory (~/.config/aether/)
 ///
 /// # Errors
-/// Returns error if config directory cannot be determined
+/// Returns error if home directory cannot be determined
 pub fn get_config_dir() -> Result<PathBuf> {
-    if let Some(config_dir) = dirs::config_dir() {
-        return Ok(config_dir.join("aether"));
-    }
-    // Fallback to Unix-style path
+    // Use unified path ~/.config/aether/ across all platforms
     let home_dir = get_home_dir()?;
     Ok(home_dir.join(".config").join("aether"))
 }
@@ -80,19 +76,13 @@ pub fn get_config_file_path() -> Result<PathBuf> {
 
 /// Get the cache directory in a cross-platform way
 ///
-/// Returns platform-specific path using dirs::cache_dir():
-/// - macOS: ~/Library/Caches/aether/
-/// - Windows: %LOCALAPPDATA%\aether\cache\ (e.g., C:\Users\<user>\AppData\Local\aether\cache\)
-/// - Linux: ~/.cache/aether/
+/// Uses a unified path across all platforms for consistency:
+/// - All platforms: ~/.config/aether/cache/
 ///
-/// Falls back to ~/.cache/aether/ if dirs::cache_dir() fails.
+/// This keeps all Aether data under the same root directory.
 pub fn get_cache_dir() -> Result<PathBuf> {
-    if let Some(cache_dir) = dirs::cache_dir() {
-        return Ok(cache_dir.join("aether"));
-    }
-    // Fallback to Unix-style path
-    let home_dir = get_home_dir()?;
-    Ok(home_dir.join(".cache").join("aether"))
+    // Use unified path ~/.config/aether/cache/ across all platforms
+    Ok(get_config_dir()?.join("cache"))
 }
 
 /// Get the HuggingFace cache directory for fastembed models

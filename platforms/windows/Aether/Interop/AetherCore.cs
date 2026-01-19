@@ -134,8 +134,9 @@ public sealed class AetherCore : IDisposable
 
     private static string GetDefaultConfigPath()
     {
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        return Path.Combine(appData, "Aether", "config.toml");
+        // Use ~/.config/aether/ for cross-platform consistency
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return Path.Combine(userProfile, ".config", "aether", "config.toml");
     }
 
     /// <summary>

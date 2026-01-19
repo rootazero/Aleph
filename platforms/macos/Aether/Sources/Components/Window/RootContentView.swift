@@ -228,10 +228,10 @@ struct RootContentView: View {
                 isSaving: saveBarState.isSaving,
                 statusMessage: saveBarState.statusMessage,
                 onSave: {
-                    print("[RootContentView] UnifiedSaveBar onSave triggered, saveBarState.onSave is \(saveBarState.onSave != nil ? "set" : "nil")")
+                    NSLog("[RootContentView] UnifiedSaveBar onSave triggered, saveBarState.onSave is %@", saveBarState.onSave != nil ? "set" : "nil")
                     Task {
                         await saveBarState.onSave?()
-                        print("[RootContentView] saveBarState.onSave completed")
+                        NSLog("[RootContentView] saveBarState.onSave completed")
                     }
                 },
                 onCancel: {

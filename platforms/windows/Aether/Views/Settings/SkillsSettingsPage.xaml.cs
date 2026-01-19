@@ -81,8 +81,9 @@ public sealed partial class SkillsSettingsPage : UserControl
 
     private void UpdateSkillsDirectory()
     {
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        SkillsDirectoryText.Text = Path.Combine(appData, "Aether", "skills");
+        // Use ~/.config/aether/ for cross-platform consistency
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        SkillsDirectoryText.Text = Path.Combine(userProfile, ".config", "aether", "skills");
     }
 
     #endregion

@@ -45,7 +45,7 @@ class SettingsSaveBarState: ObservableObject {
         self.statusMessage = statusMessage
         if let onSave = onSave {
             self.onSave = onSave
-            print("[SettingsSaveBarState] onSave callback updated")
+            NSLog("[SettingsSaveBarState] onSave callback updated")
         }
         if let onCancel = onCancel {
             self.onCancel = onCancel
