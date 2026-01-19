@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Aether.ViewModels;
 using System.Collections.ObjectModel;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Windows.Storage.Pickers;
 using WinRT.Interop;
@@ -15,6 +16,9 @@ namespace Aether.Views.Settings;
 /// </summary>
 public sealed partial class McpSettingsPage : UserControl
 {
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetActiveWindow();
+
     public SettingsViewModel ViewModel { get; set; } = null!;
 
     private ObservableCollection<McpServerItem> _servers = new();
@@ -281,7 +285,7 @@ public sealed partial class McpSettingsPage : UserControl
         var picker = new FileOpenPicker();
         picker.FileTypeFilter.Add("*");
 
-        var hwnd = WindowNative.GetWindowHandle(App.MainWindow);
+        var hwnd = GetActiveWindow();
         InitializeWithWindow.Initialize(picker, hwnd);
 
         var file = await picker.PickSingleFileAsync();

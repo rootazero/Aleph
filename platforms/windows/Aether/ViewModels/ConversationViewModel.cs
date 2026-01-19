@@ -12,6 +12,7 @@ namespace Aether.ViewModels;
 /// - Message input
 /// - Streaming responses
 /// - Multi-turn state
+/// - Slash commands (/ and //)
 /// </summary>
 public partial class ConversationViewModel : ObservableObject
 {
@@ -38,12 +39,51 @@ public partial class ConversationViewModel : ObservableObject
     [ObservableProperty]
     private bool _canSend = true;
 
+    [ObservableProperty]
+    private ContentDisplayState _displayState = ContentDisplayState.Empty;
+
+    [ObservableProperty]
+    private int _selectedCommandIndex = -1;
+
+    [ObservableProperty]
+    private int _selectedTopicIndex = -1;
+
     #endregion
 
     /// <summary>
     /// Collection of messages in the conversation.
     /// </summary>
     public ObservableCollection<ConversationMessage> Messages { get; } = new();
+
+    /// <summary>
+    /// Collection of available commands for slash menu.
+    /// </summary>
+    public ObservableCollection<CommandItem> FilteredCommands { get; } = new();
+
+    /// <summary>
+    /// Collection of available topics for double-slash menu.
+    /// </summary>
+    public ObservableCollection<TopicItem> FilteredTopics { get; } = new();
+
+    /// <summary>
+    /// All available commands.
+    /// </summary>
+    private readonly List<CommandItem> _allCommands = new()
+    {
+        new CommandItem { Name = "clear", Description = "Clear the conversation" },
+        new CommandItem { Name = "copy", Description = "Copy the last response" },
+        new CommandItem { Name = "regenerate", Description = "Regenerate the last response" },
+        new CommandItem { Name = "help", Description = "Show available commands" },
+        new CommandItem { Name = "settings", Description = "Open settings" },
+    };
+
+    /// <summary>
+    /// All available topics/conversations.
+    /// </summary>
+    private readonly List<TopicItem> _allTopics = new()
+    {
+        new TopicItem { Title = "New Conversation", Description = "Start a fresh conversation" },
+    };
 
     /// <summary>
     /// Event raised when streaming text is received.
@@ -55,13 +95,259 @@ public partial class ConversationViewModel : ObservableObject
     /// </summary>
     public event Action? StreamingCompleted;
 
+    /// <summary>
+    /// Event raised when the window should be closed.
+    /// </summary>
+    public event Action? CloseRequested;
+
+    /// <summary>
+    /// Whether the messages list has any messages.
+    /// </summary>
+    public bool HasMessages => Messages.Count > 0;
+
+    /// <summary>
+    /// Whether the command list is showing.
+    /// </summary>
+    public bool IsShowingCommands => DisplayState == ContentDisplayState.CommandList;
+
+    /// <summary>
+    /// Whether the topic list is showing.
+    /// </summary>
+    public bool IsShowingTopics => DisplayState == ContentDisplayState.TopicList;
+
+    /// <summary>
+    /// Whether the conversation view is showing.
+    /// </summary>
+    public bool IsShowingConversation => DisplayState == ContentDisplayState.Conversation;
+
     public ConversationViewModel()
     {
-        // Add welcome message
+        // No welcome message - start with empty state (macOS style)
+        Messages.CollectionChanged += (s, e) =>
+        {
+            OnPropertyChanged(nameof(HasMessages));
+            UpdateDisplayState();
+        };
+    }
+
+    /// <summary>
+    /// Called when InputText changes to update display state.
+    /// </summary>
+    partial void OnInputTextChanged(string value)
+    {
+        UpdateDisplayState();
+    }
+
+    /// <summary>
+    /// Update the display state based on input text and messages.
+    /// </summary>
+    private void UpdateDisplayState()
+    {
+        var previousState = DisplayState;
+
+        if (InputText.StartsWith("//"))
+        {
+            DisplayState = ContentDisplayState.TopicList;
+            FilterTopics(InputText[2..]);
+        }
+        else if (InputText.StartsWith("/"))
+        {
+            DisplayState = ContentDisplayState.CommandList;
+            FilterCommands(InputText[1..]);
+        }
+        else if (Messages.Count > 0)
+        {
+            DisplayState = ContentDisplayState.Conversation;
+        }
+        else
+        {
+            DisplayState = ContentDisplayState.Empty;
+        }
+
+        // Reset selection when state changes
+        if (previousState != DisplayState)
+        {
+            SelectedCommandIndex = FilteredCommands.Count > 0 ? 0 : -1;
+            SelectedTopicIndex = FilteredTopics.Count > 0 ? 0 : -1;
+        }
+
+        OnPropertyChanged(nameof(IsShowingCommands));
+        OnPropertyChanged(nameof(IsShowingTopics));
+        OnPropertyChanged(nameof(IsShowingConversation));
+    }
+
+    /// <summary>
+    /// Filter commands based on search text.
+    /// </summary>
+    private void FilterCommands(string searchText)
+    {
+        FilteredCommands.Clear();
+        var filtered = string.IsNullOrEmpty(searchText)
+            ? _allCommands
+            : _allCommands.Where(c => c.Name.Contains(searchText, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        foreach (var cmd in filtered)
+        {
+            FilteredCommands.Add(cmd);
+        }
+
+        if (SelectedCommandIndex >= FilteredCommands.Count)
+        {
+            SelectedCommandIndex = FilteredCommands.Count > 0 ? 0 : -1;
+        }
+    }
+
+    /// <summary>
+    /// Filter topics based on search text.
+    /// </summary>
+    private void FilterTopics(string searchText)
+    {
+        FilteredTopics.Clear();
+        var filtered = string.IsNullOrEmpty(searchText)
+            ? _allTopics
+            : _allTopics.Where(t => t.Title.Contains(searchText, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        foreach (var topic in filtered)
+        {
+            FilteredTopics.Add(topic);
+        }
+
+        if (SelectedTopicIndex >= FilteredTopics.Count)
+        {
+            SelectedTopicIndex = FilteredTopics.Count > 0 ? 0 : -1;
+        }
+    }
+
+    /// <summary>
+    /// Move selection up in the current list.
+    /// </summary>
+    public void MoveSelectionUp()
+    {
+        if (IsShowingCommands && FilteredCommands.Count > 0)
+        {
+            SelectedCommandIndex = SelectedCommandIndex <= 0
+                ? FilteredCommands.Count - 1
+                : SelectedCommandIndex - 1;
+        }
+        else if (IsShowingTopics && FilteredTopics.Count > 0)
+        {
+            SelectedTopicIndex = SelectedTopicIndex <= 0
+                ? FilteredTopics.Count - 1
+                : SelectedTopicIndex - 1;
+        }
+    }
+
+    /// <summary>
+    /// Move selection down in the current list.
+    /// </summary>
+    public void MoveSelectionDown()
+    {
+        if (IsShowingCommands && FilteredCommands.Count > 0)
+        {
+            SelectedCommandIndex = SelectedCommandIndex >= FilteredCommands.Count - 1
+                ? 0
+                : SelectedCommandIndex + 1;
+        }
+        else if (IsShowingTopics && FilteredTopics.Count > 0)
+        {
+            SelectedTopicIndex = SelectedTopicIndex >= FilteredTopics.Count - 1
+                ? 0
+                : SelectedTopicIndex + 1;
+        }
+    }
+
+    /// <summary>
+    /// Handle Tab key to select current item.
+    /// </summary>
+    public void HandleTab()
+    {
+        if (IsShowingCommands && SelectedCommandIndex >= 0 && SelectedCommandIndex < FilteredCommands.Count)
+        {
+            var command = FilteredCommands[SelectedCommandIndex];
+            ExecuteCommand(command.Name);
+        }
+        else if (IsShowingTopics && SelectedTopicIndex >= 0 && SelectedTopicIndex < FilteredTopics.Count)
+        {
+            var topic = FilteredTopics[SelectedTopicIndex];
+            SelectTopic(topic);
+        }
+    }
+
+    /// <summary>
+    /// Handle Escape key with layered exit behavior.
+    /// </summary>
+    public void HandleEscape()
+    {
+        if (IsShowingCommands || IsShowingTopics)
+        {
+            // First ESC: Clear input and exit list mode
+            InputText = "";
+        }
+        else
+        {
+            // Second ESC: Close the window
+            CloseRequested?.Invoke();
+        }
+    }
+
+    /// <summary>
+    /// Execute a slash command.
+    /// </summary>
+    private void ExecuteCommand(string commandName)
+    {
+        InputText = "";
+
+        switch (commandName.ToLowerInvariant())
+        {
+            case "clear":
+                ClearConversation();
+                break;
+            case "copy":
+                CopyLastResponse();
+                break;
+            case "regenerate":
+                RegenerateResponse();
+                break;
+            case "help":
+                ShowHelpMessage();
+                break;
+            case "settings":
+                // TODO: Open settings window
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Select a topic/conversation.
+    /// </summary>
+    private void SelectTopic(TopicItem topic)
+    {
+        InputText = "";
+
+        if (topic.Title == "New Conversation")
+        {
+            Messages.Clear();
+        }
+        // TODO: Load existing conversation by topic
+    }
+
+    /// <summary>
+    /// Show help message in conversation.
+    /// </summary>
+    private void ShowHelpMessage()
+    {
+        var helpText = "Available commands:\n" +
+                       "/clear - Clear the conversation\n" +
+                       "/copy - Copy the last response\n" +
+                       "/regenerate - Regenerate the last response\n" +
+                       "/help - Show this help message\n" +
+                       "/settings - Open settings\n\n" +
+                       "Use // to access conversation history.";
+
         Messages.Add(new ConversationMessage
         {
             Role = MessageRole.System,
-            Content = "Welcome to Aether. How can I help you today?",
+            Content = helpText,
             Timestamp = DateTime.Now
         });
     }
@@ -134,12 +420,7 @@ public partial class ConversationViewModel : ObservableObject
     {
         Messages.Clear();
         ConversationTitle = "New Conversation";
-        Messages.Add(new ConversationMessage
-        {
-            Role = MessageRole.System,
-            Content = "Conversation cleared. How can I help you?",
-            Timestamp = DateTime.Now
-        });
+        // No message after clear - macOS style empty state
     }
 
     [RelayCommand]
@@ -277,4 +558,41 @@ public enum MessageRole
     User,
     Assistant,
     System
+}
+
+/// <summary>
+/// Represents a slash command item.
+/// </summary>
+public class CommandItem
+{
+    /// <summary>
+    /// Command name (without the leading /).
+    /// </summary>
+    public string Name { get; set; } = "";
+
+    /// <summary>
+    /// Description of what the command does.
+    /// </summary>
+    public string Description { get; set; } = "";
+}
+
+/// <summary>
+/// Represents a topic/conversation item.
+/// </summary>
+public class TopicItem
+{
+    /// <summary>
+    /// Topic/conversation title.
+    /// </summary>
+    public string Title { get; set; } = "";
+
+    /// <summary>
+    /// Description or preview of the topic.
+    /// </summary>
+    public string Description { get; set; } = "";
+
+    /// <summary>
+    /// Unique identifier for the topic.
+    /// </summary>
+    public string Id { get; set; } = "";
 }

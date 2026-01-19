@@ -27,7 +27,7 @@ public sealed partial class CoworkSettingsPage : UserControl
     public void SetViewModel(SettingsViewModel viewModel)
     {
         ViewModel = viewModel;
-        _core = App.Current?.AetherCore;
+        _core = App.Instance.Core;
         LoadSettings();
     }
 

@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.Input;
 using H.NotifyIcon;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace Aether.Services;
 
@@ -60,8 +61,20 @@ public sealed class TrayIconService : IDisposable
         // Double-click opens settings (using command)
         _trayIcon.DoubleClickCommand = new RelayCommand(() => SettingsRequested?.Invoke());
 
-        // Set icon (using placeholder for now)
+        // Set icon
         SetDefaultIcon();
+
+        // CRITICAL: Force create the tray icon to make it visible
+        // H.NotifyIcon.WinUI requires this for programmatic creation
+        try
+        {
+            _trayIcon.ForceCreate(enablesEfficiencyMode: false);
+            System.Diagnostics.Debug.WriteLine("[TrayIcon] ForceCreate called successfully");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[TrayIcon] ForceCreate failed: {ex.Message}");
+        }
     }
 
     public void Hide()
@@ -87,17 +100,24 @@ public sealed class TrayIconService : IDisposable
 
     private void SetDefaultIcon()
     {
-        // Use a built-in icon for now
-        // In production, load from Resources/aether.ico
         try
         {
-            // H.NotifyIcon will use application icon by default
-            // Custom icon can be set via:
-            // _trayIcon.Icon = new System.Drawing.Icon("path/to/icon.ico");
+            // Use H.NotifyIcon's GeneratedIconSource to create a text-based icon
+            // This is the recommended approach for WinUI 3
+            _trayIcon!.IconSource = new H.NotifyIcon.GeneratedIconSource
+            {
+                Text = "A",  // "A" for Aether
+                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                    Microsoft.UI.Colors.White),
+                Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                    Microsoft.UI.ColorHelper.FromArgb(255, 0, 120, 212)),  // Windows accent blue
+                FontSize = 20,
+            };
+            System.Diagnostics.Debug.WriteLine("[TrayIcon] Generated icon set successfully");
         }
-        catch
+        catch (Exception ex)
         {
-            // Fallback to default
+            System.Diagnostics.Debug.WriteLine($"[TrayIcon] Failed to set icon: {ex.Message}");
         }
     }
 

@@ -83,10 +83,11 @@
 
         <!-- Right Panel - Provider Configuration -->
         <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
-            <StackPanel x:Name="DetailPanel"
-                        Padding="24"
-                        Spacing="16"
-                        Visibility="Collapsed">
+            <Grid>
+                <StackPanel x:Name="DetailPanel"
+                            Padding="24"
+                            Spacing="16"
+                            Visibility="Collapsed">
 
                 <!-- Provider Header -->
                 <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
@@ -291,17 +292,18 @@
                 </Button>
             </StackPanel>
 
-            <!-- Empty State -->
-            <StackPanel x:Name="EmptyDetailState"
-                        Visibility="Visible"
-                        VerticalAlignment="Center"
-                        HorizontalAlignment="Center"
-                        Spacing="8">
-                <FontIcon Glyph="&#xE721;" FontSize="48"
-                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                <TextBlock Text="Select a search provider to configure"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-            </StackPanel>
+                <!-- Empty State -->
+                <StackPanel x:Name="EmptyDetailState"
+                            Visibility="Visible"
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Center"
+                            Spacing="8">
+                    <FontIcon Glyph="&#xE721;" FontSize="48"
+                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <TextBlock Text="Select a search provider to configure"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                </StackPanel>
+            </Grid>
         </ScrollViewer>
 
         <!-- Status InfoBar -->

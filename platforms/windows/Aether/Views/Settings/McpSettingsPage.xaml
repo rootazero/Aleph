@@ -109,10 +109,11 @@
 
         <!-- Right Detail Panel -->
         <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
-            <StackPanel x:Name="DetailPanel"
-                        Padding="24"
-                        Spacing="24"
-                        Visibility="Collapsed">
+            <Grid>
+                <StackPanel x:Name="DetailPanel"
+                            Padding="24"
+                            Spacing="24"
+                            Visibility="Collapsed">
 
                 <!-- Server Header -->
                 <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
@@ -368,17 +369,18 @@
                 </Border>
             </StackPanel>
 
-            <!-- Empty Detail State -->
-            <StackPanel x:Name="EmptyDetailState"
-                        Visibility="Visible"
-                        VerticalAlignment="Center"
-                        HorizontalAlignment="Center"
-                        Spacing="8">
-                <FontIcon Glyph="&#xE700;" FontSize="48"
-                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                <TextBlock Text="Select a server to configure"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-            </StackPanel>
+                <!-- Empty Detail State -->
+                <StackPanel x:Name="EmptyDetailState"
+                            Visibility="Visible"
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Center"
+                            Spacing="8">
+                    <FontIcon Glyph="&#xE700;" FontSize="48"
+                              Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <TextBlock Text="Select a server to configure"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                </StackPanel>
+            </Grid>
         </ScrollViewer>
 
         <!-- Add Server Dialog -->
