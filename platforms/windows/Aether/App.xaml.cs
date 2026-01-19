@@ -406,12 +406,12 @@ public partial class App : Application
     private static string GetConfigPath()
     {
         // Use ~/.config/aether/ for cross-platform consistency
+        // Directory creation is handled by first-time initialization
         var configDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".config",
             "aether"
         );
-        Directory.CreateDirectory(configDir);
         return Path.Combine(configDir, "config.toml");
     }
 
