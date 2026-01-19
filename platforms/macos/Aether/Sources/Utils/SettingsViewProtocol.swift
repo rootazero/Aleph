@@ -21,12 +21,15 @@ class SettingsSaveBarState: ObservableObject {
     var onCancel: (() -> Void)?
 
     /// Reset state (called when switching tabs)
+    /// Note: We don't reset onSave/onCancel here because views may be reused
+    /// due to .id() modifiers, and onAppear may not be called again.
+    /// Each view's updateSaveBarState() will set the correct callbacks.
     func reset() {
         hasUnsavedChanges = false
         isSaving = false
         statusMessage = nil
-        onSave = nil
-        onCancel = nil
+        // Don't clear onSave and onCancel - they will be updated by the active view
+        // Clearing them here causes issues when views are reused (onAppear not called)
     }
 
     /// Update state from settings view
@@ -42,6 +45,7 @@ class SettingsSaveBarState: ObservableObject {
         self.statusMessage = statusMessage
         if let onSave = onSave {
             self.onSave = onSave
+            print("[SettingsSaveBarState] onSave callback updated")
         }
         if let onCancel = onCancel {
             self.onCancel = onCancel

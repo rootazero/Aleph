@@ -607,6 +607,8 @@ struct ProviderEditPanel: View {
         // Only show save bar when a provider is selected
         let hasChanges = (selectedProvider != nil || selectedPreset != nil) && hasUnsavedFormChanges
 
+        print("[ProviderEditPanel] updateSaveBarState() - hasChanges: \(hasChanges), selectedProvider: \(selectedProvider ?? "nil"), selectedPreset: \(selectedPreset?.id ?? "nil"), hasUnsavedFormChanges: \(hasUnsavedFormChanges)")
+
         saveBarState.update(
             hasUnsavedChanges: hasChanges,
             isSaving: isSaving,
@@ -618,6 +620,7 @@ struct ProviderEditPanel: View {
 
     /// Async wrapper for saveProvider
     private func saveProviderAsync() async {
+        print("[ProviderEditPanel] saveProviderAsync() called")
         await MainActor.run {
             saveProvider()
         }
@@ -952,12 +955,16 @@ struct ProviderEditPanel: View {
     }
 
     private func saveProvider() {
+        NSLog("[ProviderEditPanel] saveProvider() called - providerName: %@, model: %@, apiKey: %@, baseURL: %@, providerType: %@, isCustomProvider: %d", providerName, model, apiKey.isEmpty ? "empty" : "set", baseURL, providerType, isCustomProvider ? 1 : 0)
+
         // Validate form and show specific error messages
         if let validationError = getValidationError() {
+            NSLog("[ProviderEditPanel] Validation failed: %@", validationError)
             errorMessage = validationError
             return
         }
 
+        NSLog("[ProviderEditPanel] Validation passed, starting save...")
         isSaving = true
         errorMessage = nil
 

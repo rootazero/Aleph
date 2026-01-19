@@ -88,7 +88,8 @@ struct RootContentView: View {
                     if shouldProceed {
                         // Reset save bar state when switching tabs
                         saveBarState.reset()
-                        // Tab change is handled automatically by SwiftUI binding
+                        // Force view recreation to ensure onAppear is called and onSave is set correctly
+                        configReloadTrigger += 1
                     } else {
                         // Revert tab selection (prevent switch)
                         selectedTab = oldTab
@@ -97,6 +98,8 @@ struct RootContentView: View {
             } else {
                 // No unsaved changes, reset save bar state
                 saveBarState.reset()
+                // Force view recreation to ensure onAppear is called and onSave is set correctly
+                configReloadTrigger += 1
             }
         }
         .onChange(of: appDelegate.core != nil) { _, isInitialized in
@@ -225,8 +228,10 @@ struct RootContentView: View {
                 isSaving: saveBarState.isSaving,
                 statusMessage: saveBarState.statusMessage,
                 onSave: {
+                    print("[RootContentView] UnifiedSaveBar onSave triggered, saveBarState.onSave is \(saveBarState.onSave != nil ? "set" : "nil")")
                     Task {
                         await saveBarState.onSave?()
+                        print("[RootContentView] saveBarState.onSave completed")
                     }
                 },
                 onCancel: {

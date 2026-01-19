@@ -89,8 +89,11 @@ struct UnifiedSaveBar: View {
 
                 // Save button
                 Button(action: {
+                    print("[UnifiedSaveBar] Save button clicked, hasUnsavedChanges: \(hasUnsavedChanges), isSaving: \(isSaving)")
                     Task {
+                        print("[UnifiedSaveBar] Calling onSave...")
                         await onSave()
+                        print("[UnifiedSaveBar] onSave completed")
                     }
                 }) {
                     HStack(spacing: 6) {
