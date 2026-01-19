@@ -3,24 +3,160 @@
     x:Class="Aether.Windows.SettingsWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:Aether.ViewModels"
     Title="Aether Settings">
 
-    <Grid Padding="24">
-        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="16">
-            <TextBlock
-                Text="Aether Settings"
-                Style="{StaticResource TitleTextBlockStyle}"
-                HorizontalAlignment="Center"/>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
 
-            <TextBlock
-                Text="Settings UI will be implemented in Phase 3"
-                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                HorizontalAlignment="Center"/>
+        <!-- Navigation View -->
+        <NavigationView
+            x:Name="SettingsNav"
+            Grid.Row="0"
+            IsBackButtonVisible="Collapsed"
+            IsSettingsVisible="False"
+            PaneDisplayMode="Left"
+            OpenPaneLength="220"
+            SelectionChanged="SettingsNav_SelectionChanged">
 
-            <Button
-                Content="Close"
-                Click="CloseButton_Click"
-                HorizontalAlignment="Center"/>
-        </StackPanel>
+            <NavigationView.MenuItems>
+                <!-- General -->
+                <NavigationViewItem Tag="General" Content="General">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE713;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <!-- Providers -->
+                <NavigationViewItem Tag="Providers" Content="Providers">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8F1;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <!-- Generation -->
+                <NavigationViewItem Tag="Generation" Content="Generation">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8B9;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <!-- Routing -->
+                <NavigationViewItem Tag="Routing" Content="Routing">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8D1;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <!-- Shortcuts -->
+                <NavigationViewItem Tag="Shortcuts" Content="Shortcuts">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE765;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <!-- Behavior -->
+                <NavigationViewItem Tag="Behavior" Content="Behavior">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE771;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <!-- Memory -->
+                <NavigationViewItem Tag="Memory" Content="Memory">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE7C3;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <!-- Search -->
+                <NavigationViewItem Tag="Search" Content="Search">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE721;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <NavigationViewItemSeparator/>
+
+                <!-- MCP -->
+                <NavigationViewItem Tag="Mcp" Content="MCP">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE912;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <!-- Skills -->
+                <NavigationViewItem Tag="Skills" Content="Skills">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE734;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <!-- Cowork -->
+                <NavigationViewItem Tag="Cowork" Content="Cowork">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE902;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <!-- Policies -->
+                <NavigationViewItem Tag="Policies" Content="Policies">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8D4;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <!-- Runtimes -->
+                <NavigationViewItem Tag="Runtimes" Content="Runtimes">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE756;"/>
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+
+            <!-- Content Area -->
+            <Frame x:Name="ContentFrame"/>
+
+        </NavigationView>
+
+        <!-- Save Bar (shown when there are unsaved changes) -->
+        <Border
+            x:Name="SaveBar"
+            Grid.Row="1"
+            Background="{ThemeResource SystemFillColorAttentionBackgroundBrush}"
+            Padding="16,12"
+            Visibility="Collapsed">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock
+                    x:Name="StatusMessageText"
+                    Grid.Column="0"
+                    Text="You have unsaved changes"
+                    VerticalAlignment="Center"
+                    Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
+
+                <StackPanel
+                    Grid.Column="1"
+                    Orientation="Horizontal"
+                    Spacing="8">
+                    <Button
+                        x:Name="CancelButton"
+                        Content="Cancel"
+                        Click="CancelButton_Click"/>
+                    <Button
+                        x:Name="SaveButton"
+                        Content="Save"
+                        Style="{ThemeResource AccentButtonStyle}"
+                        Click="SaveButton_Click"/>
+                </StackPanel>
+            </Grid>
+        </Border>
     </Grid>
 </Window>

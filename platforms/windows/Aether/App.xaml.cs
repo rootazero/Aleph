@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml;
 using Aether.Services;
 using Aether.Interop;
 using Aether.Windows;
+using Aether.Models;
 
 namespace Aether;
 
@@ -14,7 +15,7 @@ namespace Aether;
 ///
 /// Responsibilities:
 /// - Single instance enforcement
-/// - Service initialization (hotkey, tray, core)
+/// - Service initialization (hotkey, tray, core, cursor, clipboard, screen capture, auto-update)
 /// - Window management (Halo, Settings, Conversation)
 /// - Application lifecycle
 /// </summary>
@@ -36,6 +37,10 @@ public partial class App : Application
     private TrayIconService? _trayIconService;
     private HotkeyService? _hotkeyService;
     private AetherCore? _aetherCore;
+    private CursorService? _cursorService;
+    private ClipboardService? _clipboardService;
+    private ScreenCaptureService? _screenCaptureService;
+    private AutoUpdateService? _autoUpdateService;
 
     public TrayIconService TrayIcon => _trayIconService
         ?? throw new InvalidOperationException("TrayIconService not initialized");
@@ -46,6 +51,18 @@ public partial class App : Application
     public AetherCore Core => _aetherCore
         ?? throw new InvalidOperationException("AetherCore not initialized");
 
+    public CursorService Cursor => _cursorService
+        ?? throw new InvalidOperationException("CursorService not initialized");
+
+    public ClipboardService Clipboard => _clipboardService
+        ?? throw new InvalidOperationException("ClipboardService not initialized");
+
+    public ScreenCaptureService ScreenCapture => _screenCaptureService
+        ?? throw new InvalidOperationException("ScreenCaptureService not initialized");
+
+    public AutoUpdateService AutoUpdate => _autoUpdateService
+        ?? throw new InvalidOperationException("AutoUpdateService not initialized");
+
     #endregion
 
     #region Windows
@@ -53,6 +70,8 @@ public partial class App : Application
     private HaloWindow? _haloWindow;
     private SettingsWindow? _settingsWindow;
     private ConversationWindow? _conversationWindow;
+
+    public HaloWindow? HaloWindow => _haloWindow;
 
     #endregion
 
@@ -76,8 +95,17 @@ public partial class App : Application
         // Wire up hotkey handlers
         WireUpHotkeys();
 
+        // Wire up core callbacks
+        WireUpCoreCallbacks();
+
         // Show tray icon
         _trayIconService?.Show();
+
+        // Check for updates on startup (background)
+        _ = CheckForUpdatesAsync();
+
+        // Cleanup old update files
+        _autoUpdateService?.CleanupOldUpdates();
 
         System.Diagnostics.Debug.WriteLine("Aether started successfully");
     }
@@ -86,7 +114,16 @@ public partial class App : Application
     {
         try
         {
-            // 1. Initialize Rust core
+            // 1. Initialize cursor service (needed for Halo positioning)
+            _cursorService = new CursorService();
+
+            // 2. Initialize clipboard service
+            _clipboardService = new ClipboardService();
+
+            // 3. Initialize screen capture service
+            _screenCaptureService = new ScreenCaptureService();
+
+            // 4. Initialize Rust core
             _aetherCore = new AetherCore(_dispatcherQueue!);
             var configPath = GetConfigPath();
             if (!_aetherCore.Initialize(configPath))
@@ -94,13 +131,17 @@ public partial class App : Application
                 System.Diagnostics.Debug.WriteLine("Warning: Aether core initialization failed (DLL may be missing)");
             }
 
-            // 2. Initialize hotkey service
+            // 5. Initialize hotkey service
             _hotkeyService = new HotkeyService();
 
-            // 3. Initialize tray icon service
+            // 6. Initialize tray icon service
             _trayIconService = new TrayIconService();
             _trayIconService.SettingsRequested += ShowSettings;
             _trayIconService.QuitRequested += Quit;
+
+            // 7. Initialize auto-update service
+            _autoUpdateService = new AutoUpdateService();
+            _autoUpdateService.UpdateAvailable += OnUpdateAvailable;
         }
         catch (Exception ex)
         {
@@ -152,14 +193,76 @@ public partial class App : Application
         };
     }
 
+    private void WireUpCoreCallbacks()
+    {
+        if (_aetherCore == null || _haloWindow == null) return;
+
+        // Stream text callback
+        _aetherCore.StreamReceived += (text) =>
+        {
+            _dispatcherQueue?.TryEnqueue(() =>
+            {
+                if (_haloWindow.ViewModel.State != HaloState.Streaming &&
+                    _haloWindow.ViewModel.State != HaloState.MultiTurnStreaming)
+                {
+                    _haloWindow.SetState(HaloState.Streaming);
+                }
+                _haloWindow.AppendStreamingText(text);
+            });
+        };
+
+        // Stream complete callback
+        _aetherCore.StreamCompleted += () =>
+        {
+            _dispatcherQueue?.TryEnqueue(() =>
+            {
+                _haloWindow.SetState(HaloState.Success);
+            });
+        };
+
+        // Error callback
+        _aetherCore.ErrorReceived += (error) =>
+        {
+            _dispatcherQueue?.TryEnqueue(() =>
+            {
+                _haloWindow.SetError(error);
+            });
+        };
+
+        // Tool execution callbacks
+        _aetherCore.ToolStarted += (toolName) =>
+        {
+            _dispatcherQueue?.TryEnqueue(() =>
+            {
+                _haloWindow.StartToolExecution(toolName);
+            });
+        };
+
+        _aetherCore.ToolCompleted += (toolName, result) =>
+        {
+            _dispatcherQueue?.TryEnqueue(() =>
+            {
+                _haloWindow.CompleteToolExecution(result);
+            });
+        };
+
+        _aetherCore.ToolFailed += (toolName, error) =>
+        {
+            _dispatcherQueue?.TryEnqueue(() =>
+            {
+                _haloWindow.FailToolExecution(error);
+            });
+        };
+    }
+
     #region Window Management
 
     public void ShowHaloAtCursor()
     {
-        if (_haloWindow == null) return;
+        if (_haloWindow == null || _cursorService == null) return;
 
-        var (x, y) = GetCursorPosition();
-        _haloWindow.ShowAt(x + 20, y + 20);
+        var (x, y) = _cursorService.GetHaloPosition(280, 180);
+        _haloWindow.ShowAt(x, y);
     }
 
     public void HideHalo()
@@ -189,6 +292,94 @@ public partial class App : Application
 
     #endregion
 
+    #region AI Interaction
+
+    /// <summary>
+    /// Send user input to AI and display response in Halo.
+    /// </summary>
+    public async Task ProcessUserInputAsync(string input)
+    {
+        if (_haloWindow == null || _aetherCore == null) return;
+
+        // Show thinking state
+        _haloWindow.SetState(HaloState.Thinking);
+        _haloWindow.ClearStreamingText();
+
+        try
+        {
+            // Send to Rust core (which will trigger callbacks)
+            await _aetherCore.SendMessageAsync(input);
+        }
+        catch (Exception ex)
+        {
+            _haloWindow.SetError(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Process selected text (transmutation flow).
+    /// </summary>
+    public async Task ProcessSelectedTextAsync()
+    {
+        if (_clipboardService == null) return;
+
+        // Simulate copy (Ctrl+C) to get selected text
+        var content = await _clipboardService.SimulateCopyAsync();
+        if (content?.HasText == true && !string.IsNullOrWhiteSpace(content.Text))
+        {
+            ShowHaloAtCursor();
+            await ProcessUserInputAsync(content.Text);
+        }
+    }
+
+    /// <summary>
+    /// Capture screen and send to AI for vision analysis.
+    /// </summary>
+    public async Task ProcessScreenCaptureAsync()
+    {
+        if (_screenCaptureService == null || _aetherCore == null || _haloWindow == null) return;
+
+        _haloWindow.SetState(HaloState.Processing);
+
+        var imageBytes = await _screenCaptureService.CaptureActiveWindowAsync();
+        if (imageBytes != null)
+        {
+            // Resize for efficiency
+            var resized = _screenCaptureService.ResizeImage(imageBytes, 1280, 720);
+            if (resized != null)
+            {
+                // TODO: Send to vision API via Rust core
+                // await _aetherCore.SendImageAsync(resized, "What's on this screen?");
+            }
+        }
+    }
+
+    #endregion
+
+    #region Auto Update
+
+    private async Task CheckForUpdatesAsync()
+    {
+        if (_autoUpdateService == null) return;
+
+        // Wait a bit before checking (don't slow down startup)
+        await Task.Delay(5000);
+
+        var update = await _autoUpdateService.CheckForUpdatesAsync();
+        if (update != null)
+        {
+            System.Diagnostics.Debug.WriteLine($"[AutoUpdate] New version available: {update.Version}");
+        }
+    }
+
+    private void OnUpdateAvailable(UpdateInfo update)
+    {
+        // TODO: Show update notification to user
+        System.Diagnostics.Debug.WriteLine($"[AutoUpdate] Update available: {update.Version} (current: {update.CurrentVersion})");
+    }
+
+    #endregion
+
     #region Helpers
 
     private static string GetConfigPath()
@@ -201,12 +392,6 @@ public partial class App : Application
         return Path.Combine(configDir, "config.toml");
     }
 
-    private static (int x, int y) GetCursorPosition()
-    {
-        NativeMethods.GetCursorPos(out var point);
-        return (point.X, point.Y);
-    }
-
     #endregion
 
     #region Lifecycle
@@ -217,6 +402,9 @@ public partial class App : Application
         _hotkeyService?.Dispose();
         _trayIconService?.Dispose();
         _aetherCore?.Dispose();
+        _cursorService?.Dispose();
+        _screenCaptureService?.Dispose();
+        _autoUpdateService?.Dispose();
 
         // Close all windows
         _haloWindow?.Close();
@@ -234,21 +422,4 @@ public partial class App : Application
     }
 
     #endregion
-}
-
-/// <summary>
-/// Native methods for cursor position, etc.
-/// </summary>
-internal static partial class NativeMethods
-{
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-    public struct POINT
-    {
-        public int X;
-        public int Y;
-    }
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
-    public static extern bool GetCursorPos(out POINT lpPoint);
 }

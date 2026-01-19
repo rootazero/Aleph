@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Aether.Views.Settings.ProvidersSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="24" Padding="24">
+
+            <!-- Default Provider Section -->
+            <StackPanel Spacing="8">
+                <TextBlock Text="Default Provider" Style="{StaticResource SubtitleTextBlockStyle}"/>
+                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        CornerRadius="8" Padding="16">
+                    <ComboBox
+                        x:Name="DefaultProviderCombo"
+                        Header="Select default AI provider"
+                        Width="300"
+                        SelectedIndex="0">
+                        <ComboBoxItem Content="OpenAI (GPT-4)" Tag="openai"/>
+                        <ComboBoxItem Content="Anthropic (Claude)" Tag="anthropic"/>
+                        <ComboBoxItem Content="Google (Gemini)" Tag="gemini"/>
+                        <ComboBoxItem Content="Local (Ollama)" Tag="ollama"/>
+                    </ComboBox>
+                </Border>
+            </StackPanel>
+
+            <!-- OpenAI Section -->
+            <StackPanel Spacing="8">
+                <TextBlock Text="OpenAI" Style="{StaticResource SubtitleTextBlockStyle}"/>
+                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        CornerRadius="8" Padding="16">
+                    <StackPanel Spacing="12">
+                        <PasswordBox
+                            x:Name="OpenAiKeyBox"
+                            Header="API Key"
+                            PlaceholderText="sk-..."
+                            Width="400"
+                            HorizontalAlignment="Left"/>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Test Connection" Click="TestOpenAi_Click"/>
+                            <HyperlinkButton Content="Get API Key" NavigateUri="https://platform.openai.com/api-keys"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- Anthropic Section -->
+            <StackPanel Spacing="8">
+                <TextBlock Text="Anthropic" Style="{StaticResource SubtitleTextBlockStyle}"/>
+                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        CornerRadius="8" Padding="16">
+                    <StackPanel Spacing="12">
+                        <PasswordBox
+                            x:Name="AnthropicKeyBox"
+                            Header="API Key"
+                            PlaceholderText="sk-ant-..."
+                            Width="400"
+                            HorizontalAlignment="Left"/>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Test Connection" Click="TestAnthropic_Click"/>
+                            <HyperlinkButton Content="Get API Key" NavigateUri="https://console.anthropic.com/"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- Gemini Section -->
+            <StackPanel Spacing="8">
+                <TextBlock Text="Google Gemini" Style="{StaticResource SubtitleTextBlockStyle}"/>
+                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        CornerRadius="8" Padding="16">
+                    <StackPanel Spacing="12">
+                        <PasswordBox
+                            x:Name="GeminiKeyBox"
+                            Header="API Key"
+                            PlaceholderText="AIza..."
+                            Width="400"
+                            HorizontalAlignment="Left"/>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Test Connection" Click="TestGemini_Click"/>
+                            <HyperlinkButton Content="Get API Key" NavigateUri="https://makersuite.google.com/app/apikey"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- Local Providers Section -->
+            <StackPanel Spacing="8">
+                <TextBlock Text="Local Providers" Style="{StaticResource SubtitleTextBlockStyle}"/>
+                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        CornerRadius="8" Padding="16">
+                    <StackPanel Spacing="12">
+                        <TextBox
+                            x:Name="OllamaUrlBox"
+                            Header="Ollama URL"
+                            PlaceholderText="http://localhost:11434"
+                            Width="400"
+                            HorizontalAlignment="Left"/>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Test Connection" Click="TestOllama_Click"/>
+                            <HyperlinkButton Content="Install Ollama" NavigateUri="https://ollama.ai/download"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- Info Box -->
+            <InfoBar
+                x:Name="StatusInfoBar"
+                IsOpen="False"
+                IsClosable="True"
+                Severity="Informational"/>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

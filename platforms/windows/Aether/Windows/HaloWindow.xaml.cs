@@ -14,12 +14,13 @@ namespace Aether.Windows;
 /// Halo floating window - the core AI interaction overlay.
 ///
 /// Key behaviors:
-/// - Does not steal focus from other applications
-/// - Transparent background with blur
-/// - Always on top
-/// - No taskbar entry
+/// - Does not steal focus from other applications (WS_EX_NOACTIVATE)
+/// - Transparent background with blur effect
+/// - Always on top (HWND_TOPMOST)
+/// - No taskbar entry (WS_EX_TOOLWINDOW)
 /// - Follows cursor position
-/// - Displays AI response states
+/// - Displays all 21 AI response states
+/// - Integrates with HaloViewModel for MVVM pattern
 /// </summary>
 public sealed partial class HaloWindow : Window
 {
@@ -67,9 +68,14 @@ public sealed partial class HaloWindow : Window
 
     private readonly IntPtr _hwnd;
     private readonly AppWindow _appWindow;
-    private HaloState _currentState = HaloState.Hidden;
+    private readonly HaloViewModel _viewModel;
 
     public bool IsVisible { get; private set; }
+
+    /// <summary>
+    /// The ViewModel for data binding.
+    /// </summary>
+    public HaloViewModel ViewModel => _viewModel;
 
     public HaloWindow()
     {
@@ -78,6 +84,9 @@ public sealed partial class HaloWindow : Window
         _hwnd = WindowNative.GetWindowHandle(this);
         var windowId = Win32Interop.GetWindowIdFromWindow(_hwnd);
         _appWindow = AppWindow.GetFromWindowId(windowId);
+
+        _viewModel = new HaloViewModel();
+        _viewModel.PropertyChanged += ViewModel_PropertyChanged;
 
         ConfigureWindow();
     }
@@ -94,7 +103,7 @@ public sealed partial class HaloWindow : Window
         }
 
         // Set initial size
-        _appWindow.Resize(new SizeInt32(220, 160));
+        _appWindow.Resize(new SizeInt32(280, 180));
 
         // Apply no-focus window styles
         int exStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
@@ -121,7 +130,7 @@ public sealed partial class HaloWindow : Window
         SetWindowPos(_hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 
         IsVisible = true;
-        SetState(HaloState.Listening);
+        _viewModel.StartListening();
     }
 
     /// <summary>
@@ -131,63 +140,44 @@ public sealed partial class HaloWindow : Window
     {
         ShowWindow(_hwnd, SW_HIDE);
         IsVisible = false;
-        SetState(HaloState.Hidden);
+        _viewModel.Hide();
     }
 
+    #region State Management
+
     /// <summary>
-    /// Set the current Halo state.
+    /// Set the current Halo state via ViewModel.
     /// </summary>
     public void SetState(HaloState state)
     {
-        if (_currentState == state) return;
-        _currentState = state;
+        _viewModel.TransitionTo(state);
+    }
 
-        // Update UI based on state
-        switch (state)
-        {
-            case HaloState.Hidden:
-                break;
+    /// <summary>
+    /// Start tool execution.
+    /// </summary>
+    public void StartToolExecution(string toolName)
+    {
+        _viewModel.StartToolExecution(toolName);
+        ToolView.ShowExecuting(toolName);
+    }
 
-            case HaloState.Listening:
-                StatusText.Text = "Listening...";
-                ThinkingRing.IsActive = false;
-                StreamingScrollViewer.Visibility = Visibility.Collapsed;
-                ErrorText.Visibility = Visibility.Collapsed;
-                SetHaloColor("#FF6B4EFF", "#FF9B6BFF");
-                break;
+    /// <summary>
+    /// Complete tool execution successfully.
+    /// </summary>
+    public void CompleteToolExecution(string? result = null)
+    {
+        _viewModel.ToolComplete(result);
+        ToolView.ShowSuccess(result);
+    }
 
-            case HaloState.Thinking:
-                StatusText.Text = "Thinking...";
-                ThinkingRing.IsActive = true;
-                StreamingScrollViewer.Visibility = Visibility.Collapsed;
-                SetHaloColor("#FF4ECAFF", "#FF6B9BFF");
-                break;
-
-            case HaloState.Processing:
-                StatusText.Text = "Processing...";
-                ThinkingRing.IsActive = true;
-                break;
-
-            case HaloState.Streaming:
-                StatusText.Text = "";
-                ThinkingRing.IsActive = false;
-                StreamingScrollViewer.Visibility = Visibility.Visible;
-                SetHaloColor("#FF4EFF6B", "#FF6BFFB9");
-                break;
-
-            case HaloState.Success:
-                StatusText.Text = "Done";
-                ThinkingRing.IsActive = false;
-                SetHaloColor("#FF4EFF6B", "#FF6BFFB9");
-                break;
-
-            case HaloState.Error:
-                StatusText.Text = "Error";
-                ThinkingRing.IsActive = false;
-                ErrorText.Visibility = Visibility.Visible;
-                SetHaloColor("#FFFF4E4E", "#FFFF6B6B");
-                break;
-        }
+    /// <summary>
+    /// Mark tool execution as failed.
+    /// </summary>
+    public void FailToolExecution(string error)
+    {
+        _viewModel.ToolFailed(error);
+        ToolView.ShowError(error);
     }
 
     /// <summary>
@@ -195,10 +185,8 @@ public sealed partial class HaloWindow : Window
     /// </summary>
     public void AppendStreamingText(string text)
     {
-        StreamingText.Text += text;
-
-        // Auto-scroll to bottom
-        StreamingScrollViewer.ChangeView(null, StreamingScrollViewer.ScrollableHeight, null);
+        _viewModel.AppendText(text);
+        StreamingView.AppendText(text);
     }
 
     /// <summary>
@@ -206,7 +194,8 @@ public sealed partial class HaloWindow : Window
     /// </summary>
     public void ClearStreamingText()
     {
-        StreamingText.Text = "";
+        _viewModel.ClearStreamingText();
+        StreamingView.Clear();
     }
 
     /// <summary>
@@ -214,14 +203,134 @@ public sealed partial class HaloWindow : Window
     /// </summary>
     public void SetError(string message)
     {
-        ErrorText.Text = message;
-        SetState(HaloState.Error);
+        _viewModel.SetError(message);
+    }
+
+    /// <summary>
+    /// Set clarification message.
+    /// </summary>
+    public void SetClarification(string message)
+    {
+        ClarificationText.Text = message;
+        _viewModel.RequestClarification();
+    }
+
+    #endregion
+
+    #region ViewModel Property Changed Handler
+
+    private void ViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(HaloViewModel.State))
+        {
+            UpdateUIForState(_viewModel.State);
+        }
+        else if (e.PropertyName == nameof(HaloViewModel.GradientStartColor) ||
+                 e.PropertyName == nameof(HaloViewModel.GradientEndColor))
+        {
+            SetHaloColor(_viewModel.GradientStartColor, _viewModel.GradientEndColor);
+        }
+    }
+
+    private void UpdateUIForState(HaloState state)
+    {
+        // Update status text
+        StatusText.Text = state.GetDisplayText();
+
+        // Reset all visibility
+        StatusText.Visibility = Visibility.Visible;
+        StreamingView.Visibility = Visibility.Collapsed;
+        ToolView.Visibility = Visibility.Collapsed;
+        ErrorBorder.Visibility = Visibility.Collapsed;
+        ClarificationBorder.Visibility = Visibility.Collapsed;
+        MultiTurnBadge.Visibility = Visibility.Collapsed;
+        AgentBadge.Visibility = Visibility.Collapsed;
+
+        // Update thinking ring
+        ThinkingRing.IsActive = state.IsLoading();
+
+        // Update gradient colors
+        var colors = state.GetGradientColors();
+        SetHaloColor(colors.Start, colors.End);
+
+        // State-specific UI updates
+        switch (state)
+        {
+            case HaloState.Hidden:
+                break;
+
+            case HaloState.Streaming:
+            case HaloState.MultiTurnStreaming:
+                StatusText.Visibility = Visibility.Collapsed;
+                StreamingView.Visibility = Visibility.Visible;
+                StreamingView.StartCursor();
+                if (state == HaloState.MultiTurnStreaming)
+                    MultiTurnBadge.Visibility = Visibility.Visible;
+                break;
+
+            case HaloState.Success:
+                StreamingView.StopCursor();
+                break;
+
+            case HaloState.Error:
+            case HaloState.ToolError:
+                StatusText.Visibility = Visibility.Collapsed;
+                ErrorBorder.Visibility = Visibility.Visible;
+                ErrorText.Text = _viewModel.ErrorMessage;
+                if (state == HaloState.ToolError)
+                    ErrorText.Text = _viewModel.ToolResult;
+                break;
+
+            case HaloState.ToolExecuting:
+            case HaloState.ToolSuccess:
+                StatusText.Visibility = Visibility.Collapsed;
+                ToolView.Visibility = Visibility.Visible;
+                break;
+
+            case HaloState.ClarificationNeeded:
+                StatusText.Visibility = Visibility.Collapsed;
+                ClarificationBorder.Visibility = Visibility.Visible;
+                break;
+
+            case HaloState.ClarificationReceived:
+                ClarificationBorder.Visibility = Visibility.Collapsed;
+                break;
+
+            case HaloState.MultiTurnActive:
+            case HaloState.MultiTurnThinking:
+                MultiTurnBadge.Visibility = Visibility.Visible;
+                break;
+
+            case HaloState.AgentPlanning:
+            case HaloState.AgentExecuting:
+            case HaloState.AgentComplete:
+                AgentBadge.Visibility = Visibility.Visible;
+                break;
+        }
+
+        // Update window size based on content
+        UpdateWindowSize(state);
+    }
+
+    private void UpdateWindowSize(HaloState state)
+    {
+        var (width, height) = state switch
+        {
+            HaloState.Streaming or HaloState.MultiTurnStreaming => (360, 300),
+            HaloState.ToolExecuting or HaloState.ToolSuccess or HaloState.ToolError => (320, 220),
+            HaloState.ClarificationNeeded => (320, 200),
+            HaloState.Error => (300, 180),
+            _ => (280, 180)
+        };
+
+        _appWindow.Resize(new SizeInt32(width, height));
     }
 
     private void SetHaloColor(string startColor, string endColor)
     {
         GradientStart.Color = ParseColor(startColor);
         GradientEnd.Color = ParseColor(endColor);
+        ThinkingRing.Foreground = new SolidColorBrush(ParseColor(startColor));
     }
 
     private static Windows.UI.Color ParseColor(string hex)
@@ -245,4 +354,6 @@ public sealed partial class HaloWindow : Window
 
         return Windows.UI.Color.FromArgb(a, r, g, b);
     }
+
+    #endregion
 }

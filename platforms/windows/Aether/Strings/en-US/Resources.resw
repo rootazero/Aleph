@@ -1,0 +1,353 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" msdata:Ordinal="0" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+
+  <!-- App General -->
+  <data name="AppName" xml:space="preserve">
+    <value>Aether</value>
+  </data>
+  <data name="AppDescription" xml:space="preserve">
+    <value>System-level AI middleware</value>
+  </data>
+
+  <!-- Common -->
+  <data name="Common_OK" xml:space="preserve">
+    <value>OK</value>
+  </data>
+  <data name="Common_Cancel" xml:space="preserve">
+    <value>Cancel</value>
+  </data>
+  <data name="Common_Save" xml:space="preserve">
+    <value>Save</value>
+  </data>
+  <data name="Common_Close" xml:space="preserve">
+    <value>Close</value>
+  </data>
+  <data name="Common_Error" xml:space="preserve">
+    <value>Error</value>
+  </data>
+  <data name="Common_Success" xml:space="preserve">
+    <value>Success</value>
+  </data>
+
+  <!-- Tray Menu -->
+  <data name="Tray_Settings" xml:space="preserve">
+    <value>Settings</value>
+  </data>
+  <data name="Tray_Conversation" xml:space="preserve">
+    <value>Conversation</value>
+  </data>
+  <data name="Tray_Quit" xml:space="preserve">
+    <value>Quit</value>
+  </data>
+
+  <!-- Halo States -->
+  <data name="Halo_Idle" xml:space="preserve">
+    <value></value>
+  </data>
+  <data name="Halo_Listening" xml:space="preserve">
+    <value>Listening...</value>
+  </data>
+  <data name="Halo_Thinking" xml:space="preserve">
+    <value>Thinking...</value>
+  </data>
+  <data name="Halo_Processing" xml:space="preserve">
+    <value>Processing...</value>
+  </data>
+  <data name="Halo_Success" xml:space="preserve">
+    <value>Done</value>
+  </data>
+  <data name="Halo_Error" xml:space="preserve">
+    <value>Error</value>
+  </data>
+  <data name="Halo_ToolExecuting" xml:space="preserve">
+    <value>Executing tool...</value>
+  </data>
+  <data name="Halo_ToolCompleted" xml:space="preserve">
+    <value>Tool completed</value>
+  </data>
+  <data name="Halo_ToolFailed" xml:space="preserve">
+    <value>Tool failed</value>
+  </data>
+  <data name="Halo_ClarificationNeeded" xml:space="preserve">
+    <value>Need clarification</value>
+  </data>
+  <data name="Halo_AgentPlanning" xml:space="preserve">
+    <value>Planning...</value>
+  </data>
+  <data name="Halo_AgentExecuting" xml:space="preserve">
+    <value>Executing...</value>
+  </data>
+  <data name="Halo_AgentComplete" xml:space="preserve">
+    <value>Complete</value>
+  </data>
+
+  <!-- Settings Window -->
+  <data name="Settings_Title" xml:space="preserve">
+    <value>Aether Settings</value>
+  </data>
+  <data name="Settings_General" xml:space="preserve">
+    <value>General</value>
+  </data>
+  <data name="Settings_Providers" xml:space="preserve">
+    <value>Providers</value>
+  </data>
+  <data name="Settings_Generation" xml:space="preserve">
+    <value>Generation</value>
+  </data>
+  <data name="Settings_Routing" xml:space="preserve">
+    <value>Routing</value>
+  </data>
+  <data name="Settings_Shortcuts" xml:space="preserve">
+    <value>Shortcuts</value>
+  </data>
+  <data name="Settings_Behavior" xml:space="preserve">
+    <value>Behavior</value>
+  </data>
+  <data name="Settings_Memory" xml:space="preserve">
+    <value>Memory</value>
+  </data>
+  <data name="Settings_Search" xml:space="preserve">
+    <value>Search</value>
+  </data>
+  <data name="Settings_MCP" xml:space="preserve">
+    <value>MCP</value>
+  </data>
+  <data name="Settings_Skills" xml:space="preserve">
+    <value>Skills</value>
+  </data>
+  <data name="Settings_Cowork" xml:space="preserve">
+    <value>Cowork</value>
+  </data>
+  <data name="Settings_Policies" xml:space="preserve">
+    <value>Policies</value>
+  </data>
+  <data name="Settings_Runtimes" xml:space="preserve">
+    <value>Runtimes</value>
+  </data>
+
+  <!-- General Settings -->
+  <data name="Settings_General_Sound" xml:space="preserve">
+    <value>Sound</value>
+  </data>
+  <data name="Settings_General_SoundEffects" xml:space="preserve">
+    <value>Sound Effects</value>
+  </data>
+  <data name="Settings_General_Startup" xml:space="preserve">
+    <value>Startup</value>
+  </data>
+  <data name="Settings_General_LaunchAtStartup" xml:space="preserve">
+    <value>Launch at Windows startup</value>
+  </data>
+  <data name="Settings_General_LaunchAtStartupDesc" xml:space="preserve">
+    <value>Aether will start automatically when you sign in to Windows.</value>
+  </data>
+  <data name="Settings_General_Language" xml:space="preserve">
+    <value>Language</value>
+  </data>
+  <data name="Settings_General_LanguagePreference" xml:space="preserve">
+    <value>Language Preference</value>
+  </data>
+  <data name="Settings_General_SystemDefault" xml:space="preserve">
+    <value>System Default</value>
+  </data>
+  <data name="Settings_General_Updates" xml:space="preserve">
+    <value>Updates</value>
+  </data>
+  <data name="Settings_General_CheckUpdates" xml:space="preserve">
+    <value>Check for Updates</value>
+  </data>
+  <data name="Settings_General_Logs" xml:space="preserve">
+    <value>Logs</value>
+  </data>
+  <data name="Settings_General_ViewLogs" xml:space="preserve">
+    <value>View Logs</value>
+  </data>
+  <data name="Settings_General_OpenConfigFolder" xml:space="preserve">
+    <value>Open Config Folder</value>
+  </data>
+  <data name="Settings_General_About" xml:space="preserve">
+    <value>About</value>
+  </data>
+  <data name="Settings_General_Version" xml:space="preserve">
+    <value>Version</value>
+  </data>
+  <data name="Settings_UnsavedChanges" xml:space="preserve">
+    <value>You have unsaved changes</value>
+  </data>
+  <data name="Settings_Saving" xml:space="preserve">
+    <value>Saving...</value>
+  </data>
+  <data name="Settings_Saved" xml:space="preserve">
+    <value>Settings saved</value>
+  </data>
+
+  <!-- Providers Settings -->
+  <data name="Settings_Providers_DefaultProvider" xml:space="preserve">
+    <value>Default Provider</value>
+  </data>
+  <data name="Settings_Providers_SelectDefault" xml:space="preserve">
+    <value>Select default AI provider</value>
+  </data>
+  <data name="Settings_Providers_APIKey" xml:space="preserve">
+    <value>API Key</value>
+  </data>
+  <data name="Settings_Providers_TestConnection" xml:space="preserve">
+    <value>Test Connection</value>
+  </data>
+  <data name="Settings_Providers_GetAPIKey" xml:space="preserve">
+    <value>Get API Key</value>
+  </data>
+  <data name="Settings_Providers_LocalProviders" xml:space="preserve">
+    <value>Local Providers</value>
+  </data>
+  <data name="Settings_Providers_OllamaURL" xml:space="preserve">
+    <value>Ollama URL</value>
+  </data>
+
+  <!-- Shortcuts Settings -->
+  <data name="Settings_Shortcuts_HaloActivation" xml:space="preserve">
+    <value>Halo Activation</value>
+  </data>
+  <data name="Settings_Shortcuts_PrimaryHotkey" xml:space="preserve">
+    <value>Primary Hotkey</value>
+  </data>
+  <data name="Settings_Shortcuts_HaloHotkeyDesc" xml:space="preserve">
+    <value>Double-tap Shift to activate Halo at cursor position</value>
+  </data>
+  <data name="Settings_Shortcuts_ConversationWindow" xml:space="preserve">
+    <value>Conversation Window</value>
+  </data>
+  <data name="Settings_Shortcuts_OpenConversation" xml:space="preserve">
+    <value>Open Conversation</value>
+  </data>
+  <data name="Settings_Shortcuts_QuickActions" xml:space="preserve">
+    <value>Quick Actions</value>
+  </data>
+  <data name="Settings_Shortcuts_DismissHalo" xml:space="preserve">
+    <value>Dismiss Halo</value>
+  </data>
+  <data name="Settings_Shortcuts_ConfirmSend" xml:space="preserve">
+    <value>Confirm/Send</value>
+  </data>
+  <data name="Settings_Shortcuts_CopyResponse" xml:space="preserve">
+    <value>Copy Response</value>
+  </data>
+
+  <!-- Memory Settings -->
+  <data name="Settings_Memory_StorageUsage" xml:space="preserve">
+    <value>Storage Usage</value>
+  </data>
+  <data name="Settings_Memory_Database" xml:space="preserve">
+    <value>Memory Database</value>
+  </data>
+  <data name="Settings_Memory_RetentionPolicy" xml:space="preserve">
+    <value>Retention Policy</value>
+  </data>
+  <data name="Settings_Memory_KeepHistory" xml:space="preserve">
+    <value>Keep conversation history for</value>
+  </data>
+  <data name="Settings_Memory_AutoCompact" xml:space="preserve">
+    <value>Auto-compact old conversations</value>
+  </data>
+  <data name="Settings_Memory_Management" xml:space="preserve">
+    <value>Memory Management</value>
+  </data>
+  <data name="Settings_Memory_CompactNow" xml:space="preserve">
+    <value>Compact Now</value>
+  </data>
+  <data name="Settings_Memory_ClearHistory" xml:space="preserve">
+    <value>Clear All History</value>
+  </data>
+  <data name="Settings_Memory_ClearWarning" xml:space="preserve">
+    <value>Warning: Clearing history cannot be undone.</value>
+  </data>
+  <data name="Settings_Memory_FactsLayer" xml:space="preserve">
+    <value>Facts Layer</value>
+  </data>
+  <data name="Settings_Memory_TotalFacts" xml:space="preserve">
+    <value>Total Facts</value>
+  </data>
+  <data name="Settings_Memory_Topics" xml:space="preserve">
+    <value>Topics</value>
+  </data>
+  <data name="Settings_Memory_ViewFacts" xml:space="preserve">
+    <value>View Facts Browser</value>
+  </data>
+
+  <!-- Conversation Window -->
+  <data name="Conversation_Title" xml:space="preserve">
+    <value>Aether Conversation</value>
+  </data>
+  <data name="Conversation_NewConversation" xml:space="preserve">
+    <value>New Conversation</value>
+  </data>
+  <data name="Conversation_Ready" xml:space="preserve">
+    <value>Ready</value>
+  </data>
+  <data name="Conversation_Thinking" xml:space="preserve">
+    <value>Thinking...</value>
+  </data>
+  <data name="Conversation_Streaming" xml:space="preserve">
+    <value>Streaming...</value>
+  </data>
+  <data name="Conversation_Typing" xml:space="preserve">
+    <value>Aether is typing...</value>
+  </data>
+  <data name="Conversation_Stop" xml:space="preserve">
+    <value>Stop</value>
+  </data>
+  <data name="Conversation_Send" xml:space="preserve">
+    <value>Send</value>
+  </data>
+  <data name="Conversation_Placeholder" xml:space="preserve">
+    <value>Type a message... (Press Enter to send)</value>
+  </data>
+  <data name="Conversation_Clear" xml:space="preserve">
+    <value>Clear conversation</value>
+  </data>
+  <data name="Conversation_ClearConfirm" xml:space="preserve">
+    <value>Are you sure you want to clear the conversation history?</value>
+  </data>
+  <data name="Conversation_Welcome" xml:space="preserve">
+    <value>Welcome to Aether. How can I help you today?</value>
+  </data>
+  <data name="Conversation_Cleared" xml:space="preserve">
+    <value>Conversation cleared. How can I help you?</value>
+  </data>
+
+  <!-- Roles -->
+  <data name="Role_You" xml:space="preserve">
+    <value>You</value>
+  </data>
+  <data name="Role_Aether" xml:space="preserve">
+    <value>Aether</value>
+  </data>
+  <data name="Role_System" xml:space="preserve">
+    <value>System</value>
+  </data>
+
+  <!-- Placeholder Pages -->
+  <data name="Placeholder_ComingSoon" xml:space="preserve">
+    <value>Coming Soon</value>
+  </data>
+  <data name="Placeholder_CheckUpdates" xml:space="preserve">
+    <value>Check for updates to get the latest features.</value>
+  </data>
+</root>
