@@ -263,10 +263,10 @@ struct MultiTurnInputView: View {
             if viewModel.turnCount > 0 {
                 Text("Turn \(viewModel.turnCount + 1)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .liquidGlassSecondaryText()
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.primary.opacity(0.1))
+                    .background(inputIndicatorBackground)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
             }
 
@@ -275,8 +275,8 @@ struct MultiTurnInputView: View {
                 text: $viewModel.inputText,
                 placeholder: "Type a message... (/ for commands, // for topics)",
                 font: .systemFont(ofSize: 16),
-                textColor: .labelColor,
-                placeholderColor: NSColor.secondaryLabelColor,
+                textColor: inputTextColor,
+                placeholderColor: inputPlaceholderColor,
                 backgroundColor: .clear,
                 autoFocus: true,
                 onSubmit: { viewModel.submit() },
@@ -311,6 +311,33 @@ struct MultiTurnInputView: View {
         .padding(16)
     }
 
+    /// Adaptive text color for glass effect
+    private var inputTextColor: NSColor {
+        if #available(macOS 26.0, *) {
+            return .white
+        } else {
+            return .labelColor
+        }
+    }
+
+    /// Adaptive placeholder color for glass effect
+    private var inputPlaceholderColor: NSColor {
+        if #available(macOS 26.0, *) {
+            return NSColor.white.withAlphaComponent(0.5)
+        } else {
+            return .secondaryLabelColor
+        }
+    }
+
+    /// Adaptive indicator background for glass effect
+    private var inputIndicatorBackground: Color {
+        if #available(macOS 26.0, *) {
+            return Color.white.opacity(0.15)
+        } else {
+            return Color.primary.opacity(0.1)
+        }
+    }
+
     // MARK: - Command List
 
     private var commandList: some View {
@@ -320,7 +347,7 @@ struct MultiTurnInputView: View {
             if viewModel.commands.isEmpty {
                 Text("No commands found")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .liquidGlassSecondaryText()
                     .padding()
             } else {
                 ScrollViewReader { proxy in
@@ -358,7 +385,7 @@ struct MultiTurnInputView: View {
             if viewModel.filteredTopics.isEmpty {
                 Text("No topics found")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .liquidGlassSecondaryText()
                     .padding()
             } else {
                 ScrollViewReader { proxy in
@@ -411,7 +438,7 @@ struct CommandRowView: View {
                 // Command icon
                 Image(systemName: command.icon.isEmpty ? "terminal" : command.icon)
                     .font(.system(size: 14))
-                    .foregroundStyle(.primary)
+                    .liquidGlassIcon()
                     .frame(width: 20)
 
                 // Command info
@@ -419,22 +446,22 @@ struct CommandRowView: View {
                     HStack(spacing: 6) {
                         Text("/\(command.key)")
                             .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.primary)
+                            .liquidGlassText()
 
                         // Source badge
                         Text(sourceTypeName(command.sourceType))
                             .font(.system(size: 9))
-                            .foregroundStyle(.secondary)
+                            .liquidGlassSecondaryText()
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
-                            .background(Color.primary.opacity(0.1))
+                            .background(rowBadgeBackground)
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
 
                     if !command.description.isEmpty {
                         Text(command.description)
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .liquidGlassSecondaryText()
                             .lineLimit(1)
                     }
                 }
@@ -443,15 +470,34 @@ struct CommandRowView: View {
 
                 Image(systemName: "chevron.right")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .liquidGlassSecondaryText()
+                    .opacity(0.5)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background((isHovering || isSelected) ? Color.primary.opacity(0.08) : Color.clear)
+            .background((isHovering || isSelected) ? rowHighlightBackground : Color.clear)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
             isHovering = hovering
+        }
+    }
+
+    /// Adaptive row highlight background
+    private var rowHighlightBackground: Color {
+        if #available(macOS 26.0, *) {
+            return Color.white.opacity(0.12)
+        } else {
+            return Color.primary.opacity(0.08)
+        }
+    }
+
+    /// Adaptive badge background
+    private var rowBadgeBackground: Color {
+        if #available(macOS 26.0, *) {
+            return Color.white.opacity(0.15)
+        } else {
+            return Color.primary.opacity(0.1)
         }
     }
 }
@@ -487,9 +533,18 @@ struct TopicRowView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background((isHovering || isSelected || isConfirmingDelete) ? Color.primary.opacity(0.08) : Color.clear)
+        .background((isHovering || isSelected || isConfirmingDelete) ? topicRowHighlight : Color.clear)
         .onHover { hovering in
             isHovering = hovering
+        }
+    }
+
+    /// Adaptive row highlight for glass effect
+    private var topicRowHighlight: Color {
+        if #available(macOS 26.0, *) {
+            return Color.white.opacity(0.12)
+        } else {
+            return Color.primary.opacity(0.08)
         }
     }
 
@@ -502,12 +557,12 @@ struct TopicRowView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(topic.title)
                         .font(.system(size: 14))
-                        .foregroundStyle(.primary)
+                        .liquidGlassText()
                         .lineLimit(1)
 
                     Text(formatDate(topic.updatedAt))
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .liquidGlassSecondaryText()
                 }
             }
             .buttonStyle(.plain)
@@ -525,7 +580,7 @@ struct TopicRowView: View {
                     } label: {
                         Image(systemName: "pencil")
                             .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
+                            .liquidGlassSecondaryText()
                     }
                     .buttonStyle(.plain)
                     .help("Rename")
@@ -548,7 +603,8 @@ struct TopicRowView: View {
                 // Chevron when not hovering
                 Image(systemName: "chevron.right")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .liquidGlassSecondaryText()
+                    .opacity(0.5)
             }
         }
         .animation(.easeInOut(duration: 0.15), value: isHovering)
@@ -564,7 +620,7 @@ struct TopicRowView: View {
 
             Text("确认删除「\(topic.title)」？")
                 .font(.system(size: 13))
-                .foregroundStyle(.primary)
+                .liquidGlassText()
                 .lineLimit(1)
 
             Spacer()
@@ -577,7 +633,7 @@ struct TopicRowView: View {
             } label: {
                 Text("取消")
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .liquidGlassSecondaryText()
             }
             .buttonStyle(.plain)
 
@@ -601,7 +657,7 @@ struct TopicRowView: View {
             TextField("Topic title", text: $editingTitle)
                 .textFieldStyle(.plain)
                 .font(.system(size: 14))
-                .foregroundStyle(.primary)
+                .liquidGlassText()
                 .focused($isTextFieldFocused)
                 .onSubmit {
                     commitRename()
@@ -627,7 +683,7 @@ struct TopicRowView: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .liquidGlassSecondaryText()
             }
             .buttonStyle(.plain)
             .help("Cancel")

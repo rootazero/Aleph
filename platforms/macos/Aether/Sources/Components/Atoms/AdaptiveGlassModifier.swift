@@ -41,11 +41,15 @@ struct AdaptiveGlassModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
+            let _ = print("[AdaptiveGlassModifier] Using native macOS 26 glassEffect (.regular)")
+            // Use pure glassEffect without custom background layers
+            // System automatically applies vibrant text colors for legibility
             content
                 .environment(\.isInGlass, true)
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         } else {
             // Fallback for macOS 15-25
+            let _ = print("[AdaptiveGlassModifier] Using NSVisualEffectView fallback (macOS < 26)")
             content
                 .environment(\.isInGlass, true)
                 .background(
@@ -89,11 +93,9 @@ private struct GlassProminentButtonContent: View {
         if #available(macOS 26.0, *) {
             configuration.label
                 .font(.system(size: 16, weight: .semibold))
+                // Let system handle text color automatically for vibrant legibility
                 .padding(10)
-                .background(
-                    Circle()
-                        .glassEffect(.regular.interactive(), in: Circle())
-                )
+                .glassEffect(.regular.interactive(), in: Circle())
                 .contentShape(Circle())
                 .opacity(configuration.isPressed ? 0.7 : 1.0)
                 .background(WindowDragBlocker())
@@ -186,6 +188,28 @@ struct GlassMessageBubbleModifier: ViewModifier {
     }
 }
 
+// MARK: - Glass Colors Helper
+
+/// Helper for glass-appropriate colors with OS version detection
+/// Note: On macOS 26+, system automatically applies vibrant treatment to text inside glass
+enum GlassColors {
+    /// Primary text color for glass surfaces
+    /// System automatically applies vibrant treatment for legibility
+    static var text: Color {
+        return Color.primary
+    }
+
+    /// Secondary text color for glass surfaces
+    static var secondaryText: Color {
+        return Color.secondary
+    }
+
+    /// Icon color for glass surfaces
+    static var icon: Color {
+        return Color.primary
+    }
+}
+
 // MARK: - View Extensions
 
 extension View {
@@ -201,19 +225,36 @@ extension View {
         modifier(GlassButtonModifier())
     }
 
-    /// Apply glass text style (primary color)
+    /// Apply glass text style - system automatically applies vibrant colors for legibility
+    @ViewBuilder
     func liquidGlassText() -> some View {
-        self.foregroundStyle(.primary)
+        if #available(macOS 26.0, *) {
+            // Let system handle vibrant text color automatically
+            self.foregroundStyle(.primary)
+        } else {
+            self.foregroundStyle(.primary)
+        }
     }
 
-    /// Apply glass icon style (primary color)
+    /// Apply glass icon style - system automatically applies vibrant colors for legibility
+    @ViewBuilder
     func liquidGlassIcon() -> some View {
-        self.foregroundStyle(.primary)
+        if #available(macOS 26.0, *) {
+            // Let system handle vibrant icon color automatically
+            self.foregroundStyle(.primary)
+        } else {
+            self.foregroundStyle(.primary)
+        }
     }
 
-    /// Apply glass secondary text style (secondary color)
+    /// Apply glass secondary text style
+    @ViewBuilder
     func liquidGlassSecondaryText() -> some View {
-        self.foregroundStyle(.secondary)
+        if #available(macOS 26.0, *) {
+            self.foregroundStyle(.secondary)
+        } else {
+            self.foregroundStyle(.secondary)
+        }
     }
 
     /// Apply glass bubble effect for messages

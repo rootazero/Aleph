@@ -19,7 +19,7 @@ struct CommandListView: View {
             if viewModel.commands.isEmpty {
                 Text(NSLocalizedString("commands.empty", comment: ""))
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .liquidGlassSecondaryText()
                     .padding()
                     .onAppear {
                         viewModel.reportHeightChange(60)  // Report empty state height
@@ -81,7 +81,7 @@ struct TopicListView: View {
             if viewModel.filteredTopics.isEmpty {
                 Text(NSLocalizedString("topics.empty", comment: ""))
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .liquidGlassSecondaryText()
                     .padding()
                     .onAppear {
                         viewModel.reportHeightChange(60)  // Report empty state height

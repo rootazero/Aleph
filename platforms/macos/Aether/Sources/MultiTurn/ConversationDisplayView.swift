@@ -68,7 +68,7 @@ struct ConversationDisplayView: View {
             Button(action: viewModel.copyAllMessages) {
                 Image(systemName: "doc.on.doc")
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .liquidGlassSecondaryText()
             }
             .buttonStyle(.plain)
             .adaptiveGlassButton()
@@ -129,11 +129,12 @@ struct ConversationDisplayView: View {
         VStack(spacing: 8) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 32))
-                .foregroundStyle(.tertiary)
+                .liquidGlassSecondaryText()
+                .opacity(0.5)
 
             Text("Start a conversation")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .liquidGlassSecondaryText()
         }
         .frame(maxWidth: .infinity)
         .frame(height: 100)
@@ -151,7 +152,7 @@ struct ConversationDisplayView: View {
         HStack(spacing: 6) {
             ForEach(0..<3, id: \.self) { index in
                 Circle()
-                    .fill(Color.primary.opacity(0.5))
+                    .fill(GlassColors.secondaryText)
                     .frame(width: 6, height: 6)
             }
         }
@@ -194,7 +195,7 @@ struct MessageBubbleView: View {
                 // Message content with glass bubble effect
                 Text(message.content)
                     .font(.system(size: 13))
-                    .foregroundStyle(.primary)
+                    .liquidGlassText()
                     .textSelection(.enabled)
                     .padding(12)
                     .glassBubble(isUser: isUser)
@@ -207,7 +208,7 @@ struct MessageBubbleView: View {
                             Text("Copy")
                         }
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .liquidGlassSecondaryText()
                     }
                     .buttonStyle(.plain)
                 }

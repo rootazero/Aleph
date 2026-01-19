@@ -22,14 +22,12 @@ struct UnifiedConversationView: View {
     private let attachmentPreviewHeight: CGFloat = 100
 
     var body: some View {
-        AdaptiveGlassContainer {
-            VStack(spacing: 0) {
-                // Spacer pushes content to bottom
-                Spacer(minLength: 0)
+        VStack(spacing: 0) {
+            // Spacer pushes content to bottom
+            Spacer(minLength: 0)
 
-                // Main content with glass background
-                contentWithBackground
-            }
+            // Main content with glass background
+            contentWithBackground
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers: providers)

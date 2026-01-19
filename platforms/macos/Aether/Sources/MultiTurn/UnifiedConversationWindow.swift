@@ -244,5 +244,7 @@ final class UnifiedConversationWindow: NSWindow {
     // MARK: - Focus
 
     override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
+    // Note: Must be true for glassEffect to render in active state
+    // Otherwise glass degrades to simple blur
+    override var canBecomeMain: Bool { true }
 }

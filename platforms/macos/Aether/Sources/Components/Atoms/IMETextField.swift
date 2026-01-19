@@ -33,6 +33,7 @@ struct IMETextField: NSViewRepresentable {
     var placeholderColor: NSColor = NSColor.white.withAlphaComponent(0.3)
     var backgroundColor: NSColor = .clear
     var autoFocus: Bool = true
+    var textShadow: NSShadow? = nil  // Optional shadow for glass effect
     var onSubmit: (() -> Void)?
     var onEscape: (() -> Void)?
     var onTextChange: ((String) -> Void)?
@@ -58,15 +59,24 @@ struct IMETextField: NSViewRepresentable {
         textField.cell?.wraps = false
         textField.cell?.isScrollable = true
 
-        // Set placeholder with custom color
-        let placeholderAttributes: [NSAttributedString.Key: Any] = [
+        // Set placeholder with custom color and optional shadow
+        var placeholderAttributes: [NSAttributedString.Key: Any] = [
             .foregroundColor: placeholderColor,
             .font: font
         ]
+        if let shadow = textShadow {
+            placeholderAttributes[.shadow] = shadow
+        }
         textField.placeholderAttributedString = NSAttributedString(
             string: placeholder,
             attributes: placeholderAttributes
         )
+
+        // Apply shadow to the text field's layer for typed text
+        if let shadow = textShadow {
+            textField.wantsLayer = true
+            textField.shadow = shadow
+        }
 
         // Store callbacks in coordinator
         context.coordinator.onSubmit = onSubmit

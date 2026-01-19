@@ -8,6 +8,35 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - Glass Text Color Helper
+
+/// Get appropriate text color for glass effect
+/// System automatically applies vibrant treatment for legibility on macOS 26+
+private var glassTextNSColor: NSColor {
+    return .labelColor
+}
+
+/// Get appropriate placeholder color for glass effect
+private var glassPlaceholderNSColor: NSColor {
+    return .secondaryLabelColor
+}
+
+/// Get appropriate indicator background for glass effect
+private var glassIndicatorBackground: Color {
+    return Color.primary.opacity(0.1)
+}
+
+/// Get appropriate button background for glass effect
+private var glassButtonBackground: Color {
+    return Color.primary.opacity(0.05)
+}
+
+/// Get appropriate button hover background for glass effect
+private var glassButtonHoverBackground: Color {
+    return Color.primary.opacity(0.1)
+}
+
+
 // MARK: - InputAreaView
 
 /// Input area with text field, attachment button, and send button
@@ -20,10 +49,10 @@ struct InputAreaView: View {
             if viewModel.turnCount > 0 {
                 Text("Turn \(viewModel.turnCount + 1)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .liquidGlassSecondaryText()
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.primary.opacity(0.1))
+                    .background(glassIndicatorBackground)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
             }
 
@@ -32,8 +61,8 @@ struct InputAreaView: View {
                 text: $viewModel.inputText,
                 placeholder: NSLocalizedString("multiturn.input.placeholder", comment: ""),
                 font: .systemFont(ofSize: 16),
-                textColor: .labelColor,
-                placeholderColor: NSColor.secondaryLabelColor,
+                textColor: glassTextNSColor,
+                placeholderColor: glassPlaceholderNSColor,
                 backgroundColor: .clear,
                 autoFocus: true,
                 onSubmit: { viewModel.submit() },
@@ -75,13 +104,14 @@ struct AttachmentButton: View {
         Button(action: openFilePicker) {
             Image(systemName: "plus")
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(isHovering ? .primary : .secondary)
+                .liquidGlassIcon()
+                .opacity(isHovering ? 1.0 : 0.7)
         }
         .buttonStyle(.plain)
         .frame(width: 28, height: 28)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color.primary.opacity(isTargeted ? 0.15 : (isHovering ? 0.1 : 0.05)))
+                .fill(attachmentButtonBackground)
         )
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.1)) {
@@ -92,6 +122,18 @@ struct AttachmentButton: View {
             handleDrop(providers: providers)
         }
         .help(NSLocalizedString("multiturn.attachment.add", comment: ""))
+    }
+
+    /// Adaptive background color for glass effect
+    /// System handles vibrant colors automatically
+    private var attachmentButtonBackground: Color {
+        if isTargeted {
+            return Color.primary.opacity(0.15)
+        } else if isHovering {
+            return Color.primary.opacity(0.1)
+        } else {
+            return Color.primary.opacity(0.05)
+        }
     }
 
     private func openFilePicker() {

@@ -51,14 +51,14 @@ struct AttachmentThumbnailView: View {
 
                 Text(attachment.fileName)
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .liquidGlassSecondaryText()
                     .lineLimit(1)
                     .frame(maxWidth: thumbnailSize + 16)
             }
             .padding(4)
             .background(
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.primary.opacity(isHovering ? 0.08 : 0.04))
+                    .fill(thumbnailBackground)
             )
 
             // Remove button
@@ -66,8 +66,8 @@ struct AttachmentThumbnailView: View {
                 Button(action: onRemove) {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 18))
-                        .foregroundStyle(.secondary)
-                        .background(Circle().fill(Color(nsColor: .windowBackgroundColor).opacity(0.8)))
+                        .liquidGlassSecondaryText()
+                        .background(Circle().fill(removeButtonBackground))
                 }
                 .buttonStyle(.plain)
                 .offset(x: 6, y: -6)
@@ -81,6 +81,24 @@ struct AttachmentThumbnailView: View {
         }
     }
 
+    /// Adaptive thumbnail background for glass effect
+    private var thumbnailBackground: Color {
+        if #available(macOS 26.0, *) {
+            return Color.white.opacity(isHovering ? 0.15 : 0.08)
+        } else {
+            return Color.primary.opacity(isHovering ? 0.08 : 0.04)
+        }
+    }
+
+    /// Adaptive remove button background
+    private var removeButtonBackground: Color {
+        if #available(macOS 26.0, *) {
+            return Color.black.opacity(0.5)
+        } else {
+            return Color(nsColor: .windowBackgroundColor).opacity(0.8)
+        }
+    }
+
     @ViewBuilder
     private var thumbnailImage: some View {
         if let thumbnail = attachment.thumbnail {
@@ -90,9 +108,19 @@ struct AttachmentThumbnailView: View {
         } else {
             Image(systemName: attachment.fileType.iconName)
                 .font(.system(size: 28))
-                .foregroundStyle(.tertiary)
+                .liquidGlassSecondaryText()
+                .opacity(0.6)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.primary.opacity(0.04))
+                .background(placeholderBackground)
+        }
+    }
+
+    /// Adaptive placeholder background
+    private var placeholderBackground: Color {
+        if #available(macOS 26.0, *) {
+            return Color.white.opacity(0.08)
+        } else {
+            return Color.primary.opacity(0.04)
         }
     }
 }
