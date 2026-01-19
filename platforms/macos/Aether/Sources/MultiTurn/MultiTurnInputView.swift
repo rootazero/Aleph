@@ -3,7 +3,6 @@
 //  Aether
 //
 //  SwiftUI view for multi-turn input window.
-//  Updated to use Liquid Glass design language (macOS 26+).
 //
 
 import AppKit
@@ -235,7 +234,6 @@ struct MultiTurnInputView: View {
     }
 
     /// Content area with animated background
-    /// Uses adaptive glass effect for Liquid Glass on macOS 26+
     private var contentWithBackground: some View {
         VStack(spacing: 0) {
             // Input field
@@ -261,14 +259,14 @@ struct MultiTurnInputView: View {
 
     private var inputField: some View {
         HStack(spacing: 12) {
-            // Turn indicator (Liquid Glass style - white text)
+            // Turn indicator
             if viewModel.turnCount > 0 {
                 Text("Turn \(viewModel.turnCount + 1)")
                     .font(.caption)
-                    .foregroundColor(.white.opacity(0.8))
+                    .foregroundStyle(.secondary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.white.opacity(0.15))
+                    .background(Color.primary.opacity(0.1))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
             }
 
@@ -322,7 +320,7 @@ struct MultiTurnInputView: View {
             if viewModel.commands.isEmpty {
                 Text("No commands found")
                     .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundStyle(.secondary)
                     .padding()
             } else {
                 ScrollViewReader { proxy in
@@ -360,7 +358,7 @@ struct MultiTurnInputView: View {
             if viewModel.filteredTopics.isEmpty {
                 Text("No topics found")
                     .font(.subheadline)
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundStyle(.secondary)
                     .padding()
             } else {
                 ScrollViewReader { proxy in
@@ -399,7 +397,7 @@ struct MultiTurnInputView: View {
 
 // MARK: - CommandRowView
 
-/// Row view for command list with glass style
+/// Row view for command list
 struct CommandRowView: View {
     let command: CommandNode
     let isSelected: Bool
@@ -410,10 +408,10 @@ struct CommandRowView: View {
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 12) {
-                // Command icon (Liquid Glass - white)
+                // Command icon
                 Image(systemName: command.icon.isEmpty ? "terminal" : command.icon)
                     .font(.system(size: 14))
-                    .foregroundColor(.white.opacity(0.9))
+                    .foregroundStyle(.primary)
                     .frame(width: 20)
 
                 // Command info
@@ -421,22 +419,22 @@ struct CommandRowView: View {
                     HStack(spacing: 6) {
                         Text("/\(command.key)")
                             .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.white)
+                            .foregroundStyle(.primary)
 
-                        // Source badge (Liquid Glass - white)
+                        // Source badge
                         Text(sourceTypeName(command.sourceType))
                             .font(.system(size: 9))
-                            .foregroundColor(.white.opacity(0.7))
+                            .foregroundStyle(.secondary)
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
-                            .background(Color.white.opacity(0.15))
+                            .background(Color.primary.opacity(0.1))
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
 
                     if !command.description.isEmpty {
                         Text(command.description)
                             .font(.caption)
-                            .foregroundColor(.white.opacity(0.6))
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                 }
@@ -445,11 +443,11 @@ struct CommandRowView: View {
 
                 Image(systemName: "chevron.right")
                     .font(.caption)
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background((isHovering || isSelected) ? Color.white.opacity(0.12) : Color.clear)
+            .background((isHovering || isSelected) ? Color.primary.opacity(0.08) : Color.clear)
         }
         .buttonStyle(.plain)
         .onHover { hovering in
@@ -460,7 +458,7 @@ struct CommandRowView: View {
 
 // MARK: - TopicRowView
 
-/// Row view for topic list with glass style
+/// Row view for topic list
 struct TopicRowView: View {
     let topic: Topic
     let isSelected: Bool
@@ -489,7 +487,7 @@ struct TopicRowView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-        .background((isHovering || isSelected || isConfirmingDelete) ? Color.white.opacity(0.12) : Color.clear)
+        .background((isHovering || isSelected || isConfirmingDelete) ? Color.primary.opacity(0.08) : Color.clear)
         .onHover { hovering in
             isHovering = hovering
         }
@@ -504,12 +502,12 @@ struct TopicRowView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(topic.title)
                         .font(.system(size: 14))
-                        .foregroundColor(.white)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
 
                     Text(formatDate(topic.updatedAt))
                         .font(.caption)
-                        .foregroundColor(.white.opacity(0.6))
+                        .foregroundStyle(.secondary)
                 }
             }
             .buttonStyle(.plain)
@@ -527,7 +525,7 @@ struct TopicRowView: View {
                     } label: {
                         Image(systemName: "pencil")
                             .font(.system(size: 12))
-                            .foregroundColor(.white.opacity(0.7))
+                            .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
                     .help("Rename")
@@ -550,7 +548,7 @@ struct TopicRowView: View {
                 // Chevron when not hovering
                 Image(systemName: "chevron.right")
                     .font(.caption)
-                    .foregroundColor(.white.opacity(0.5))
+                    .foregroundStyle(.tertiary)
             }
         }
         .animation(.easeInOut(duration: 0.15), value: isHovering)
@@ -566,7 +564,7 @@ struct TopicRowView: View {
 
             Text("确认删除「\(topic.title)」？")
                 .font(.system(size: 13))
-                .foregroundColor(.white)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
 
             Spacer()
@@ -579,7 +577,7 @@ struct TopicRowView: View {
             } label: {
                 Text("取消")
                     .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.6))
+                    .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
 
@@ -603,7 +601,7 @@ struct TopicRowView: View {
             TextField("Topic title", text: $editingTitle)
                 .textFieldStyle(.plain)
                 .font(.system(size: 14))
-                .foregroundColor(.white)
+                .foregroundStyle(.primary)
                 .focused($isTextFieldFocused)
                 .onSubmit {
                     commitRename()
@@ -629,7 +627,7 @@ struct TopicRowView: View {
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.6))
+                    .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
             .help("Cancel")

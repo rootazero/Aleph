@@ -2,13 +2,8 @@
 //  AdaptiveGlassModifier.swift
 //  Aether
 //
-//  Custom Liquid Glass effect modifiers following Apple macOS 26 design language.
-//  Reference: https://developer.apple.com/documentation/SwiftUI/Applying-Liquid-Glass-to-custom-views
-//
-//  Key principles:
-//  - Foreground glass: Bright, transparent appearance with white text/icons
-//  - Uses .state = .active to maintain consistent appearance regardless of window focus
-//  - White color (.white) for text and icons on glass surfaces
+//  Adaptive glass effect modifiers using native NSVisualEffectView.
+//  Uses system colors (.primary, .secondary) for automatic light/dark mode adaptation.
 //
 
 import SwiftUI
@@ -29,14 +24,13 @@ extension EnvironmentValues {
     }
 }
 
-// MARK: - Liquid Glass Style
+// MARK: - Glass Style
 
-/// Defines the style variants for Liquid Glass effects
-/// Reference: Apple's Glass variants - regular, clear, identity
+/// Defines the style variants for glass effects
 enum LiquidGlassStyle {
-    /// Regular glass: Medium transparency, full adaptivity (default)
+    /// Regular glass: Medium transparency (default)
     case regular
-    /// Clear glass: High transparency for foreground elements (bright appearance)
+    /// Clear glass: High transparency for foreground elements
     case clear
     /// Subtle glass: Very light glass effect for nested elements
     case subtle
@@ -44,9 +38,8 @@ enum LiquidGlassStyle {
 
 // MARK: - GlassModifier
 
-/// A view modifier that applies Liquid Glass effect using NSVisualEffectView.
+/// A view modifier that applies glass effect using NSVisualEffectView.
 /// Always uses .state = .active to keep appearance consistent regardless of window focus.
-/// Designed to match Apple's macOS 26 Liquid Glass foreground appearance.
 struct GlassModifier: ViewModifier {
 
     // MARK: - Properties
@@ -123,8 +116,8 @@ struct GlassModifier: ViewModifier {
 
 // MARK: - GlassProminentButtonStyle
 
-/// A button style for prominent glass-style buttons following Liquid Glass design.
-/// Uses white color for icons/text on glass surfaces.
+/// A button style for prominent glass-style buttons.
+/// Uses primary color for icons/text to adapt to light/dark mode.
 /// Uses contentShape inside makeBody to ensure entire circle area is clickable.
 struct GlassProminentButtonStyle: ButtonStyle {
 
@@ -140,11 +133,12 @@ private struct GlassProminentButtonContent: View {
 
     let configuration: ButtonStyle.Configuration
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         configuration.label
             .font(.system(size: 16, weight: .semibold))
-            .foregroundColor(.white)  // Liquid Glass: white icons/text
+            .foregroundStyle(.primary)
             .padding(10)
             .background(
                 Circle()
@@ -157,10 +151,9 @@ private struct GlassProminentButtonContent: View {
 
     private var fillColor: Color {
         if !isEnabled {
-            return Color.white.opacity(0.1)
+            return Color.primary.opacity(0.1)
         }
-        // Liquid Glass: white-based fill for bright appearance
-        return Color.white.opacity(configuration.isPressed ? 0.35 : 0.25)
+        return Color.primary.opacity(configuration.isPressed ? 0.20 : 0.12)
     }
 }
 
@@ -175,11 +168,11 @@ struct GlassProminentButtonModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .font(.system(size: 16, weight: .semibold))
-            .foregroundColor(.white)  // Liquid Glass: white icons/text
+            .foregroundStyle(.primary)
             .padding(10)
             .background(
                 Circle()
-                    .fill(isEnabled ? Color.white.opacity(0.25) : Color.white.opacity(0.1))
+                    .fill(isEnabled ? Color.primary.opacity(0.12) : Color.primary.opacity(0.06))
             )
             .contentShape(Circle())
             .background(WindowDragBlocker())
@@ -209,7 +202,6 @@ private class NonDraggableView: NSView {
 // MARK: - GlassButtonModifier
 
 /// A view modifier for secondary glass-style buttons with hover effect.
-/// Uses white-based styling for Liquid Glass surfaces.
 struct GlassButtonModifier: ViewModifier {
 
     @State private var isHovering = false
@@ -219,7 +211,7 @@ struct GlassButtonModifier: ViewModifier {
             .padding(6)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isHovering ? Color.white.opacity(0.15) : Color.clear)
+                    .fill(isHovering ? Color.primary.opacity(0.1) : Color.clear)
             )
             .onHover { hovering in
                 withAnimation(.easeInOut(duration: 0.15)) {
@@ -264,24 +256,19 @@ extension View {
         modifier(GlassButtonModifier())
     }
 
-    /// Apply Liquid Glass text style (white with subtle shadow for legibility)
-    /// Reference: Apple's .foregroundStyle(.white) recommendation for glass surfaces
+    /// Apply glass text style (primary color for automatic light/dark mode adaptation)
     func liquidGlassText() -> some View {
-        self
-            .foregroundColor(.white)
-            .shadow(color: .black.opacity(0.15), radius: 0.5, x: 0, y: 0.5)
+        self.foregroundStyle(.primary)
     }
 
-    /// Apply Liquid Glass icon style (white)
+    /// Apply glass icon style (primary color)
     func liquidGlassIcon() -> some View {
-        self.foregroundColor(.white)
+        self.foregroundStyle(.primary)
     }
 
-    /// Apply Liquid Glass secondary text style (white with reduced opacity)
+    /// Apply glass secondary text style (secondary color)
     func liquidGlassSecondaryText() -> some View {
-        self
-            .foregroundColor(.white.opacity(0.7))
-            .shadow(color: .black.opacity(0.1), radius: 0.5, x: 0, y: 0.5)
+        self.foregroundStyle(.secondary)
     }
 }
 
@@ -307,8 +294,7 @@ struct AdaptiveGlassContainer<Content: View>: View {
 
 // MARK: - Glass Message Bubble Modifier
 
-/// Modifier for message bubbles with Liquid Glass effect.
-/// Uses white-based styling for consistency with foreground glass.
+/// Modifier for message bubbles with glass effect.
 struct GlassMessageBubbleModifier: ViewModifier {
 
     let isUser: Bool
@@ -317,7 +303,7 @@ struct GlassMessageBubbleModifier: ViewModifier {
         content
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(isUser ? 0.12 : 0.08))
+                    .fill(Color.primary.opacity(isUser ? 0.12 : 0.08))
             )
     }
 }
@@ -331,7 +317,7 @@ extension View {
 
 // MARK: - Preview Provider
 
-#Preview("Liquid Glass Effect Demo") {
+#Preview("Glass Effect Demo") {
     ZStack {
         // Background gradient to demonstrate glass transparency
         LinearGradient(
@@ -341,14 +327,14 @@ extension View {
         )
 
         VStack(spacing: 20) {
-            Text("Liquid Glass Effect")
+            Text("Glass Effect")
                 .font(.headline)
                 .liquidGlassText()
 
             VStack(spacing: 12) {
-                Text("Foreground Glass Design")
+                Text("Adaptive Glass Design")
                     .liquidGlassText()
-                Text("White text on transparent glass")
+                Text("Primary text on transparent glass")
                     .liquidGlassSecondaryText()
             }
             .padding(20)
@@ -358,7 +344,7 @@ extension View {
             HStack(spacing: 16) {
                 Button {} label: {
                     Text("Secondary")
-                        .foregroundColor(.white.opacity(0.8))
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
                 .adaptiveGlassButton()
@@ -374,7 +360,7 @@ extension View {
     .frame(width: 400, height: 300)
 }
 
-#Preview("Liquid Glass Message Bubbles") {
+#Preview("Glass Message Bubbles") {
     ZStack {
         // Background to demonstrate glass effect
         LinearGradient(
@@ -387,7 +373,7 @@ extension View {
             // AI message
             HStack {
                 Text("Hello! How can I help you today?")
-                    .foregroundColor(.white)
+                    .foregroundStyle(.primary)
                     .padding(12)
                     .glassBubble(isUser: false)
                 Spacer()
@@ -396,8 +382,8 @@ extension View {
             // User message
             HStack {
                 Spacer()
-                Text("I'd like to learn about Liquid Glass")
-                    .foregroundColor(.white)
+                Text("I'd like to learn about Glass effects")
+                    .foregroundStyle(.primary)
                     .padding(12)
                     .glassBubble(isUser: true)
             }

@@ -3,7 +3,6 @@
 //  Aether
 //
 //  SwiftUI view for displaying conversation history.
-//  Updated to use Liquid Glass design language (macOS 26+).
 //
 //  ⚠️ DEPRECATED: This file is deprecated and will be removed in a future version.
 //  Use UnifiedConversationView and ConversationAreaView instead.
@@ -14,7 +13,7 @@ import SwiftUI
 // MARK: - ConversationDisplayView
 
 /// Main view for conversation display window
-/// Uses adaptive glass effect for Liquid Glass on macOS 26+ with fallback
+/// Uses adaptive glass effect with system colors
 struct ConversationDisplayView: View {
     @ObservedObject var viewModel: ConversationDisplayViewModel
 
@@ -58,7 +57,6 @@ struct ConversationDisplayView: View {
 
     private var titleBar: some View {
         HStack {
-            // Liquid Glass design: white text on transparent glass
             Text(viewModel.displayTitle)
                 .font(.headline)
                 .liquidGlassText()
@@ -70,7 +68,7 @@ struct ConversationDisplayView: View {
             Button(action: viewModel.copyAllMessages) {
                 Image(systemName: "doc.on.doc")
                     .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
             .adaptiveGlassButton()
@@ -131,11 +129,11 @@ struct ConversationDisplayView: View {
         VStack(spacing: 8) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 32))
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundStyle(.tertiary)
 
             Text("Start a conversation")
                 .font(.subheadline)
-                .foregroundColor(.white.opacity(0.7))
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .frame(height: 100)
@@ -153,12 +151,11 @@ struct ConversationDisplayView: View {
         HStack(spacing: 6) {
             ForEach(0..<3, id: \.self) { index in
                 Circle()
-                    .fill(Color.white.opacity(0.5))
+                    .fill(Color.primary.opacity(0.5))
                     .frame(width: 6, height: 6)
             }
         }
         .padding(.vertical, 10)
-        // Liquid Glass style: white for visibility
     }
 
     // MARK: - Error Banner
@@ -179,7 +176,6 @@ struct ConversationDisplayView: View {
 // MARK: - MessageBubbleView
 
 /// Individual message bubble with glass effect
-/// Uses adaptive glass bubble styling for Liquid Glass on macOS 26+
 struct MessageBubbleView: View {
     let message: ConversationMessage
     let onCopy: () -> Void
@@ -195,11 +191,10 @@ struct MessageBubbleView: View {
             if isUser { Spacer(minLength: 40) }
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
-                // Message content with Liquid Glass bubble effect
-                // White text for foreground glass design
+                // Message content with glass bubble effect
                 Text(message.content)
                     .font(.system(size: 13))
-                    .foregroundColor(.white)
+                    .foregroundStyle(.primary)
                     .textSelection(.enabled)
                     .padding(12)
                     .glassBubble(isUser: isUser)
@@ -212,7 +207,7 @@ struct MessageBubbleView: View {
                             Text("Copy")
                         }
                         .font(.caption2)
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
                 }

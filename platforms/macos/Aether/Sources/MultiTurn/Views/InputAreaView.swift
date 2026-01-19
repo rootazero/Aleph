@@ -20,10 +20,10 @@ struct InputAreaView: View {
             if viewModel.turnCount > 0 {
                 Text("Turn \(viewModel.turnCount + 1)")
                     .font(.caption)
-                    .foregroundColor(.white.opacity(0.8))
+                    .foregroundStyle(.secondary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color.white.opacity(0.15))
+                    .background(Color.primary.opacity(0.1))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
             }
 
@@ -75,13 +75,13 @@ struct AttachmentButton: View {
         Button(action: openFilePicker) {
             Image(systemName: "plus")
                 .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.white.opacity(isHovering ? 1.0 : 0.7))
+                .foregroundStyle(isHovering ? .primary : .secondary)
         }
         .buttonStyle(.plain)
         .frame(width: 28, height: 28)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color.white.opacity(isTargeted ? 0.25 : (isHovering ? 0.15 : 0.08)))
+                .fill(Color.primary.opacity(isTargeted ? 0.15 : (isHovering ? 0.1 : 0.05)))
         )
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.1)) {

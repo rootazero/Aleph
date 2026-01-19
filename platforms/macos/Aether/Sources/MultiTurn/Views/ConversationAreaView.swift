@@ -60,7 +60,7 @@ struct ConversationAreaView: View {
             Button(action: viewModel.copyAllMessages) {
                 Image(systemName: "doc.on.doc")
                     .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.7))
+                    .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
             .adaptiveGlassButton()
@@ -124,11 +124,11 @@ struct ConversationAreaView: View {
         VStack(spacing: 8) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .font(.system(size: 32))
-                .foregroundColor(.white.opacity(0.6))
+                .foregroundStyle(.tertiary)
 
             Text(NSLocalizedString("conversation.empty", comment: ""))
                 .font(.subheadline)
-                .foregroundColor(.white.opacity(0.7))
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .frame(height: 100)
@@ -141,7 +141,7 @@ struct ConversationAreaView: View {
         HStack(spacing: 6) {
             ForEach(0..<3, id: \.self) { _ in
                 Circle()
-                    .fill(Color.white.opacity(0.5))
+                    .fill(Color.primary.opacity(0.5))
                     .frame(width: 6, height: 6)
             }
         }
