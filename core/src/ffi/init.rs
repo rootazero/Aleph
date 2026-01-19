@@ -109,6 +109,26 @@ impl InitProgressHandler for ProgressHandlerAdapter {
     }
 }
 
+/// Check if the embedding model is installed
+///
+/// Returns true if the embedding model files exist at the expected location.
+/// This is useful for UI to determine whether memory features can be enabled.
+#[uniffi::export]
+pub fn check_embedding_model_exists() -> bool {
+    match crate::utils::paths::get_embedding_model_dir() {
+        Ok(model_dir) => {
+            // Check for required model files
+            let model_onnx = model_dir.join("model.onnx");
+            let tokenizer_json = model_dir.join("tokenizer.json");
+            model_onnx.exists() && tokenizer_json.exists()
+        }
+        Err(e) => {
+            tracing::debug!("Error checking embedding model: {}", e);
+            false
+        }
+    }
+}
+
 /// Check if first-time initialization is needed
 ///
 /// Returns true if any of the following conditions are met:
@@ -137,7 +157,7 @@ pub fn needs_first_time_init() -> bool {
 /// Run first-time initialization with progress callback
 ///
 /// This is a blocking function that runs the full initialization sequence:
-/// 1. Create directory structure (~/.config/aether/*)
+/// 1. Create directory structure (config, runtimes, models, skills, etc.)
 /// 2. Generate default config.toml
 /// 3. Download embedding model (bge-small-zh-v1.5)
 /// 4. Initialize memory database

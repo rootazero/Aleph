@@ -25,7 +25,6 @@ struct MemoryView: View {
     @State private var memoryToDelete: MemoryEntry?
     @State private var showClearAllConfirmation = false
     @State private var showClearFactsConfirmation = false
-    @State private var showModelDownloadWindow = false
     @State private var isCheckingModel = false
 
     // Compression state
@@ -115,21 +114,6 @@ struct MemoryView: View {
             }
         } message: {
             Text(L("settings.memory.clear_facts_message"))
-        }
-        .sheet(isPresented: $showModelDownloadWindow) {
-            ModelDownloadView(
-                onSuccess: { [self] in
-                    print("[MemoryView] Model download succeeded - enabling memory")
-                    memoryConfig.enabled = true
-                    updateConfig()
-                    showModelDownloadWindow = false
-                },
-                onFailure: { [self] error in
-                    print("[MemoryView] Model download failed: \(error)")
-                    errorMessage = "Failed to download model: \(error)"
-                    showModelDownloadWindow = false
-                }
-            )
         }
     }
 
@@ -534,34 +518,28 @@ struct MemoryView: View {
         hasUnsavedChanges = hasLocalUnsavedChanges
     }
 
-    /// Handle memory toggle - check model and download if needed
+    /// Handle memory toggle - check model and enable/disable memory
     private func handleMemoryToggle(_ newValue: Bool) {
         if newValue {
             // User wants to enable memory - check if model exists
             isCheckingModel = true
 
             DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    let modelExists = try checkEmbeddingModelExists()
+                // Check if embedding model exists using new FFI function
+                let modelExists = checkEmbeddingModelExists()
 
-                    DispatchQueue.main.async {
-                        isCheckingModel = false
+                DispatchQueue.main.async {
+                    isCheckingModel = false
 
-                        if modelExists {
-                            // Model exists - enable memory
-                            print("[MemoryView] Model exists, enabling memory")
-                            memoryConfig.enabled = true
-                            updateConfig()
-                        } else {
-                            // Model doesn't exist - show download window
-                            print("[MemoryView] Model doesn't exist, showing download window")
-                            showModelDownloadWindow = true
-                        }
-                    }
-                } catch {
-                    DispatchQueue.main.async {
-                        isCheckingModel = false
-                        errorMessage = "Failed to check model: \(error.localizedDescription)"
+                    if modelExists {
+                        // Model exists - enable memory
+                        print("[MemoryView] Model exists, enabling memory")
+                        memoryConfig.enabled = true
+                        updateConfig()
+                    } else {
+                        // Model doesn't exist - show error message
+                        print("[MemoryView] Model doesn't exist")
+                        errorMessage = L("settings.memory.model_not_found")
                     }
                 }
             }

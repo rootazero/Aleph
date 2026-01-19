@@ -4855,6 +4855,117 @@ public func FfiConverterTypeGenerationProviderInfoFFI_lower(_ value: GenerationP
 }
 
 
+/**
+ * FFI wrapper for InitializationResult
+ *
+ * This struct mirrors `InitializationResult` but uses UniFFI-compatible types.
+ */
+public struct InitResultFfi {
+    /**
+     * Whether initialization completed successfully
+     */
+    public var success: Bool
+    /**
+     * List of phase names that completed successfully
+     */
+    public var completedPhases: [String]
+    /**
+     * Phase name where error occurred (if any)
+     */
+    public var errorPhase: String?
+    /**
+     * Error message (if any)
+     */
+    public var errorMessage: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Whether initialization completed successfully
+         */success: Bool, 
+        /**
+         * List of phase names that completed successfully
+         */completedPhases: [String], 
+        /**
+         * Phase name where error occurred (if any)
+         */errorPhase: String?, 
+        /**
+         * Error message (if any)
+         */errorMessage: String?) {
+        self.success = success
+        self.completedPhases = completedPhases
+        self.errorPhase = errorPhase
+        self.errorMessage = errorMessage
+    }
+}
+
+
+
+extension InitResultFfi: Equatable, Hashable {
+    public static func ==(lhs: InitResultFfi, rhs: InitResultFfi) -> Bool {
+        if lhs.success != rhs.success {
+            return false
+        }
+        if lhs.completedPhases != rhs.completedPhases {
+            return false
+        }
+        if lhs.errorPhase != rhs.errorPhase {
+            return false
+        }
+        if lhs.errorMessage != rhs.errorMessage {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(success)
+        hasher.combine(completedPhases)
+        hasher.combine(errorPhase)
+        hasher.combine(errorMessage)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeInitResultFFI: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> InitResultFfi {
+        return
+            try InitResultFfi(
+                success: FfiConverterBool.read(from: &buf), 
+                completedPhases: FfiConverterSequenceString.read(from: &buf), 
+                errorPhase: FfiConverterOptionString.read(from: &buf), 
+                errorMessage: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: InitResultFfi, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.success, into: &buf)
+        FfiConverterSequenceString.write(value.completedPhases, into: &buf)
+        FfiConverterOptionString.write(value.errorPhase, into: &buf)
+        FfiConverterOptionString.write(value.errorMessage, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeInitResultFFI_lift(_ buf: RustBuffer) throws -> InitResultFfi {
+    return try FfiConverterTypeInitResultFFI.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeInitResultFFI_lower(_ value: InitResultFfi) -> RustBuffer {
+    return FfiConverterTypeInitResultFFI.lower(value)
+}
+
+
 public struct IntentDetectionPolicy {
     public var confidenceThreshold: Double
     public var timeoutMs: UInt64
@@ -13235,55 +13346,75 @@ extension FfiConverterCallbackInterfaceCoworkProgressHandler : FfiConverter {
 
 
 
-public protocol InitializationProgressHandler : AnyObject {
+/**
+ * FFI callback interface for initialization progress
+ *
+ * Swift/Kotlin clients implement this trait to receive progress updates
+ * during the initialization process.
+ */
+public protocol InitProgressHandlerFfi : AnyObject {
     
-    func onInitStarted() 
+    /**
+     * Called when a phase starts
+     *
+     * # Arguments
+     * - `phase`: Phase name (directories, config, embedding_model, database, runtimes, skills)
+     * - `current`: Current phase number (1-based)
+     * - `total`: Total number of phases
+     */
+    func onPhaseStarted(phase: String, current: UInt32, total: UInt32) 
     
-    func onStepStarted(stepName: String, current: UInt32, total: UInt32) 
+    /**
+     * Called for progress updates within a phase
+     *
+     * # Arguments
+     * - `phase`: Phase name
+     * - `progress`: Progress value (0.0 to 1.0)
+     * - `message`: Status message describing current operation
+     */
+    func onPhaseProgress(phase: String, progress: Double, message: String) 
     
-    func onDownloadProgress(downloadedBytes: UInt64, totalBytes: UInt64) 
+    /**
+     * Called when a phase completes successfully
+     *
+     * # Arguments
+     * - `phase`: Phase name that completed
+     */
+    func onPhaseCompleted(phase: String) 
     
-    func onStepCompleted(stepName: String) 
+    /**
+     * Called for download progress updates (e.g., embedding model download)
+     *
+     * # Arguments
+     * - `item`: Item being downloaded (e.g., "bge-small-zh-v1.5")
+     * - `downloaded`: Bytes downloaded so far
+     * - `total`: Total bytes (0 if unknown)
+     */
+    func onDownloadProgress(item: String, downloaded: UInt64, total: UInt64) 
     
-    func onInitCompleted() 
-    
-    func onInitFailed(error: String) 
+    /**
+     * Called when an error occurs
+     *
+     * # Arguments
+     * - `phase`: Phase where error occurred
+     * - `message`: Error message
+     * - `is_retryable`: Whether retry might succeed
+     */
+    func onError(phase: String, message: String, isRetryable: Bool) 
     
 }
 
 
 
 // Put the implementation in a struct so we don't pollute the top-level namespace
-fileprivate struct UniffiCallbackInterfaceInitializationProgressHandler {
+fileprivate struct UniffiCallbackInterfaceInitProgressHandlerFFI {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    static var vtable: UniffiVTableCallbackInterfaceInitializationProgressHandler = UniffiVTableCallbackInterfaceInitializationProgressHandler(
-        onInitStarted: { (
+    static var vtable: UniffiVTableCallbackInterfaceInitProgressHandlerFfi = UniffiVTableCallbackInterfaceInitProgressHandlerFfi(
+        onPhaseStarted: { (
             uniffiHandle: UInt64,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceInitializationProgressHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onInitStarted(
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onStepStarted: { (
-            uniffiHandle: UInt64,
-            stepName: RustBuffer,
+            phase: RustBuffer,
             current: UInt32,
             total: UInt32,
             uniffiOutReturn: UnsafeMutableRawPointer,
@@ -13291,11 +13422,11 @@ fileprivate struct UniffiCallbackInterfaceInitializationProgressHandler {
         ) in
             let makeCall = {
                 () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceInitializationProgressHandler.handleMap.get(handle: uniffiHandle) else {
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceInitProgressHandlerFfi.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
-                return uniffiObj.onStepStarted(
-                     stepName: try FfiConverterString.lift(stepName),
+                return uniffiObj.onPhaseStarted(
+                     phase: try FfiConverterString.lift(phase),
                      current: try FfiConverterUInt32.lift(current),
                      total: try FfiConverterUInt32.lift(total)
                 )
@@ -13309,21 +13440,75 @@ fileprivate struct UniffiCallbackInterfaceInitializationProgressHandler {
                 writeReturn: writeReturn
             )
         },
-        onDownloadProgress: { (
+        onPhaseProgress: { (
             uniffiHandle: UInt64,
-            downloadedBytes: UInt64,
-            totalBytes: UInt64,
+            phase: RustBuffer,
+            progress: Double,
+            message: RustBuffer,
             uniffiOutReturn: UnsafeMutableRawPointer,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
         ) in
             let makeCall = {
                 () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceInitializationProgressHandler.handleMap.get(handle: uniffiHandle) else {
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceInitProgressHandlerFfi.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onPhaseProgress(
+                     phase: try FfiConverterString.lift(phase),
+                     progress: try FfiConverterDouble.lift(progress),
+                     message: try FfiConverterString.lift(message)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onPhaseCompleted: { (
+            uniffiHandle: UInt64,
+            phase: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceInitProgressHandlerFfi.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onPhaseCompleted(
+                     phase: try FfiConverterString.lift(phase)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        onDownloadProgress: { (
+            uniffiHandle: UInt64,
+            item: RustBuffer,
+            downloaded: UInt64,
+            total: UInt64,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceInitProgressHandlerFfi.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
                 return uniffiObj.onDownloadProgress(
-                     downloadedBytes: try FfiConverterUInt64.lift(downloadedBytes),
-                     totalBytes: try FfiConverterUInt64.lift(totalBytes)
+                     item: try FfiConverterString.lift(item),
+                     downloaded: try FfiConverterUInt64.lift(downloaded),
+                     total: try FfiConverterUInt64.lift(total)
                 )
             }
 
@@ -13335,65 +13520,23 @@ fileprivate struct UniffiCallbackInterfaceInitializationProgressHandler {
                 writeReturn: writeReturn
             )
         },
-        onStepCompleted: { (
+        onError: { (
             uniffiHandle: UInt64,
-            stepName: RustBuffer,
+            phase: RustBuffer,
+            message: RustBuffer,
+            isRetryable: Int8,
             uniffiOutReturn: UnsafeMutableRawPointer,
             uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
         ) in
             let makeCall = {
                 () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceInitializationProgressHandler.handleMap.get(handle: uniffiHandle) else {
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceInitProgressHandlerFfi.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
-                return uniffiObj.onStepCompleted(
-                     stepName: try FfiConverterString.lift(stepName)
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onInitCompleted: { (
-            uniffiHandle: UInt64,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceInitializationProgressHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onInitCompleted(
-                )
-            }
-
-            
-            let writeReturn = { () }
-            uniffiTraitInterfaceCall(
-                callStatus: uniffiCallStatus,
-                makeCall: makeCall,
-                writeReturn: writeReturn
-            )
-        },
-        onInitFailed: { (
-            uniffiHandle: UInt64,
-            error: RustBuffer,
-            uniffiOutReturn: UnsafeMutableRawPointer,
-            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
-        ) in
-            let makeCall = {
-                () throws -> () in
-                guard let uniffiObj = try? FfiConverterCallbackInterfaceInitializationProgressHandler.handleMap.get(handle: uniffiHandle) else {
-                    throw UniffiInternalError.unexpectedStaleHandle
-                }
-                return uniffiObj.onInitFailed(
-                     error: try FfiConverterString.lift(error)
+                return uniffiObj.onError(
+                     phase: try FfiConverterString.lift(phase),
+                     message: try FfiConverterString.lift(message),
+                     isRetryable: try FfiConverterBool.lift(isRetryable)
                 )
             }
 
@@ -13406,31 +13549,31 @@ fileprivate struct UniffiCallbackInterfaceInitializationProgressHandler {
             )
         },
         uniffiFree: { (uniffiHandle: UInt64) -> () in
-            let result = try? FfiConverterCallbackInterfaceInitializationProgressHandler.handleMap.remove(handle: uniffiHandle)
+            let result = try? FfiConverterCallbackInterfaceInitProgressHandlerFfi.handleMap.remove(handle: uniffiHandle)
             if result == nil {
-                print("Uniffi callback interface InitializationProgressHandler: handle missing in uniffiFree")
+                print("Uniffi callback interface InitProgressHandlerFFI: handle missing in uniffiFree")
             }
         }
     )
 }
 
-private func uniffiCallbackInitInitializationProgressHandler() {
-    uniffi_aethecore_fn_init_callback_vtable_initializationprogresshandler(&UniffiCallbackInterfaceInitializationProgressHandler.vtable)
+private func uniffiCallbackInitInitProgressHandlerFFI() {
+    uniffi_aethecore_fn_init_callback_vtable_initprogresshandlerffi(&UniffiCallbackInterfaceInitProgressHandlerFFI.vtable)
 }
 
 // FfiConverter protocol for callback interfaces
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterCallbackInterfaceInitializationProgressHandler {
-    fileprivate static var handleMap = UniffiHandleMap<InitializationProgressHandler>()
+fileprivate struct FfiConverterCallbackInterfaceInitProgressHandlerFfi {
+    fileprivate static var handleMap = UniffiHandleMap<InitProgressHandlerFfi>()
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-extension FfiConverterCallbackInterfaceInitializationProgressHandler : FfiConverter {
-    typealias SwiftType = InitializationProgressHandler
+extension FfiConverterCallbackInterfaceInitProgressHandlerFfi : FfiConverter {
+    typealias SwiftType = InitProgressHandlerFfi
     typealias FfiType = UInt64
 
 #if swift(>=5.8)
@@ -13842,30 +13985,6 @@ fileprivate struct FfiConverterOptionTypeTriggerConfig: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeTriggerConfig.read(from: &buf)
-        default: throw UniffiInternalError.unexpectedOptionalTag
-        }
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterOptionCallbackInterfaceInitializationProgressHandler: FfiConverterRustBuffer {
-    typealias SwiftType = InitializationProgressHandler?
-
-    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
-        guard let value = value else {
-            writeInt(&buf, Int8(0))
-            return
-        }
-        writeInt(&buf, Int8(1))
-        FfiConverterCallbackInterfaceInitializationProgressHandler.write(value, into: &buf)
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
-        switch try readInt(&buf) as Int8 {
-        case 0: return nil
-        case 1: return try FfiConverterCallbackInterfaceInitializationProgressHandler.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -14842,19 +14961,6 @@ fileprivate struct FfiConverterDictionaryStringUInt64: FfiConverterRustBuffer {
         return dict
     }
 }
-public func checkEmbeddingModelExists()throws  -> Bool {
-    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_func_check_embedding_model_exists($0
-    )
-})
-}
-public func downloadEmbeddingModelStandalone(progressHandler: InitializationProgressHandler?)throws  -> Bool {
-    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_func_download_embedding_model_standalone(
-        FfiConverterOptionCallbackInterfaceInitializationProgressHandler.lower(progressHandler),$0
-    )
-})
-}
 public func getSkillsDirString()throws  -> String {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_func_get_skills_dir_string($0
@@ -14875,23 +14981,71 @@ public func initializeBuiltinSkillsFfi(bundleSkillsDir: String)throws  {try rust
     )
 }
 }
-public func isFreshInstall()throws  -> Bool {
-    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_func_is_fresh_install($0
-    )
-})
-}
 public func listInstalledSkills()throws  -> [SkillInfo] {
     return try  FfiConverterSequenceTypeSkillInfo.lift(try rustCallWithError(FfiConverterTypeAetherException.lift) {
     uniffi_aethecore_fn_func_list_installed_skills($0
     )
 })
 }
-public func runFirstTimeInit(progressHandler: InitializationProgressHandler?)throws  {try rustCallWithError(FfiConverterTypeAetherException.lift) {
-    uniffi_aethecore_fn_func_run_first_time_init(
-        FfiConverterOptionCallbackInterfaceInitializationProgressHandler.lower(progressHandler),$0
+/**
+ * Check if the embedding model is installed
+ *
+ * Returns true if the embedding model files exist at the expected location.
+ * This is useful for UI to determine whether memory features can be enabled.
+ */
+public func checkEmbeddingModelExists() -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_aethecore_fn_func_check_embedding_model_exists($0
     )
+})
 }
+/**
+ * Check if first-time initialization is needed
+ *
+ * Returns true if any of the following conditions are met:
+ * - Config directory (~/.config/aether) doesn't exist
+ * - config.toml doesn't exist
+ * - runtimes/manifest.json doesn't exist
+ *
+ * This function is safe to call at any time and doesn't modify any files.
+ * If an error occurs while checking, logs the error and returns true (safer default).
+ */
+public func needsFirstTimeInit() -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_aethecore_fn_func_needs_first_time_init($0
+    )
+})
+}
+/**
+ * Run first-time initialization with progress callback
+ *
+ * This is a blocking function that runs the full initialization sequence:
+ * 1. Create directory structure (config, runtimes, models, skills, etc.)
+ * 2. Generate default config.toml
+ * 3. Download embedding model (bge-small-zh-v1.5)
+ * 4. Initialize memory database
+ * 5. Install runtimes (ffmpeg, yt-dlp, uv, fnm) in parallel
+ * 6. Set up skills directory
+ *
+ * The handler receives progress updates throughout the process.
+ * If any phase fails, completed phases are rolled back to ensure clean state.
+ *
+ * # Arguments
+ * - `handler`: Progress callback handler for UI updates
+ *
+ * # Returns
+ * `InitResultFFI` containing:
+ * - `success`: true if all phases completed successfully
+ * - `completed_phases`: list of successfully completed phase names
+ * - `error_phase`: phase name where error occurred (if any)
+ * - `error_message`: error description (if any)
+ */
+public func runInitialization(handler: InitProgressHandlerFfi) -> InitResultFfi {
+    return try!  FfiConverterTypeInitResultFFI.lift(try! rustCall() {
+    uniffi_aethecore_fn_func_run_initialization(
+        FfiConverterCallbackInterfaceInitProgressHandlerFfi.lower(handler),$0
+    )
+})
 }
 
 private enum InitializationResult {
@@ -14909,12 +15063,6 @@ private var initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_aethecore_checksum_func_check_embedding_model_exists() != 65318) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_func_download_embedding_model_standalone() != 33400) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_aethecore_checksum_func_get_skills_dir_string() != 54210) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -14924,13 +15072,16 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_func_initialize_builtin_skills_ffi() != 33816) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_func_is_fresh_install() != 56701) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_aethecore_checksum_func_list_installed_skills() != 7975) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_func_run_first_time_init() != 14662) {
+    if (uniffi_aethecore_checksum_func_check_embedding_model_exists() != 33566) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_func_needs_first_time_init() != 57511) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_aethecore_checksum_func_run_initialization() != 5873) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_method_aethercore_add_mcp_server() != 57915) {
@@ -15323,28 +15474,25 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_method_coworkprogresshandler_on_progress_event() != 54161) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_init_started() != 45699) {
+    if (uniffi_aethecore_checksum_method_initprogresshandlerffi_on_phase_started() != 36810) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_step_started() != 37574) {
+    if (uniffi_aethecore_checksum_method_initprogresshandlerffi_on_phase_progress() != 40155) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_download_progress() != 31136) {
+    if (uniffi_aethecore_checksum_method_initprogresshandlerffi_on_phase_completed() != 33490) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_step_completed() != 58663) {
+    if (uniffi_aethecore_checksum_method_initprogresshandlerffi_on_download_progress() != 17769) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_init_completed() != 65255) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_aethecore_checksum_method_initializationprogresshandler_on_init_failed() != 3346) {
+    if (uniffi_aethecore_checksum_method_initprogresshandlerffi_on_error() != 2145) {
         return InitializationResult.apiChecksumMismatch
     }
 
     uniffiCallbackInitAetherEventHandler()
     uniffiCallbackInitCoworkProgressHandler()
-    uniffiCallbackInitInitializationProgressHandler()
+    uniffiCallbackInitInitProgressHandlerFFI()
     return InitializationResult.ok
 }()
 
