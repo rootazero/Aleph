@@ -12,11 +12,13 @@ struct ProviderEditPanel: View {
 
     @Binding var providers: [ProviderConfigEntry]
     @Binding var hasUnsavedChanges: Bool  // Communicate unsaved state to parent
+    @Binding var isSaving: Bool  // Save operation in progress
+    @Binding var errorMessage: String?  // Error message for save bar
     @Binding var selectedProvider: String?
-    @Binding var isAddingNew: Bool  // NEW: External control for adding new provider
-    @Binding var selectedPreset: PresetProvider?  // NEW: Selected preset provider
+    @Binding var isAddingNew: Bool  // External control for adding new provider
+    @Binding var selectedPreset: PresetProvider?  // Selected preset provider
 
-    // Default provider state (NEW for default provider management)
+    // Default provider state
     var defaultProviderId: Binding<String?>? = nil
 
     // MARK: - State
@@ -77,10 +79,8 @@ struct ProviderEditPanel: View {
     @State private var savedIsProviderActive: Bool = false
 
     // UI state
-    @State private var isSaving: Bool = false
     @State private var isTesting: Bool = false
     @State private var testResult: TestResult?
-    @State private var errorMessage: String?
     @State private var showDeleteConfirmation: Bool = false
     @State private var justSavedProviderName: String? = nil  // Track just-saved provider to skip unnecessary reload
 
@@ -143,6 +143,52 @@ struct ProviderEditPanel: View {
     // MARK: - Body
 
     var body: some View {
+        mainContent
+            .background(DesignTokens.Colors.contentBackground)
+            .modifier(NotificationHandlers(
+                onSaveRequested: saveProvider,
+                onCancelRequested: cancelEditing
+            ))
+            .modifier(SelectionChangeHandlers(
+                isAddingNew: isAddingNew,
+                selectedPreset: selectedPreset,
+                selectedProvider: selectedProvider,
+                isSaving: isSaving,
+                justSavedProviderName: $justSavedProviderName,
+                onStartNewProvider: startNewProviderFromPreset,
+                onLoadProvider: loadProviderData,
+                onSyncChanges: syncUnsavedChanges
+            ))
+            .modifier(FormFieldChangeHandlers(
+                providerName: providerName,
+                apiKey: apiKey,
+                model: model,
+                baseURL: baseURL,
+                isProviderActive: isProviderActive,
+                temperature: temperature,
+                maxTokens: maxTokens,
+                timeoutSeconds: timeoutSeconds,
+                topP: topP,
+                topK: topK,
+                frequencyPenalty: frequencyPenalty,
+                presencePenalty: presencePenalty,
+                stopSequences: stopSequences,
+                thinkingLevel: thinkingLevel,
+                mediaResolution: mediaResolution,
+                repeatPenalty: repeatPenalty,
+                systemPromptMode: systemPromptMode,
+                isSaving: isSaving,
+                errorMessage: errorMessage,
+                onSyncChanges: syncUnsavedChanges
+            ))
+            .onAppear {
+                syncUnsavedChanges()
+            }
+    }
+
+    /// Main content view - extracted to simplify body type checking
+    @ViewBuilder
+    private var mainContent: some View {
         VStack(spacing: 0) {
             // Scrollable content
             ScrollView {
@@ -158,64 +204,6 @@ struct ProviderEditPanel: View {
                 .padding(DesignTokens.Spacing.lg)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-            // Save bar at bottom of ProviderEditPanel
-            if selectedProvider != nil || selectedPreset != nil {
-                UnifiedSaveBar(
-                    hasUnsavedChanges: hasUnsavedFormChanges,
-                    isSaving: isSaving,
-                    statusMessage: errorMessage,
-                    onSave: { await saveProviderAsync() },
-                    onCancel: { cancelEditing() }
-                )
-            }
-        }
-        .background(DesignTokens.Colors.contentBackground)
-        .onChange(of: isAddingNew) { _, newValue in
-            if newValue {
-                startNewProviderFromPreset()
-            }
-            syncUnsavedChanges()
-        }
-        .onChange(of: selectedPreset) { _, newPreset in
-            // When preset changes, load provider data
-            // Skip if we're just updating the preset after save
-            if newPreset != nil && !isSaving {
-                // Skip reload if we just saved this provider (data is already correct)
-                if let justSaved = justSavedProviderName, justSaved == newPreset?.id {
-                    justSavedProviderName = nil  // Clear flag after skipping
-                } else {
-                    loadProviderData()
-                }
-            }
-            syncUnsavedChanges()
-        }
-        .onChange(of: selectedProvider) { _, newProvider in
-            // When selected provider changes, load provider data
-            // Skip if we're in the middle of saving to prevent reload
-            if newProvider != nil && !isSaving {
-                // Skip reload if we just saved this provider (data is already correct)
-                if let justSaved = justSavedProviderName, justSaved == newProvider {
-                    // Don't clear flag here - let selectedPreset onChange clear it
-                } else {
-                    loadProviderData()
-                }
-            }
-            syncUnsavedChanges()
-        }
-        .onChange(of: isSaving) { _, _ in syncUnsavedChanges() }
-        .onChange(of: errorMessage) { _, _ in syncUnsavedChanges() }
-        // Monitor form field changes to update save bar state
-        .onChange(of: providerName) { _, _ in syncUnsavedChanges() }
-        .onChange(of: apiKey) { _, _ in syncUnsavedChanges() }
-        .onChange(of: model) { _, _ in syncUnsavedChanges() }
-        .onChange(of: baseURL) { _, _ in syncUnsavedChanges() }
-        .onChange(of: isProviderActive) { _, _ in syncUnsavedChanges() }
-        .onChange(of: temperature) { _, _ in syncUnsavedChanges() }
-        .onChange(of: maxTokens) { _, _ in syncUnsavedChanges() }
-        .onChange(of: systemPromptMode) { _, _ in syncUnsavedChanges() }
-        .onAppear {
-            syncUnsavedChanges()
         }
     }
 
@@ -1404,5 +1392,215 @@ struct ProviderEditPanel: View {
             return L("provider.help.base_url_with_default")
         }
         return L("provider.help.base_url_custom")
+    }
+}
+
+// MARK: - Notification Names for Provider Edit Panel
+
+extension Notification.Name {
+    /// Posted by parent view to request save operation
+    static let providerSaveRequested = Notification.Name("providerSaveRequested")
+    /// Posted by parent view to request cancel operation
+    static let providerCancelRequested = Notification.Name("providerCancelRequested")
+}
+
+// MARK: - View Modifiers for Type-Check Optimization
+
+/// Handles notification center observers for save/cancel requests
+private struct NotificationHandlers: ViewModifier {
+    let onSaveRequested: () -> Void
+    let onCancelRequested: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .providerSaveRequested)) { _ in
+                onSaveRequested()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .providerCancelRequested)) { _ in
+                onCancelRequested()
+            }
+    }
+}
+
+/// Handles selection state change observers
+private struct SelectionChangeHandlers: ViewModifier {
+    let isAddingNew: Bool
+    let selectedPreset: PresetProvider?
+    let selectedProvider: String?
+    let isSaving: Bool
+    @Binding var justSavedProviderName: String?
+    let onStartNewProvider: () -> Void
+    let onLoadProvider: () -> Void
+    let onSyncChanges: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: isAddingNew) { _, newValue in
+                if newValue {
+                    onStartNewProvider()
+                }
+                onSyncChanges()
+            }
+            .onChange(of: selectedPreset) { _, newPreset in
+                // When preset changes, load provider data
+                // Skip if we're just updating the preset after save
+                if newPreset != nil && !isSaving {
+                    // Skip reload if we just saved this provider (data is already correct)
+                    if let justSaved = justSavedProviderName, justSaved == newPreset?.id {
+                        justSavedProviderName = nil  // Clear flag after skipping
+                    } else {
+                        onLoadProvider()
+                    }
+                }
+                onSyncChanges()
+            }
+            .onChange(of: selectedProvider) { _, newProvider in
+                // When selected provider changes, load provider data
+                // Skip if we're in the middle of saving to prevent reload
+                if newProvider != nil && !isSaving {
+                    // Skip reload if we just saved this provider (data is already correct)
+                    if let justSaved = justSavedProviderName, justSaved == newProvider {
+                        // Don't clear flag here - let selectedPreset onChange clear it
+                    } else {
+                        onLoadProvider()
+                    }
+                }
+                onSyncChanges()
+            }
+    }
+}
+
+/// Handles form field change observers
+private struct FormFieldChangeHandlers: ViewModifier {
+    // Basic fields
+    let providerName: String
+    let apiKey: String
+    let model: String
+    let baseURL: String
+    let isProviderActive: Bool
+    // Common parameters
+    let temperature: String
+    let maxTokens: String
+    let timeoutSeconds: String
+    let topP: String
+    let topK: String
+    // Provider-specific parameters
+    let frequencyPenalty: String
+    let presencePenalty: String
+    let stopSequences: String
+    let thinkingLevel: String
+    let mediaResolution: String
+    let repeatPenalty: String
+    let systemPromptMode: String
+    // State
+    let isSaving: Bool
+    let errorMessage: String?
+    let onSyncChanges: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .modifier(StateChangeHandlers(
+                isSaving: isSaving,
+                errorMessage: errorMessage,
+                onSyncChanges: onSyncChanges
+            ))
+            .modifier(BasicFieldChangeHandlers(
+                providerName: providerName,
+                apiKey: apiKey,
+                model: model,
+                baseURL: baseURL,
+                isProviderActive: isProviderActive,
+                onSyncChanges: onSyncChanges
+            ))
+            .modifier(CommonParamChangeHandlers(
+                temperature: temperature,
+                maxTokens: maxTokens,
+                timeoutSeconds: timeoutSeconds,
+                topP: topP,
+                topK: topK,
+                onSyncChanges: onSyncChanges
+            ))
+            .modifier(ProviderParamChangeHandlers(
+                frequencyPenalty: frequencyPenalty,
+                presencePenalty: presencePenalty,
+                stopSequences: stopSequences,
+                thinkingLevel: thinkingLevel,
+                mediaResolution: mediaResolution,
+                repeatPenalty: repeatPenalty,
+                systemPromptMode: systemPromptMode,
+                onSyncChanges: onSyncChanges
+            ))
+    }
+}
+
+// MARK: - Split ViewModifiers to avoid type-check timeout
+
+private struct StateChangeHandlers: ViewModifier {
+    let isSaving: Bool
+    let errorMessage: String?
+    let onSyncChanges: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: isSaving) { _, _ in onSyncChanges() }
+            .onChange(of: errorMessage) { _, _ in onSyncChanges() }
+    }
+}
+
+private struct BasicFieldChangeHandlers: ViewModifier {
+    let providerName: String
+    let apiKey: String
+    let model: String
+    let baseURL: String
+    let isProviderActive: Bool
+    let onSyncChanges: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: providerName) { _, _ in onSyncChanges() }
+            .onChange(of: apiKey) { _, _ in onSyncChanges() }
+            .onChange(of: model) { _, _ in onSyncChanges() }
+            .onChange(of: baseURL) { _, _ in onSyncChanges() }
+            .onChange(of: isProviderActive) { _, _ in onSyncChanges() }
+    }
+}
+
+private struct CommonParamChangeHandlers: ViewModifier {
+    let temperature: String
+    let maxTokens: String
+    let timeoutSeconds: String
+    let topP: String
+    let topK: String
+    let onSyncChanges: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: temperature) { _, _ in onSyncChanges() }
+            .onChange(of: maxTokens) { _, _ in onSyncChanges() }
+            .onChange(of: timeoutSeconds) { _, _ in onSyncChanges() }
+            .onChange(of: topP) { _, _ in onSyncChanges() }
+            .onChange(of: topK) { _, _ in onSyncChanges() }
+    }
+}
+
+private struct ProviderParamChangeHandlers: ViewModifier {
+    let frequencyPenalty: String
+    let presencePenalty: String
+    let stopSequences: String
+    let thinkingLevel: String
+    let mediaResolution: String
+    let repeatPenalty: String
+    let systemPromptMode: String
+    let onSyncChanges: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: frequencyPenalty) { _, _ in onSyncChanges() }
+            .onChange(of: presencePenalty) { _, _ in onSyncChanges() }
+            .onChange(of: stopSequences) { _, _ in onSyncChanges() }
+            .onChange(of: thinkingLevel) { _, _ in onSyncChanges() }
+            .onChange(of: mediaResolution) { _, _ in onSyncChanges() }
+            .onChange(of: repeatPenalty) { _, _ in onSyncChanges() }
+            .onChange(of: systemPromptMode) { _, _ in onSyncChanges() }
     }
 }
