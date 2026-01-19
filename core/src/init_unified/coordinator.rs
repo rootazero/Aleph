@@ -414,12 +414,42 @@ impl InitializationCoordinator {
     }
 
     // =========================================================================
-    // Phase 6: Install skills (placeholder - Task 5)
+    // Phase 6: Install skills
     // =========================================================================
 
     async fn install_skills(&self) -> Result<(), InitError> {
-        // TODO: Implement in Task 5
-        debug!("Skills installation placeholder");
+        use crate::skills::SkillsRegistry;
+
+        let skills_dir = self.config_dir.join("skills");
+
+        info!(path = ?skills_dir, "Setting up skills directory");
+
+        // Ensure skills directory exists
+        tokio::fs::create_dir_all(&skills_dir).await.map_err(|e| {
+            InitError::new("skills", format!("Failed to create skills directory: {}", e))
+        })?;
+
+        // Note: Built-in skills are copied from app bundle by the platform layer (Swift/C#)
+        // The bundle_skills_dir path is not available from Rust core
+        // This phase just ensures the directory exists and validates the registry
+
+        // Report progress
+        if let Some(h) = &self.handler {
+            h.on_phase_progress(
+                "skills".to_string(),
+                0.5,
+                "Validating skills registry...".to_string(),
+            );
+        }
+
+        // Initialize and validate skills registry
+        let registry = SkillsRegistry::new(skills_dir.clone());
+        if let Err(e) = registry.load_all() {
+            // Non-fatal: just warn if skills can't be loaded
+            warn!(error = %e, "Failed to load skills registry");
+        }
+
+        info!(skill_count = registry.count(), "Skills directory initialized");
         Ok(())
     }
 }
