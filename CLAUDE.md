@@ -107,13 +107,18 @@ See [docs/DIRECTORY_STRUCTURE.md](./docs/DIRECTORY_STRUCTURE.md) for detailed tr
 
 ### Branch Strategy
 
+**单分支开发模式**：所有开发工作直接在 main 分支进行。
+
 ```
-main
-├── feature/core-memory-improvement    # Rust 核心功能
-├── feature/macos                      # macOS 专属功能
-├── feature/windows                    # Windows 专属功能
-└── release/v0.2.0                     # 发布分支
+main                    # 唯一的长期分支，所有开发直接在此进行
+└── hotfix/xxx          # 临时分支：仅在需要紧急修复时创建，完成后立即合并删除
 ```
+
+**原则**：
+- 日常开发直接在 main 分支提交
+- 仅在需要隔离测试或紧急修复时临时创建分支
+- 临时分支完成后立即合并并删除
+- 避免长期存在的 feature 分支导致配置不同步
 
 ### Key Decisions Summary
 

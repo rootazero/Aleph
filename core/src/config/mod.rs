@@ -218,12 +218,10 @@ impl Config {
         self.unified_tools.is_some()
     }
 
-    /// Get the default config path using platform-aware directories
+    /// Get the default config path using unified directory
     ///
-    /// Returns platform-specific path:
-    /// - macOS: ~/Library/Application Support/aether/config.toml
-    /// - Windows: %APPDATA%\aether\config.toml
-    /// - Linux: ~/.config/aether/config.toml
+    /// Returns unified path for all platforms:
+    /// - All platforms: ~/.config/aether/config.toml
     pub fn default_path() -> PathBuf {
         crate::utils::paths::get_config_dir()
             .map(|d| d.join("config.toml"))

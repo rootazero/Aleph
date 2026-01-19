@@ -4,9 +4,10 @@
 //! Aether configuration and data directories.
 //!
 //! Cross-platform support:
-//! - macOS: Uses ~/Library/Application Support/aether (via dirs::config_dir)
-//! - Windows: Uses %APPDATA%\aether (via dirs::config_dir)
-//! - Linux: Uses ~/.config/aether (via dirs::config_dir)
+//! - All platforms: Uses ~/.config/aether/ (unified path)
+//!
+//! Note: This was changed from platform-specific paths (like ~/Library/Application Support
+//! on macOS) to a unified path for consistency across all platforms.
 //!
 //! Fallback for home directory:
 //! - Unix: Uses $HOME environment variable
