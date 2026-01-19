@@ -88,6 +88,11 @@ final class UnifiedConversationWindow: NSWindow {
         if let hostingView = hostingView {
             hostingView.frame = contentView?.bounds ?? .zero
             hostingView.autoresizingMask = [.width, .height]
+
+            // Critical: Ensure NSHostingView is fully transparent for glassEffect
+            hostingView.wantsLayer = true
+            hostingView.layer?.backgroundColor = .clear
+
             contentView = hostingView
         }
 

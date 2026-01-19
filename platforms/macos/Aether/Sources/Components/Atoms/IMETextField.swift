@@ -51,7 +51,7 @@ struct IMETextField: NSViewRepresentable {
         textField.backgroundColor = backgroundColor
         textField.isBordered = false
         textField.focusRingType = .none
-        textField.drawsBackground = true
+        textField.drawsBackground = false  // Critical: false for glass transparency
         textField.isEditable = true
         textField.isSelectable = true
         textField.cell?.usesSingleLineMode = true
