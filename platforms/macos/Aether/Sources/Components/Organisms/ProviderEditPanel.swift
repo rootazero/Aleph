@@ -972,51 +972,51 @@ struct ProviderEditPanel: View {
                 let config = try core.loadConfig()
 
                 await MainActor.run {
+                    // Set flag to skip unnecessary loadProviderData() calls
+                    // This MUST be set BEFORE any state changes that could trigger onChange
+                    justSavedProviderName = savedProviderName
+
                     // Update providers list with reloaded config
                     providers = config.providers
 
-                    // Exit add mode if we were adding a new provider
+                    // CRITICAL: Update selectedProvider BEFORE setting isAddingNew = false
+                    // This ensures currentProvider can find the saved provider when
+                    // loadProviderData() is triggered by state changes
+                    selectedProvider = savedProviderName
+
+                    // Update selectedPreset for both custom and preset providers
+                    // This ensures the UI stays on the current provider after save
+                    // Check custom provider by examining the current providerType and preset
+                    let isCustom = selectedPreset?.id == "custom" || providerType == "custom"
+                    if isCustom {
+                        // For custom providers, create a temporary PresetProvider
+                        let customPreset = PresetProvider(
+                            id: savedProviderName,
+                            name: savedProviderName,
+                            iconName: "puzzlepiece.extension",
+                            color: "#5E5CE6",  // Fixed default color
+                            providerType: providerType,
+                            defaultModel: model,
+                            description: baseURL.isEmpty ? "Custom OpenAI-compatible provider" : "OpenAI-compatible API: \(baseURL)",
+                            baseUrl: baseURL.isEmpty ? nil : baseURL
+                        )
+                        selectedPreset = customPreset
+                    } else {
+                        // For preset providers, find and update the preset
+                        if let preset = PresetProviders.find(byId: savedProviderName) {
+                            selectedPreset = preset
+                        }
+                    }
+
+                    // Exit add mode AFTER updating selectedProvider and selectedPreset
+                    // This ensures currentProvider is valid when loadProviderData() checks
                     isAddingNew = false
 
                     // Update saved state after successful save
                     saveSavedState()
 
-                    // CRITICAL: Set isSaving = false BEFORE updating selection
-                    // This allows onChange handlers to process the selection update
+                    // Set isSaving = false to allow onChange handlers to process
                     isSaving = false
-
-                    // Set flag to skip unnecessary loadProviderData() calls
-                    // This prevents the form from being reset after save
-                    justSavedProviderName = savedProviderName
-
-                    // CRITICAL: Keep the current provider selected
-                    // This prevents jumping to the first provider
-                    // Use DispatchQueue to ensure this runs after SwiftUI processes the providers update
-                    DispatchQueue.main.async {
-                        selectedProvider = savedProviderName
-
-                        // Update selectedPreset for both custom and preset providers
-                        // This ensures the UI stays on the current provider after save
-                        if isCustomProvider {
-                            // For custom providers, create a temporary PresetProvider
-                            let customPreset = PresetProvider(
-                                id: savedProviderName,
-                                name: savedProviderName,
-                                iconName: "puzzlepiece.extension",
-                                color: "#5E5CE6",  // Fixed default color
-                                providerType: providerType,
-                                defaultModel: model,
-                                description: baseURL.isEmpty ? "Custom OpenAI-compatible provider" : "OpenAI-compatible API: \(baseURL)",
-                                baseUrl: baseURL.isEmpty ? nil : baseURL
-                            )
-                            selectedPreset = customPreset
-                        } else {
-                            // For preset providers, find and update the preset
-                            if let preset = PresetProviders.find(byId: savedProviderName) {
-                                selectedPreset = preset
-                            }
-                        }
-                    }
 
                     // Notify that configuration was saved internally
                     // This prevents ConfigWatcher from triggering a full view rebuild
