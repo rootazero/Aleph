@@ -26,6 +26,8 @@ settings:
     SDKROOT: macosx
     SUPPORTED_PLATFORMS: macosx
     ENABLE_PREVIEWS: YES
+    # Development team for stable code signing (avoids re-authorization on each build)
+    DEVELOPMENT_TEAM: DVMQ798AGH
     SWIFT_APPROACHABLE_CONCURRENCY: YES
     SWIFT_EMIT_LOC_STRINGS: YES
     SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
