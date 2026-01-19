@@ -13,16 +13,23 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
+    <!-- Self-contained Windows App SDK (no separate runtime install needed) -->
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <WindowsPackageType>None</WindowsPackageType>
+
     <!-- Single instance application -->
     <ApplicationId>com.aether.app</ApplicationId>
+
+    <!-- Localization: auto-detect system language -->
+    <DefaultLanguage>en-US</DefaultLanguage>
 
     <!-- Version from shared VERSION file -->
     <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../../../VERSION').Trim())</Version>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.5.240227000" />
-    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.22621.756" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.5.240627000" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />
     <PackageReference Include="H.NotifyIcon.WinUI" Version="2.1.0" />
   </ItemGroup>
@@ -33,7 +40,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Generated P/Invoke bindings -->
-    <Compile Include="Interop\NativeMethods.g.cs" Condition="Exists('Interop\NativeMethods.g.cs')" />
+    <!-- Localization resources -->
+    <PRIResource Include="Strings\**\*.resw" />
   </ItemGroup>
+
+  <!-- NativeMethods.g.cs is auto-included by SDK from Interop folder -->
 </Project>

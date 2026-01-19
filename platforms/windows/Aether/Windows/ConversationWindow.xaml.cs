@@ -15,9 +15,14 @@ namespace Aether.Windows;
 /// - Streaming response indicator
 /// - Keyboard shortcuts (Enter to send)
 /// - Auto-scroll to latest message
+/// - Mica backdrop for modern glass effect
+/// - Right-click context menu for Clear action
 /// </summary>
 public sealed partial class ConversationWindow : Window
 {
+    private const int FixedWidth = 800;
+    private const int DefaultHeight = 600;
+
     public ConversationViewModel ViewModel { get; }
 
     public ConversationWindow()
@@ -25,11 +30,11 @@ public sealed partial class ConversationWindow : Window
         InitializeComponent();
         Title = "Aether Conversation";
 
-        // Set window size
+        // Set fixed window size (800px width like macOS)
         var presenter = Microsoft.UI.Windowing.AppWindow.GetFromWindowId(
             Microsoft.UI.Win32Interop.GetWindowIdFromWindow(
                 WinRT.Interop.WindowNative.GetWindowHandle(this)));
-        presenter.Resize(new SizeInt32(650, 750));
+        presenter.Resize(new SizeInt32(FixedWidth, DefaultHeight));
 
         // Initialize ViewModel
         ViewModel = new ConversationViewModel();
@@ -45,12 +50,6 @@ public sealed partial class ConversationWindow : Window
     {
         switch (e.PropertyName)
         {
-            case nameof(ConversationViewModel.StatusText):
-                StatusText.Text = ViewModel.StatusText;
-                break;
-            case nameof(ConversationViewModel.ConversationTitle):
-                TitleText.Text = ViewModel.ConversationTitle;
-                break;
             case nameof(ConversationViewModel.IsStreaming):
                 StreamingIndicator.Visibility = ViewModel.IsStreaming ? Visibility.Visible : Visibility.Collapsed;
                 break;
@@ -95,7 +94,7 @@ public sealed partial class ConversationWindow : Window
     private static bool IsShiftPressed()
     {
         var state = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift);
-        return state.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        return state.HasFlag(global::Windows.UI.Core.CoreVirtualKeyStates.Down);
     }
 
     private async void SendButton_Click(object sender, RoutedEventArgs e)
@@ -135,12 +134,5 @@ public sealed partial class ConversationWindow : Window
         {
             ViewModel.ClearConversationCommand.Execute(null);
         }
-    }
-
-    private void SettingsButton_Click(object sender, RoutedEventArgs e)
-    {
-        // Open settings window
-        var settingsWindow = new SettingsWindow();
-        settingsWindow.Activate();
     }
 }

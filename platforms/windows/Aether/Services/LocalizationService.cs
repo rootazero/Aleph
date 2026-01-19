@@ -77,7 +77,7 @@ public static class LocalizationService
     {
         get
         {
-            var languages = Windows.Globalization.ApplicationLanguages.Languages;
+            var languages = global::Windows.Globalization.ApplicationLanguages.Languages;
             return languages.Count > 0 ? languages[0] : "en-US";
         }
     }

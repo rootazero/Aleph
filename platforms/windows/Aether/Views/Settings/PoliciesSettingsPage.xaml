@@ -1,0 +1,389 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Aether.Views.Settings.PoliciesSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Padding="24" Spacing="16">
+
+            <!-- Policy Overview -->
+            <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE8D7;" FontSize="16"/>
+                        <TextBlock Text="System Policies" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                    </StackPanel>
+
+                    <TextBlock Text="Policies define system-level behavior constraints. These are typically managed by administrators and displayed here for reference."
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               FontSize="12"
+                               TextWrapping="Wrap"/>
+
+                    <InfoBar IsOpen="True"
+                             IsClosable="False"
+                             Severity="Informational"
+                             Title="Read-Only View"
+                             Message="Policy settings are managed via configuration files or enterprise policies."/>
+                </StackPanel>
+            </Border>
+
+            <!-- Content Policies -->
+            <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE8FD;" FontSize="16"/>
+                        <TextBlock Text="Content Policies" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                    </StackPanel>
+
+                    <!-- Content Filter -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Content Filter Level"/>
+                            <TextBlock Text="Controls filtering of potentially harmful content"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <Border Grid.Column="1"
+                                Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                CornerRadius="4" Padding="8,4">
+                            <TextBlock x:Name="ContentFilterValue" Text="Standard" FontSize="11" Foreground="White"/>
+                        </Border>
+                    </Grid>
+
+                    <!-- Safe Mode -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Safe Mode"/>
+                            <TextBlock Text="Restricts generation of sensitive content"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <Border Grid.Column="1"
+                                Background="{ThemeResource SystemFillColorSuccessBrush}"
+                                CornerRadius="4" Padding="8,4">
+                            <TextBlock x:Name="SafeModeValue" Text="Enabled" FontSize="11" Foreground="White"/>
+                        </Border>
+                    </Grid>
+
+                    <!-- Explicit Content -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Allow Explicit Content"/>
+                            <TextBlock Text="Permits generation of adult content (requires verification)"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <Border Grid.Column="1"
+                                Background="{ThemeResource SystemFillColorCriticalBrush}"
+                                CornerRadius="4" Padding="8,4">
+                            <TextBlock x:Name="ExplicitContentValue" Text="Disabled" FontSize="11" Foreground="White"/>
+                        </Border>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- Data Policies -->
+            <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE72E;" FontSize="16"/>
+                        <TextBlock Text="Data Policies" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                    </StackPanel>
+
+                    <!-- Data Retention -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Data Retention Period"/>
+                            <TextBlock Text="How long conversation history is stored locally"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <TextBlock Grid.Column="1"
+                                   x:Name="DataRetentionValue"
+                                   Text="30 days"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </Grid>
+
+                    <!-- Local Storage Only -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Local Storage Only"/>
+                            <TextBlock Text="All data stored locally, no cloud sync"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <Border Grid.Column="1"
+                                Background="{ThemeResource SystemFillColorSuccessBrush}"
+                                CornerRadius="4" Padding="8,4">
+                            <TextBlock x:Name="LocalStorageValue" Text="Enforced" FontSize="11" Foreground="White"/>
+                        </Border>
+                    </Grid>
+
+                    <!-- PII Auto-Delete -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Auto-Delete PII"/>
+                            <TextBlock Text="Automatically remove detected PII after session"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <Border Grid.Column="1"
+                                Background="{ThemeResource SystemFillColorSuccessBrush}"
+                                CornerRadius="4" Padding="8,4">
+                            <TextBlock x:Name="PiiAutoDeleteValue" Text="Enabled" FontSize="11" Foreground="White"/>
+                        </Border>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- API Policies -->
+            <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE968;" FontSize="16"/>
+                        <TextBlock Text="API Policies" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                    </StackPanel>
+
+                    <!-- Rate Limiting -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Rate Limiting"/>
+                            <TextBlock Text="Maximum requests per minute"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <TextBlock Grid.Column="1"
+                                   x:Name="RateLimitValue"
+                                   Text="60 req/min"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </Grid>
+
+                    <!-- Cost Limit -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Daily Cost Limit"/>
+                            <TextBlock Text="Maximum API spend per day"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <TextBlock Grid.Column="1"
+                                   x:Name="CostLimitValue"
+                                   Text="No limit"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </Grid>
+
+                    <!-- Allowed Providers -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Allowed Providers"/>
+                            <TextBlock Text="AI providers permitted by policy"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <TextBlock Grid.Column="1"
+                                   x:Name="AllowedProvidersValue"
+                                   Text="All"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- Tool Policies -->
+            <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE90F;" FontSize="16"/>
+                        <TextBlock Text="Tool Policies" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                    </StackPanel>
+
+                    <!-- Code Execution -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Code Execution"/>
+                            <TextBlock Text="Allow AI to execute code in sandboxed environment"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <Border Grid.Column="1"
+                                Background="{ThemeResource SystemFillColorCautionBrush}"
+                                CornerRadius="4" Padding="8,4">
+                            <TextBlock x:Name="CodeExecutionValue" Text="Sandboxed" FontSize="11" Foreground="White"/>
+                        </Border>
+                    </Grid>
+
+                    <!-- File System Access -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="File System Access"/>
+                            <TextBlock Text="AI tool access to local files"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <Border Grid.Column="1"
+                                Background="{ThemeResource SystemFillColorCautionBrush}"
+                                CornerRadius="4" Padding="8,4">
+                            <TextBlock x:Name="FileAccessValue" Text="Read Only" FontSize="11" Foreground="White"/>
+                        </Border>
+                    </Grid>
+
+                    <!-- Network Access -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="Network Access"/>
+                            <TextBlock Text="AI tool access to network resources"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <Border Grid.Column="1"
+                                Background="{ThemeResource SystemFillColorSuccessBrush}"
+                                CornerRadius="4" Padding="8,4">
+                            <TextBlock x:Name="NetworkAccessValue" Text="Allowed" FontSize="11" Foreground="White"/>
+                        </Border>
+                    </Grid>
+
+                    <!-- MCP Servers -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="MCP Server Installation"/>
+                            <TextBlock Text="Allow adding new MCP servers"
+                                       FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </StackPanel>
+
+                        <Border Grid.Column="1"
+                                Background="{ThemeResource SystemFillColorSuccessBrush}"
+                                CornerRadius="4" Padding="8,4">
+                            <TextBlock x:Name="McpInstallValue" Text="Allowed" FontSize="11" Foreground="White"/>
+                        </Border>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- Policy Source -->
+            <Border Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                    CornerRadius="8"
+                    Padding="16">
+                <StackPanel Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE946;" FontSize="14" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock Text="Policy Source"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   FontSize="12"/>
+                    </StackPanel>
+                    <TextBlock x:Name="PolicySourceText"
+                               Text="Local configuration file (~/.aether/config.toml)"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               FontSize="11"/>
+                    <TextBlock x:Name="PolicyLastUpdatedText"
+                               Text="Last updated: Never"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               FontSize="11"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Refresh Button -->
+            <Button x:Name="RefreshButton"
+                    HorizontalAlignment="Right"
+                    Click="RefreshButton_Click">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE72C;" FontSize="14"/>
+                    <TextBlock Text="Refresh Policies"/>
+                </StackPanel>
+            </Button>
+
+            <!-- Status InfoBar -->
+            <InfoBar x:Name="StatusInfoBar"
+                     IsOpen="False"
+                     IsClosable="True"
+                     Severity="Informational"/>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

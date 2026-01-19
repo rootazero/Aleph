@@ -406,6 +406,247 @@ namespace Aether.Interop
         [DllImport(__DllName, EntryPoint = "aether_get_log_directory", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_get_log_directory(byte** out_path);
 
+        // =============================================================================
+        // MCP Server Management Functions
+        // =============================================================================
+
+        /// <summary>
+        /// List all MCP servers as JSON
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_list_mcp_servers", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_list_mcp_servers(byte** out_json, nuint* out_len);
+
+        /// <summary>
+        /// Add an MCP server
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_add_mcp_server", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_add_mcp_server(byte* config_json);
+
+        /// <summary>
+        /// Update an MCP server configuration
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_update_mcp_server", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_update_mcp_server(byte* config_json);
+
+        /// <summary>
+        /// Delete an MCP server
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_delete_mcp_server", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_delete_mcp_server(byte* server_id);
+
+        /// <summary>
+        /// Get MCP server status
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_get_mcp_server_status", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_get_mcp_server_status(byte* server_id, byte** out_json, nuint* out_len);
+
+        /// <summary>
+        /// Export MCP configuration as claude_desktop_config.json format
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_export_mcp_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_export_mcp_config(byte** out_json, nuint* out_len);
+
+        /// <summary>
+        /// Import MCP configuration from claude_desktop_config.json format
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_import_mcp_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_import_mcp_config(byte* json);
+
+        // =============================================================================
+        // Skills Management Functions
+        // =============================================================================
+
+        /// <summary>
+        /// List all installed skills as JSON
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_list_skills", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_list_skills(byte** out_json, nuint* out_len);
+
+        /// <summary>
+        /// Install a skill from URL
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_install_skill", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_install_skill(byte* url, byte** out_json, nuint* out_len);
+
+        /// <summary>
+        /// Install skills from ZIP file
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_install_skills_from_zip", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_install_skills_from_zip(byte* zip_path, byte** out_json, nuint* out_len);
+
+        /// <summary>
+        /// Delete a skill
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_delete_skill", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_delete_skill(byte* skill_id);
+
+        /// <summary>
+        /// Get skills directory path
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_get_skills_dir", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_get_skills_dir(byte** out_path);
+
+        /// <summary>
+        /// Refresh skills registry
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_refresh_skills", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_refresh_skills();
+
+        // =============================================================================
+        // Generation Provider Functions
+        // =============================================================================
+
+        /// <summary>
+        /// List all generation providers as JSON
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_list_generation_providers", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_list_generation_providers(byte** out_json, nuint* out_len);
+
+        /// <summary>
+        /// Get generation provider configuration as JSON
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_get_generation_provider_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_get_generation_provider_config(byte* provider_id, byte** out_json, nuint* out_len);
+
+        /// <summary>
+        /// Update generation provider configuration
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_update_generation_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_update_generation_provider(byte* provider_id, byte* config_json);
+
+        /// <summary>
+        /// Test generation provider connection
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_test_generation_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_test_generation_provider(byte* provider_id, byte* api_key, int* out_success, byte** out_message);
+
+        // =============================================================================
+        // Routing Configuration Functions
+        // =============================================================================
+
+        /// <summary>
+        /// Get routing configuration as JSON
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_get_routing_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_get_routing_config(byte** out_json, nuint* out_len);
+
+        /// <summary>
+        /// Update routing configuration
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_update_routing_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_update_routing_config(byte* config_json);
+
+        // =============================================================================
+        // Behavior Configuration Functions
+        // =============================================================================
+
+        /// <summary>
+        /// Get behavior configuration as JSON
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_get_behavior_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_get_behavior_config(byte** out_json, nuint* out_len);
+
+        /// <summary>
+        /// Update behavior configuration
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_update_behavior_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_update_behavior_config(byte* config_json);
+
+        // =============================================================================
+        // Search Provider Functions
+        // =============================================================================
+
+        /// <summary>
+        /// List all search providers as JSON
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_list_search_providers", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_list_search_providers(byte** out_json, nuint* out_len);
+
+        /// <summary>
+        /// Get search provider configuration as JSON
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_get_search_provider_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_get_search_provider_config(byte* provider_id, byte** out_json, nuint* out_len);
+
+        /// <summary>
+        /// Update search provider configuration
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_update_search_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_update_search_provider(byte* provider_id, byte* config_json);
+
+        /// <summary>
+        /// Test search provider connection
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_test_search_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_test_search_provider(byte* provider_id, byte* api_key, int* out_success, byte** out_message);
+
+        // =============================================================================
+        // Cowork Configuration Functions
+        // =============================================================================
+
+        /// <summary>
+        /// Get cowork configuration as JSON
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_get_cowork_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_get_cowork_config(byte** out_json, nuint* out_len);
+
+        /// <summary>
+        /// Update cowork configuration
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_update_cowork_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_update_cowork_config(byte* config_json);
+
+        // =============================================================================
+        // Policies Functions (Read-Only)
+        // =============================================================================
+
+        /// <summary>
+        /// Get all policies as JSON (read-only, managed by admin)
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_get_policies", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_get_policies(byte** out_json, nuint* out_len);
+
+        // =============================================================================
+        // Runtime Management Functions
+        // =============================================================================
+
+        /// <summary>
+        /// List all runtimes as JSON
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_list_runtimes", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_list_runtimes(byte** out_json, nuint* out_len);
+
+        /// <summary>
+        /// Check if a runtime is installed
+        /// Returns: 1 if installed, 0 if not installed, negative on error
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_is_runtime_installed", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_is_runtime_installed(byte* runtime_id);
+
+        /// <summary>
+        /// Install a runtime
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_install_runtime", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_install_runtime(byte* runtime_id, byte** out_message);
+
+        /// <summary>
+        /// Check for runtime updates
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_check_runtime_updates", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_check_runtime_updates(byte** out_json, nuint* out_len);
+
+        /// <summary>
+        /// Update a runtime
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_update_runtime", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_update_runtime(byte* runtime_id, byte** out_message);
+
+        /// <summary>
+        /// Set runtime auto-update preference
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_set_runtime_auto_update", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_set_runtime_auto_update(int enabled);
+
 
     }
 

@@ -259,6 +259,11 @@ public partial class ConversationMessage : ObservableObject
     };
 
     /// <summary>
+    /// Get the first character of the role display (for avatar).
+    /// </summary>
+    public string RoleInitial => RoleDisplay.Length > 0 ? RoleDisplay[0].ToString() : "?";
+
+    /// <summary>
     /// Get the timestamp display string.
     /// </summary>
     public string TimestampDisplay => Timestamp.ToString("HH:mm");

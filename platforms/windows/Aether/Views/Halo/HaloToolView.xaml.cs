@@ -147,9 +147,9 @@ public sealed partial class HaloToolView : UserControl
     }
 
     /// <summary>
-    /// Parse hex color string to Windows.UI.Color.
+    /// Parse hex color string to global::Windows.UI.Color.
     /// </summary>
-    private static Windows.UI.Color ColorFromHex(string hex)
+    private static global::Windows.UI.Color ColorFromHex(string hex)
     {
         hex = hex.TrimStart('#');
 
@@ -166,6 +166,6 @@ public sealed partial class HaloToolView : UserControl
         byte g = Convert.ToByte(hex.Substring(startIndex + 2, 2), 16);
         byte b = Convert.ToByte(hex.Substring(startIndex + 4, 2), 16);
 
-        return Windows.UI.Color.FromArgb(a, r, g, b);
+        return global::Windows.UI.Color.FromArgb(a, r, g, b);
     }
 }

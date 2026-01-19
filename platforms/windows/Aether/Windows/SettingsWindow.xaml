@@ -3,8 +3,7 @@
     x:Class="Aether.Windows.SettingsWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:vm="using:Aether.ViewModels"
-    Title="Aether Settings">
+    xmlns:vm="using:Aether.ViewModels">
 
     <Grid>
         <Grid.RowDefinitions>
@@ -24,56 +23,56 @@
 
             <NavigationView.MenuItems>
                 <!-- General -->
-                <NavigationViewItem Tag="General" Content="General">
+                <NavigationViewItem Tag="General" x:Uid="NavItem_General">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE713;"/>
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
 
                 <!-- Providers -->
-                <NavigationViewItem Tag="Providers" Content="Providers">
+                <NavigationViewItem Tag="Providers" x:Uid="NavItem_Providers">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE8F1;"/>
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
 
                 <!-- Generation -->
-                <NavigationViewItem Tag="Generation" Content="Generation">
+                <NavigationViewItem Tag="Generation" x:Uid="NavItem_Generation">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE8B9;"/>
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
 
                 <!-- Routing -->
-                <NavigationViewItem Tag="Routing" Content="Routing">
+                <NavigationViewItem Tag="Routing" x:Uid="NavItem_Routing">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE8D1;"/>
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
 
                 <!-- Shortcuts -->
-                <NavigationViewItem Tag="Shortcuts" Content="Shortcuts">
+                <NavigationViewItem Tag="Shortcuts" x:Uid="NavItem_Shortcuts">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE765;"/>
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
 
                 <!-- Behavior -->
-                <NavigationViewItem Tag="Behavior" Content="Behavior">
+                <NavigationViewItem Tag="Behavior" x:Uid="NavItem_Behavior">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE771;"/>
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
 
                 <!-- Memory -->
-                <NavigationViewItem Tag="Memory" Content="Memory">
+                <NavigationViewItem Tag="Memory" x:Uid="NavItem_Memory">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE7C3;"/>
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
 
                 <!-- Search -->
-                <NavigationViewItem Tag="Search" Content="Search">
+                <NavigationViewItem Tag="Search" x:Uid="NavItem_Search">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE721;"/>
                     </NavigationViewItem.Icon>
@@ -82,35 +81,35 @@
                 <NavigationViewItemSeparator/>
 
                 <!-- MCP -->
-                <NavigationViewItem Tag="Mcp" Content="MCP">
+                <NavigationViewItem Tag="Mcp" x:Uid="NavItem_MCP">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE912;"/>
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
 
                 <!-- Skills -->
-                <NavigationViewItem Tag="Skills" Content="Skills">
+                <NavigationViewItem Tag="Skills" x:Uid="NavItem_Skills">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE734;"/>
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
 
                 <!-- Cowork -->
-                <NavigationViewItem Tag="Cowork" Content="Cowork">
+                <NavigationViewItem Tag="Cowork" x:Uid="NavItem_Cowork">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE902;"/>
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
 
                 <!-- Policies -->
-                <NavigationViewItem Tag="Policies" Content="Policies">
+                <NavigationViewItem Tag="Policies" x:Uid="NavItem_Policies">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE8D4;"/>
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
 
                 <!-- Runtimes -->
-                <NavigationViewItem Tag="Runtimes" Content="Runtimes">
+                <NavigationViewItem Tag="Runtimes" x:Uid="NavItem_Runtimes">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE756;"/>
                     </NavigationViewItem.Icon>
@@ -138,7 +137,7 @@
                 <TextBlock
                     x:Name="StatusMessageText"
                     Grid.Column="0"
-                    Text="You have unsaved changes"
+                    x:Uid="Settings_UnsavedChanges"
                     VerticalAlignment="Center"
                     Foreground="{ThemeResource TextFillColorPrimaryBrush}"/>
 
@@ -148,11 +147,11 @@
                     Spacing="8">
                     <Button
                         x:Name="CancelButton"
-                        Content="Cancel"
+                        x:Uid="Common_Cancel"
                         Click="CancelButton_Click"/>
                     <Button
                         x:Name="SaveButton"
-                        Content="Save"
+                        x:Uid="Common_Save"
                         Style="{ThemeResource AccentButtonStyle}"
                         Click="SaveButton_Click"/>
                 </StackPanel>

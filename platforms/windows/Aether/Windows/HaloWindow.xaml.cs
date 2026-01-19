@@ -136,7 +136,7 @@ public sealed partial class HaloWindow : Window
     /// <summary>
     /// Hide the Halo window.
     /// </summary>
-    public new void Hide()
+    public void Hide()
     {
         ShowWindow(_hwnd, SW_HIDE);
         IsVisible = false;
@@ -333,7 +333,7 @@ public sealed partial class HaloWindow : Window
         ThinkingRing.Foreground = new SolidColorBrush(ParseColor(startColor));
     }
 
-    private static Windows.UI.Color ParseColor(string hex)
+    private static global::Windows.UI.Color ParseColor(string hex)
     {
         hex = hex.TrimStart('#');
         byte a = 255, r, g, b;
@@ -352,7 +352,7 @@ public sealed partial class HaloWindow : Window
             b = Convert.ToByte(hex[4..6], 16);
         }
 
-        return Windows.UI.Color.FromArgb(a, r, g, b);
+        return global::Windows.UI.Color.FromArgb(a, r, g, b);
     }
 
     #endregion

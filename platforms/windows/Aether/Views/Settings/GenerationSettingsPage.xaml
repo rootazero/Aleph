@@ -1,0 +1,254 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Aether.Views.Settings.GenerationSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="240" MinWidth="200" MaxWidth="300"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Left Panel - Category Tabs and Provider List -->
+        <Border Grid.Column="0"
+                Background="{ThemeResource LayerFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="0,0,1,0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Category Tabs -->
+                <Border Grid.Row="0"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        Padding="8"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="0,0,0,1">
+                    <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Center">
+                        <RadioButton x:Name="ImageTab" Content="Image" GroupName="Category"
+                                     IsChecked="True" Click="CategoryTab_Click" Tag="Image"
+                                     Style="{StaticResource DefaultRadioButtonStyle}"/>
+                        <RadioButton x:Name="VideoTab" Content="Video" GroupName="Category"
+                                     Click="CategoryTab_Click" Tag="Video"
+                                     Style="{StaticResource DefaultRadioButtonStyle}"/>
+                        <RadioButton x:Name="AudioTab" Content="Audio" GroupName="Category"
+                                     Click="CategoryTab_Click" Tag="Audio"
+                                     Style="{StaticResource DefaultRadioButtonStyle}"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Provider List -->
+                <ListView x:Name="ProviderListView"
+                          Grid.Row="1"
+                          SelectionMode="Single"
+                          SelectionChanged="ProviderListView_SelectionChanged"
+                          Padding="8">
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Padding="8,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="32"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Provider Icon -->
+                                <Border Grid.Column="0"
+                                        Width="28" Height="28"
+                                        Background="{Binding IconBackground}"
+                                        CornerRadius="6">
+                                    <FontIcon Glyph="{Binding Icon}"
+                                              FontSize="14"
+                                              Foreground="White"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                                </Border>
+
+                                <!-- Provider Name -->
+                                <TextBlock Grid.Column="1"
+                                           Text="{Binding Name}"
+                                           Margin="8,0,0,0"
+                                           VerticalAlignment="Center"/>
+
+                                <!-- Status Indicator -->
+                                <Ellipse Grid.Column="2"
+                                         Width="8" Height="8"
+                                         Fill="{Binding StatusColor}"/>
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+            </Grid>
+        </Border>
+
+        <!-- Right Panel - Provider Configuration -->
+        <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="DetailPanel"
+                        Padding="24"
+                        Spacing="16"
+                        Visibility="Collapsed">
+
+                <!-- Provider Header -->
+                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        CornerRadius="8"
+                        Padding="16">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0"
+                                x:Name="ProviderIconBorder"
+                                Width="48" Height="48"
+                                Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                CornerRadius="8">
+                            <FontIcon x:Name="ProviderIconGlyph"
+                                      Glyph="&#xE8B9;"
+                                      FontSize="24"
+                                      Foreground="White"/>
+                        </Border>
+
+                        <StackPanel Grid.Column="1" Margin="16,0,0,0" VerticalAlignment="Center">
+                            <TextBlock x:Name="ProviderNameText"
+                                       Style="{StaticResource SubtitleTextBlockStyle}"/>
+                            <TextBlock x:Name="ProviderDescText"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       FontSize="12"/>
+                        </StackPanel>
+
+                        <!-- Supported Types -->
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4">
+                            <Border x:Name="ImageBadge" Visibility="Collapsed"
+                                    Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                    CornerRadius="4" Padding="6,2">
+                                <TextBlock Text="Image" FontSize="10" Foreground="White"/>
+                            </Border>
+                            <Border x:Name="VideoBadge" Visibility="Collapsed"
+                                    Background="{ThemeResource SystemFillColorSuccessBrush}"
+                                    CornerRadius="4" Padding="6,2">
+                                <TextBlock Text="Video" FontSize="10" Foreground="White"/>
+                            </Border>
+                            <Border x:Name="AudioBadge" Visibility="Collapsed"
+                                    Background="{ThemeResource SystemFillColorCautionBrush}"
+                                    CornerRadius="4" Padding="6,2">
+                                <TextBlock Text="Audio" FontSize="10" Foreground="White"/>
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- API Configuration -->
+                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        CornerRadius="8"
+                        Padding="16">
+                    <StackPanel Spacing="16">
+                        <TextBlock Text="API Configuration" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+
+                        <!-- API Key -->
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="100"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="API Key" VerticalAlignment="Center"/>
+                            <PasswordBox Grid.Column="1"
+                                         x:Name="ApiKeyBox"
+                                         PlaceholderText="Enter your API key"
+                                         PasswordChanged="ApiKeyBox_PasswordChanged"/>
+                        </Grid>
+
+                        <!-- Model -->
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="100"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Model" VerticalAlignment="Center"/>
+                            <ComboBox Grid.Column="1"
+                                      x:Name="ModelComboBox"
+                                      HorizontalAlignment="Stretch"
+                                      SelectionChanged="ModelComboBox_SelectionChanged"/>
+                        </Grid>
+
+                        <!-- Base URL (for custom providers) -->
+                        <Grid x:Name="BaseUrlGrid" Visibility="Collapsed">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="100"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Base URL" VerticalAlignment="Center"/>
+                            <TextBox Grid.Column="1"
+                                     x:Name="BaseUrlBox"
+                                     PlaceholderText="https://api.example.com"
+                                     TextChanged="BaseUrlBox_TextChanged"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- Test Connection -->
+                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        CornerRadius="8"
+                        Padding="16">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Spacing="4">
+                            <TextBlock Text="Connection Test" Style="{StaticResource BodyStrongTextBlockStyle}"/>
+                            <TextBlock x:Name="TestResultText"
+                                       Text="Test your API connection"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       FontSize="12"/>
+                        </StackPanel>
+
+                        <Button Grid.Column="1"
+                                x:Name="TestConnectionButton"
+                                Click="TestConnection_Click">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <FontIcon Glyph="&#xE768;" FontSize="12"/>
+                                <TextBlock Text="Test"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                </Border>
+
+                <!-- Save Button -->
+                <Button x:Name="SaveButton"
+                        Style="{StaticResource AccentButtonStyle}"
+                        HorizontalAlignment="Right"
+                        IsEnabled="False"
+                        Click="SaveButton_Click">
+                    <TextBlock Text="Save Configuration"/>
+                </Button>
+            </StackPanel>
+
+            <!-- Empty State -->
+            <StackPanel x:Name="EmptyDetailState"
+                        Visibility="Visible"
+                        VerticalAlignment="Center"
+                        HorizontalAlignment="Center"
+                        Spacing="8">
+                <FontIcon Glyph="&#xE8B9;" FontSize="48"
+                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                <TextBlock Text="Select a provider to configure"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Status InfoBar -->
+        <InfoBar x:Name="StatusInfoBar"
+                 Grid.ColumnSpan="2"
+                 IsOpen="False"
+                 IsClosable="True"
+                 Severity="Informational"
+                 VerticalAlignment="Top"
+                 Margin="24"/>
+    </Grid>
+</UserControl>

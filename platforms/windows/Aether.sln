@@ -25,4 +25,10 @@ Global
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {E1F2A3B4-C5D6-7890-ABCD-123456789ABC}
+	EndGlobalSection
+	GlobalSection(StartupConfiguration) = preSolution
+		Startup.ProjectGuid = {A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
+	EndGlobalSection
 EndGlobal

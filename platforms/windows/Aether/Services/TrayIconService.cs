@@ -1,3 +1,4 @@
+using CommunityToolkit.Mvvm.Input;
 using H.NotifyIcon;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -56,14 +57,8 @@ public sealed class TrayIconService : IDisposable
 
         _trayIcon.ContextFlyout = contextMenu;
 
-        // Double-click opens settings
-        _trayIcon.TrayIconActivated += (s, e) =>
-        {
-            if (e.ActivationReason == TaskbarIconActivationReason.DoubleClick)
-            {
-                SettingsRequested?.Invoke();
-            }
-        };
+        // Double-click opens settings (using command)
+        _trayIcon.DoubleClickCommand = new RelayCommand(() => SettingsRequested?.Invoke());
 
         // Set icon (using placeholder for now)
         SetDefaultIcon();

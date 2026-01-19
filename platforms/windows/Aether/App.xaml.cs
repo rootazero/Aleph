@@ -78,8 +78,32 @@ public partial class App : Application
     public App()
     {
         _instance = this;
+
+        // Set application language based on system preference
+        InitializeLanguage();
+
         InitializeComponent();
         UnhandledException += OnUnhandledException;
+    }
+
+    private static void InitializeLanguage()
+    {
+        try
+        {
+            // Get system language from user preferences
+            var systemLanguages = global::Windows.System.UserProfile.GlobalizationPreferences.Languages;
+            if (systemLanguages.Count > 0)
+            {
+                var primaryLanguage = systemLanguages[0];
+                // Set application language to match system
+                global::Windows.Globalization.ApplicationLanguages.PrimaryLanguageOverride = primaryLanguage;
+                System.Diagnostics.Debug.WriteLine($"[App] Language set to: {primaryLanguage}");
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[App] Language detection failed: {ex.Message}");
+        }
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
@@ -212,7 +236,7 @@ public partial class App : Application
         };
 
         // Stream complete callback
-        _aetherCore.StreamCompleted += () =>
+        _aetherCore.Completed += (response) =>
         {
             _dispatcherQueue?.TryEnqueue(() =>
             {
@@ -221,7 +245,7 @@ public partial class App : Application
         };
 
         // Error callback
-        _aetherCore.ErrorReceived += (error) =>
+        _aetherCore.ErrorOccurred += (error, code) =>
         {
             _dispatcherQueue?.TryEnqueue(() =>
             {
@@ -229,28 +253,23 @@ public partial class App : Application
             });
         };
 
-        // Tool execution callbacks
-        _aetherCore.ToolStarted += (toolName) =>
+        // Tool execution callback (status: 0=started, 1=completed, 2=failed)
+        _aetherCore.ToolExecuted += (toolName, status, result) =>
         {
             _dispatcherQueue?.TryEnqueue(() =>
             {
-                _haloWindow.StartToolExecution(toolName);
-            });
-        };
-
-        _aetherCore.ToolCompleted += (toolName, result) =>
-        {
-            _dispatcherQueue?.TryEnqueue(() =>
-            {
-                _haloWindow.CompleteToolExecution(result);
-            });
-        };
-
-        _aetherCore.ToolFailed += (toolName, error) =>
-        {
-            _dispatcherQueue?.TryEnqueue(() =>
-            {
-                _haloWindow.FailToolExecution(error);
+                switch (status)
+                {
+                    case 0: // Started
+                        _haloWindow.StartToolExecution(toolName);
+                        break;
+                    case 1: // Completed
+                        _haloWindow.CompleteToolExecution(result);
+                        break;
+                    case 2: // Failed
+                        _haloWindow.FailToolExecution(result);
+                        break;
+                }
             });
         };
     }
@@ -297,9 +316,9 @@ public partial class App : Application
     /// <summary>
     /// Send user input to AI and display response in Halo.
     /// </summary>
-    public async Task ProcessUserInputAsync(string input)
+    public Task ProcessUserInputAsync(string input)
     {
-        if (_haloWindow == null || _aetherCore == null) return;
+        if (_haloWindow == null || _aetherCore == null) return Task.CompletedTask;
 
         // Show thinking state
         _haloWindow.SetState(HaloState.Thinking);
@@ -308,12 +327,14 @@ public partial class App : Application
         try
         {
             // Send to Rust core (which will trigger callbacks)
-            await _aetherCore.SendMessageAsync(input);
+            _aetherCore.Process(input, stream: true);
         }
         catch (Exception ex)
         {
             _haloWindow.SetError(ex.Message);
         }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>

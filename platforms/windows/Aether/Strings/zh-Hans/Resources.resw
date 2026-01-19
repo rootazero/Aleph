@@ -26,23 +26,68 @@
     <value>系统级 AI 中间件</value>
   </data>
 
-  <!-- Common -->
-  <data name="Common_OK" xml:space="preserve">
-    <value>确定</value>
+  <!-- x:Uid bindings for Settings Window -->
+  <data name="SettingsWindowTitle" xml:space="preserve">
+    <value>Aether 设置</value>
   </data>
-  <data name="Common_Cancel" xml:space="preserve">
+  <data name="NavItem_General.Content" xml:space="preserve">
+    <value>通用</value>
+  </data>
+  <data name="NavItem_Providers.Content" xml:space="preserve">
+    <value>服务商</value>
+  </data>
+  <data name="NavItem_Generation.Content" xml:space="preserve">
+    <value>生成</value>
+  </data>
+  <data name="NavItem_Routing.Content" xml:space="preserve">
+    <value>路由</value>
+  </data>
+  <data name="NavItem_Shortcuts.Content" xml:space="preserve">
+    <value>快捷键</value>
+  </data>
+  <data name="NavItem_Behavior.Content" xml:space="preserve">
+    <value>行为</value>
+  </data>
+  <data name="NavItem_Memory.Content" xml:space="preserve">
+    <value>记忆</value>
+  </data>
+  <data name="NavItem_Search.Content" xml:space="preserve">
+    <value>搜索</value>
+  </data>
+  <data name="NavItem_MCP.Content" xml:space="preserve">
+    <value>MCP</value>
+  </data>
+  <data name="NavItem_Skills.Content" xml:space="preserve">
+    <value>技能</value>
+  </data>
+  <data name="NavItem_Cowork.Content" xml:space="preserve">
+    <value>协作</value>
+  </data>
+  <data name="NavItem_Policies.Content" xml:space="preserve">
+    <value>策略</value>
+  </data>
+  <data name="NavItem_Runtimes.Content" xml:space="preserve">
+    <value>运行时</value>
+  </data>
+  <data name="Settings_UnsavedChanges.Text" xml:space="preserve">
+    <value>您有未保存的更改</value>
+  </data>
+  <data name="Common_Cancel.Content" xml:space="preserve">
     <value>取消</value>
   </data>
-  <data name="Common_Save" xml:space="preserve">
+  <data name="Common_Save.Content" xml:space="preserve">
     <value>保存</value>
   </data>
-  <data name="Common_Close" xml:space="preserve">
+  <data name="Common_OK.Content" xml:space="preserve">
+    <value>确定</value>
+  </data>
+  <data name="Common_Close.Content" xml:space="preserve">
     <value>关闭</value>
   </data>
-  <data name="Common_Error" xml:space="preserve">
+  <data name="Common_Error.Text" xml:space="preserve">
     <value>错误</value>
   </data>
-  <data name="Common_Success" xml:space="preserve">
+  <data name="Common_Success.Text" xml:space="preserve">
     <value>成功</value>
   </data>
 
@@ -98,49 +143,7 @@
     <value>已完成</value>
   </data>
 
-  <!-- Settings Window -->
-  <data name="Settings_Title" xml:space="preserve">
-    <value>Aether 设置</value>
-  </data>
-  <data name="Settings_General" xml:space="preserve">
-    <value>通用</value>
-  </data>
-  <data name="Settings_Providers" xml:space="preserve">
-    <value>服务商</value>
-  </data>
-  <data name="Settings_Generation" xml:space="preserve">
-    <value>生成</value>
-  </data>
-  <data name="Settings_Routing" xml:space="preserve">
-    <value>路由</value>
-  </data>
-  <data name="Settings_Shortcuts" xml:space="preserve">
-    <value>快捷键</value>
-  </data>
-  <data name="Settings_Behavior" xml:space="preserve">
-    <value>行为</value>
-  </data>
-  <data name="Settings_Memory" xml:space="preserve">
-    <value>记忆</value>
-  </data>
-  <data name="Settings_Search" xml:space="preserve">
-    <value>搜索</value>
-  </data>
-  <data name="Settings_MCP" xml:space="preserve">
-    <value>MCP</value>
-  </data>
-  <data name="Settings_Skills" xml:space="preserve">
-    <value>技能</value>
-  </data>
-  <data name="Settings_Cowork" xml:space="preserve">
-    <value>协作</value>
-  </data>
-  <data name="Settings_Policies" xml:space="preserve">
-    <value>策略</value>
-  </data>
-  <data name="Settings_Runtimes" xml:space="preserve">
-    <value>运行时</value>
-  </data>
+  <!-- Settings Window (legacy keys moved to x:Uid format above) -->
 
   <!-- General Settings -->
   <data name="Settings_General_Sound" xml:space="preserve">
@@ -188,13 +191,10 @@
   <data name="Settings_General_Version" xml:space="preserve">
     <value>版本</value>
   </data>
-  <data name="Settings_UnsavedChanges" xml:space="preserve">
-    <value>您有未保存的更改</value>
-  </data>
-  <data name="Settings_Saving" xml:space="preserve">
+  <data name="Settings_Saving.Text" xml:space="preserve">
     <value>正在保存...</value>
   </data>
-  <data name="Settings_Saved" xml:space="preserve">
+  <data name="Settings_Saved.Text" xml:space="preserve">
     <value>设置已保存</value>
   </data>
 

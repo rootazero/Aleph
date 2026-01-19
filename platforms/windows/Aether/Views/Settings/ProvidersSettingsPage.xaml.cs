@@ -19,7 +19,7 @@ public sealed partial class ProvidersSettingsPage : UserControl
     public void SetViewModel(SettingsViewModel viewModel)
     {
         ViewModel = viewModel;
-        Bindings.Update();
+        // TODO: Update UI bindings when x:Bind is implemented
     }
 
     private async void TestOpenAi_Click(object sender, RoutedEventArgs e)

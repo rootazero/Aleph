@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.Graphics;
+using Windows.ApplicationModel.Resources;
 using Aether.ViewModels;
 using Aether.Views.Settings;
 
@@ -23,18 +24,38 @@ public sealed partial class SettingsWindow : Window
     private ProvidersSettingsPage? _providersPage;
     private ShortcutsSettingsPage? _shortcutsPage;
     private MemorySettingsPage? _memoryPage;
-    private PlaceholderSettingsPage? _placeholderPage;
+    private McpSettingsPage? _mcpPage;
+    private SkillsSettingsPage? _skillsPage;
+    private GenerationSettingsPage? _generationPage;
+    private RoutingSettingsPage? _routingPage;
+    private BehaviorSettingsPage? _behaviorPage;
+    private SearchSettingsPage? _searchPage;
+    private CoworkSettingsPage? _coworkPage;
+    private PoliciesSettingsPage? _policiesPage;
+    private RuntimesSettingsPage? _runtimesPage;
 
     public SettingsWindow()
     {
         InitializeComponent();
-        Title = "Aether Settings";
+
+        // Set localized window title
+        try
+        {
+            var resourceLoader = new ResourceLoader();
+            Title = resourceLoader.GetString("SettingsWindowTitle");
+            if (string.IsNullOrEmpty(Title))
+                Title = "Aether Settings";
+        }
+        catch
+        {
+            Title = "Aether Settings";
+        }
 
         // Set window size
         var presenter = Microsoft.UI.Windowing.AppWindow.GetFromWindowId(
             Microsoft.UI.Win32Interop.GetWindowIdFromWindow(
                 WinRT.Interop.WindowNative.GetWindowHandle(this)));
-        presenter.Resize(new SizeInt32(900, 700));
+        presenter.Resize(new SizeInt32(800, 700));
 
         // Initialize ViewModel
         _viewModel = new SettingsViewModel();
@@ -106,19 +127,58 @@ public sealed partial class SettingsWindow : Window
                 ContentFrame.Content = _memoryPage;
                 break;
 
-            // Placeholder pages for tabs not yet implemented
-            case SettingsTab.Generation:
-            case SettingsTab.Routing:
-            case SettingsTab.Behavior:
-            case SettingsTab.Search:
             case SettingsTab.Mcp:
+                _mcpPage ??= new McpSettingsPage();
+                _mcpPage.SetViewModel(_viewModel);
+                ContentFrame.Content = _mcpPage;
+                break;
+
             case SettingsTab.Skills:
+                _skillsPage ??= new SkillsSettingsPage();
+                _skillsPage.SetViewModel(_viewModel);
+                ContentFrame.Content = _skillsPage;
+                break;
+
+            case SettingsTab.Generation:
+                _generationPage ??= new GenerationSettingsPage();
+                _generationPage.SetViewModel(_viewModel);
+                ContentFrame.Content = _generationPage;
+                break;
+
+            case SettingsTab.Routing:
+                _routingPage ??= new RoutingSettingsPage();
+                _routingPage.SetViewModel(_viewModel);
+                ContentFrame.Content = _routingPage;
+                break;
+
+            case SettingsTab.Behavior:
+                _behaviorPage ??= new BehaviorSettingsPage();
+                _behaviorPage.SetViewModel(_viewModel);
+                ContentFrame.Content = _behaviorPage;
+                break;
+
+            case SettingsTab.Search:
+                _searchPage ??= new SearchSettingsPage();
+                _searchPage.SetViewModel(_viewModel);
+                ContentFrame.Content = _searchPage;
+                break;
+
             case SettingsTab.Cowork:
+                _coworkPage ??= new CoworkSettingsPage();
+                _coworkPage.SetViewModel(_viewModel);
+                ContentFrame.Content = _coworkPage;
+                break;
+
             case SettingsTab.Policies:
+                _policiesPage ??= new PoliciesSettingsPage();
+                _policiesPage.SetViewModel(_viewModel);
+                ContentFrame.Content = _policiesPage;
+                break;
+
             case SettingsTab.Runtimes:
-                _placeholderPage ??= new PlaceholderSettingsPage();
-                _placeholderPage.Configure(tab);
-                ContentFrame.Content = _placeholderPage;
+                _runtimesPage ??= new RuntimesSettingsPage();
+                _runtimesPage.SetViewModel(_viewModel);
+                ContentFrame.Content = _runtimesPage;
                 break;
         }
     }

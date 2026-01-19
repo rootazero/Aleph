@@ -6,60 +6,21 @@
     xmlns:vm="using:Aether.ViewModels"
     Title="Aether Conversation">
 
+    <Window.SystemBackdrop>
+        <MicaBackdrop/>
+    </Window.SystemBackdrop>
+
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>     <!-- Messages -->
+            <RowDefinition Height="Auto"/>  <!-- Streaming Indicator -->
+            <RowDefinition Height="Auto"/>  <!-- Input Area -->
         </Grid.RowDefinitions>
-
-        <!-- Header -->
-        <Border
-            Grid.Row="0"
-            Background="{ThemeResource LayerFillColorDefaultBrush}"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            BorderThickness="0,0,0,1"
-            Padding="16,12">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-
-                <StackPanel Grid.Column="0" Spacing="4">
-                    <TextBlock
-                        x:Name="TitleText"
-                        Text="New Conversation"
-                        Style="{StaticResource SubtitleTextBlockStyle}"/>
-                    <TextBlock
-                        x:Name="StatusText"
-                        Text="Ready"
-                        FontSize="12"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                </StackPanel>
-
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-                    <Button
-                        x:Name="ClearButton"
-                        ToolTipService.ToolTip="Clear conversation"
-                        Click="ClearButton_Click">
-                        <FontIcon Glyph="&#xE74D;" FontSize="16"/>
-                    </Button>
-                    <Button
-                        x:Name="SettingsButton"
-                        ToolTipService.ToolTip="Settings"
-                        Click="SettingsButton_Click">
-                        <FontIcon Glyph="&#xE713;" FontSize="16"/>
-                    </Button>
-                </StackPanel>
-            </Grid>
-        </Border>
 
         <!-- Messages List -->
         <ScrollViewer
             x:Name="MessagesScrollViewer"
-            Grid.Row="1"
+            Grid.Row="0"
             VerticalScrollBarVisibility="Auto"
             Padding="16">
             <ItemsControl
@@ -90,7 +51,7 @@
                                         CornerRadius="12"
                                         Background="{ThemeResource AccentFillColorDefaultBrush}">
                                         <TextBlock
-                                            Text="{x:Bind RoleDisplay[0]}"
+                                            Text="{x:Bind RoleInitial}"
                                             FontSize="12"
                                             FontWeight="Bold"
                                             Foreground="White"
@@ -124,7 +85,7 @@
         <!-- Streaming Indicator -->
         <Border
             x:Name="StreamingIndicator"
-            Grid.Row="2"
+            Grid.Row="1"
             Background="{ThemeResource LayerFillColorDefaultBrush}"
             Padding="16,8"
             Visibility="Collapsed">
@@ -145,13 +106,22 @@
             </StackPanel>
         </Border>
 
-        <!-- Input Area -->
+        <!-- Input Area (with context menu for Clear) -->
         <Border
-            Grid.Row="3"
+            Grid.Row="2"
             Background="{ThemeResource LayerFillColorDefaultBrush}"
             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
             BorderThickness="0,1,0,0"
             Padding="16">
+            <Border.ContextFlyout>
+                <MenuFlyout>
+                    <MenuFlyoutItem Text="Clear Conversation" Click="ClearButton_Click">
+                        <MenuFlyoutItem.Icon>
+                            <FontIcon Glyph="&#xE74D;"/>
+                        </MenuFlyoutItem.Icon>
+                    </MenuFlyoutItem>
+                </MenuFlyout>
+            </Border.ContextFlyout>
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>

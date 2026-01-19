@@ -787,6 +787,1035 @@ public sealed class AetherCore : IDisposable
 
     #endregion
 
+    #region MCP Server Management
+
+    /// <summary>
+    /// List all MCP servers as JSON.
+    /// </summary>
+    public unsafe string? ListMcpServers()
+    {
+        if (!_initialized) return null;
+
+        try
+        {
+            byte* jsonPtr = null;
+            nuint len = 0;
+
+            int result = NativeMethods.aether_list_mcp_servers(&jsonPtr, &len);
+            if (result != 0) return null;
+
+            try
+            {
+                return Marshal.PtrToStringUTF8((IntPtr)jsonPtr, (int)len);
+            }
+            finally
+            {
+                if (jsonPtr != null)
+                    NativeMethods.aether_free_string(jsonPtr);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"ListMcpServers error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Add an MCP server.
+    /// </summary>
+    public unsafe bool AddMcpServer(string configJson)
+    {
+        if (!_initialized) return false;
+
+        try
+        {
+            var bytes = Encoding.UTF8.GetBytes(configJson + '\0');
+            fixed (byte* ptr = bytes)
+            {
+                int result = NativeMethods.aether_add_mcp_server(ptr);
+                return result == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"AddMcpServer error: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Update an MCP server.
+    /// </summary>
+    public unsafe bool UpdateMcpServer(string configJson)
+    {
+        if (!_initialized) return false;
+
+        try
+        {
+            var bytes = Encoding.UTF8.GetBytes(configJson + '\0');
+            fixed (byte* ptr = bytes)
+            {
+                int result = NativeMethods.aether_update_mcp_server(ptr);
+                return result == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"UpdateMcpServer error: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Delete an MCP server.
+    /// </summary>
+    public unsafe bool DeleteMcpServer(string serverId)
+    {
+        if (!_initialized) return false;
+
+        try
+        {
+            var bytes = Encoding.UTF8.GetBytes(serverId + '\0');
+            fixed (byte* ptr = bytes)
+            {
+                int result = NativeMethods.aether_delete_mcp_server(ptr);
+                return result == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"DeleteMcpServer error: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Get MCP server status as JSON.
+    /// </summary>
+    public unsafe string? GetMcpServerStatus(string serverId)
+    {
+        if (!_initialized) return null;
+
+        try
+        {
+            var idBytes = Encoding.UTF8.GetBytes(serverId + '\0');
+            byte* jsonPtr = null;
+            nuint len = 0;
+
+            fixed (byte* idPtr = idBytes)
+            {
+                int result = NativeMethods.aether_get_mcp_server_status(idPtr, &jsonPtr, &len);
+                if (result != 0) return null;
+
+                try
+                {
+                    return Marshal.PtrToStringUTF8((IntPtr)jsonPtr, (int)len);
+                }
+                finally
+                {
+                    if (jsonPtr != null)
+                        NativeMethods.aether_free_string(jsonPtr);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"GetMcpServerStatus error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Export MCP config as JSON.
+    /// </summary>
+    public unsafe string? ExportMcpConfig()
+    {
+        if (!_initialized) return null;
+
+        try
+        {
+            byte* jsonPtr = null;
+            nuint len = 0;
+
+            int result = NativeMethods.aether_export_mcp_config(&jsonPtr, &len);
+            if (result != 0) return null;
+
+            try
+            {
+                return Marshal.PtrToStringUTF8((IntPtr)jsonPtr, (int)len);
+            }
+            finally
+            {
+                if (jsonPtr != null)
+                    NativeMethods.aether_free_string(jsonPtr);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"ExportMcpConfig error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Import MCP config from JSON.
+    /// </summary>
+    public unsafe bool ImportMcpConfig(string json)
+    {
+        if (!_initialized) return false;
+
+        try
+        {
+            var bytes = Encoding.UTF8.GetBytes(json + '\0');
+            fixed (byte* ptr = bytes)
+            {
+                int result = NativeMethods.aether_import_mcp_config(ptr);
+                return result == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"ImportMcpConfig error: {ex.Message}");
+            return false;
+        }
+    }
+
+    #endregion
+
+    #region Skills Management
+
+    /// <summary>
+    /// List all installed skills as JSON.
+    /// </summary>
+    public unsafe string? ListSkills()
+    {
+        if (!_initialized) return null;
+
+        try
+        {
+            byte* jsonPtr = null;
+            nuint len = 0;
+
+            int result = NativeMethods.aether_list_skills(&jsonPtr, &len);
+            if (result != 0) return null;
+
+            try
+            {
+                return Marshal.PtrToStringUTF8((IntPtr)jsonPtr, (int)len);
+            }
+            finally
+            {
+                if (jsonPtr != null)
+                    NativeMethods.aether_free_string(jsonPtr);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"ListSkills error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Install a skill from URL.
+    /// </summary>
+    public unsafe string? InstallSkill(string url)
+    {
+        if (!_initialized) return null;
+
+        try
+        {
+            var urlBytes = Encoding.UTF8.GetBytes(url + '\0');
+            byte* jsonPtr = null;
+            nuint len = 0;
+
+            fixed (byte* urlPtr = urlBytes)
+            {
+                int result = NativeMethods.aether_install_skill(urlPtr, &jsonPtr, &len);
+                if (result != 0) return null;
+
+                try
+                {
+                    return Marshal.PtrToStringUTF8((IntPtr)jsonPtr, (int)len);
+                }
+                finally
+                {
+                    if (jsonPtr != null)
+                        NativeMethods.aether_free_string(jsonPtr);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"InstallSkill error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Install skills from ZIP file.
+    /// </summary>
+    public unsafe string? InstallSkillsFromZip(string zipPath)
+    {
+        if (!_initialized) return null;
+
+        try
+        {
+            var pathBytes = Encoding.UTF8.GetBytes(zipPath + '\0');
+            byte* jsonPtr = null;
+            nuint len = 0;
+
+            fixed (byte* pathPtr = pathBytes)
+            {
+                int result = NativeMethods.aether_install_skills_from_zip(pathPtr, &jsonPtr, &len);
+                if (result != 0) return null;
+
+                try
+                {
+                    return Marshal.PtrToStringUTF8((IntPtr)jsonPtr, (int)len);
+                }
+                finally
+                {
+                    if (jsonPtr != null)
+                        NativeMethods.aether_free_string(jsonPtr);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"InstallSkillsFromZip error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Delete a skill.
+    /// </summary>
+    public unsafe bool DeleteSkill(string skillId)
+    {
+        if (!_initialized) return false;
+
+        try
+        {
+            var bytes = Encoding.UTF8.GetBytes(skillId + '\0');
+            fixed (byte* ptr = bytes)
+            {
+                int result = NativeMethods.aether_delete_skill(ptr);
+                return result == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"DeleteSkill error: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Get skills directory path.
+    /// </summary>
+    public unsafe string? GetSkillsDirectory()
+    {
+        try
+        {
+            byte* pathPtr = null;
+            int result = NativeMethods.aether_get_skills_dir(&pathPtr);
+            if (result != 0) return null;
+
+            try
+            {
+                return Marshal.PtrToStringUTF8((IntPtr)pathPtr);
+            }
+            finally
+            {
+                if (pathPtr != null)
+                    NativeMethods.aether_free_string(pathPtr);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"GetSkillsDirectory error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Refresh skills registry.
+    /// </summary>
+    public bool RefreshSkills()
+    {
+        if (!_initialized) return false;
+        int result = NativeMethods.aether_refresh_skills();
+        return result == 0;
+    }
+
+    #endregion
+
+    #region Generation Provider Management
+
+    /// <summary>
+    /// List all generation providers as JSON.
+    /// </summary>
+    public unsafe string? ListGenerationProviders()
+    {
+        if (!_initialized) return null;
+
+        try
+        {
+            byte* jsonPtr = null;
+            nuint len = 0;
+
+            int result = NativeMethods.aether_list_generation_providers(&jsonPtr, &len);
+            if (result != 0) return null;
+
+            try
+            {
+                return Marshal.PtrToStringUTF8((IntPtr)jsonPtr, (int)len);
+            }
+            finally
+            {
+                if (jsonPtr != null)
+                    NativeMethods.aether_free_string(jsonPtr);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"ListGenerationProviders error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Get generation provider configuration as JSON.
+    /// </summary>
+    public unsafe string? GetGenerationProviderConfig(string providerId)
+    {
+        if (!_initialized) return null;
+
+        try
+        {
+            var idBytes = Encoding.UTF8.GetBytes(providerId + '\0');
+            byte* jsonPtr = null;
+            nuint len = 0;
+
+            fixed (byte* idPtr = idBytes)
+            {
+                int result = NativeMethods.aether_get_generation_provider_config(idPtr, &jsonPtr, &len);
+                if (result != 0) return null;
+
+                try
+                {
+                    return Marshal.PtrToStringUTF8((IntPtr)jsonPtr, (int)len);
+                }
+                finally
+                {
+                    if (jsonPtr != null)
+                        NativeMethods.aether_free_string(jsonPtr);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"GetGenerationProviderConfig error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Update generation provider configuration.
+    /// </summary>
+    public unsafe bool UpdateGenerationProvider(string providerId, string configJson)
+    {
+        if (!_initialized) return false;
+
+        try
+        {
+            var idBytes = Encoding.UTF8.GetBytes(providerId + '\0');
+            var configBytes = Encoding.UTF8.GetBytes(configJson + '\0');
+
+            fixed (byte* idPtr = idBytes)
+            fixed (byte* configPtr = configBytes)
+            {
+                int result = NativeMethods.aether_update_generation_provider(idPtr, configPtr);
+                return result == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"UpdateGenerationProvider error: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Test generation provider connection.
+    /// </summary>
+    public unsafe (bool Success, string Message) TestGenerationProvider(string providerId, string apiKey)
+    {
+        if (!_initialized) return (false, "Not initialized");
+
+        try
+        {
+            var idBytes = Encoding.UTF8.GetBytes(providerId + '\0');
+            var keyBytes = Encoding.UTF8.GetBytes(apiKey + '\0');
+            int success = 0;
+            byte* messagePtr = null;
+
+            fixed (byte* idPtr = idBytes)
+            fixed (byte* keyPtr = keyBytes)
+            {
+                int result = NativeMethods.aether_test_generation_provider(idPtr, keyPtr, &success, &messagePtr);
+                if (result != 0)
+                {
+                    return (false, GetErrorMessage(result));
+                }
+
+                try
+                {
+                    var message = Marshal.PtrToStringUTF8((IntPtr)messagePtr) ?? "";
+                    return (success != 0, message);
+                }
+                finally
+                {
+                    if (messagePtr != null)
+                        NativeMethods.aether_free_string(messagePtr);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    #endregion
+
+    #region Routing Configuration
+
+    /// <summary>
+    /// Get routing configuration as JSON.
+    /// </summary>
+    public unsafe string? GetRoutingConfig()
+    {
+        if (!_initialized) return null;
+
+        try
+        {
+            byte* jsonPtr = null;
+            nuint len = 0;
+
+            int result = NativeMethods.aether_get_routing_config(&jsonPtr, &len);
+            if (result != 0) return null;
+
+            try
+            {
+                return Marshal.PtrToStringUTF8((IntPtr)jsonPtr, (int)len);
+            }
+            finally
+            {
+                if (jsonPtr != null)
+                    NativeMethods.aether_free_string(jsonPtr);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"GetRoutingConfig error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Update routing configuration.
+    /// </summary>
+    public unsafe bool UpdateRoutingConfig(string configJson)
+    {
+        if (!_initialized) return false;
+
+        try
+        {
+            var bytes = Encoding.UTF8.GetBytes(configJson + '\0');
+            fixed (byte* ptr = bytes)
+            {
+                int result = NativeMethods.aether_update_routing_config(ptr);
+                return result == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"UpdateRoutingConfig error: {ex.Message}");
+            return false;
+        }
+    }
+
+    #endregion
+
+    #region Behavior Configuration
+
+    /// <summary>
+    /// Get behavior configuration as JSON.
+    /// </summary>
+    public unsafe string? GetBehaviorConfig()
+    {
+        if (!_initialized) return null;
+
+        try
+        {
+            byte* jsonPtr = null;
+            nuint len = 0;
+
+            int result = NativeMethods.aether_get_behavior_config(&jsonPtr, &len);
+            if (result != 0) return null;
+
+            try
+            {
+                return Marshal.PtrToStringUTF8((IntPtr)jsonPtr, (int)len);
+            }
+            finally
+            {
+                if (jsonPtr != null)
+                    NativeMethods.aether_free_string(jsonPtr);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"GetBehaviorConfig error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Update behavior configuration.
+    /// </summary>
+    public unsafe bool UpdateBehaviorConfig(string configJson)
+    {
+        if (!_initialized) return false;
+
+        try
+        {
+            var bytes = Encoding.UTF8.GetBytes(configJson + '\0');
+            fixed (byte* ptr = bytes)
+            {
+                int result = NativeMethods.aether_update_behavior_config(ptr);
+                return result == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"UpdateBehaviorConfig error: {ex.Message}");
+            return false;
+        }
+    }
+
+    #endregion
+
+    #region Search Provider Management
+
+    /// <summary>
+    /// List all search providers as JSON.
+    /// </summary>
+    public unsafe string? ListSearchProviders()
+    {
+        if (!_initialized) return null;
+
+        try
+        {
+            byte* jsonPtr = null;
+            nuint len = 0;
+
+            int result = NativeMethods.aether_list_search_providers(&jsonPtr, &len);
+            if (result != 0) return null;
+
+            try
+            {
+                return Marshal.PtrToStringUTF8((IntPtr)jsonPtr, (int)len);
+            }
+            finally
+            {
+                if (jsonPtr != null)
+                    NativeMethods.aether_free_string(jsonPtr);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"ListSearchProviders error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Get search provider configuration as JSON.
+    /// </summary>
+    public unsafe string? GetSearchProviderConfig(string providerId)
+    {
+        if (!_initialized) return null;
+
+        try
+        {
+            var idBytes = Encoding.UTF8.GetBytes(providerId + '\0');
+            byte* jsonPtr = null;
+            nuint len = 0;
+
+            fixed (byte* idPtr = idBytes)
+            {
+                int result = NativeMethods.aether_get_search_provider_config(idPtr, &jsonPtr, &len);
+                if (result != 0) return null;
+
+                try
+                {
+                    return Marshal.PtrToStringUTF8((IntPtr)jsonPtr, (int)len);
+                }
+                finally
+                {
+                    if (jsonPtr != null)
+                        NativeMethods.aether_free_string(jsonPtr);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"GetSearchProviderConfig error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Update search provider configuration.
+    /// </summary>
+    public unsafe bool UpdateSearchProvider(string providerId, string configJson)
+    {
+        if (!_initialized) return false;
+
+        try
+        {
+            var idBytes = Encoding.UTF8.GetBytes(providerId + '\0');
+            var configBytes = Encoding.UTF8.GetBytes(configJson + '\0');
+
+            fixed (byte* idPtr = idBytes)
+            fixed (byte* configPtr = configBytes)
+            {
+                int result = NativeMethods.aether_update_search_provider(idPtr, configPtr);
+                return result == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"UpdateSearchProvider error: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Test search provider connection.
+    /// </summary>
+    public unsafe (bool Success, string Message) TestSearchProvider(string providerId, string apiKey)
+    {
+        if (!_initialized) return (false, "Not initialized");
+
+        try
+        {
+            var idBytes = Encoding.UTF8.GetBytes(providerId + '\0');
+            var keyBytes = Encoding.UTF8.GetBytes(apiKey + '\0');
+            int success = 0;
+            byte* messagePtr = null;
+
+            fixed (byte* idPtr = idBytes)
+            fixed (byte* keyPtr = keyBytes)
+            {
+                int result = NativeMethods.aether_test_search_provider(idPtr, keyPtr, &success, &messagePtr);
+                if (result != 0)
+                {
+                    return (false, GetErrorMessage(result));
+                }
+
+                try
+                {
+                    var message = Marshal.PtrToStringUTF8((IntPtr)messagePtr) ?? "";
+                    return (success != 0, message);
+                }
+                finally
+                {
+                    if (messagePtr != null)
+                        NativeMethods.aether_free_string(messagePtr);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    #endregion
+
+    #region Cowork Configuration
+
+    /// <summary>
+    /// Get cowork configuration as JSON.
+    /// </summary>
+    public unsafe string? GetCoworkConfig()
+    {
+        if (!_initialized) return null;
+
+        try
+        {
+            byte* jsonPtr = null;
+            nuint len = 0;
+
+            int result = NativeMethods.aether_get_cowork_config(&jsonPtr, &len);
+            if (result != 0) return null;
+
+            try
+            {
+                return Marshal.PtrToStringUTF8((IntPtr)jsonPtr, (int)len);
+            }
+            finally
+            {
+                if (jsonPtr != null)
+                    NativeMethods.aether_free_string(jsonPtr);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"GetCoworkConfig error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Update cowork configuration.
+    /// </summary>
+    public unsafe bool UpdateCoworkConfig(string configJson)
+    {
+        if (!_initialized) return false;
+
+        try
+        {
+            var bytes = Encoding.UTF8.GetBytes(configJson + '\0');
+            fixed (byte* ptr = bytes)
+            {
+                int result = NativeMethods.aether_update_cowork_config(ptr);
+                return result == 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"UpdateCoworkConfig error: {ex.Message}");
+            return false;
+        }
+    }
+
+    #endregion
+
+    #region Policies (Read-Only)
+
+    /// <summary>
+    /// Get all policies as JSON (read-only, managed by admin).
+    /// </summary>
+    public unsafe string? GetPolicies()
+    {
+        if (!_initialized) return null;
+
+        try
+        {
+            byte* jsonPtr = null;
+            nuint len = 0;
+
+            int result = NativeMethods.aether_get_policies(&jsonPtr, &len);
+            if (result != 0) return null;
+
+            try
+            {
+                return Marshal.PtrToStringUTF8((IntPtr)jsonPtr, (int)len);
+            }
+            finally
+            {
+                if (jsonPtr != null)
+                    NativeMethods.aether_free_string(jsonPtr);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"GetPolicies error: {ex.Message}");
+            return null;
+        }
+    }
+
+    #endregion
+
+    #region Runtime Management
+
+    /// <summary>
+    /// List all runtimes as JSON.
+    /// </summary>
+    public unsafe string? ListRuntimes()
+    {
+        if (!_initialized) return null;
+
+        try
+        {
+            byte* jsonPtr = null;
+            nuint len = 0;
+
+            int result = NativeMethods.aether_list_runtimes(&jsonPtr, &len);
+            if (result != 0) return null;
+
+            try
+            {
+                return Marshal.PtrToStringUTF8((IntPtr)jsonPtr, (int)len);
+            }
+            finally
+            {
+                if (jsonPtr != null)
+                    NativeMethods.aether_free_string(jsonPtr);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"ListRuntimes error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Check if a runtime is installed.
+    /// </summary>
+    public unsafe bool IsRuntimeInstalled(string runtimeId)
+    {
+        if (!_initialized) return false;
+
+        try
+        {
+            var bytes = Encoding.UTF8.GetBytes(runtimeId + '\0');
+            fixed (byte* ptr = bytes)
+            {
+                int result = NativeMethods.aether_is_runtime_installed(ptr);
+                return result == 1;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"IsRuntimeInstalled error: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Install a runtime.
+    /// </summary>
+    public unsafe (bool Success, string Message) InstallRuntime(string runtimeId)
+    {
+        if (!_initialized) return (false, "Not initialized");
+
+        try
+        {
+            var idBytes = Encoding.UTF8.GetBytes(runtimeId + '\0');
+            byte* messagePtr = null;
+
+            fixed (byte* idPtr = idBytes)
+            {
+                int result = NativeMethods.aether_install_runtime(idPtr, &messagePtr);
+
+                try
+                {
+                    var message = messagePtr != null
+                        ? Marshal.PtrToStringUTF8((IntPtr)messagePtr) ?? ""
+                        : "";
+                    return (result == 0, result == 0 ? message : GetErrorMessage(result));
+                }
+                finally
+                {
+                    if (messagePtr != null)
+                        NativeMethods.aether_free_string(messagePtr);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Check for runtime updates.
+    /// </summary>
+    public unsafe string? CheckRuntimeUpdates()
+    {
+        if (!_initialized) return null;
+
+        try
+        {
+            byte* jsonPtr = null;
+            nuint len = 0;
+
+            int result = NativeMethods.aether_check_runtime_updates(&jsonPtr, &len);
+            if (result != 0) return null;
+
+            try
+            {
+                return Marshal.PtrToStringUTF8((IntPtr)jsonPtr, (int)len);
+            }
+            finally
+            {
+                if (jsonPtr != null)
+                    NativeMethods.aether_free_string(jsonPtr);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"CheckRuntimeUpdates error: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Update a runtime.
+    /// </summary>
+    public unsafe (bool Success, string Message) UpdateRuntime(string runtimeId)
+    {
+        if (!_initialized) return (false, "Not initialized");
+
+        try
+        {
+            var idBytes = Encoding.UTF8.GetBytes(runtimeId + '\0');
+            byte* messagePtr = null;
+
+            fixed (byte* idPtr = idBytes)
+            {
+                int result = NativeMethods.aether_update_runtime(idPtr, &messagePtr);
+
+                try
+                {
+                    var message = messagePtr != null
+                        ? Marshal.PtrToStringUTF8((IntPtr)messagePtr) ?? ""
+                        : "";
+                    return (result == 0, result == 0 ? message : GetErrorMessage(result));
+                }
+                finally
+                {
+                    if (messagePtr != null)
+                        NativeMethods.aether_free_string(messagePtr);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            return (false, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Set runtime auto-update preference.
+    /// </summary>
+    public bool SetRuntimeAutoUpdate(bool enabled)
+    {
+        if (!_initialized) return false;
+        int result = NativeMethods.aether_set_runtime_auto_update(enabled ? 1 : 0);
+        return result == 0;
+    }
+
+    #endregion
+
     #region Logging Helper
 
     private void Log(string message)
