@@ -247,36 +247,31 @@ Displays all rules with:
 
 ## Shortcuts Tab
 
-Customize global hotkeys for Aether operations.
+Customize trigger hotkeys for Aether operations.
 
-### Summon Hotkey
+### Trigger Hotkeys (New System)
 
-**Purpose**: Trigger Aether to process selected text
+Aether uses a **double-tap modifier key** system for triggering AI operations:
 
-**Default**: `Command+Grave` (Cmd+~)
+**Replace Trigger**: Double-tap **Left Shift**
+- AI response replaces selected text
+- Default: `DoubleTap+leftShift`
 
-**How to change:**
-1. Click **"Change"** button
-2. Key recorder appears: "Press key combination..."
-3. Press your desired hotkey (e.g., `Cmd+Shift+A`)
-4. Recorder displays: `⌘ + ⇧ + A`
-5. Click **"Save"**
-
-**Conflict Detection:**
-- If hotkey conflicts with system shortcuts, warning appears
-- Example: "⚠️ This hotkey may conflict with macOS Copy (Cmd+C)"
-- You can proceed anyway with confirmation
+**Append Trigger**: Double-tap **Right Shift**
+- AI response appends after selected text
+- Default: `DoubleTap+rightShift`
 
 **Supported Modifiers:**
-- `Command` (⌘)
-- `Shift` (⇧)
-- `Option` (⌥)
-- `Control` (⌃)
+- `leftShift` / `rightShift`
+- `leftControl` / `rightControl`
+- `leftOption` / `rightOption`
+- `leftCommand` / `rightCommand`
 
-**Supported Keys:**
-- Letters: A-Z
-- Numbers: 0-9
-- Special: Space, Escape, Tab, Return, Grave (~), etc.
+**How to use:**
+1. Select text in any app
+2. Double-tap the modifier key quickly
+3. Aether processes the text
+4. Result is pasted back
 
 ### Cancel Hotkey
 
@@ -284,26 +279,10 @@ Customize global hotkeys for Aether operations.
 
 **Default**: `Escape`
 
-**How to change:**
-1. Click **"Change"** for Cancel hotkey
-2. Follow same steps as Summon hotkey
-3. Must be different from Summon hotkey
+### Other Shortcuts
 
-### Preset Shortcuts
-
-Quick-select common hotkey combinations:
-
-1. Click **"Presets"** dropdown
-2. Choose from:
-   - `Command+Grave` (Default)
-   - `Command+Shift+A`
-   - `Control+Space`
-   - `Command+Shift+Space`
-3. Hotkey applies immediately
-
-### Reset to Default
-
-Click **"Reset to Default"** to restore `Command+Grave`
+- **Command Prompt**: `Command+Option+/` - Quick command completion
+- **OCR Capture**: `Command+Option+O` - Capture screen text
 
 ---
 

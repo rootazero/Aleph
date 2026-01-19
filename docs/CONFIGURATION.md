@@ -9,8 +9,11 @@ This document describes Aether's configuration schema stored in `~/.config/aethe
 theme = "cyberpunk"                # cyberpunk | zen | jarvis
 default_provider = "openai"
 
+[trigger]
+replace_hotkey = "DoubleTap+leftShift"   # Double-tap left Shift = Replace
+append_hotkey = "DoubleTap+rightShift"   # Double-tap right Shift = Append
+
 [shortcuts]
-summon = "Command+Grave"           # Cmd + ~
 cancel = "Escape"
 
 [behavior]
@@ -178,12 +181,20 @@ capabilities = ["memory"]          # Enable memory for all requests
 | `theme` | String | `"cyberpunk"` | UI theme: cyberpunk, zen, jarvis |
 | `default_provider` | String | Required | Default AI provider name |
 
+### [trigger]
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `replace_hotkey` | String | `"DoubleTap+leftShift"` | Double-tap trigger for Replace mode |
+| `append_hotkey` | String | `"DoubleTap+rightShift"` | Double-tap trigger for Append mode |
+
 ### [shortcuts]
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `summon` | String | `"Command+Grave"` | Hotkey to activate Aether |
 | `cancel` | String | `"Escape"` | Hotkey to cancel operation |
+| `command_prompt` | String | `"Command+Option+/"` | Command completion hotkey |
+| `ocr_capture` | String | `"Command+Option+O"` | OCR capture hotkey |
 
 ### [behavior]
 

@@ -1,8 +1,9 @@
 # Aether Configuration Example
 # Copy this file to ~/.config/aether/config.toml and customize
 
-# Default hotkey to summon Aether (deprecated - use [shortcuts] section below)
-default_hotkey = "Command+Grave"  # macOS: Cmd+~, Windows: Ctrl+~
+# Legacy hotkey field (deprecated - use [trigger] section below)
+# Kept for backward compatibility with old config files
+default_hotkey = "Grave"
 
 # ============================================================================
 # General Settings
@@ -29,22 +30,37 @@ enable_performance_logging = false
 max_image_size_mb = 10
 
 # ============================================================================
-# Shortcuts Configuration (Phase 6)
+# Trigger Configuration (New Hotkey System)
+# ============================================================================
+[trigger]
+# Replace action: AI response replaces selected text
+# Format: "DoubleTap+{modifier}" - double-tap a modifier key
+replace_hotkey = "DoubleTap+leftShift"    # Double-tap left Shift
+
+# Append action: AI response appends after selected text
+append_hotkey = "DoubleTap+rightShift"    # Double-tap right Shift
+
+# Supported modifiers:
+# - leftShift, rightShift
+# - leftControl, rightControl
+# - leftOption, rightOption
+# - leftCommand, rightCommand
+
+# ============================================================================
+# Shortcuts Configuration (Legacy, kept for compatibility)
 # ============================================================================
 [shortcuts]
-# Global summon hotkey - triggers Aether to process selected text
-summon = "Command+Grave"         # macOS: Cmd+~, Windows: Ctrl+~
-                                  # Other examples: "Command+Shift+A", "Control+Space"
+# Legacy summon hotkey - NOT USED in new trigger system
+summon = "Command+Grave"
 
-# Cancel operation hotkey - stops processing and restores original text
-cancel = "Escape"                # Other examples: "Command+Period"
+# Cancel operation hotkey - still used
+cancel = "Escape"
 
-# Hotkey format:
-# - macOS modifiers: Command, Option, Control, Shift
-# - Windows modifiers: Control, Alt, Shift
-# - Special keys: Escape, Space, Tab, Return, Delete, Grave (~)
-# - Regular keys: A-Z, 0-9, etc.
-# - Combine with "+": "Command+Shift+A"
+# Command completion hotkey
+command_prompt = "Command+Option+/"
+
+# OCR capture hotkey
+ocr_capture = "Command+Option+O"
 
 # ============================================================================
 # Behavior Configuration (Phase 6)

@@ -1,8 +1,9 @@
 # Aether Configuration Example
 # Copy this file to ~/.config/aether/config.toml and customize
 
-# Default hotkey to summon Aether (deprecated - use [shortcuts] section below)
-default_hotkey = "Command+Grave"  # macOS: Cmd+~, Windows: Ctrl+~
+# Legacy hotkey field (deprecated - use [trigger] section below)
+# Kept for backward compatibility with old config files
+default_hotkey = "Grave"
 
 # ============================================================================
 # General Settings
@@ -29,22 +30,37 @@ enable_performance_logging = false
 max_image_size_mb = 10
 
 # ============================================================================
-# Shortcuts Configuration (Phase 6)
+# Trigger Configuration (New Hotkey System)
+# ============================================================================
+[trigger]
+# Replace action: AI response replaces selected text
+# Format: "DoubleTap+{modifier}" - double-tap a modifier key
+replace_hotkey = "DoubleTap+leftShift"    # Double-tap left Shift
+
+# Append action: AI response appends after selected text
+append_hotkey = "DoubleTap+rightShift"    # Double-tap right Shift
+
+# Supported modifiers:
+# - leftShift, rightShift
+# - leftControl, rightControl
+# - leftOption, rightOption
+# - leftCommand, rightCommand
+
+# ============================================================================
+# Shortcuts Configuration (Legacy, kept for compatibility)
 # ============================================================================
 [shortcuts]
-# Global summon hotkey - triggers Aether to process selected text
-summon = "Command+Grave"         # macOS: Cmd+~, Windows: Ctrl+~
-                                  # Other examples: "Command+Shift+A", "Control+Space"
+# Legacy summon hotkey - NOT USED in new trigger system
+summon = "Command+Grave"
 
-# Cancel operation hotkey - stops processing and restores original text
-cancel = "Escape"                # Other examples: "Command+Period"
+# Cancel operation hotkey - still used
+cancel = "Escape"
 
-# Hotkey format:
-# - macOS modifiers: Command, Option, Control, Shift
-# - Windows modifiers: Control, Alt, Shift
-# - Special keys: Escape, Space, Tab, Return, Delete, Grave (~)
-# - Regular keys: A-Z, 0-9, etc.
-# - Combine with "+": "Command+Shift+A"
+# Command completion hotkey
+command_prompt = "Command+Option+/"
+
+# OCR capture hotkey
+ocr_capture = "Command+Option+O"
 
 # ============================================================================
 # Behavior Configuration (Phase 6)
@@ -289,29 +305,29 @@ excluded_apps = [
 #
 # Example 1: Use OpenAI by default
 # - Select text in any app
-# - Press Cmd+~ (or Ctrl+~ on Windows)
+# - Double-tap left Shift (replace mode) or right Shift (append mode)
 # - Text is sent to OpenAI GPT-4o
-# - Response is pasted back
+# - Response replaces or appends to selected text
 #
 # Example 2: Use Claude for code
 # - Select: "/code write a function to check if a number is prime"
-# - Press Cmd+~
+# - Double-tap left Shift
 # - Routed to Claude 3.5 Sonnet (matches /code rule)
 #
 # Example 3: Use local Ollama
 # - Select: "/local explain quantum computing"
-# - Press Cmd+~
+# - Double-tap left Shift
 # - Routed to local Llama 3.2 (no API costs)
 #
 # Example 4: Use custom provider
 # - Select: "/deep write a poem about AI"
-# - Press Cmd+~
+# - Double-tap left Shift
 # - Routed to DeepSeek (custom OpenAI-compatible provider)
 #
-# Example 5: Custom hotkey (Phase 6)
-# - Set summon = "Command+Shift+A" in [shortcuts]
-# - Press Cmd+Shift+A to trigger Aether
-# - Useful to avoid conflicts with other apps
+# Example 5: Replace vs Append mode
+# - Double-tap LEFT Shift: AI response REPLACES selected text
+# - Double-tap RIGHT Shift: AI response APPENDS after selected text
+# - Customize in [trigger] section
 #
 # Example 6: Typewriter effect (Phase 6)
 # - Set output_mode = "typewriter" and typing_speed = 100
@@ -385,11 +401,11 @@ excluded_apps = [
 #    - Context is filtered by app and window
 #    - Excluded apps are never stored
 #
-# 9. Hotkey Customization (Phase 6):
-#    - Avoid conflicts with system shortcuts
-#    - Aether warns about common conflicts in UI
-#    - Use Cmd+Shift combinations for safety
-#    - Cancel hotkey must be different from summon
+# 9. Trigger Customization:
+#    - Use double-tap modifier keys (Shift, Control, Option, Command)
+#    - Left modifier = Replace mode, Right modifier = Append mode
+#    - Customize in [trigger] section
+#    - Works independently of keyboard layout
 #
 # 10. Input/Output Modes (Phase 6):
 #     - Cut mode (default): Original text disappears (dramatic effect)
@@ -463,10 +479,11 @@ excluded_apps = [
 # - Check provider name in routing rules matches [providers.xxx]
 # - Ensure provider is properly configured
 #
-# "Hotkey not working" (Phase 6):
+# "Trigger not working":
 # - Check Accessibility permissions in System Settings
-# - Try a different hotkey (may conflict with another app)
-# - Use Settings UI to test and detect conflicts
+# - Ensure you're double-tapping the modifier key quickly
+# - Try a different modifier in [trigger] section
+# - Check for conflicts with other apps
 #
 # "Config not saving" (Phase 6):
 # - File permissions are automatically set to 600 on save

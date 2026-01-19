@@ -28,9 +28,13 @@ pub struct GeneralConfig {
 // =============================================================================
 
 /// Shortcuts configuration (Phase 6 - Task 4.2)
+///
+/// Note: The `summon` field is LEGACY and not used in the new trigger system.
+/// Use TriggerConfig.replace_hotkey and TriggerConfig.append_hotkey instead.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShortcutsConfig {
-    /// Global summon hotkey (e.g., "Command+Grave") - LEGACY, not used in new trigger system
+    /// Legacy summon hotkey - NOT USED in new trigger system
+    /// Kept for backward compatibility with old config files
     #[serde(default = "default_summon_hotkey")]
     pub summon: String,
     /// Cancel operation hotkey (optional)
@@ -46,12 +50,16 @@ pub struct ShortcutsConfig {
     pub ocr_capture: String,
 }
 
+/// Legacy default hotkey - NOT USED in new trigger system
+/// Kept for backward compatibility
 pub fn default_hotkey() -> String {
-    "Grave".to_string()
+    "Grave".to_string() // Legacy value, use TriggerConfig instead
 }
 
+/// Legacy default summon hotkey - NOT USED in new trigger system
+/// Kept for backward compatibility
 pub fn default_summon_hotkey() -> String {
-    "Command+Grave".to_string()
+    "Command+Grave".to_string() // Legacy value, use TriggerConfig instead
 }
 
 pub fn default_command_prompt_hotkey() -> String {

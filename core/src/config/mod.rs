@@ -35,7 +35,8 @@ pub use watcher::ConfigWatcher;
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Default hotkey (hardcoded to "Command+Grave" in Phase 1)
+    /// Legacy hotkey field (deprecated, use trigger.replace_hotkey/append_hotkey instead)
+    /// Kept for backward compatibility with old config files
     #[serde(default = "types::general::default_hotkey")]
     pub default_hotkey: String,
     /// General settings
@@ -163,7 +164,7 @@ impl From<Config> for FullConfig {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            default_hotkey: "Grave".to_string(), // Single ` key (backtick) for quick access
+            default_hotkey: "Grave".to_string(), // Legacy field, kept for backward compatibility
             general: GeneralConfig::default(),
             memory: MemoryConfig::default(),
             providers: HashMap::new(),
