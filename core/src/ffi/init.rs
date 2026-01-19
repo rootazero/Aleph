@@ -4,6 +4,9 @@
 //! This module exposes initialization functions for Swift/Kotlin clients to perform
 //! first-time setup including directory creation, config generation, embedding model
 //! download, database initialization, runtime installation, and skills setup.
+//!
+//! Note: This module is only compiled when the `uniffi` feature is enabled.
+//! For Windows C ABI exports, see `ffi_cabi.rs`.
 
 use crate::init_unified::{InitProgressHandler, InitializationCoordinator, InitializationResult};
 use std::sync::Arc;
@@ -113,14 +116,49 @@ impl InitProgressHandler for ProgressHandlerAdapter {
 ///
 /// Returns true if the embedding model files exist at the expected location.
 /// This is useful for UI to determine whether memory features can be enabled.
+///
+/// fastembed stores models in a specific structure:
+/// `cache_dir/models--BAAI--bge-small-zh-v1.5/snapshots/<hash>/model.onnx`
 #[uniffi::export]
 pub fn check_embedding_model_exists() -> bool {
-    match crate::utils::paths::get_embedding_model_dir() {
-        Ok(model_dir) => {
-            // Check for required model files
-            let model_onnx = model_dir.join("model.onnx");
-            let tokenizer_json = model_dir.join("tokenizer.json");
-            model_onnx.exists() && tokenizer_json.exists()
+    use crate::memory::EmbeddingModel;
+
+    match EmbeddingModel::get_default_model_path() {
+        Ok(cache_dir) => {
+            // fastembed uses this structure: models--{org}--{model}/snapshots/{hash}/
+            let model_dir = cache_dir.join("models--BAAI--bge-small-zh-v1.5");
+            if !model_dir.exists() {
+                tracing::debug!("Model directory does not exist: {:?}", model_dir);
+                return false;
+            }
+
+            // Check for snapshots directory with at least one valid snapshot
+            let snapshots_dir = model_dir.join("snapshots");
+            if !snapshots_dir.exists() {
+                tracing::debug!("Snapshots directory does not exist: {:?}", snapshots_dir);
+                return false;
+            }
+
+            // Look for model.onnx in any snapshot
+            if let Ok(entries) = std::fs::read_dir(&snapshots_dir) {
+                for entry in entries.flatten() {
+                    let snapshot_path = entry.path();
+                    if snapshot_path.is_dir() {
+                        let model_onnx = snapshot_path.join("model.onnx");
+                        let tokenizer_json = snapshot_path.join("tokenizer.json");
+                        if model_onnx.exists() && tokenizer_json.exists() {
+                            tracing::debug!(
+                                "Embedding model found at: {:?}",
+                                snapshot_path
+                            );
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            tracing::debug!("No valid model snapshot found in: {:?}", snapshots_dir);
+            false
         }
         Err(e) => {
             tracing::debug!("Error checking embedding model: {}", e);

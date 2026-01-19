@@ -258,6 +258,7 @@ impl InitializationCoordinator {
     // =========================================================================
 
     async fn download_embedding_model(&self) -> Result<(), InitError> {
+        use crate::memory::EmbeddingModel as AetherEmbeddingModel;
         use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
         info!("Downloading embedding model bge-small-zh-v1.5...");
@@ -271,10 +272,31 @@ impl InitializationCoordinator {
             );
         }
 
+        // Get our custom cache directory (same as EmbeddingModel uses at runtime)
+        // This ensures consistency: ~/.config/aether/models/fastembed/
+        let cache_dir = AetherEmbeddingModel::get_default_model_path().map_err(|e| {
+            InitError::new(
+                "embedding_model",
+                format!("Failed to get model path: {}", e),
+            )
+        })?;
+
+        // Ensure cache directory exists
+        tokio::fs::create_dir_all(&cache_dir).await.map_err(|e| {
+            InitError::new(
+                "embedding_model",
+                format!("Failed to create model directory: {}", e),
+            )
+        })?;
+
+        debug!(cache_dir = %cache_dir.display(), "Using cache directory for embedding model");
+
         // fastembed handles download automatically
-        // Model is cached in ~/.cache/huggingface/hub/
+        // Model is cached in our custom directory for consistency
         let _model = TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::BGESmallZHV15).with_show_download_progress(true),
+            InitOptions::new(EmbeddingModel::BGESmallZHV15)
+                .with_cache_dir(cache_dir)
+                .with_show_download_progress(true),
         )
         .map_err(|e| {
             InitError::new(

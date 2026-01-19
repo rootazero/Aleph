@@ -803,7 +803,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     self?.initializeAppComponents()
                 }
             },
-            onFailure: { [weak self] error in
+            onFailure: { error in
                 DispatchQueue.main.async {
                     print("[Aether] ❌ Initialization failed: \(error)")
                     // The InitializationProgressView handles retry internally

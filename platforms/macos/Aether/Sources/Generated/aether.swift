@@ -14992,6 +14992,9 @@ public func listInstalledSkills()throws  -> [SkillInfo] {
  *
  * Returns true if the embedding model files exist at the expected location.
  * This is useful for UI to determine whether memory features can be enabled.
+ *
+ * fastembed stores models in a specific structure:
+ * `cache_dir/models--BAAI--bge-small-zh-v1.5/snapshots/<hash>/model.onnx`
  */
 public func checkEmbeddingModelExists() -> Bool {
     return try!  FfiConverterBool.lift(try! rustCall() {
@@ -15075,7 +15078,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_aethecore_checksum_func_list_installed_skills() != 7975) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_aethecore_checksum_func_check_embedding_model_exists() != 33566) {
+    if (uniffi_aethecore_checksum_func_check_embedding_model_exists() != 353) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_aethecore_checksum_func_needs_first_time_init() != 57511) {

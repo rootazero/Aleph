@@ -406,246 +406,530 @@ namespace Aether.Interop
         [DllImport(__DllName, EntryPoint = "aether_get_log_directory", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_get_log_directory(byte** out_path);
 
-        // =============================================================================
-        // MCP Server Management Functions
-        // =============================================================================
-
         /// <summary>
-        /// List all MCP servers as JSON
+        ///  List all MCP servers as JSON
+        ///
+        ///  # Arguments
+        ///  * `out_json` - Pointer to receive servers list as JSON
+        ///  * `out_len` - Pointer to receive JSON length
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
+        ///
+        ///  # Safety
+        ///  The caller must free the returned string using `aether_free_string`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_list_mcp_servers", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_list_mcp_servers(byte** out_json, nuint* out_len);
 
         /// <summary>
-        /// Add an MCP server
+        ///  Add an MCP server
+        ///
+        ///  # Arguments
+        ///  * `config_json` - Server configuration as JSON (UTF-8 encoded, null-terminated)
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_add_mcp_server", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_add_mcp_server(byte* config_json);
 
         /// <summary>
-        /// Update an MCP server configuration
+        ///  Update an MCP server configuration
+        ///
+        ///  # Arguments
+        ///  * `config_json` - Server configuration as JSON (UTF-8 encoded, null-terminated)
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_update_mcp_server", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_update_mcp_server(byte* config_json);
 
         /// <summary>
-        /// Delete an MCP server
+        ///  Delete an MCP server
+        ///
+        ///  # Arguments
+        ///  * `server_id` - Server ID (UTF-8 encoded, null-terminated)
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_delete_mcp_server", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_delete_mcp_server(byte* server_id);
 
         /// <summary>
-        /// Get MCP server status
+        ///  Get MCP server status
+        ///
+        ///  # Arguments
+        ///  * `server_id` - Server ID (UTF-8 encoded, null-terminated)
+        ///  * `out_json` - Pointer to receive status as JSON
+        ///  * `out_len` - Pointer to receive JSON length
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_get_mcp_server_status", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_get_mcp_server_status(byte* server_id, byte** out_json, nuint* out_len);
 
         /// <summary>
-        /// Export MCP configuration as claude_desktop_config.json format
+        ///  Export MCP configuration as claude_desktop_config.json format
+        ///
+        ///  # Arguments
+        ///  * `out_json` - Pointer to receive JSON
+        ///  * `out_len` - Pointer to receive JSON length
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_export_mcp_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_export_mcp_config(byte** out_json, nuint* out_len);
 
         /// <summary>
-        /// Import MCP configuration from claude_desktop_config.json format
+        ///  Import MCP configuration from claude_desktop_config.json format
+        ///
+        ///  # Arguments
+        ///  * `json` - JSON configuration (UTF-8 encoded, null-terminated)
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_import_mcp_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_import_mcp_config(byte* json);
 
-        // =============================================================================
-        // Skills Management Functions
-        // =============================================================================
-
         /// <summary>
-        /// List all installed skills as JSON
+        ///  List all installed skills as JSON
+        ///
+        ///  # Arguments
+        ///  * `out_json` - Pointer to receive skills list as JSON
+        ///  * `out_len` - Pointer to receive JSON length
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
+        ///
+        ///  # Safety
+        ///  The caller must free the returned string using `aether_free_string`.
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_list_skills", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_list_skills(byte** out_json, nuint* out_len);
 
         /// <summary>
-        /// Install a skill from URL
+        ///  Install a skill from URL
+        ///
+        ///  # Arguments
+        ///  * `url` - GitHub URL or direct download URL (UTF-8 encoded, null-terminated)
+        ///  * `out_json` - Pointer to receive installed skill info as JSON
+        ///  * `out_len` - Pointer to receive JSON length
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_install_skill", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_install_skill(byte* url, byte** out_json, nuint* out_len);
 
         /// <summary>
-        /// Install skills from ZIP file
+        ///  Install skills from ZIP file
+        ///
+        ///  # Arguments
+        ///  * `zip_path` - Path to ZIP file (UTF-8 encoded, null-terminated)
+        ///  * `out_json` - Pointer to receive installed skill IDs as JSON array
+        ///  * `out_len` - Pointer to receive JSON length
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_install_skills_from_zip", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_install_skills_from_zip(byte* zip_path, byte** out_json, nuint* out_len);
 
         /// <summary>
-        /// Delete a skill
+        ///  Delete a skill
+        ///
+        ///  # Arguments
+        ///  * `skill_id` - Skill ID (UTF-8 encoded, null-terminated)
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_delete_skill", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_delete_skill(byte* skill_id);
 
         /// <summary>
-        /// Get skills directory path
+        ///  Get skills directory path
+        ///
+        ///  # Arguments
+        ///  * `out_path` - Pointer to receive path
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_get_skills_dir", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_get_skills_dir(byte** out_path);
 
         /// <summary>
-        /// Refresh skills registry
+        ///  Refresh skills registry
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_refresh_skills", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_refresh_skills();
 
-        // =============================================================================
-        // Generation Provider Functions
-        // =============================================================================
-
         /// <summary>
-        /// List all generation providers as JSON
+        ///  List all generation providers as JSON
+        ///
+        ///  # Arguments
+        ///  * `out_json` - Pointer to receive providers list as JSON
+        ///  * `out_len` - Pointer to receive JSON length
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_list_generation_providers", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_list_generation_providers(byte** out_json, nuint* out_len);
 
         /// <summary>
-        /// Get generation provider configuration as JSON
+        ///  Get generation provider configuration
+        ///
+        ///  # Arguments
+        ///  * `provider_id` - Provider ID (UTF-8 encoded, null-terminated)
+        ///  * `out_json` - Pointer to receive config as JSON
+        ///  * `out_len` - Pointer to receive JSON length
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_get_generation_provider_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_get_generation_provider_config(byte* provider_id, byte** out_json, nuint* out_len);
 
         /// <summary>
-        /// Update generation provider configuration
+        ///  Update generation provider configuration
+        ///
+        ///  # Arguments
+        ///  * `provider_id` - Provider ID (UTF-8 encoded, null-terminated)
+        ///  * `config_json` - Configuration as JSON (UTF-8 encoded, null-terminated)
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_update_generation_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_update_generation_provider(byte* provider_id, byte* config_json);
 
         /// <summary>
-        /// Test generation provider connection
+        ///  Test generation provider connection
+        ///
+        ///  # Arguments
+        ///  * `provider_id` - Provider ID (UTF-8 encoded, null-terminated)
+        ///  * `api_key` - API key to test (UTF-8 encoded, null-terminated)
+        ///  * `out_success` - Pointer to receive success flag (1 = success, 0 = failure)
+        ///  * `out_message` - Pointer to receive result message
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_test_generation_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_test_generation_provider(byte* provider_id, byte* api_key, int* out_success, byte** out_message);
 
-        // =============================================================================
-        // Routing Configuration Functions
-        // =============================================================================
-
         /// <summary>
-        /// Get routing configuration as JSON
+        ///  Get routing configuration as JSON
+        ///
+        ///  # Arguments
+        ///  * `out_json` - Pointer to receive config as JSON
+        ///  * `out_len` - Pointer to receive JSON length
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_get_routing_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_get_routing_config(byte** out_json, nuint* out_len);
 
         /// <summary>
-        /// Update routing configuration
+        ///  Update routing configuration
+        ///
+        ///  # Arguments
+        ///  * `config_json` - Configuration as JSON (UTF-8 encoded, null-terminated)
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_update_routing_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_update_routing_config(byte* config_json);
 
-        // =============================================================================
-        // Behavior Configuration Functions
-        // =============================================================================
-
         /// <summary>
-        /// Get behavior configuration as JSON
+        ///  Get behavior configuration as JSON
+        ///
+        ///  # Arguments
+        ///  * `out_json` - Pointer to receive config as JSON
+        ///  * `out_len` - Pointer to receive JSON length
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_get_behavior_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_get_behavior_config(byte** out_json, nuint* out_len);
 
         /// <summary>
-        /// Update behavior configuration
+        ///  Update behavior configuration
+        ///
+        ///  # Arguments
+        ///  * `config_json` - Configuration as JSON (UTF-8 encoded, null-terminated)
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_update_behavior_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_update_behavior_config(byte* config_json);
 
-        // =============================================================================
-        // Search Provider Functions
-        // =============================================================================
-
         /// <summary>
-        /// List all search providers as JSON
+        ///  List all search providers as JSON
+        ///
+        ///  # Arguments
+        ///  * `out_json` - Pointer to receive providers list as JSON
+        ///  * `out_len` - Pointer to receive JSON length
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_list_search_providers", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_list_search_providers(byte** out_json, nuint* out_len);
 
         /// <summary>
-        /// Get search provider configuration as JSON
+        ///  Get search provider configuration
+        ///
+        ///  # Arguments
+        ///  * `provider_id` - Provider ID (UTF-8 encoded, null-terminated)
+        ///  * `out_json` - Pointer to receive config as JSON
+        ///  * `out_len` - Pointer to receive JSON length
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_get_search_provider_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_get_search_provider_config(byte* provider_id, byte** out_json, nuint* out_len);
 
         /// <summary>
-        /// Update search provider configuration
+        ///  Update search provider configuration
+        ///
+        ///  # Arguments
+        ///  * `provider_id` - Provider ID (UTF-8 encoded, null-terminated)
+        ///  * `config_json` - Configuration as JSON (UTF-8 encoded, null-terminated)
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_update_search_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_update_search_provider(byte* provider_id, byte* config_json);
 
         /// <summary>
-        /// Test search provider connection
+        ///  Test search provider connection
+        ///
+        ///  # Arguments
+        ///  * `provider_id` - Provider ID (UTF-8 encoded, null-terminated)
+        ///  * `api_key` - API key to test (UTF-8 encoded, null-terminated)
+        ///  * `out_success` - Pointer to receive success flag (1 = success, 0 = failure)
+        ///  * `out_message` - Pointer to receive result message
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_test_search_provider", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_test_search_provider(byte* provider_id, byte* api_key, int* out_success, byte** out_message);
 
-        // =============================================================================
-        // Cowork Configuration Functions
-        // =============================================================================
-
         /// <summary>
-        /// Get cowork configuration as JSON
+        ///  Get cowork configuration as JSON
+        ///
+        ///  # Arguments
+        ///  * `out_json` - Pointer to receive config as JSON
+        ///  * `out_len` - Pointer to receive JSON length
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_get_cowork_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_get_cowork_config(byte** out_json, nuint* out_len);
 
         /// <summary>
-        /// Update cowork configuration
+        ///  Update cowork configuration
+        ///
+        ///  # Arguments
+        ///  * `config_json` - Configuration as JSON (UTF-8 encoded, null-terminated)
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_update_cowork_config", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_update_cowork_config(byte* config_json);
 
-        // =============================================================================
-        // Policies Functions (Read-Only)
-        // =============================================================================
-
         /// <summary>
-        /// Get all policies as JSON (read-only, managed by admin)
+        ///  Get policies configuration as JSON (read-only)
+        ///
+        ///  # Arguments
+        ///  * `out_json` - Pointer to receive policies as JSON
+        ///  * `out_len` - Pointer to receive JSON length
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_get_policies", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_get_policies(byte** out_json, nuint* out_len);
 
-        // =============================================================================
-        // Runtime Management Functions
-        // =============================================================================
-
         /// <summary>
-        /// List all runtimes as JSON
+        ///  List all runtimes and their status as JSON
+        ///
+        ///  # Arguments
+        ///  * `out_json` - Pointer to receive runtimes list as JSON
+        ///  * `out_len` - Pointer to receive JSON length
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_list_runtimes", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_list_runtimes(byte** out_json, nuint* out_len);
 
         /// <summary>
-        /// Check if a runtime is installed
-        /// Returns: 1 if installed, 0 if not installed, negative on error
+        ///  Check if a runtime is installed
+        ///
+        ///  # Arguments
+        ///  * `runtime_id` - Runtime ID (UTF-8 encoded, null-terminated)
+        ///
+        ///  # Returns
+        ///  * `1` if installed
+        ///  * `0` if not installed
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_is_runtime_installed", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_is_runtime_installed(byte* runtime_id);
 
         /// <summary>
-        /// Install a runtime
+        ///  Install a runtime
+        ///
+        ///  # Arguments
+        ///  * `runtime_id` - Runtime ID (UTF-8 encoded, null-terminated)
+        ///  * `out_message` - Pointer to receive status message
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_install_runtime", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_install_runtime(byte* runtime_id, byte** out_message);
 
         /// <summary>
-        /// Check for runtime updates
+        ///  Check for runtime updates
+        ///
+        ///  # Arguments
+        ///  * `out_json` - Pointer to receive updates info as JSON
+        ///  * `out_len` - Pointer to receive JSON length
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_check_runtime_updates", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_check_runtime_updates(byte** out_json, nuint* out_len);
 
         /// <summary>
-        /// Update a runtime
+        ///  Update a runtime
+        ///
+        ///  # Arguments
+        ///  * `runtime_id` - Runtime ID (UTF-8 encoded, null-terminated)
+        ///  * `out_message` - Pointer to receive status message
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_update_runtime", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_update_runtime(byte* runtime_id, byte** out_message);
 
         /// <summary>
-        /// Set runtime auto-update preference
+        ///  Set auto-update preference for runtimes
+        ///
+        ///  # Arguments
+        ///  * `enabled` - 1 to enable, 0 to disable
+        ///
+        ///  # Returns
+        ///  * `0` on success
+        ///  * Error code on failure
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_set_runtime_auto_update", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern int aether_set_runtime_auto_update(int enabled);
+
+        /// <summary>
+        ///  Check if first-time initialization is needed
+        ///
+        ///  Returns:
+        ///  * `1` if initialization is needed
+        ///  * `0` if already initialized
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_needs_first_time_init", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_needs_first_time_init();
+
+        /// <summary>
+        ///  Check if the embedding model is installed
+        ///
+        ///  Returns:
+        ///  * `1` if model exists
+        ///  * `0` if model does not exist
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_check_embedding_model_exists", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_check_embedding_model_exists();
+
+        /// <summary>
+        ///  Register initialization progress callbacks
+        ///
+        ///  # Safety
+        ///  All callback function pointers must be valid for the duration of initialization.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_register_init_callbacks", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_register_init_callbacks(delegate* unmanaged[Cdecl]<byte*, uint, uint, void> on_phase_started, delegate* unmanaged[Cdecl]<byte*, double, byte*, void> on_phase_progress, delegate* unmanaged[Cdecl]<byte*, void> on_phase_completed, delegate* unmanaged[Cdecl]<byte*, ulong, ulong, void> on_download_progress, delegate* unmanaged[Cdecl]<byte*, byte*, int, void> on_error);
+
+        /// <summary>
+        ///  Clear initialization callbacks
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_clear_init_callbacks", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void aether_clear_init_callbacks();
+
+        /// <summary>
+        ///  Run first-time initialization
+        ///
+        ///  This is a blocking function that runs the full 6-phase initialization.
+        ///  Progress is reported via registered callbacks.
+        ///
+        ///  Returns:
+        ///  * `0` on success
+        ///  * Negative error code on failure
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_run_first_time_init", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern int aether_run_first_time_init();
 
 
     }
