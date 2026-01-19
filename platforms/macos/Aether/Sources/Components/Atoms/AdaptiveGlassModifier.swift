@@ -2,11 +2,15 @@
 //  AdaptiveGlassModifier.swift
 //  Aether
 //
-//  Native Liquid Glass effect using macOS 26 glassEffect API.
+//  Adaptive glass effect with backward compatibility:
+//  - macOS 26+: Native Liquid Glass using glassEffect API
+//  - macOS 15-25: NSVisualEffectView fallback
+//
 //  Reference: https://developer.apple.com/documentation/SwiftUI/Applying-Liquid-Glass-to-custom-views
 //
 
 import SwiftUI
+import AppKit
 
 // MARK: - Glass Environment Key
 
@@ -23,50 +27,103 @@ extension EnvironmentValues {
     }
 }
 
-// MARK: - Native Glass Modifier
+// MARK: - Adaptive Glass Modifier
 
-/// A view modifier that applies native Liquid Glass effect using glassEffect API.
-struct NativeGlassModifier: ViewModifier {
+/// A view modifier that applies glass effect with OS version detection.
+/// Uses native Liquid Glass on macOS 26+, falls back to NSVisualEffectView on earlier versions.
+struct AdaptiveGlassModifier: ViewModifier {
 
     let cornerRadius: CGFloat
-    let glass: Glass
 
-    init(cornerRadius: CGFloat = 12, glass: Glass = .regular) {
+    init(cornerRadius: CGFloat = 12) {
         self.cornerRadius = cornerRadius
-        self.glass = glass
     }
 
     func body(content: Content) -> some View {
-        content
-            .environment(\.isInGlass, true)
-            .glassEffect(glass, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        if #available(macOS 26.0, *) {
+            content
+                .environment(\.isInGlass, true)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        } else {
+            // Fallback for macOS 15-25
+            content
+                .environment(\.isInGlass, true)
+                .background(
+                    ZStack {
+                        VisualEffectBackground(
+                            material: .underWindowBackground,
+                            blendingMode: .behindWindow
+                        )
+                        // Subtle overlay for glass-like appearance
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.12),
+                                Color.white.opacity(0.06)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    }
+                )
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        }
     }
 }
 
 // MARK: - GlassProminentButtonStyle
 
-/// A button style using native glassProminent style.
-/// Uses contentShape inside makeBody to ensure entire circle area is clickable.
+/// A button style for prominent glass-style buttons.
+/// Uses native glassEffect on macOS 26+, custom styling on earlier versions.
 struct GlassProminentButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 16, weight: .semibold))
-            .padding(10)
-            .background(
-                Circle()
-                    .glassEffect(.regular.interactive(), in: Circle())
-            )
-            .contentShape(Circle())
-            .opacity(configuration.isPressed ? 0.7 : 1.0)
-            .background(WindowDragBlocker())
+        GlassProminentButtonContent(configuration: configuration)
+    }
+}
+
+private struct GlassProminentButtonContent: View {
+    let configuration: ButtonStyle.Configuration
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        if #available(macOS 26.0, *) {
+            configuration.label
+                .font(.system(size: 16, weight: .semibold))
+                .padding(10)
+                .background(
+                    Circle()
+                        .glassEffect(.regular.interactive(), in: Circle())
+                )
+                .contentShape(Circle())
+                .opacity(configuration.isPressed ? 0.7 : 1.0)
+                .background(WindowDragBlocker())
+        } else {
+            // Fallback for macOS 15-25
+            configuration.label
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.primary)
+                .padding(10)
+                .background(
+                    Circle()
+                        .fill(fillColor)
+                )
+                .contentShape(Circle())
+                .opacity(configuration.isPressed ? 0.7 : 1.0)
+                .background(WindowDragBlocker())
+        }
+    }
+
+    private var fillColor: Color {
+        if !isEnabled {
+            return Color.primary.opacity(0.1)
+        }
+        return Color.primary.opacity(configuration.isPressed ? 0.20 : 0.12)
     }
 }
 
 // MARK: - Window Drag Blocker
 
 /// An NSView wrapper that prevents window dragging in its area.
-/// Used for buttons that need to be clickable in windows with isMovableByWindowBackground = true.
 struct WindowDragBlocker: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NonDraggableView()
@@ -78,7 +135,6 @@ struct WindowDragBlocker: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
-/// Custom NSView that blocks window dragging
 private class NonDraggableView: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
 }
@@ -105,19 +161,39 @@ struct GlassButtonModifier: ViewModifier {
     }
 }
 
+// MARK: - Glass Message Bubble Modifier
+
+/// Modifier for message bubbles with glass effect.
+struct GlassMessageBubbleModifier: ViewModifier {
+
+    let isUser: Bool
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content
+                .glassEffect(
+                    isUser ? .regular : .regular.tint(.secondary),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+        } else {
+            // Fallback for macOS 15-25
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.primary.opacity(isUser ? 0.12 : 0.08))
+                )
+        }
+    }
+}
+
 // MARK: - View Extensions
 
 extension View {
 
-    /// Apply native Liquid Glass effect
-    /// - Parameters:
-    ///   - cornerRadius: Corner radius for the glass shape (default: 12)
-    ///   - glass: Glass style variant (default: .regular)
-    func adaptiveGlass(
-        cornerRadius: CGFloat = 12,
-        glass: Glass = .regular
-    ) -> some View {
-        modifier(NativeGlassModifier(cornerRadius: cornerRadius, glass: glass))
+    /// Apply adaptive glass effect (Liquid Glass on macOS 26+, VisualEffect fallback on earlier)
+    /// - Parameter cornerRadius: Corner radius for the glass shape (default: 12)
+    func adaptiveGlass(cornerRadius: CGFloat = 12) -> some View {
+        modifier(AdaptiveGlassModifier(cornerRadius: cornerRadius))
     }
 
     /// Apply secondary glass button style with hover effect
@@ -139,11 +215,17 @@ extension View {
     func liquidGlassSecondaryText() -> some View {
         self.foregroundStyle(.secondary)
     }
+
+    /// Apply glass bubble effect for messages
+    func glassBubble(isUser: Bool) -> some View {
+        modifier(GlassMessageBubbleModifier(isUser: isUser))
+    }
 }
 
 // MARK: - Glass Container
 
-/// A container that groups glass elements using GlassEffectContainer.
+/// A container that groups glass elements.
+/// Uses GlassEffectContainer on macOS 26+, plain VStack on earlier versions.
 struct AdaptiveGlassContainer<Content: View>: View {
 
     let content: () -> Content
@@ -153,40 +235,22 @@ struct AdaptiveGlassContainer<Content: View>: View {
     }
 
     var body: some View {
-        GlassEffectContainer {
-            content()
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer {
+                content()
+            }
+        } else {
+            VStack(spacing: 0) {
+                content()
+            }
         }
-    }
-}
-
-// MARK: - Glass Message Bubble Modifier
-
-/// Modifier for message bubbles with glass effect.
-struct GlassMessageBubbleModifier: ViewModifier {
-
-    let isUser: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .glassEffect(
-                isUser ? .regular : .regular.tint(.secondary),
-                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-            )
-    }
-}
-
-extension View {
-    /// Apply glass bubble effect for messages
-    func glassBubble(isUser: Bool) -> some View {
-        modifier(GlassMessageBubbleModifier(isUser: isUser))
     }
 }
 
 // MARK: - Preview Provider
 
-#Preview("Native Liquid Glass Demo") {
+#Preview("Adaptive Glass Demo") {
     ZStack {
-        // Background gradient to demonstrate glass transparency
         LinearGradient(
             colors: [.blue.opacity(0.6), .purple.opacity(0.6)],
             startPoint: .topLeading,
@@ -194,13 +258,15 @@ extension View {
         )
 
         VStack(spacing: 20) {
-            Text("Liquid Glass Effect")
+            Text("Adaptive Glass Effect")
                 .font(.headline)
+                .liquidGlassText()
 
             VStack(spacing: 12) {
-                Text("Native Glass Design")
-                Text("Using glassEffect API")
-                    .foregroundStyle(.secondary)
+                Text("Native on macOS 26+")
+                    .liquidGlassText()
+                Text("Fallback on macOS 15-25")
+                    .liquidGlassSecondaryText()
             }
             .padding(20)
             .frame(width: 300)
@@ -209,8 +275,10 @@ extension View {
             HStack(spacing: 16) {
                 Button {} label: {
                     Text("Secondary")
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.plain)
+                .adaptiveGlassButton()
 
                 Button {} label: {
                     Image(systemName: "arrow.up")
@@ -234,6 +302,7 @@ extension View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Hello! How can I help you today?")
+                    .foregroundStyle(.primary)
                     .padding(12)
                     .glassBubble(isUser: false)
                 Spacer()
@@ -241,7 +310,8 @@ extension View {
 
             HStack {
                 Spacer()
-                Text("I'd like to learn about Liquid Glass")
+                Text("I'd like to learn about Glass effects")
+                    .foregroundStyle(.primary)
                     .padding(12)
                     .glassBubble(isUser: true)
             }
