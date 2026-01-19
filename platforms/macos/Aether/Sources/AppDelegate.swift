@@ -777,89 +777,65 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     /// Check if this is a fresh install and run initialization if needed
     private func checkAndRunFirstTimeInit() {
-        do {
-            let isFresh = try isFreshInstall()
-            NSLog("[Aether] isFreshInstall=%@", isFresh ? "true" : "false")
+        let needsInit = needsFirstTimeInit()
+        NSLog("[Aether] needsFirstTimeInit=%@", needsInit ? "true" : "false")
 
-            if isFresh {
-                NSLog("[Aether] 🆕 Fresh install - running first-time init in background")
-                // Run initialization in background, then continue
-                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                    do {
-                        try runFirstTimeInit(progressHandler: nil)
-                        NSLog("[Aether] ✅ First-time init completed")
-                    } catch {
-                        NSLog("[Aether] ⚠️ First-time init failed: %@", error.localizedDescription)
-                    }
-                    // Continue with app initialization regardless
-                    DispatchQueue.main.async {
-                        self?.initializeAppComponents()
-                    }
-                }
-            } else {
-                initializeAppComponents()
-            }
-        } catch {
-            NSLog("[Aether] ❌ isFreshInstall error: %@", error.localizedDescription)
+        if needsInit {
+            NSLog("[Aether] 🆕 Fresh install detected - showing initialization window")
+            // Show blocking initialization window
+            showInitializationWindow()
+        } else {
+            NSLog("[Aether] ✅ Existing installation - proceeding with app startup")
             initializeAppComponents()
         }
     }
 
     /// Show the first-time initialization progress window
+    ///
+    /// This shows a blocking NSPanel that displays progress for all 6 initialization phases.
+    /// The window cannot be closed until initialization completes or fails with retry option.
     private func showInitializationWindow() {
         let initView = InitializationProgressView(
             onCompletion: { [weak self] in
                 DispatchQueue.main.async {
-                    print("[Aether] Initialization completed - proceeding with app startup")
+                    print("[Aether] ✅ Initialization completed - proceeding with app startup")
                     self?.closeInitializationWindow()
                     self?.initializeAppComponents()
                 }
             },
             onFailure: { [weak self] error in
                 DispatchQueue.main.async {
-                    print("[Aether] Initialization failed: \(error)")
-
-                    // Show error alert
-                    let alert = NSAlert()
-                    alert.messageText = "Initialization Failed"
-                    alert.informativeText = "Aether failed to complete first-time initialization.\n\nError: \(error)\n\nPlease check your internet connection and try again."
-                    alert.alertStyle = .critical
-                    alert.addButton(withTitle: "Quit")
-                    alert.addButton(withTitle: "Retry")
-
-                    let response = alert.runModal()
-                    if response == .alertFirstButtonReturn {
-                        // Quit
-                        NSApp.terminate(nil)
-                    } else {
-                        // Retry
-                        self?.showInitializationWindow()
-                    }
+                    print("[Aether] ❌ Initialization failed: \(error)")
+                    // The InitializationProgressView handles retry internally
+                    // If user can't retry, they can quit from the window
                 }
             }
         )
 
         let hostingController = NSHostingController(rootView: initView)
 
-        // Create window
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 400),
-            styleMask: [.titled, .closable],
+        // Create NSPanel (non-closable during initialization)
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 420),
+            styleMask: [.titled, .fullSizeContentView],  // No close button
             backing: .buffered,
             defer: false
         )
 
-        window.title = "Initializing Aether"
-        window.contentViewController = hostingController
-        window.center()
-        window.level = .floating
-        window.isReleasedWhenClosed = false
+        panel.title = "正在初始化 Aether"
+        panel.titlebarAppearsTransparent = true
+        panel.titleVisibility = .hidden
+        panel.contentViewController = hostingController
+        panel.center()
+        panel.level = .floating
+        panel.isReleasedWhenClosed = false
+        panel.becomesKeyOnlyIfNeeded = false  // Can become key window
 
-        initializationWindow = window
-        window.makeKeyAndOrderFront(nil)
+        initializationWindow = panel
+        panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
-        print("[Aether] Initialization window shown")
+        print("[Aether] Initialization window shown (6 phases)")
     }
 
     /// Close the initialization window
