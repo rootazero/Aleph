@@ -296,7 +296,9 @@ pub use crate::generation::{
 };
 
 // Planner exports (unified 2-layer architecture)
-pub use crate::planner::{ExecutionPlan, PlannedTask, PlannerError};
+pub use crate::planner::{
+    ExecutionPlan, PlannedTask, PlannerConfig, PlannerError, ToolInfo, UnifiedPlanner,
+};
 
 // Event system exports (event-driven agentic loop)
 pub use crate::event::{
