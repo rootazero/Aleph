@@ -191,6 +191,53 @@ impl CommandNode {
     }
 }
 
+/// Trigger keywords for natural language command detection
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CommandTriggers {
+    /// Manually defined trigger keywords (weight: 1.0)
+    pub manual: Vec<String>,
+    /// Auto-extracted from description (weight: 0.6)
+    pub auto_extracted: Vec<String>,
+}
+
+impl CommandTriggers {
+    /// Create new triggers with manual and auto-extracted keywords
+    pub fn new(manual: Vec<String>, auto_extracted: Vec<String>) -> Self {
+        Self {
+            manual,
+            auto_extracted,
+        }
+    }
+
+    /// Create empty triggers
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Create triggers from manual keywords only
+    pub fn from_manual(manual: Vec<String>) -> Self {
+        Self {
+            manual,
+            auto_extracted: Vec::new(),
+        }
+    }
+
+    /// Check if there are any triggers
+    pub fn has_triggers(&self) -> bool {
+        !self.manual.is_empty() || !self.auto_extracted.is_empty()
+    }
+
+    /// Get total trigger count
+    pub fn len(&self) -> usize {
+        self.manual.len() + self.auto_extracted.len()
+    }
+
+    /// Check if empty
+    pub fn is_empty(&self) -> bool {
+        self.manual.is_empty() && self.auto_extracted.is_empty()
+    }
+}
+
 /// Result of executing a command
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommandExecutionResult {
@@ -320,5 +367,24 @@ mod tests {
         assert!(result.success);
         assert_eq!(result.command_path, Some("/search".to_string()));
         assert_eq!(result.argument, Some("weather".to_string()));
+    }
+
+    #[test]
+    fn test_command_triggers_creation() {
+        let triggers = CommandTriggers::new(
+            vec!["知识图谱".to_string(), "graph".to_string()],
+            vec!["generate".to_string(), "analyze".to_string()],
+        );
+        assert_eq!(triggers.manual.len(), 2);
+        assert_eq!(triggers.auto_extracted.len(), 2);
+        assert!(triggers.has_triggers());
+    }
+
+    #[test]
+    fn test_command_triggers_empty() {
+        let triggers = CommandTriggers::empty();
+        assert!(triggers.manual.is_empty());
+        assert!(triggers.auto_extracted.is_empty());
+        assert!(!triggers.has_triggers());
     }
 }

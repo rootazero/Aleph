@@ -15,7 +15,7 @@ mod types;
 
 pub use parser::{CommandContext, CommandParser, ParsedCommand};
 pub use registry::CommandRegistry;
-pub use types::{CommandExecutionResult, CommandNode, CommandType};
+pub use types::{CommandExecutionResult, CommandNode, CommandTriggers, CommandType};
 
 // Re-export builtin hint localization
 pub use registry::get_builtin_hint;
