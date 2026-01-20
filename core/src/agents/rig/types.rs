@@ -72,6 +72,19 @@ impl AgentConfig {
 // Tool Call Types
 // =============================================================================
 
+/// How a tool call relates to the current goal
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum GoalRelation {
+    /// Directly achieves the goal
+    DirectlyAchieves,
+    /// Gathers information for subsequent decisions
+    GathersInformation,
+    /// Validates previous results
+    Validates,
+    /// Prepares for subsequent steps
+    Prepares,
+}
+
 /// Information about a tool call from the LLM
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallInfo {
@@ -83,6 +96,19 @@ pub struct ToolCallInfo {
 
     /// Arguments for the tool (JSON)
     pub arguments: Value,
+
+    // === New fields for context retention ===
+    /// Purpose of this call (LLM generated)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<String>,
+
+    /// Expected outcome type
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_outcome: Option<String>,
+
+    /// Relation to current goal
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub goal_relation: Option<GoalRelation>,
 }
 
 impl ToolCallInfo {
@@ -92,7 +118,28 @@ impl ToolCallInfo {
             id: id.into(),
             name: name.into(),
             arguments,
+            purpose: None,
+            expected_outcome: None,
+            goal_relation: None,
         }
+    }
+
+    /// Set the purpose of this tool call
+    pub fn with_purpose(mut self, purpose: impl Into<String>) -> Self {
+        self.purpose = Some(purpose.into());
+        self
+    }
+
+    /// Set the expected outcome
+    pub fn with_expected_outcome(mut self, outcome: impl Into<String>) -> Self {
+        self.expected_outcome = Some(outcome.into());
+        self
+    }
+
+    /// Set the goal relation
+    pub fn with_goal_relation(mut self, relation: GoalRelation) -> Self {
+        self.goal_relation = Some(relation);
+        self
     }
 }
 
@@ -293,5 +340,17 @@ mod tests {
 
         assert!(!result.success);
         assert!(result.error.is_some());
+    }
+
+    #[test]
+    fn test_tool_call_info_with_purpose() {
+        let info = ToolCallInfo::new("call_123", "search_files", serde_json::json!({"pattern": "*.toml"}))
+            .with_purpose("Find configuration files to determine build method")
+            .with_expected_outcome("List of config file paths")
+            .with_goal_relation(GoalRelation::GathersInformation);
+
+        assert_eq!(info.purpose, Some("Find configuration files to determine build method".to_string()));
+        assert_eq!(info.expected_outcome, Some("List of config file paths".to_string()));
+        assert_eq!(info.goal_relation, Some(GoalRelation::GathersInformation));
     }
 }
