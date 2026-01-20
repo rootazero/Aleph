@@ -77,7 +77,7 @@ public sealed partial class SearchSettingsPage : UserControl
 
     private void InitializeProviders()
     {
-        // Web Search Providers
+        // Web Search Providers (synced with macOS)
         _providers.Add(new SearchProviderItem
         {
             Id = "tavily",
@@ -85,43 +85,7 @@ public sealed partial class SearchSettingsPage : UserControl
             Description = "AI-optimized search API",
             Category = "Web Search",
             Icon = "\uE721",
-            IconBackground = new SolidColorBrush(Microsoft.UI.Colors.Blue),
-            RequiresSearchId = false,
-            AllowCustomUrl = false
-        });
-
-        _providers.Add(new SearchProviderItem
-        {
-            Id = "brave",
-            Name = "Brave Search",
-            Description = "Privacy-focused web search",
-            Category = "Web Search",
-            Icon = "\uE721",
-            IconBackground = new SolidColorBrush(Microsoft.UI.Colors.Orange),
-            RequiresSearchId = false,
-            AllowCustomUrl = false
-        });
-
-        _providers.Add(new SearchProviderItem
-        {
-            Id = "google",
-            Name = "Google CSE",
-            Description = "Google Custom Search Engine",
-            Category = "Web Search",
-            Icon = "\uE721",
-            IconBackground = new SolidColorBrush(Microsoft.UI.Colors.Green),
-            RequiresSearchId = true,
-            AllowCustomUrl = false
-        });
-
-        _providers.Add(new SearchProviderItem
-        {
-            Id = "bing",
-            Name = "Bing Search",
-            Description = "Microsoft Bing Web Search",
-            Category = "Web Search",
-            Icon = "\uE721",
-            IconBackground = new SolidColorBrush(Microsoft.UI.Colors.Teal),
+            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 79, 70, 229)), // #4F46E5
             RequiresSearchId = false,
             AllowCustomUrl = false
         });
@@ -133,20 +97,55 @@ public sealed partial class SearchSettingsPage : UserControl
             Description = "Self-hosted meta search engine",
             Category = "Web Search",
             Icon = "\uE721",
-            IconBackground = new SolidColorBrush(Microsoft.UI.Colors.Purple),
+            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 49, 130, 206)), // #3182CE
             RequiresSearchId = false,
             AllowCustomUrl = true
         });
 
-        // Code Search Providers
         _providers.Add(new SearchProviderItem
         {
-            Id = "github",
-            Name = "GitHub",
-            Description = "GitHub code search",
-            Category = "Code Search",
-            Icon = "\uE943",
-            IconBackground = new SolidColorBrush(Microsoft.UI.Colors.DarkSlateGray),
+            Id = "google",
+            Name = "Google CSE",
+            Description = "Google Custom Search Engine",
+            Category = "Web Search",
+            Icon = "\uE721",
+            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 66, 133, 244)), // #4285F4
+            RequiresSearchId = true,
+            AllowCustomUrl = false
+        });
+
+        _providers.Add(new SearchProviderItem
+        {
+            Id = "bing",
+            Name = "Bing",
+            Description = "Microsoft Bing Web Search",
+            Category = "Web Search",
+            Icon = "\uE721",
+            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 0, 131, 115)), // #008373
+            RequiresSearchId = false,
+            AllowCustomUrl = false
+        });
+
+        _providers.Add(new SearchProviderItem
+        {
+            Id = "brave",
+            Name = "Brave",
+            Description = "Privacy-focused web search",
+            Category = "Web Search",
+            Icon = "\uE721",
+            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 251, 84, 43)), // #FB542B
+            RequiresSearchId = false,
+            AllowCustomUrl = false
+        });
+
+        _providers.Add(new SearchProviderItem
+        {
+            Id = "exa",
+            Name = "Exa",
+            Description = "Neural search for AI applications",
+            Category = "Web Search",
+            Icon = "\uE721",
+            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 139, 92, 246)), // #8B5CF6
             RequiresSearchId = false,
             AllowCustomUrl = false
         });
