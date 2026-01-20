@@ -3,6 +3,7 @@
 //! Aggregates trigger keywords from all command sources (Skills, MCP, Custom)
 //! for natural language command detection.
 
+use crate::command::CommandTriggers;
 use crate::dispatcher::ToolSourceType;
 use std::collections::HashMap;
 
@@ -50,11 +51,38 @@ impl UnifiedCommandIndex {
     pub fn len(&self) -> usize {
         self.entries.len()
     }
+
+    /// Add a command with its triggers to the index
+    pub fn add_command(
+        &mut self,
+        source_type: ToolSourceType,
+        command_name: &str,
+        triggers: &CommandTriggers,
+    ) {
+        // Add manual triggers with weight 1.0
+        for trigger in &triggers.manual {
+            let key = trigger.to_lowercase();
+            self.entries
+                .entry(key)
+                .or_default()
+                .push(IndexEntry::new(source_type, command_name, 1.0));
+        }
+
+        // Add auto-extracted triggers with weight 0.6
+        for trigger in &triggers.auto_extracted {
+            let key = trigger.to_lowercase();
+            self.entries
+                .entry(key)
+                .or_default()
+                .push(IndexEntry::new(source_type, command_name, 0.6));
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::command::CommandTriggers;
 
     #[test]
     fn test_index_entry_creation() {
@@ -73,5 +101,19 @@ mod tests {
         let index = UnifiedCommandIndex::new();
         assert!(index.is_empty());
         assert_eq!(index.len(), 0);
+    }
+
+    #[test]
+    fn test_add_command_with_triggers() {
+        let mut index = UnifiedCommandIndex::new();
+        let triggers = CommandTriggers::new(
+            vec!["知识图谱".to_string(), "graph".to_string()],
+            vec!["dependencies".to_string()],
+        );
+
+        index.add_command(ToolSourceType::Skill, "knowledge-graph", &triggers);
+
+        assert!(!index.is_empty());
+        assert_eq!(index.len(), 3); // 3 unique triggers
     }
 }
