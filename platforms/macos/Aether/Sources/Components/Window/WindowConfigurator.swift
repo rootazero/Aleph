@@ -49,14 +49,16 @@ struct WindowConfigurator: NSViewRepresentable {
 
 /// Custom NSView subclass that monitors window size changes
 /// and enforces minimum size constraints using notifications (not delegate)
+@MainActor
 private class WindowConfiguratorView: NSView {
 
-    private var resizeObserver: NSObjectProtocol?
-    private var willResizeObserver: NSObjectProtocol?
+    /// Notification observers - nonisolated(unsafe) for cleanup in deinit
+    nonisolated(unsafe) private var resizeObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var willResizeObserver: NSObjectProtocol?
     private var hasConfiguredInitialPosition = false
 
     /// Track which windows have been initially positioned to avoid re-centering
-    private static var positionedWindows = Set<ObjectIdentifier>()
+    nonisolated(unsafe) private static var positionedWindows = Set<ObjectIdentifier>()
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -97,13 +99,16 @@ private class WindowConfiguratorView: NSView {
         }
 
         // Observe window resize events to enforce minimum size AFTER resize
+        // Note: closure runs on .main queue so MainActor.assumeIsolated is safe
         resizeObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResizeNotification,
             object: window,
             queue: .main
         ) { [weak self, weak window] _ in
-            guard let window = window else { return }
-            self?.enforceMinimumSize(for: window)
+            MainActor.assumeIsolated {
+                guard let window = window else { return }
+                self?.enforceMinimumSize(for: window)
+            }
         }
 
         // Schedule periodic check during resize
@@ -113,37 +118,45 @@ private class WindowConfiguratorView: NSView {
             object: window,
             queue: .main
         ) { [weak self, weak window] _ in
-            guard let window = window else { return }
-            // Re-apply constraints at start of resize
-            window.minSize = NSSize(width: kMinWindowWidth, height: kMinWindowHeight)
-            window.contentMinSize = NSSize(width: kMinWindowWidth, height: kMinWindowHeight)
-            self?.startResizeMonitor(for: window)
+            MainActor.assumeIsolated {
+                guard let window = window else { return }
+                // Re-apply constraints at start of resize
+                window.minSize = NSSize(width: kMinWindowWidth, height: kMinWindowHeight)
+                window.contentMinSize = NSSize(width: kMinWindowWidth, height: kMinWindowHeight)
+                self?.startResizeMonitor(for: window)
+            }
         }
     }
 
-    private var resizeTimer: Timer?
+    /// Resize timer - nonisolated(unsafe) for access from Timer callback
+    nonisolated(unsafe) private var resizeTimer: Timer?
 
     private func startResizeMonitor(for window: NSWindow) {
         // Monitor during live resize to enforce constraints
         resizeTimer?.invalidate()
-        resizeTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self, weak window] timer in
-            guard let window = window else {
-                timer.invalidate()
-                return
-            }
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self, weak window] _ in
+            // Timer callbacks run on main thread
+            MainActor.assumeIsolated {
+                guard let window = window else {
+                    self?.resizeTimer?.invalidate()
+                    self?.resizeTimer = nil
+                    return
+                }
 
-            // Check if still resizing
-            if !window.inLiveResize {
-                timer.invalidate()
-                self?.resizeTimer = nil
-                // Final enforcement after resize ends
+                // Check if still resizing
+                if !window.inLiveResize {
+                    self?.resizeTimer?.invalidate()
+                    self?.resizeTimer = nil
+                    // Final enforcement after resize ends
+                    self?.enforceMinimumSize(for: window)
+                    return
+                }
+
+                // Enforce during resize
                 self?.enforceMinimumSize(for: window)
-                return
             }
-
-            // Enforce during resize
-            self?.enforceMinimumSize(for: window)
         }
+        resizeTimer = timer
     }
 
     private func enforceMinimumSize(for window: NSWindow) {
@@ -155,6 +168,17 @@ private class WindowConfiguratorView: NSView {
             // Adjust origin to keep top-left corner in place
             newFrame.origin.y -= (newFrame.height - frame.height)
             window.setFrame(newFrame, display: true, animate: false)
+        }
+    }
+
+    nonisolated private func cleanupObserversNonisolated() {
+        // Safe cleanup that can be called from deinit
+        // NotificationCenter.removeObserver is thread-safe
+        if let observer = resizeObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = willResizeObserver {
+            NotificationCenter.default.removeObserver(observer)
         }
     }
 
@@ -172,7 +196,7 @@ private class WindowConfiguratorView: NSView {
     }
 
     deinit {
-        cleanupObservers()
+        cleanupObserversNonisolated()
     }
 }
 

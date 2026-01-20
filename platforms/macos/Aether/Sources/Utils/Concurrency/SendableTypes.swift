@@ -96,7 +96,7 @@ public struct AnySendable: @unchecked Sendable {
 
 // MARK: - Task Sleep Extension
 
-extension Task where Success == Never, Failure == Never {
+public extension Task where Success == Never, Failure == Never {
     /// Sleep for a specified number of seconds.
     /// Convenience wrapper for Task.sleep(nanoseconds:).
     ///
@@ -104,7 +104,7 @@ extension Task where Success == Never, Failure == Never {
     /// ```swift
     /// try await Task.sleep(seconds: 0.5)
     /// ```
-    public static func sleep(seconds: Double) async throws {
+    static func sleep(seconds: Double) async throws {
         try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
 }

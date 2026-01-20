@@ -177,9 +177,9 @@ final class MultiTurnCoordinator {
         let isFirstMessage = messageCount == 1
         print("[MultiTurnCoordinator] handleInput: messageCount=\(messageCount), isFirstMessage=\(isFirstMessage)")
 
-        // Process in background
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.processWithAI(
+        // Process in background using Task for proper actor isolation
+        Task.detached { [weak self] in
+            await self?.processWithAI(
                 text: text,
                 topic: topic,
                 userDisplayText: text,

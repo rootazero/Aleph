@@ -156,6 +156,7 @@ enum DesignTokens {
 
     /// Adaptive materials with automatic fallback for older macOS versions
     /// Reference: WWDC 2025 - Apple Design System (Liquid Glass)
+    @MainActor
     enum Materials {
         /// Sidebar material - for floating navigation sidebars
         static var sidebar: AdaptiveMaterial { .sidebar }

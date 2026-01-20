@@ -79,7 +79,11 @@ struct ProviderCard: View {
                                 .frame(width: 20, height: 20)
                                 .background(
                                     RoundedRectangle(cornerRadius: 4)
-                                        .strokeBorder(Color(hex: provider.config.color)?.opacity(0.3) ?? DesignTokens.Colors.accentBlue.opacity(0.3), lineWidth: 1)
+                                        .strokeBorder(
+                                            Color(hex: provider.config.color)?.opacity(0.3)
+                                                ?? DesignTokens.Colors.accentBlue.opacity(0.3),
+                                            lineWidth: 1
+                                        )
                                 )
                         }
                         .buttonStyle(.plain)

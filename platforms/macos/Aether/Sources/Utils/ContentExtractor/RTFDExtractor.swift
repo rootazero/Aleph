@@ -128,7 +128,14 @@ final class RTFDExtractor: ContentExtractor {
             let sizeBytes = UInt64(data.count)
             if sizeBytes > MediaSizeLimits.maxImageSizeBytes {
                 let sizeMB = Double(sizeBytes) / (1024.0 * 1024.0)
-                oversizeError = String(format: "Embedded image \"%@\" (%.1fMB) exceeds the maximum limit of %@. Please use a smaller image.", filename, sizeMB, MediaSizeLimits.maxImageSizeDescription)
+                let errorFormat = "Embedded image \"%@\" (%.1fMB) exceeds the maximum limit of %@. "
+                    + "Please use a smaller image."
+                oversizeError = String(
+                    format: errorFormat,
+                    filename,
+                    sizeMB,
+                    MediaSizeLimits.maxImageSizeDescription
+                )
                 logger.error("RTFD attachment too large: \(filename) (\(sizeBytes) bytes)")
                 // Stop enumeration
                 stop.pointee = true

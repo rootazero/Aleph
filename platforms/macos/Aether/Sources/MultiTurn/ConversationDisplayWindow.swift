@@ -146,7 +146,10 @@ final class ConversationDisplayWindow: NSWindow {
             context.duration = 0.15
             self.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            self?.orderOut(nil)
+            // Completion handler runs on main thread
+            MainActor.assumeIsolated {
+                self?.orderOut(nil)
+            }
         })
     }
 

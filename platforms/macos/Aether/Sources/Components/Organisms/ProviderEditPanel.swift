@@ -438,7 +438,10 @@ struct ProviderEditPanel: View {
                     // Top-K (Claude, Gemini, Ollama)
                     if providerType == "claude" || providerType == "gemini" || providerType == "ollama" {
                         FormField(title: L("provider.field.top_k_optional")) {
-                            TextField(providerType == "ollama" ? L("provider.placeholder.top_k_ollama") : L("provider.placeholder.top_k_default"), text: $topK)
+                            let topKPlaceholder = providerType == "ollama"
+                                ? L("provider.placeholder.top_k_ollama")
+                                : L("provider.placeholder.top_k_default")
+                            TextField(topKPlaceholder, text: $topK)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 150)
                             Text(L("provider.help.top_k"))
@@ -1286,6 +1289,7 @@ struct ProviderEditPanel: View {
         }
     }
 
+    // swiftlint:disable line_length
     private func getProviderDescription(_ type: String?) -> String {
         switch type?.lowercased() ?? "" {
         case "openai":
@@ -1300,6 +1304,7 @@ struct ProviderEditPanel: View {
             return "A configured AI language model provider for use with Aether."
         }
     }
+    // swiftlint:enable line_length
 
     // MARK: - Parameter Helpers
 

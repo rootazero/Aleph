@@ -67,7 +67,10 @@ final class UnifiedConversationWindow: NSWindow {
         if let monitor = escapeMonitor {
             NSEvent.removeMonitor(monitor)
         }
-        removeNotificationObservers()
+        // NotificationCenter.removeObserver is thread-safe
+        for observer in notificationObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 
     // MARK: - Window Setup
@@ -149,8 +152,11 @@ final class UnifiedConversationWindow: NSWindow {
             object: nil,
             queue: .main
         ) { [weak self] notification in
+            // Extract data before MainActor.assumeIsolated to avoid sending Notification
             guard let steps = notification.userInfo?["steps"] as? [String] else { return }
-            self?.viewModel.setPlanSteps(steps)
+            MainActor.assumeIsolated {
+                self?.viewModel.setPlanSteps(steps)
+            }
         }
         notificationObservers.append(planObserver)
 
@@ -160,8 +166,11 @@ final class UnifiedConversationWindow: NSWindow {
             object: nil,
             queue: .main
         ) { [weak self] notification in
+            // Extract data before MainActor.assumeIsolated to avoid sending Notification
             guard let toolName = notification.userInfo?["toolName"] as? String else { return }
-            self?.viewModel.setToolCallStarted(toolName)
+            MainActor.assumeIsolated {
+                self?.viewModel.setToolCallStarted(toolName)
+            }
         }
         notificationObservers.append(startedObserver)
 
@@ -171,7 +180,9 @@ final class UnifiedConversationWindow: NSWindow {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.viewModel.setToolCallCompleted()
+            MainActor.assumeIsolated {
+                self?.viewModel.setToolCallCompleted()
+            }
         }
         notificationObservers.append(completedObserver)
 
@@ -181,7 +192,9 @@ final class UnifiedConversationWindow: NSWindow {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.viewModel.setToolCallFailed()
+            MainActor.assumeIsolated {
+                self?.viewModel.setToolCallFailed()
+            }
         }
         notificationObservers.append(failedObserver)
     }
@@ -287,8 +300,11 @@ final class UnifiedConversationWindow: NSWindow {
             context.duration = 0.15
             self.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            self?.orderOut(nil)
-            self?.viewModel.reset()
+            // Completion handler runs on main thread
+            MainActor.assumeIsolated {
+                self?.orderOut(nil)
+                self?.viewModel.reset()
+            }
         })
     }
 

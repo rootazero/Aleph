@@ -71,16 +71,31 @@ struct StreamingTextView: View {
             return
         }
 
-        // Start typewriter animation
-        var currentIndex = start
-        animationTimer = Timer.scheduledTimer(withTimeInterval: delayPerCharacter, repeats: true) { [self] timer in
-            if currentIndex < end {
-                currentIndex += 1
-                visibleCharacters = currentIndex
-            } else {
-                timer.invalidate()
+        // Start typewriter animation using a class to hold mutable state
+        final class AnimationState: @unchecked Sendable {
+            var currentIndex: Int
+            // Store timer reference for safe invalidation from within closure
+            weak var timer: Timer?
+            init(_ start: Int) { self.currentIndex = start }
+        }
+        let state = AnimationState(start)
+
+        // Capture the binding to update visibleCharacters
+        let visibleCharactersBinding = _visibleCharacters
+
+        let timer = Timer.scheduledTimer(withTimeInterval: delayPerCharacter, repeats: true) { _ in
+            // Timer callbacks run on main thread
+            MainActor.assumeIsolated {
+                if state.currentIndex < end {
+                    state.currentIndex += 1
+                    visibleCharactersBinding.wrappedValue = state.currentIndex
+                } else {
+                    state.timer?.invalidate()
+                }
             }
         }
+        state.timer = timer
+        animationTimer = timer
     }
 }
 
@@ -98,6 +113,7 @@ struct StreamingTextView_Previews: PreviewProvider {
             .previewDisplayName("Short Text")
 
             StreamingTextView(
+                // swiftlint:disable:next line_length
                 text: "This is a much longer streaming response that will demonstrate the line wrapping and truncation behavior when text exceeds the maximum number of lines allowed in the view.",
                 textColor: Color.cyan
             )

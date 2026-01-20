@@ -225,9 +225,12 @@ final class HaloWindow: NSWindow {
             context.duration = 0.2
             self.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            guard let self = self, self.hideSequence == currentSequence else { return }
-            self.orderOut(nil)
-            self.viewModel.state = .idle
+            // Completion handler runs on main thread
+            MainActor.assumeIsolated {
+                guard let self = self, self.hideSequence == currentSequence else { return }
+                self.orderOut(nil)
+                self.viewModel.state = .idle
+            }
         })
     }
 

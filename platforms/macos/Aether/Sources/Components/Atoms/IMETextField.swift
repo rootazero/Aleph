@@ -185,6 +185,7 @@ struct IMETextField: NSViewRepresentable {
         Coordinator(self)
     }
 
+    @MainActor
     class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: IMETextField
         var onSubmit: (() -> Void)?
@@ -205,22 +206,27 @@ struct IMETextField: NSViewRepresentable {
 
         func controlTextDidChange(_ obj: Notification) {
             print("[IMETextField] controlTextDidChange called")
-            handleTextChange(from: obj)
+            guard let textField = obj.object as? NSTextField else {
+                print("[IMETextField] ❌ Could not get textField from notification")
+                return
+            }
+            let newValue = textField.stringValue
+            handleTextChange(newValue: newValue)
         }
 
         /// NotificationCenter backup method for text changes
         @objc func textDidChangeNotification(_ notification: Notification) {
             print("[IMETextField] textDidChangeNotification called (NotificationCenter)")
-            handleTextChange(from: notification)
-        }
-
-        /// Unified text change handler
-        private func handleTextChange(from notification: Notification) {
             guard let textField = notification.object as? NSTextField else {
                 print("[IMETextField] ❌ Could not get textField from notification")
                 return
             }
             let newValue = textField.stringValue
+            handleTextChange(newValue: newValue)
+        }
+
+        /// Unified text change handler
+        private func handleTextChange(newValue: String) {
             print("[IMETextField] Text changed to: '\(newValue)'")
             parent.text = newValue
             if let callback = onTextChange {

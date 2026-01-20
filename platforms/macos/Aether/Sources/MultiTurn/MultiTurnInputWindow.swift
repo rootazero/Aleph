@@ -173,8 +173,11 @@ final class MultiTurnInputWindow: NSWindow {
             context.duration = 0.15
             self.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            self?.orderOut(nil)
-            self?.viewModel.reset()
+            // Completion handler runs on main thread
+            MainActor.assumeIsolated {
+                self?.orderOut(nil)
+                self?.viewModel.reset()
+            }
         })
     }
 

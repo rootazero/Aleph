@@ -62,7 +62,11 @@ struct UnifiedSaveBar: View {
                 }
 
                 // Error message (if provided via statusMessage parameter)
-                if let message = statusMessage, message.contains("Failed") || message.contains("Error") || message.contains("失败") || message.contains("错误") {
+                let isErrorMessage = statusMessage?.contains("Failed") == true
+                    || statusMessage?.contains("Error") == true
+                    || statusMessage?.contains("失败") == true
+                    || statusMessage?.contains("错误") == true
+                if let message = statusMessage, isErrorMessage {
                     Text("• \(message)")
                         .font(DesignTokens.Typography.caption)
                         .foregroundColor(DesignTokens.Colors.error)

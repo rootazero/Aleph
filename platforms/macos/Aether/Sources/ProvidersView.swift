@@ -372,12 +372,13 @@ struct ProvidersView: View {
                     testResults[preset.id] = .failure(result.message)
                 }
 
-                // Auto-clear result after 5 seconds
-                let timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
-                    testResults[preset.id] = nil
-                    testResultTimers[preset.id] = nil
+                // Auto-clear result after 5 seconds using async Task
+                let presetId = preset.id
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
+                    testResults[presetId] = nil
+                    testResultTimers[presetId] = nil
                 }
-                testResultTimers[preset.id] = timer
             }
         }
     }

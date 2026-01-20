@@ -165,6 +165,7 @@ struct ProviderIcon: View {
 
 // MARK: - Helper Function
 
+@MainActor
 private func iconPreview(_ name: String, _ type: String) -> some View {
     VStack(spacing: 6) {
         ProviderIcon(providerType: type, size: 32)

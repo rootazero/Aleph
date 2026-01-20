@@ -58,7 +58,13 @@ final class DirectImageExtractor: ContentExtractor {
                 let sizeBytes = UInt64(finalData.count)
                 if sizeBytes > MediaSizeLimits.maxImageSizeBytes {
                     let sizeMB = Double(sizeBytes) / (1024.0 * 1024.0)
-                    let errorMessage = String(format: "Image size (%.1fMB) exceeds the maximum limit of %@. Please use a smaller image.", sizeMB, MediaSizeLimits.maxImageSizeDescription)
+                    let errorFormat = "Image size (%.1fMB) exceeds the maximum limit of %@. "
+                        + "Please use a smaller image."
+                    let errorMessage = String(
+                        format: errorFormat,
+                        sizeMB,
+                        MediaSizeLimits.maxImageSizeDescription
+                    )
                     logger.error("Image too large: \(sizeBytes) bytes (max: \(MediaSizeLimits.maxImageSizeBytes))")
                     // Return error immediately to stop processing
                     return ExtractionResult(

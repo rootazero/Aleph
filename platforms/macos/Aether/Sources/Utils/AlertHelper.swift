@@ -80,6 +80,7 @@ func showErrorToast(title: String, message: String, autoDismiss: Bool = false) {
 ///   - message: Detailed alert message (informativeText)
 ///
 /// - Note: Automatically uses localized "OK" button via `common.ok` key
+@MainActor
 func showInfoAlert(title: String, message: String) {
     let alert = NSAlert()
     alert.messageText = title
@@ -96,6 +97,7 @@ func showInfoAlert(title: String, message: String) {
 /// - Parameters:
 ///   - title: Alert title (messageText)
 ///   - message: Detailed alert message (informativeText)
+@MainActor
 func showWarningAlert(title: String, message: String) {
     let alert = NSAlert()
     alert.messageText = title
@@ -112,6 +114,7 @@ func showWarningAlert(title: String, message: String) {
 /// - Parameters:
 ///   - title: Alert title (messageText)
 ///   - message: Detailed alert message (informativeText)
+@MainActor
 func showErrorAlert(title: String, message: String) {
     let alert = NSAlert()
     alert.messageText = title

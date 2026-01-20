@@ -202,6 +202,7 @@ struct StreamingMessageBubble: View {
 
 // MARK: - Preview
 
+// swiftlint:disable line_length
 #Preview("Streaming Message") {
     VStack(spacing: 20) {
         StreamingMessageBubble(
@@ -224,3 +225,4 @@ struct StreamingMessageBubble: View {
     .frame(width: 800, height: 400)
     .background(Color.gray.opacity(0.2))
 }
+// swiftlint:enable line_length
