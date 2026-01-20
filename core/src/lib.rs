@@ -57,8 +57,8 @@ pub mod agents; // NEW: Sub-agent system (Phase 4)
 pub mod capability;
 pub mod clarification; // NEW: Phantom Flow interaction types
 mod clipboard;
-pub mod components; // NEW: Core event handler components for agentic loop
 pub mod command; // NEW: Command completion system
+pub mod components; // NEW: Core event handler components for agentic loop
 mod config;
 pub mod conversation; // NEW: Multi-turn conversation support
 mod core;
@@ -84,6 +84,7 @@ pub mod mcp; // NEW: MCP (Model Context Protocol) capability
 pub mod memory;
 pub mod metrics;
 pub mod payload; // Structured context protocol with capability support
+pub mod planner; // NEW: Unified planner for 2-layer architecture
 pub mod providers;
 pub mod rig_tools; // NEW: Rig-compatible tool wrapper
 pub mod runtimes; // NEW: Runtime manager for external tools (uv, fnm, yt-dlp)
@@ -168,7 +169,7 @@ pub use crate::skills::{
 pub use crate::utils::paths::{get_skills_dir, get_skills_dir_string};
 // Initialization exports (new unified module)
 pub use crate::initialization::{
-    InitError, InitializationCoordinator, InitializationResult, InitPhase, InitProgressHandler,
+    InitError, InitPhase, InitProgressHandler, InitializationCoordinator, InitializationResult,
 };
 // NOTE: Skill modification functions are in AetherCore to ensure automatic tool registry refresh.
 // Use AetherCore.delete_skill(), AetherCore.install_skill(), etc.
@@ -294,50 +295,110 @@ pub use crate::generation::{
     GenerationType, MockGenerationProvider,
 };
 
+// Planner exports (unified 2-layer architecture)
+pub use crate::planner::{ExecutionPlan, PlannedTask, PlannerError};
+
 // Event system exports (event-driven agentic loop)
 pub use crate::event::{
-    AetherEvent, EventBus, EventBusConfig, EventContext, EventHandler,
-    EventHandlerRegistry, EventSubscriber, EventType, HandlerError, TimestampedEvent,
+    AetherEvent,
     // Event payload types
-    AiResponse, CompactionInfo, ErrorKind, InputContext, InputEvent, LoopState,
-    PlanRequest, PlanStep, SessionDiff, SessionInfo, StepStatus, StopReason,
-    SubAgentRequest, SubAgentResult, TaskPlan, TokenUsage, ToolCallError,
-    ToolCallRequest, ToolCallResult, ToolCallRetry, ToolCallStarted,
-    UserQuestion, UserResponse,
+    AiResponse,
+    CompactionInfo,
+    ErrorKind,
+    EventBus,
+    EventBusConfig,
+    EventContext,
+    EventHandler,
+    EventHandlerRegistry,
+    EventSubscriber,
+    EventType,
+    HandlerError,
+    InputContext,
+    InputEvent,
+    LoopState,
+    PlanRequest,
+    PlanStep,
+    SessionDiff,
+    SessionInfo,
+    StepStatus,
+    StopReason,
+    SubAgentRequest,
+    SubAgentResult,
+    TaskPlan,
+    TimestampedEvent,
+    TokenUsage,
+    ToolCallError,
+    ToolCallRequest,
+    ToolCallResult,
+    ToolCallRetry,
+    ToolCallStarted,
+    UserQuestion,
+    UserResponse,
 };
 
 // Component exports (event handler implementations for agentic loop)
 pub use crate::components::{
+    AiResponsePart,
+    Complexity,
+    ComponentContext,
+    Decision,
     // Session types
-    ExecutionSession, SessionStatus, SessionPart, ToolCallRecord, Complexity, Decision,
-    ComponentContext, UserInputPart, AiResponsePart, ToolCallPart, ToolCallStatus,
-    ReasoningPart, PlanPart, SubAgentPart, SummaryPart,
+    ExecutionSession,
     // Core components
-    IntentAnalyzer, TaskPlanner, ToolExecutor,
-    LoopController, LoopConfig,
-    SessionRecorder, SessionRecord, RecorderError,
-    SessionCompactor, ModelLimit, TokenTracker,
+    IntentAnalyzer,
+    LoopConfig,
+    LoopController,
+    ModelLimit,
+    PlanPart,
+    ReasoningPart,
+    RecorderError,
+    SessionCompactor,
+    SessionPart,
+    SessionRecord,
+    SessionRecorder,
+    SessionStatus,
     SubAgentHandler,
+    SubAgentPart,
+    SummaryPart,
+    TaskPlanner,
+    TokenTracker,
+    ToolCallPart,
+    ToolCallRecord,
+    ToolCallStatus,
+    ToolExecutor,
+    UserInputPart,
 };
 // Note: RetryPolicy from components is available as components::RetryPolicy
 // to avoid conflict with config::RetryPolicy (network retry policy)
 
 // Agent system exports (Phase 4 sub-agent system)
 pub use crate::agents::{
-    builtin_agents, AgentDef, AgentMode, AgentRegistry,
-    TaskTool, TaskToolError, TaskToolResult,
+    builtin_agents, AgentDef, AgentMode, AgentRegistry, TaskTool, TaskToolError, TaskToolResult,
 };
 
 // Core interface exports (rig-core based architecture)
 pub use crate::uniffi_core::{
-    init_core, AetherCore, AetherEventHandler, AetherFfiError, MemoryItem, ProcessOptions,
-    SessionSummary, ToolInfoFFI,
+    init_core,
+    AetherCore,
+    AetherEventHandler,
+    AetherFfiError,
     // Generation FFI types
-    GenerationDataFFI, GenerationDataTypeFFI, GenerationMetadataFFI, GenerationOutputFFI,
-    GenerationParamsFFI, GenerationProgressFFI, GenerationProviderConfigFFI,
-    GenerationProviderInfoFFI, GenerationTypeFFI,
+    GenerationDataFFI,
+    GenerationDataTypeFFI,
+    GenerationMetadataFFI,
+    GenerationOutputFFI,
+    GenerationParamsFFI,
+    GenerationProgressFFI,
+    GenerationProviderConfigFFI,
+    GenerationProviderInfoFFI,
+    GenerationTypeFFI,
+    MemoryItem,
+    ProcessOptions,
     // Runtime FFI types
-    RuntimeInfo, RuntimeUpdateInfo,
+    RuntimeInfo,
+    RuntimeUpdateInfo,
+    SessionSummary,
+    ToolInfoFFI,
 };
 
 // Initialization FFI types (unified) - UniFFI only
