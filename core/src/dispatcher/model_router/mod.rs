@@ -39,6 +39,7 @@ mod intelligent_routing;
 mod intent;
 mod matcher;
 mod metrics;
+mod orchestrator;
 mod profiles;
 mod retry;
 mod rules;
@@ -77,6 +78,12 @@ pub use budget::{
     BudgetCheckResult, BudgetEnforcement, BudgetEvent, BudgetLimit, BudgetManager,
     BudgetPeriod, BudgetScope, BudgetState, CostEstimate, CostEstimator, ModelPricing,
     PricingSource,
+};
+
+// Retry Orchestrator (P1)
+pub use orchestrator::{
+    AttemptRecord, ExecutionError, ExecutionRequest, ExecutionResult, OrchestratorConfig,
+    OrchestratorEvent, RetryOrchestrator,
 };
 
 // Re-export StageResult from cowork_types module for backward compatibility
