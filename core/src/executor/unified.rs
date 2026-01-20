@@ -298,13 +298,6 @@ impl UnifiedExecutor {
                 self.event_handler
                     .on_tool_call_failed(call_id, error_msg.clone(), is_retryable);
 
-                let _tool_record = ToolCallRecord::failure(
-                    &tool_name,
-                    parameters,
-                    &error_msg,
-                    tool_duration.as_millis() as u64,
-                );
-
                 Err(ExecutorError::tool_error(error_msg))
             }
         }
