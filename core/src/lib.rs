@@ -113,6 +113,8 @@ pub use crate::config::{
     Config,
     ContextRuleConfig,
     DispatcherConfigToml,
+    // Experimental feature flags
+    ExperimentalPolicy,
     FullConfig,
     GeneralConfig,
     // Generation config types
@@ -332,6 +334,7 @@ pub use crate::planner::{
 // Prompt exports (unified prompt management)
 pub use crate::prompt::{
     ConversationalPrompt, ExecutorPrompt, PromptBuilder, PromptConfig, PromptTemplate, TemplateVar,
+    ToolInfo as PromptToolInfo,
 };
 
 // Executor exports (unified 2-layer architecture)

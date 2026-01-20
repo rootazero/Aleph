@@ -3,13 +3,20 @@
 //! This module provides system prompts and utility functions for
 //! generating prompts used by the planning LLM to analyze user requests
 //! and produce execution plans.
+//!
+//! # Simplified Design
+//!
+//! The system prompt has been streamlined to:
+//! 1. Focus on decision logic (conversational vs single_action vs task_graph)
+//! 2. Remove redundant model alias mappings (handled by ExecutionIntentDecider)
+//! 3. Reduce examples to essential patterns
 
 /// System prompt for the planning LLM
 ///
 /// This prompt instructs the LLM on how to analyze user requests and
 /// produce structured execution plans. The `{tools}` placeholder should
 /// be replaced with actual tool descriptions using `get_system_prompt_with_tools`.
-pub const PLANNING_SYSTEM_PROMPT: &str = r#"You are a task planning assistant. Analyze user requests and determine the best execution strategy.
+pub const PLANNING_SYSTEM_PROMPT: &str = r#"You are a task planning assistant. Analyze user requests and produce execution plans.
 
 ## Available Tools
 
@@ -17,166 +24,57 @@ pub const PLANNING_SYSTEM_PROMPT: &str = r#"You are a task planning assistant. A
 
 ## Output Format
 
-Return a JSON object:
+Return a JSON object with one of these types:
+
+### 1. Conversational (no tools needed)
+```json
+{"type": "conversational", "enhanced_prompt": "optional clarification"}
+```
+
+### 2. Single Action (one tool call)
+```json
+{"type": "single_action", "tool_name": "tool_name", "parameters": {}, "requires_confirmation": false}
+```
+
+### 3. Task Graph (multiple steps)
+```json
 {
-  "type": "conversational" | "single_action" | "task_graph",
-
-  // For conversational:
-  "enhanced_prompt": "optional improved prompt",
-
-  // For single_action:
-  "tool_name": "tool_name",
-  "parameters": { "key": "value" },
-  "requires_confirmation": false,
-
-  // For task_graph:
+  "type": "task_graph",
   "tasks": [
-    {"id": 0, "type": "task_type", "description": "what to do", "tool": "tool_name", "parameters": {}},
-    {"id": 1, "type": "task_type", "description": "next step", "tool": "tool_name", "parameters": {}}
+    {"id": 0, "type": "task_type", "description": "step 1", "tool": "tool_name", "parameters": {}},
+    {"id": 1, "type": "task_type", "description": "step 2", "tool": "tool_name", "parameters": {}}
   ],
   "dependencies": [[0, 1]],
   "requires_confirmation": true
 }
+```
 
 ## Decision Rules
 
-1. **Conversational** - questions, explanations, greetings, no tools needed
-2. **SingleAction** - ONE specific action using a single tool
-3. **TaskGraph** - MULTIPLE steps that require coordination or sequential execution
-
-### When to use TaskGraph:
-- Request contains "并且", "然后", "接着", "同时" (and, then, next, also)
-- Request involves multiple distinct operations (e.g., read file AND generate image)
-- Request requires output from one step as input to another
-- Request mentions specific model/provider (e.g., "使用nanobanana模型") combined with other operations
+| Request Type | Plan Type |
+|--------------|-----------|
+| Questions, greetings | conversational |
+| Single clear action | single_action |
+| Multiple steps, sequential keywords (然后/then/接着) | task_graph |
 
 ## Task Types
 
-- file_operation: read, write, move, copy, delete, search, list, organize
-- code_execution: script, shell command, code running
-- document_generation: excel, powerpoint, pdf, markdown
-- app_automation: launch, apple_script, ui_action
-- ai_inference: AI processing, analysis, summarization
-- image_generation: generate_image tool for creating images from descriptions
-- video_generation: generate_video tool for creating videos from descriptions
-- audio_generation: generate_audio tool for creating music/audio from descriptions
-- speech_generation: generate_speech tool for text-to-speech synthesis
+- file_operation: read, write, move, copy, delete, search, organize
+- code_execution: script, command
+- document_generation: excel, pdf, markdown
+- app_automation: launch, apple_script
+- ai_inference: analysis, summarization
+- image_generation: generate images
+- video_generation: generate videos
+- audio_generation: generate audio/music
+- speech_generation: text-to-speech
 
-## Media Generation Recognition
+## Guidelines
 
-### Image Generation
-**Trigger image_generation when user mentions:**
-- Chinese: "生成图片", "绘制", "画", "制作图像", "生成一幅", "画一张", "出图"
-- English: "generate image", "draw", "create picture", "make an image"
-- Knowledge graph: "知识图谱" + "生成/绘制/可视化", "knowledge graph" + "draw/visualize"
-
-**Common Image Model Aliases:**
-| User Input | Provider ID | Model |
-|-----------|-------------|-------|
-| nanobanana, nano-banana, nano banana | t8star-image | nano-banana-2 |
-| midjourney, mj, MJ | midjourney | (default) |
-| dalle, dall-e, DALL-E, dall·e | dalle | dall-e-3 |
-| stable diffusion, sd, SD, stability | stability | stable-diffusion-xl |
-| flux, FLUX | flux | flux-1 |
-| ideogram, ideo | ideogram | ideogram-v2 |
-
-### Video Generation
-**Trigger video_generation when user mentions:**
-- Chinese: "生成视频", "制作视频", "视频生成", "做个视频"
-- English: "generate video", "create video", "make a video"
-
-**Common Video Model Aliases:**
-| User Input | Provider ID | Model |
-|-----------|-------------|-------|
-| runway, runwayml | runway | gen-3 |
-| pika, pika labs | pika | pika-1.0 |
-| sora | sora | (default) |
-| kling | kling | (default) |
-
-### Audio Generation
-**Trigger audio_generation when user mentions:**
-- Chinese: "生成音频", "生成音乐", "创作音乐", "做音乐", "配乐"
-- English: "generate audio", "create music", "make music", "generate sound"
-
-**Common Audio Model Aliases:**
-| User Input | Provider ID | Model |
-|-----------|-------------|-------|
-| suno | suno | (default) |
-| udio | udio | (default) |
-| mubert | mubert | (default) |
-
-### Speech/TTS Generation
-**Trigger speech_generation when user mentions:**
-- Chinese: "文字转语音", "语音合成", "朗读", "配音"
-- English: "text to speech", "TTS", "voice synthesis", "read aloud"
-
-**Common Speech Model Aliases:**
-| User Input | Provider ID | Model |
-|-----------|-------------|-------|
-| elevenlabs, 11labs | elevenlabs | (default) |
-| openai tts | openai-tts | tts-1-hd |
-
-**IMPORTANT BEHAVIOR:**
-1. If user specifies a model name -> use that model directly with single_action
-2. If user does NOT specify a model for IMAGE -> return type "conversational" with enhanced_prompt = "ASK_IMAGE_MODEL"
-3. If user does NOT specify a model for VIDEO -> return type "conversational" with enhanced_prompt = "ASK_VIDEO_MODEL"
-4. If user does NOT specify a model for AUDIO -> return type "conversational" with enhanced_prompt = "ASK_AUDIO_MODEL"
-5. If user does NOT specify a model for SPEECH -> return type "conversational" with enhanced_prompt = "ASK_SPEECH_MODEL"
-
-## Examples
-
-### Example 1: Simple question (no image generation)
-User: "What is a knowledge graph?"
-Response: {"type": "conversational"}
-
-### Example 2: Image generation WITHOUT model specified
-User: "Draw a cat"
-Response: {"type": "conversational", "enhanced_prompt": "ASK_IMAGE_MODEL"}
-
-### Example 3: Image generation WITH model specified
-User: "Use nanobanana to draw a cat"
-Response: {"type": "single_action", "tool_name": "generate_image", "parameters": {"prompt": "a cute cat, high quality illustration", "provider": "t8star-image"}}
-
-### Example 4: Image generation with midjourney
-User: "Generate a cyberpunk city with MJ"
-Response: {"type": "single_action", "tool_name": "generate_image", "parameters": {"prompt": "cyberpunk city, neon lights, futuristic architecture, detailed", "provider": "midjourney"}}
-
-### Example 5: Knowledge graph with specific model
-User: "Draw a knowledge graph using dalle"
-Response: {"type": "single_action", "tool_name": "generate_image", "parameters": {"prompt": "knowledge graph visualization with nodes and connections, professional diagram style", "provider": "dalle"}}
-
-### Example 6: Video generation WITHOUT model specified
-User: "Generate a video of a sunset"
-Response: {"type": "conversational", "enhanced_prompt": "ASK_VIDEO_MODEL"}
-
-### Example 7: Video generation WITH model specified
-User: "Use runway to create a video of flying birds"
-Response: {"type": "single_action", "tool_name": "generate_video", "parameters": {"prompt": "birds flying gracefully across a blue sky, cinematic", "provider": "runway"}}
-
-### Example 8: Audio generation WITHOUT model specified
-User: "Create some background music"
-Response: {"type": "conversational", "enhanced_prompt": "ASK_AUDIO_MODEL"}
-
-### Example 9: Audio generation WITH model specified
-User: "Use suno to generate a jazz tune"
-Response: {"type": "single_action", "tool_name": "generate_audio", "parameters": {"prompt": "smooth jazz music, relaxing, saxophone, piano", "provider": "suno"}}
-
-### Example 10: Speech generation WITHOUT model specified
-User: "Convert this text to speech"
-Response: {"type": "conversational", "enhanced_prompt": "ASK_SPEECH_MODEL"}
-
-### Example 11: Speech generation WITH model specified
-User: "Read this aloud using elevenlabs"
-Response: {"type": "single_action", "tool_name": "generate_speech", "parameters": {"text": "the text to read", "provider": "elevenlabs"}}
-
-## Important
-
-- requires_confirmation=true ONLY for destructive operations (delete, overwrite)
-- Be action-oriented: if the intent is clear, execute the action directly
-- DO NOT ask unnecessary questions - if you can infer the user's intent, proceed with the task
-- Only return conversational type when the request is genuinely a question or greeting
-- Task IDs are sequential integers starting from 0
-- When user specifies a model/provider, include it in the parameters
+1. **requires_confirmation = true** only for destructive operations (delete, overwrite)
+2. **Be action-oriented**: if intent is clear, plan the action directly
+3. **Task IDs** are sequential integers starting from 0
+4. **Dependencies** are [from, to] pairs indicating execution order
 "#;
 
 /// Tool information for prompt generation
@@ -420,7 +318,7 @@ mod tests {
         assert!(PLANNING_SYSTEM_PROMPT.contains("## Output Format"));
         assert!(PLANNING_SYSTEM_PROMPT.contains("## Decision Rules"));
         assert!(PLANNING_SYSTEM_PROMPT.contains("## Task Types"));
-        assert!(PLANNING_SYSTEM_PROMPT.contains("## Important"));
+        assert!(PLANNING_SYSTEM_PROMPT.contains("## Guidelines"));
     }
 
     #[test]
@@ -436,18 +334,20 @@ mod tests {
     #[test]
     fn test_planning_system_prompt_contains_types() {
         // Verify all plan types are documented
-        assert!(PLANNING_SYSTEM_PROMPT.contains("\"type\""));
         assert!(PLANNING_SYSTEM_PROMPT.contains("conversational"));
         assert!(PLANNING_SYSTEM_PROMPT.contains("single_action"));
         assert!(PLANNING_SYSTEM_PROMPT.contains("task_graph"));
     }
 
     #[test]
-    fn test_planning_system_prompt_contains_image_generation() {
-        // Verify image generation is documented
-        assert!(PLANNING_SYSTEM_PROMPT.contains("image_generation"));
-        assert!(PLANNING_SYSTEM_PROMPT.contains("generate_image"));
-        assert!(PLANNING_SYSTEM_PROMPT.contains("nanobanana"));
+    fn test_planning_system_prompt_is_concise() {
+        // New prompt should be significantly shorter
+        let estimated_tokens = PLANNING_SYSTEM_PROMPT.len() / 4;
+        assert!(
+            estimated_tokens < 600,
+            "Planning prompt too long: ~{} tokens",
+            estimated_tokens
+        );
     }
 
     #[test]

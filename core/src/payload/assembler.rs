@@ -4,8 +4,9 @@
 /// using different formats (Markdown, XML, JSON).
 use super::{AgentContext, AgentPayload, ContextFormat};
 use crate::capability::CapabilityDeclaration;
-use crate::intent::{AgentModePrompt, ExecutionIntent};
+use crate::intent::{AgentModePrompt, ExecutionIntent, ExecutionMode, TaskCategory};
 use crate::memory::{MemoryEntry, MemoryFact};
+use crate::prompt::{PromptBuilder, PromptConfig, ToolInfo};
 use crate::search::SearchResult;
 use crate::utils::text_format::{escape_markdown, format_timestamp, truncate_text};
 
@@ -139,6 +140,71 @@ impl PromptAssembler {
         }
 
         prompt
+    }
+
+    /// Build prompt using the new unified ExecutionMode system.
+    ///
+    /// This is the new recommended method that uses `ExecutionIntentDecider`
+    /// results directly. It provides cleaner separation between execution
+    /// and conversation modes.
+    ///
+    /// # Arguments
+    ///
+    /// * `execution_mode` - Mode determined by ExecutionIntentDecider
+    /// * `tools` - Available tools (only used in Execute mode)
+    /// * `context` - Optional existing context
+    /// * `config` - Optional prompt configuration
+    ///
+    /// # Returns
+    ///
+    /// Complete system prompt appropriate for the execution mode
+    pub fn build_prompt_with_execution_mode(
+        &self,
+        execution_mode: &ExecutionMode,
+        tools: &[ToolInfo],
+        context: Option<&AgentContext>,
+        config: Option<&PromptConfig>,
+    ) -> String {
+        let mut prompt = match execution_mode {
+            ExecutionMode::DirectTool(invocation) => {
+                // For direct tool calls, use minimal prompt
+                PromptBuilder::direct_tool_prompt(&invocation.tool_id, "Execute the requested tool")
+            }
+            ExecutionMode::Execute(category) => {
+                // For execution mode, use executor prompt with category-specific tools
+                let category_tools = self.filter_tools_for_category(tools, *category);
+                PromptBuilder::executor_prompt(*category, &category_tools, config)
+            }
+            ExecutionMode::Converse => {
+                // For conversation mode, use conversational prompt (no tools)
+                PromptBuilder::conversational_prompt(config)
+            }
+        };
+
+        // Add context if provided (memory, search results, etc.)
+        if let Some(ctx) = context {
+            if let Some(formatted_ctx) = self.format_context(ctx) {
+                prompt.push_str("\n\n");
+                prompt.push_str(&formatted_ctx);
+            }
+        }
+
+        prompt
+    }
+
+    /// Filter tools relevant to a task category.
+    ///
+    /// This reduces tool list noise by only showing tools relevant to the task.
+    fn filter_tools_for_category(&self, tools: &[ToolInfo], category: TaskCategory) -> Vec<ToolInfo> {
+        // For now, return all tools. In the future, this can be enhanced
+        // to filter based on category-tool mappings.
+        //
+        // TODO: Implement category-specific tool filtering:
+        // - FileOrganize/FileOperation → file_ops, search
+        // - ImageGeneration → generate_image, vision_*
+        // - WebSearch → search, web_fetch
+        // - CodeExecution → code_runner, shell
+        tools.to_vec()
     }
 
     /// Format the Available Tools section.
@@ -1128,10 +1194,10 @@ mod tests {
         // Should contain base prompt
         assert!(prompt.contains("Base prompt."));
 
-        // Should contain agent mode prompt (simplified version - rig-core handles tool definitions)
-        assert!(prompt.contains("Agent Execution Mode"));
-        assert!(prompt.contains("use tools to complete user requests"));
-        assert!(prompt.contains("Behavior Rules"));
+        // Should contain agent mode prompt (simplified version using new ExecutorPrompt)
+        assert!(prompt.contains("# Role"));
+        assert!(prompt.contains("task executor"));
+        assert!(prompt.contains("Execution Guidelines"));
     }
 
     #[test]
@@ -1182,6 +1248,6 @@ mod tests {
         // Should contain all three: base prompt, capabilities, and agent mode
         assert!(prompt.contains("Base prompt."));
         assert!(prompt.contains("## CRITICAL: Proactive Search Decision System"));
-        assert!(prompt.contains("Agent Execution Mode"));
+        assert!(prompt.contains("# Role")); // New simplified prompt uses "# Role" instead of "Agent Execution Mode"
     }
 }

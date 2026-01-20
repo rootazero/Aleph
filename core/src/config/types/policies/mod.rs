@@ -28,6 +28,7 @@
 //! initial_backoff_ms = 500
 //! ```
 
+pub mod experimental;
 pub mod intent;
 pub mod keyword;
 pub mod memory;
@@ -37,6 +38,7 @@ pub mod text;
 pub mod tool_safety;
 pub mod web_fetch;
 
+pub use experimental::ExperimentalPolicy;
 pub use intent::IntentDetectionPolicy;
 pub use keyword::{KeywordPolicy, PolicyKeywordRule, PolicyWeightedKeyword};
 pub use memory::{AiRetrievalPolicy, CompressionPolicy, MemoryPolicies};
@@ -86,6 +88,13 @@ pub struct PoliciesConfig {
     /// Keyword matching policy for intent detection
     #[serde(default)]
     pub keyword: KeywordPolicy,
+
+    /// Experimental feature flags
+    ///
+    /// Controls experimental features like the new unified intent decider
+    /// and streamlined prompt system. All flags default to disabled.
+    #[serde(default)]
+    pub experimental: ExperimentalPolicy,
 }
 
 #[cfg(test)]

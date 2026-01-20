@@ -29,7 +29,7 @@ mod conversational;
 mod executor;
 mod templates;
 
-pub use builder::{PromptBuilder, PromptConfig};
+pub use builder::{PromptBuilder, PromptConfig, ToolInfo};
 pub use conversational::ConversationalPrompt;
 pub use executor::ExecutorPrompt;
 pub use templates::{PromptTemplate, TemplateVar};

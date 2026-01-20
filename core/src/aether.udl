@@ -465,6 +465,14 @@ dictionary PoliciesConfig {
   TextFormatPolicy text;
   MetricsPolicy metrics;
   KeywordPolicy keyword;
+  ExperimentalPolicy experimental;
+};
+
+// Experimental feature flags
+dictionary ExperimentalPolicy {
+  boolean use_unified_intent_decider;
+  boolean use_new_prompt_system;
+  boolean verbose_decision_logging;
 };
 
 // Keyword matching policy for intent detection

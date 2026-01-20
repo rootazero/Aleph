@@ -2,6 +2,14 @@
 //!
 //! Subscribes to: InputReceived
 //! Publishes: PlanRequested or ToolCallRequested
+//!
+//! # New Architecture (v2)
+//!
+//! This component now supports two modes via configuration:
+//! 1. Legacy mode: Uses IntentClassifier (default)
+//! 2. Unified mode: Uses ExecutionIntentDecider (experimental)
+//!
+//! Set `use_unified_decider = true` in config to enable the new mode.
 
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
@@ -12,6 +20,7 @@ use crate::event::{
     ToolCallRequest,
 };
 use crate::intent::classifier::{ExecutionIntent, IntentClassifier};
+use crate::intent::{ContextSignals, ExecutionIntentDecider, ExecutionMode};
 
 use super::Complexity;
 
@@ -102,9 +111,19 @@ static SENTENCE_BOUNDARY: Lazy<Regex> = Lazy::new(|| Regex::new(r"[。！？\.!?
 /// - Subscribes to InputReceived events
 /// - Analyzes input complexity using multi-step keywords, step markers, and action sentences
 /// - Publishes either PlanRequested (for complex requests) or ToolCallRequested (for simple ones)
+///
+/// # Dual Mode Support
+///
+/// The analyzer supports two modes:
+/// - **Legacy mode** (default): Uses `IntentClassifier` for backward compatibility
+/// - **Unified mode**: Uses `ExecutionIntentDecider` for the new architecture
 pub struct IntentAnalyzer {
-    /// Intent classifier for determining task category and intent type
+    /// Intent classifier for determining task category and intent type (legacy)
     classifier: IntentClassifier,
+    /// Unified execution intent decider (new architecture)
+    decider: ExecutionIntentDecider,
+    /// Use the unified decider instead of legacy classifier
+    use_unified_decider: bool,
 }
 
 impl Default for IntentAnalyzer {
@@ -114,16 +133,57 @@ impl Default for IntentAnalyzer {
 }
 
 impl IntentAnalyzer {
-    /// Create a new IntentAnalyzer
+    /// Create a new IntentAnalyzer with legacy mode
     pub fn new() -> Self {
         Self {
             classifier: IntentClassifier::new(),
+            decider: ExecutionIntentDecider::new(),
+            use_unified_decider: false,
         }
     }
 
-    /// Create IntentAnalyzer with a custom classifier
+    /// Create IntentAnalyzer with unified decider enabled
+    pub fn with_unified_decider() -> Self {
+        Self {
+            classifier: IntentClassifier::new(),
+            decider: ExecutionIntentDecider::new(),
+            use_unified_decider: true,
+        }
+    }
+
+    /// Create IntentAnalyzer with a custom classifier (legacy)
     pub fn with_classifier(classifier: IntentClassifier) -> Self {
-        Self { classifier }
+        Self {
+            classifier,
+            decider: ExecutionIntentDecider::new(),
+            use_unified_decider: false,
+        }
+    }
+
+    /// Enable or disable unified decider mode
+    pub fn set_unified_mode(&mut self, enabled: bool) {
+        self.use_unified_decider = enabled;
+    }
+
+    /// Check if unified mode is enabled
+    pub fn is_unified_mode(&self) -> bool {
+        self.use_unified_decider
+    }
+
+    /// Get the execution mode using the unified decider
+    ///
+    /// This is the new recommended way to classify intent.
+    pub fn get_execution_mode(&self, text: &str, context: Option<&ContextSignals>) -> ExecutionMode {
+        self.decider.decide(text, context).mode
+    }
+
+    /// Get full decision result with metadata
+    pub fn get_decision_result(
+        &self,
+        text: &str,
+        context: Option<&ContextSignals>,
+    ) -> crate::intent::DecisionResult {
+        self.decider.decide(text, context)
     }
 
     // ========================================================================
@@ -346,7 +406,12 @@ impl EventHandler for IntentAnalyzer {
             _ => return Ok(vec![]),
         };
 
-        // Classify intent
+        // Use unified decider if enabled, otherwise fall back to legacy
+        if self.use_unified_decider {
+            return self.handle_with_unified_decider(input).await;
+        }
+
+        // Legacy path: use IntentClassifier
         let intent = self.classifier.classify(&input.text).await;
 
         // Analyze complexity
@@ -376,6 +441,110 @@ impl EventHandler for IntentAnalyzer {
                 Ok(vec![AetherEvent::ToolCallRequested(tool_call)])
             }
         }
+    }
+}
+
+impl IntentAnalyzer {
+    /// Handle input using the unified ExecutionIntentDecider
+    ///
+    /// This is the new path that uses the cleaner decision architecture.
+    async fn handle_with_unified_decider(
+        &self,
+        input: &InputEvent,
+    ) -> Result<Vec<AetherEvent>, HandlerError> {
+        // Build context signals from input context
+        let context_signals = input.context.as_ref().map(|ctx| ContextSignals {
+            selected_file: ctx.selected_text.clone(),
+            active_app: ctx.app_name.clone(),
+            ui_mode: None,
+            clipboard_type: None,
+        });
+
+        // Get decision from unified decider
+        let decision = self.decider.decide(&input.text, context_signals.as_ref());
+
+        // Log decision metadata for debugging
+        tracing::debug!(
+            layer = ?decision.metadata.layer,
+            confidence = decision.metadata.confidence,
+            latency_us = decision.metadata.latency_us,
+            "ExecutionIntentDecider decision"
+        );
+
+        match decision.mode {
+            ExecutionMode::DirectTool(invocation) => {
+                // Direct tool call from slash command - bypass planning entirely
+                let tool_call = ToolCallRequest {
+                    tool: invocation.tool_id,
+                    parameters: serde_json::json!({
+                        "args": invocation.args,
+                        "input_text": input.text,
+                    }),
+                    plan_step_id: None,
+                };
+                Ok(vec![AetherEvent::ToolCallRequested(tool_call)])
+            }
+            ExecutionMode::Execute(category) => {
+                // Determine if planning is needed based on complexity
+                let complexity = self.analyze_complexity_for_category(&input.text, category);
+
+                match complexity {
+                    Complexity::NeedsPlan => {
+                        let detected_steps = self.extract_steps(&input.text);
+                        let plan_request = PlanRequest {
+                            input: input.clone(),
+                            intent_type: Some(category.as_str().to_string()),
+                            detected_steps,
+                        };
+                        Ok(vec![AetherEvent::PlanRequested(plan_request)])
+                    }
+                    Complexity::Simple => {
+                        let tool_call = ToolCallRequest {
+                            tool: category.as_str().to_string(),
+                            parameters: serde_json::json!({
+                                "action": input.text,
+                                "input_text": input.text,
+                                "category": category.as_str(),
+                            }),
+                            plan_step_id: None,
+                        };
+                        Ok(vec![AetherEvent::ToolCallRequested(tool_call)])
+                    }
+                }
+            }
+            ExecutionMode::Converse => {
+                // Pure conversation - use general_chat tool
+                let tool_call = ToolCallRequest {
+                    tool: "general_chat".to_string(),
+                    parameters: serde_json::json!({
+                        "input": input.text,
+                        "mode": "conversation",
+                    }),
+                    plan_step_id: None,
+                };
+                Ok(vec![AetherEvent::ToolCallRequested(tool_call)])
+            }
+        }
+    }
+
+    /// Analyze complexity for a given task category
+    fn analyze_complexity_for_category(
+        &self,
+        text: &str,
+        _category: crate::intent::TaskCategory,
+    ) -> Complexity {
+        // Use existing complexity detection logic
+        // This checks for multi-step keywords, step markers, etc.
+        if self.has_multi_step_keywords(text) {
+            return Complexity::NeedsPlan;
+        }
+        if self.has_step_markers(text) {
+            return Complexity::NeedsPlan;
+        }
+        if self.has_multiple_action_sentences(text) {
+            return Complexity::NeedsPlan;
+        }
+        Complexity::Simple
     }
 }
 
