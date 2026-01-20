@@ -3,6 +3,9 @@
 //! When IntentClassifier determines the input is an executable task,
 //! this prompt is injected to guide the AI into Agent behavior mode.
 
+use crate::config::GenerationConfig;
+use crate::generation::GenerationType;
+
 /// Tool description for prompt generation
 #[derive(Debug, Clone)]
 pub struct ToolDescription {
@@ -22,21 +25,119 @@ impl ToolDescription {
     }
 }
 
+/// Generation model info for prompt
+#[derive(Debug, Clone)]
+pub struct GenerationModelInfo {
+    /// Provider name (e.g., "midjourney", "dalle")
+    pub provider_name: String,
+    /// Default model name
+    pub default_model: Option<String>,
+    /// Model aliases (friendly name -> actual model ID)
+    pub aliases: Vec<(String, String)>,
+    /// Supported generation types (image, video, etc.)
+    pub capabilities: Vec<String>,
+}
+
 /// Agent mode prompt template
 pub struct AgentModePrompt {
     /// Available tools
     tools: Vec<ToolDescription>,
+    /// Available generation models
+    generation_models: Vec<GenerationModelInfo>,
 }
 
 impl AgentModePrompt {
     /// Create a new agent mode prompt without tools
     pub fn new() -> Self {
-        Self { tools: Vec::new() }
+        Self {
+            tools: Vec::new(),
+            generation_models: Vec::new(),
+        }
     }
 
     /// Create a new agent mode prompt with tools
     pub fn with_tools(tools: Vec<ToolDescription>) -> Self {
-        Self { tools }
+        Self {
+            tools,
+            generation_models: Vec::new(),
+        }
+    }
+
+    /// Add generation models information from config
+    pub fn with_generation_config(mut self, config: &GenerationConfig) -> Self {
+        self.generation_models = Self::extract_generation_models(config);
+        self
+    }
+
+    /// Extract generation model info from config
+    fn extract_generation_models(config: &GenerationConfig) -> Vec<GenerationModelInfo> {
+        config
+            .providers
+            .iter()
+            .filter(|(_, cfg)| cfg.enabled)
+            .map(|(name, cfg)| {
+                let capabilities: Vec<String> = cfg
+                    .capabilities
+                    .iter()
+                    .map(|c| match c {
+                        GenerationType::Image => "图像".to_string(),
+                        GenerationType::Video => "视频".to_string(),
+                        GenerationType::Audio => "音频".to_string(),
+                        GenerationType::Speech => "语音".to_string(),
+                    })
+                    .collect();
+
+                let aliases: Vec<(String, String)> = cfg
+                    .models
+                    .iter()
+                    .map(|(alias, model)| (alias.clone(), model.clone()))
+                    .collect();
+
+                GenerationModelInfo {
+                    provider_name: name.clone(),
+                    default_model: cfg.model.clone(),
+                    aliases,
+                    capabilities,
+                }
+            })
+            .collect()
+    }
+
+    /// Generate the generation models section
+    fn generate_models_section(&self) -> String {
+        if self.generation_models.is_empty() {
+            return String::new();
+        }
+
+        let mut lines = vec!["\n\n### 可用生成模型\n".to_string()];
+        lines.push("当用户请求生成图像/视频/音频时，使用以下格式输出：".to_string());
+        lines.push("`[GENERATE:类型:provider:模型:提示词]`\n".to_string());
+        lines.push("例如：`[GENERATE:image:midjourney:nanobanana:一只可爱的猫]`\n".to_string());
+
+        for model_info in &self.generation_models {
+            let caps = model_info.capabilities.join("/");
+            let mut model_desc = format!(
+                "- **{}** ({})",
+                model_info.provider_name, caps
+            );
+
+            if let Some(ref default) = model_info.default_model {
+                model_desc.push_str(&format!(" - 默认: {}", default));
+            }
+
+            if !model_info.aliases.is_empty() {
+                let alias_list: Vec<String> = model_info
+                    .aliases
+                    .iter()
+                    .map(|(alias, actual)| format!("{} → {}", alias, actual))
+                    .collect();
+                model_desc.push_str(&format!("\n  别名: {}", alias_list.join(", ")));
+            }
+
+            lines.push(model_desc);
+        }
+
+        lines.join("\n")
     }
 
     /// Generate the agent mode prompt block
@@ -54,10 +155,12 @@ impl AgentModePrompt {
             format!("\n\n### 可用工具\n\n{}", tool_list.join("\n"))
         };
 
+        let models_section = self.generate_models_section();
+
         format!(
             r#"## Agent执行模式
 
-你是一个能够执行任务的AI助手。你必须使用工具来完成用户请求。{}
+你是一个能够执行任务的AI助手。你必须使用工具来完成用户请求。{}{}
 
 ### 行为规则（必须严格遵守）
 
@@ -78,13 +181,14 @@ impl AgentModePrompt {
 - **禁止未经确认直接执行文件移动/删除操作**
 - 必须先展示计划，等用户说"Y"或"确认"后才能执行
 - 如果用户说"N"或"取消"，则放弃操作"#,
-            tools_section
+            tools_section,
+            models_section
         )
     }
 
     /// Generate a shorter version of the prompt for context-limited scenarios
     pub fn generate_compact(&self) -> String {
-        r#"## Agent Mode
+        let mut prompt = r#"## Agent Mode
 
 You are a task-executing AI assistant with available tools. You MUST use tools to complete tasks.
 
@@ -100,7 +204,21 @@ You are a task-executing AI assistant with available tools. You MUST use tools t
 4. Confirm before delete operations
 5. Report results after execution
 
-**Important:** You CAN access local files. Use 'organize' to auto-sort files by type in one call!"#.to_string()
+**Important:** You CAN access local files. Use 'organize' to auto-sort files by type in one call!"#.to_string();
+
+        // Add generation models if available
+        if !self.generation_models.is_empty() {
+            prompt.push_str("\n\n**Generation Models:**\n");
+            prompt.push_str("Use `[GENERATE:type:provider:model:prompt]` format.\n");
+            for model_info in &self.generation_models {
+                let all_names: Vec<String> = std::iter::once(model_info.provider_name.clone())
+                    .chain(model_info.aliases.iter().map(|(alias, _)| alias.clone()))
+                    .collect();
+                prompt.push_str(&format!("- {}\n", all_names.join(", ")));
+            }
+        }
+
+        prompt
     }
 }
 

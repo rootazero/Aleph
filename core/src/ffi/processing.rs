@@ -114,9 +114,10 @@ impl AetherCore {
         let input_for_memory = input.clone();
 
         // Clone keyword policy for enhanced L2 intent matching
-        let keyword_policy = {
+        // Clone generation config for model aliases
+        let (keyword_policy, generation_config) = {
             let full_config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
-            full_config.policies.keyword.clone()
+            (full_config.policies.keyword.clone(), full_config.generation.clone())
         };
 
         // Clone conversation histories for multi-turn support
@@ -160,7 +161,9 @@ impl AetherCore {
                                 info!(task = %task_input, "Explicit /agent command detected");
 
                                 let agent_prompt =
-                                    AgentModePrompt::with_tools(tool_descriptions).generate();
+                                    AgentModePrompt::with_tools(tool_descriptions)
+                                        .with_generation_config(&generation_config)
+                                        .generate();
 
                                 // Notify UI of agent mode
                                 let task = crate::intent::ExecutableTask {
@@ -181,7 +184,9 @@ impl AetherCore {
 
                                 // Inject agent prompt with tool hint
                                 let agent_prompt =
-                                    AgentModePrompt::with_tools(tool_descriptions).generate();
+                                    AgentModePrompt::with_tools(tool_descriptions)
+                                        .with_generation_config(&generation_config)
+                                        .generate();
                                 let tool_hint = match tool_name.as_str() {
                                     "search" => format!(
                                         "请使用 search 工具搜索以下内容: {}",
@@ -270,7 +275,9 @@ impl AetherCore {
 
                             // Inject agent prompt with MCP tool hint
                             let agent_prompt =
-                                AgentModePrompt::with_tools(tool_descriptions).generate();
+                                AgentModePrompt::with_tools(tool_descriptions)
+                                        .with_generation_config(&generation_config)
+                                        .generate();
                             format!(
                                 "{}\n\n---\n\n请使用 {} 工具处理: {}",
                                 agent_prompt, server_name, args
@@ -304,7 +311,9 @@ impl AetherCore {
                     handler.on_agent_mode_detected(task.into());
 
                     // Inject agent mode prompt with tools
-                    let agent_prompt = AgentModePrompt::with_tools(tool_descriptions).generate();
+                    let agent_prompt = AgentModePrompt::with_tools(tool_descriptions)
+                                        .with_generation_config(&generation_config)
+                                        .generate();
                     format!("{}\n\n---\n\n用户请求: {}", agent_prompt, input)
                 } else {
                     input.clone()

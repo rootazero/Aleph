@@ -38,11 +38,15 @@ use std::pin::Pin;
 pub mod error;
 pub mod providers;
 pub mod registry;
+pub mod response_parser;
 pub mod types;
 
 // Re-exports
 pub use error::{GenerationError, GenerationResult};
 pub use registry::GenerationProviderRegistry;
+pub use response_parser::{
+    has_generation_requests, parse_generation_requests, ParsedGenerationRequest, ParseResult,
+};
 pub use types::{
     GenerationData, GenerationMetadata, GenerationOutput, GenerationParams,
     GenerationParamsBuilder, GenerationProgress, GenerationRequest, GenerationType,

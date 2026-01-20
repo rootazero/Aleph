@@ -348,6 +348,38 @@ impl From<crate::config::GenerationProviderConfig> for GenerationProviderConfigF
 }
 
 // ============================================================================
+// Response Parsing Types
+// ============================================================================
+
+/// FFI-safe parsed generation request from AI response
+///
+/// When AI recognizes a generation model mention in conversation,
+/// it outputs a `[GENERATE:type:provider:model:prompt]` tag that
+/// gets parsed into this structure.
+#[derive(Debug, Clone)]
+pub struct ParsedGenerationRequestFFI {
+    /// Generation type (image, video, audio, speech)
+    pub gen_type: String,
+    /// Provider name (e.g., "midjourney", "dalle")
+    pub provider: String,
+    /// Model name or alias (e.g., "nanobanana" -> "nano-banana-2")
+    pub model: String,
+    /// Generation prompt
+    pub prompt: String,
+    /// Original matched text (for replacement in response)
+    pub original_text: String,
+}
+
+/// FFI-safe parse result containing requests and cleaned response
+#[derive(Debug, Clone)]
+pub struct ParseResultFFI {
+    /// Extracted generation requests
+    pub requests: Vec<ParsedGenerationRequestFFI>,
+    /// Response text with generation tags replaced by user-friendly messages
+    pub cleaned_response: String,
+}
+
+// ============================================================================
 // AetherCore Generation Methods
 // ============================================================================
 
@@ -894,6 +926,104 @@ impl AetherCore {
                 message: err_msg,
             },
         }
+    }
+
+    // ========================================================================
+    // Response Parsing Methods
+    // ========================================================================
+
+    /// Parse AI response for generation requests
+    ///
+    /// Looks for `[GENERATE:type:provider:model:prompt]` patterns in AI responses
+    /// and extracts them into structured requests that can be executed.
+    ///
+    /// # Arguments
+    ///
+    /// * `response` - The AI response text to parse
+    ///
+    /// # Returns
+    ///
+    /// ParseResultFFI containing:
+    /// - `requests`: List of generation requests to execute
+    /// - `cleaned_response`: Response with generation tags replaced by user-friendly messages
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let result = core.parse_response_for_generation(ai_response);
+    /// for request in result.requests {
+    ///     // Execute generation with resolved model alias
+    ///     core.generate_image(request.provider, request.prompt, Some(params));
+    /// }
+    /// // Display cleaned_response to user
+    /// ```
+    pub fn parse_response_for_generation(&self, response: String) -> ParseResultFFI {
+        use crate::generation::response_parser::parse_generation_requests;
+
+        let result = parse_generation_requests(&response);
+
+        ParseResultFFI {
+            requests: result
+                .requests
+                .into_iter()
+                .map(|r| ParsedGenerationRequestFFI {
+                    gen_type: r.gen_type,
+                    provider: r.provider,
+                    model: r.model,
+                    prompt: r.prompt,
+                    original_text: r.original_text,
+                })
+                .collect(),
+            cleaned_response: result.cleaned_response,
+        }
+    }
+
+    /// Check if response contains any generation requests
+    ///
+    /// Quick check without full parsing - useful for early detection.
+    pub fn has_generation_requests(&self, response: &str) -> bool {
+        crate::generation::response_parser::has_generation_requests(response)
+    }
+
+    /// Resolve model alias to actual model ID
+    ///
+    /// Given a provider name and model alias (like "nanobanana"),
+    /// returns the actual model ID (like "nano-banana-2") if found in config.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider_name` - The generation provider name
+    /// * `model_alias` - The model alias or name to resolve
+    ///
+    /// # Returns
+    ///
+    /// The resolved model ID, or the original alias if no mapping found
+    pub fn resolve_model_alias(&self, provider_name: &str, model_alias: &str) -> String {
+        let full_config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
+
+        if let Some(provider_config) = full_config.generation.providers.get(provider_name) {
+            // Check if model_alias matches any configured alias
+            for (alias, actual_model) in &provider_config.models {
+                if alias.eq_ignore_ascii_case(model_alias) {
+                    return actual_model.clone();
+                }
+            }
+
+            // Check if it's already an actual model name
+            for (_, actual_model) in &provider_config.models {
+                if actual_model.eq_ignore_ascii_case(model_alias) {
+                    return actual_model.clone();
+                }
+            }
+
+            // Fallback to default model if available
+            if let Some(ref default_model) = provider_config.model {
+                return default_model.clone();
+            }
+        }
+
+        // Return original if no mapping found
+        model_alias.to_string()
     }
 }
 
