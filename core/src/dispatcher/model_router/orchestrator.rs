@@ -207,8 +207,11 @@ impl AttemptRecord {
 // =============================================================================
 
 /// Result of orchestrated execution
-#[derive(Debug)]
-pub struct ExecutionResult<T> {
+#[derive(Debug, Clone)]
+pub struct ExecutionResult<T>
+where
+    T: Clone,
+{
     /// Final result (success value or error)
     pub result: Result<T, ExecutionError>,
 
@@ -231,7 +234,7 @@ pub struct ExecutionResult<T> {
     pub estimated_cost: Option<f64>,
 }
 
-impl<T> ExecutionResult<T> {
+impl<T: Clone> ExecutionResult<T> {
     /// Create a successful result
     pub fn success(
         value: T,
@@ -593,6 +596,7 @@ impl RetryOrchestrator {
         executor: F,
     ) -> ExecutionResult<T>
     where
+        T: Clone,
         F: Fn(String, ExecutionRequest) -> Fut,
         Fut: Future<Output = Result<T, CallOutcome>>,
     {
@@ -857,6 +861,7 @@ impl RetryOrchestrator {
         executor: F,
     ) -> ExecutionResult<T>
     where
+        T: Clone,
         F: Fn(String, ExecutionRequest) -> Fut,
         Fut: Future<Output = Result<T, CallOutcome>>,
     {

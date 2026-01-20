@@ -39,6 +39,7 @@ mod intelligent_routing;
 mod intent;
 mod matcher;
 mod metrics;
+mod orchestrated_router;
 mod orchestrator;
 mod profiles;
 mod retry;
@@ -84,6 +85,12 @@ pub use budget::{
 pub use orchestrator::{
     AttemptRecord, ExecutionError, ExecutionRequest, ExecutionResult, OrchestratorConfig,
     OrchestratorEvent, RetryOrchestrator,
+};
+
+// Orchestrated Router (P1) - Full integration
+pub use orchestrated_router::{
+    BudgetCheckResultSummary, OrchestratedRouter, OrchestratedRouterConfig, RouterEvent,
+    RoutingExecutionError, RoutingRequest, RoutingResult,
 };
 
 // Re-export StageResult from cowork_types module for backward compatibility

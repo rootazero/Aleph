@@ -574,6 +574,12 @@ impl BudgetCheckResult {
     }
 }
 
+impl std::fmt::Display for BudgetCheckResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message())
+    }
+}
+
 // =============================================================================
 // Cost Estimator
 // =============================================================================
@@ -1067,6 +1073,80 @@ impl BudgetManager {
                     });
                 }
             }
+        }
+    }
+
+    /// Convenience method: estimate cost for a call
+    pub fn estimate_cost(
+        &self,
+        model_id: &str,
+        input_tokens: u32,
+        estimated_output_tokens: u32,
+    ) -> CostEstimate {
+        let estimator = self.estimator.blocking_read();
+        estimator.estimate(model_id, input_tokens, Some(estimated_output_tokens))
+    }
+
+    /// Convenience method: record cost directly without a CallRecord
+    pub async fn record_cost_direct(&self, scope: &BudgetScope, cost_usd: f64) {
+        let mut states = self.states.write().await;
+
+        for limit in &self.limits {
+            if !limit.scope.contains(scope) && limit.scope != BudgetScope::Global {
+                continue;
+            }
+
+            if let Some(state) = states.get_mut(&limit.id) {
+                state.record_cost(cost_usd, limit);
+
+                // Check for new warning thresholds
+                let new_warnings = state.check_warnings(&limit.warning_thresholds);
+                for threshold in &new_warnings {
+                    state.fire_warning(*threshold);
+
+                    // Emit warning event
+                    if let Some(tx) = &self.event_tx {
+                        let _ = tx.send(BudgetEvent::Warning {
+                            limit_id: limit.id.clone(),
+                            threshold: *threshold,
+                            spent_usd: state.spent_usd,
+                            limit_usd: limit.limit_usd,
+                        });
+                    }
+                }
+
+                // Emit cost recorded event
+                if let Some(tx) = &self.event_tx {
+                    let _ = tx.send(BudgetEvent::CostRecorded {
+                        limit_id: limit.id.clone(),
+                        cost_usd,
+                        spent_usd: state.spent_usd,
+                        remaining_usd: state.remaining_usd,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Record actual cost after call completes using a CallRecord
+    pub async fn record_cost_from_call(&self, scope: &BudgetScope, record: &CallRecord) {
+        let cost = record.cost_usd.unwrap_or_else(|| {
+            // Estimate from tokens if actual cost not available
+            let estimator = self.estimator.blocking_read();
+            let estimate = estimator.estimate(
+                &record.model_id,
+                record.input_tokens,
+                Some(record.output_tokens),
+            );
+            estimate.base_cost_usd
+        });
+
+        self.record_cost_direct(scope, cost).await;
+
+        // Update estimator with actual cost
+        if record.cost_usd.is_some() {
+            let mut estimator = self.estimator.write().await;
+            estimator.learn_from_actual(record);
         }
     }
 
