@@ -8030,10 +8030,11 @@ public struct RoutingRuleConfig {
     public var knowledgeBase: String?
     public var icon: String?
     public var hint: String?
+    public var triggers: [String]?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(ruleType: String?, isBuiltin: Bool, regex: String, provider: String?, systemPrompt: String?, stripPrefix: Bool?, capabilities: [String]?, intentType: String?, preferredModel: String?, contextFormat: String?, skillId: String?, skillVersion: String?, workflow: String?, tools: String?, knowledgeBase: String?, icon: String?, hint: String?) {
+    public init(ruleType: String?, isBuiltin: Bool, regex: String, provider: String?, systemPrompt: String?, stripPrefix: Bool?, capabilities: [String]?, intentType: String?, preferredModel: String?, contextFormat: String?, skillId: String?, skillVersion: String?, workflow: String?, tools: String?, knowledgeBase: String?, icon: String?, hint: String?, triggers: [String]?) {
         self.ruleType = ruleType
         self.isBuiltin = isBuiltin
         self.regex = regex
@@ -8051,6 +8052,7 @@ public struct RoutingRuleConfig {
         self.knowledgeBase = knowledgeBase
         self.icon = icon
         self.hint = hint
+        self.triggers = triggers
     }
 }
 
@@ -8109,6 +8111,9 @@ extension RoutingRuleConfig: Equatable, Hashable {
         if lhs.hint != rhs.hint {
             return false
         }
+        if lhs.triggers != rhs.triggers {
+            return false
+        }
         return true
     }
 
@@ -8130,6 +8135,7 @@ extension RoutingRuleConfig: Equatable, Hashable {
         hasher.combine(knowledgeBase)
         hasher.combine(icon)
         hasher.combine(hint)
+        hasher.combine(triggers)
     }
 }
 
@@ -8157,7 +8163,8 @@ public struct FfiConverterTypeRoutingRuleConfig: FfiConverterRustBuffer {
                 tools: FfiConverterOptionString.read(from: &buf), 
                 knowledgeBase: FfiConverterOptionString.read(from: &buf), 
                 icon: FfiConverterOptionString.read(from: &buf), 
-                hint: FfiConverterOptionString.read(from: &buf)
+                hint: FfiConverterOptionString.read(from: &buf), 
+                triggers: FfiConverterOptionSequenceString.read(from: &buf)
         )
     }
 
@@ -8179,6 +8186,7 @@ public struct FfiConverterTypeRoutingRuleConfig: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.knowledgeBase, into: &buf)
         FfiConverterOptionString.write(value.icon, into: &buf)
         FfiConverterOptionString.write(value.hint, into: &buf)
+        FfiConverterOptionSequenceString.write(value.triggers, into: &buf)
     }
 }
 
