@@ -3,7 +3,7 @@
 //! This module contains config-related methods: reload_config, update_provider, etc.
 
 use super::{AetherCore, AetherFfiError, AgentConfigHolder};
-use crate::agent::RigAgentConfig;
+use crate::agents::RigAgentConfig;
 use crate::config::{
     Config, FullConfig, GeneralConfig, ProviderConfig, RoutingRuleConfig, TestConnectionResult,
 };

@@ -24,7 +24,7 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::agent::{RigAgentManager, RigAgentConfig};
+//! use aethecore::agents::rig::{RigAgentManager, RigAgentConfig};
 //!
 //! let config = RigAgentConfig::default();
 //! let manager = RigAgentManager::new(config)?;
@@ -34,11 +34,11 @@
 //! ```
 
 pub mod config;
-mod conversation;
+mod message_history;
 pub mod manager;
 mod types;
 
 pub use config::RigAgentConfig;
-pub use conversation::{ChatMessage, ConversationHistory, MessageRole};
 pub use manager::{AgentResponse, BuiltinToolConfig, RigAgentManager};
+pub use message_history::{ChatMessage, ConversationHistory, MessageRole};
 pub use types::{AgentConfig, AgentResult, ToolCallInfo, ToolCallResult};

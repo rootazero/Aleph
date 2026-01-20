@@ -52,8 +52,7 @@
 // Module declarations
 // NOTE: clipboard module retained for ImageData/ImageFormat types (used by AI providers)
 // Clipboard operations are handled by Swift ClipboardManager
-pub mod agent; // NEW: Agent loop for tool calling
-pub mod agents; // NEW: Sub-agent system (Phase 4)
+pub mod agents; // Unified agent system: rig-core agent + sub-agent delegation
 pub mod capability;
 pub mod clarification; // NEW: Phantom Flow interaction types
 mod clipboard;
@@ -384,10 +383,16 @@ pub use crate::components::{
 // Note: RetryPolicy from components is available as components::RetryPolicy
 // to avoid conflict with config::RetryPolicy (network retry policy)
 
-// Agent system exports (Phase 4 sub-agent system)
+// Agent system exports (unified: rig-core agent + sub-agent delegation)
 pub use crate::agents::{
+    // Sub-agent delegation
     builtin_agents, AgentDef, AgentMode, AgentRegistry, TaskTool, TaskToolError, TaskToolResult,
+    // Rig-core AI agent (re-exported from agents::rig)
+    AgentConfig, AgentResponse, BuiltinToolConfig, ChatMessage, ConversationHistory, MessageRole,
+    RigAgentConfig, RigAgentManager,
 };
+// Note: ToolCallInfo/ToolCallResult from agents::rig::types are internal;
+// use crate::event::ToolCallResult for event system
 
 // Core interface exports (rig-core based architecture)
 pub use crate::uniffi_core::{

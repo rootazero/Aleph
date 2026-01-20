@@ -20,7 +20,7 @@ use tracing::{debug, error, info, warn};
 use super::types::{
     ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult, ToolCallRecord,
 };
-use crate::agent::RigAgentManager;
+use crate::agents::RigAgentManager;
 use crate::dispatcher::executor::ExecutionContext as CoworkExecutionContext;
 use crate::dispatcher::executor::ExecutorRegistry;
 use crate::dispatcher::scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};

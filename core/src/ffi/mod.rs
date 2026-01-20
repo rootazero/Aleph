@@ -26,7 +26,7 @@ mod session;
 mod skills;
 mod tools;
 
-use crate::agent::{BuiltinToolConfig, RigAgentConfig, RigAgentManager};
+use crate::agents::{BuiltinToolConfig, RigAgentConfig, RigAgentManager};
 use crate::config::Config;
 use crate::memory::MemoryEntry;
 use rig::completion::Message;

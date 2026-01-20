@@ -8,7 +8,7 @@
 //! - L3: AI unified planner for everything else (conversational, single action, task graph)
 
 use super::{AetherCore, AetherFfiError};
-use crate::agent::RigAgentManager;
+use crate::agents::RigAgentManager;
 use crate::command::{CommandContext, CommandParser, ParsedCommand};
 use crate::config::RoutingRuleConfig;
 use crate::dispatcher::executor::{
@@ -651,7 +651,7 @@ fn execute_plan(
     runtime: &tokio::runtime::Handle,
     plan: ExecutionPlan,
     original_input: &str,
-    config: &crate::agent::RigAgentConfig,
+    config: &crate::agents::RigAgentConfig,
     tool_server_handle: rig::tool::server::ToolServerHandle,
     registered_tools: Arc<std::sync::RwLock<Vec<String>>>,
     conversation_histories: &Arc<
@@ -942,7 +942,7 @@ fn execute_plan(
 fn execute_with_agent_manager(
     runtime: &tokio::runtime::Handle,
     processed_input: &str,
-    config: &crate::agent::RigAgentConfig,
+    config: &crate::agents::RigAgentConfig,
     tool_server_handle: rig::tool::server::ToolServerHandle,
     registered_tools: Arc<std::sync::RwLock<Vec<String>>>,
     conversation_histories: &Arc<
