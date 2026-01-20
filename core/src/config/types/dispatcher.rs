@@ -335,6 +335,7 @@ impl DispatcherConfigToml {
 /// limit_usd = 10.0
 /// warning_thresholds = [0.5, 0.8, 0.95]
 /// ```
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelRouterConfigToml {
     /// Whether the model router is enabled (default: true)
@@ -350,6 +351,7 @@ pub struct ModelRouterConfigToml {
     pub budget: BudgetConfigToml,
 }
 
+#[allow(dead_code)]
 fn default_model_router_enabled() -> bool {
     true
 }
@@ -366,6 +368,7 @@ impl Default for ModelRouterConfigToml {
 
 impl ModelRouterConfigToml {
     /// Validate the configuration
+    #[allow(dead_code)]
     pub fn validate(&self) -> std::result::Result<(), String> {
         self.retry.validate()?;
         self.budget.validate()?;

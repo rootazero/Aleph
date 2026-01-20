@@ -11,7 +11,7 @@
 
 use crate::dispatcher::model_router::{
     Capability, CircuitBreakerConfig, CostStrategy, CostTier, HealthConfig, LatencyTier,
-    ModelProfile, ModelRoutingRules, ProbeConfig, ScoringConfig, WindowConfig,
+    ModelProfile, ModelRoutingRules, ProbeConfig, ScoringConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -1803,15 +1803,18 @@ impl PromptAnalysisConfigToml {
     pub fn to_prompt_analyzer_config(
         &self,
     ) -> crate::dispatcher::model_router::PromptAnalyzerConfig {
-        let mut config = crate::dispatcher::model_router::PromptAnalyzerConfig::default();
-        config.high_complexity_threshold = self.high_complexity_threshold;
-        config.low_complexity_threshold = self.low_complexity_threshold;
-        config.mixed_language_threshold = self.mixed_language_threshold;
-        config.complexity_weights.length = self.complexity_length_weight;
-        config.complexity_weights.structure = self.complexity_structure_weight;
-        config.complexity_weights.technical = self.complexity_technical_weight;
-        config.complexity_weights.multi_step = self.complexity_multi_step_weight;
-        config
+        crate::dispatcher::model_router::PromptAnalyzerConfig {
+            high_complexity_threshold: self.high_complexity_threshold,
+            low_complexity_threshold: self.low_complexity_threshold,
+            mixed_language_threshold: self.mixed_language_threshold,
+            complexity_weights: crate::dispatcher::model_router::ComplexityWeights {
+                length: self.complexity_length_weight,
+                structure: self.complexity_structure_weight,
+                technical: self.complexity_technical_weight,
+                multi_step: self.complexity_multi_step_weight,
+            },
+            ..Default::default()
+        }
     }
 
     /// Validate prompt analysis configuration
@@ -2571,7 +2574,7 @@ impl EnsembleStrategyConfigToml {
         }
 
         if let Some(threshold) = self.quality_threshold {
-            if threshold < 0.0 || threshold > 1.0 {
+            if !(0.0..=1.0).contains(&threshold) {
                 return Err(format!(
                     "Strategy '{}': quality_threshold must be between 0.0 and 1.0, got {}",
                     self.intent, threshold

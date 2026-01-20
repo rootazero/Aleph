@@ -126,7 +126,7 @@ impl TrackedMetric {
     }
 
     /// Parse metric from string
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "latency_ms" | "latency" => TrackedMetric::LatencyMs,
             "cost_usd" | "cost" => TrackedMetric::CostUsd,
@@ -864,7 +864,7 @@ impl VariantStats {
         for (metric, value) in &outcome.metrics {
             self.metrics
                 .entry(metric.clone())
-                .or_insert_with(MetricStats::new)
+                .or_default()
                 .record(*value);
         }
     }
@@ -1235,7 +1235,7 @@ impl SignificanceCalculator {
             + 0.1208650973866179e-2 / (x + 5.0)
             - 0.5395239384953e-5 / (x + 6.0);
 
-        (tmp - (x + 0.5) * tmp.ln() + ser.ln()) * -1.0 + (2.5066282746310005 * ser / (x + 1.0)).ln()
+        -(tmp - (x + 0.5) * tmp.ln() + ser.ln()) + (2.5066282746310005 * ser / (x + 1.0)).ln()
     }
 }
 
@@ -1576,12 +1576,12 @@ impl ABTestingEngine {
     pub fn get_all_reports(&self) -> Vec<ExperimentReport> {
         self.split_manager
             .experiments()
-            .filter_map(|config| {
+            .map(|config| {
                 let stats = self
                     .outcome_tracker
                     .get_stats(&config.id)
                     .unwrap_or_default();
-                Some(ExperimentReport::generate(config, &stats))
+                ExperimentReport::generate(config, &stats)
             })
             .collect()
     }
@@ -1919,13 +1919,13 @@ mod tests {
     #[test]
     fn test_tracked_metric_parsing() {
         assert_eq!(
-            TrackedMetric::from_str("latency_ms"),
+            TrackedMetric::parse("latency_ms"),
             TrackedMetric::LatencyMs
         );
-        assert_eq!(TrackedMetric::from_str("LATENCY"), TrackedMetric::LatencyMs);
-        assert_eq!(TrackedMetric::from_str("cost_usd"), TrackedMetric::CostUsd);
+        assert_eq!(TrackedMetric::parse("LATENCY"), TrackedMetric::LatencyMs);
+        assert_eq!(TrackedMetric::parse("cost_usd"), TrackedMetric::CostUsd);
         assert_eq!(
-            TrackedMetric::from_str("custom_metric"),
+            TrackedMetric::parse("custom_metric"),
             TrackedMetric::Custom("custom_metric".to_string())
         );
     }

@@ -376,7 +376,7 @@ impl<'a> IntelligentRouter<'a> {
         if explore_interval == 0 {
             return false;
         }
-        count % explore_interval == 0
+        count.is_multiple_of(explore_interval)
     }
 
     /// Select a candidate for exploration (prefer underused models)
@@ -393,7 +393,7 @@ impl<'a> IntelligentRouter<'a> {
         sorted.sort_by(|a, b| a.metrics_score.partial_cmp(&b.metrics_score).unwrap());
 
         // Pick from bottom half (less used models) - use deterministic selection
-        let half = (sorted.len() / 2).max(1);
+        let _half = (sorted.len() / 2).max(1);
         // Simple selection: pick the least used one
         Some(sorted[0].clone())
     }

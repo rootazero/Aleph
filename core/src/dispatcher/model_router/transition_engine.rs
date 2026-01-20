@@ -4,8 +4,8 @@
 //! including circuit breaker logic and transition rule evaluation.
 
 use super::health::{
-    CircuitBreakerConfig, CircuitState, DegradationReason, HealthConfig, HealthError, HealthEvent,
-    HealthStatus, ModelHealth, UnhealthyReason,
+    CircuitState, DegradationReason, HealthConfig, HealthError, HealthEvent, HealthStatus,
+    ModelHealth, UnhealthyReason,
 };
 use std::time::{Duration, SystemTime};
 
@@ -350,7 +350,7 @@ impl HealthTransitionEngine {
         if health.circuit_breaker.half_open_successes
             >= self.config.circuit_breaker.half_open_successes
         {
-            let old_status = health.status;
+            let _old_status = health.status;
             health.set_status(HealthStatus::Healthy);
             health.circuit_breaker = Default::default();
 
@@ -423,7 +423,7 @@ impl HealthTransitionEngine {
 
     /// Open the circuit breaker
     fn open_circuit(&self, health: &mut ModelHealth) -> TransitionResult {
-        let old_status = health.status;
+        let _old_status = health.status;
         health.set_status(HealthStatus::CircuitOpen);
         health.circuit_breaker.state = CircuitState::Open;
         health.circuit_breaker.open_count += 1;
@@ -446,7 +446,7 @@ impl HealthTransitionEngine {
 
     /// Reopen circuit after half-open failure
     fn reopen_circuit(&self, health: &mut ModelHealth) -> TransitionResult {
-        let old_status = health.status;
+        let _old_status = health.status;
         health.set_status(HealthStatus::CircuitOpen);
         health.circuit_breaker.state = CircuitState::Open;
         health.circuit_breaker.half_open_successes = 0;

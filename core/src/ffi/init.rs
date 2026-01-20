@@ -253,28 +253,6 @@ pub fn run_initialization(handler: Box<dyn InitProgressHandlerFFI>) -> InitResul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    struct TestHandler {
-        phases_started: AtomicU32,
-        phases_completed: AtomicU32,
-    }
-
-    impl InitProgressHandlerFFI for TestHandler {
-        fn on_phase_started(&self, _phase: String, _current: u32, _total: u32) {
-            self.phases_started.fetch_add(1, Ordering::SeqCst);
-        }
-
-        fn on_phase_progress(&self, _phase: String, _progress: f64, _message: String) {}
-
-        fn on_phase_completed(&self, _phase: String) {
-            self.phases_completed.fetch_add(1, Ordering::SeqCst);
-        }
-
-        fn on_download_progress(&self, _item: String, _downloaded: u64, _total: u64) {}
-
-        fn on_error(&self, _phase: String, _message: String, _is_retryable: bool) {}
-    }
 
     #[test]
     fn test_needs_first_time_init_returns_bool() {

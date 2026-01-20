@@ -234,6 +234,7 @@ pub struct InMemoryMetricsCollector {
     aggregated: Arc<RwLock<HashMap<String, MultiWindowMetrics>>>,
 
     /// Configuration
+    #[allow(dead_code)]
     config: MetricsConfig,
 }
 
@@ -329,6 +330,7 @@ pub struct HybridMetricsCollector {
     command_tx: mpsc::Sender<CollectorCommand>,
 
     /// Configuration
+    #[allow(dead_code)]
     config: MetricsConfig,
 }
 

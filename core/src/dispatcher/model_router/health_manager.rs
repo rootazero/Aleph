@@ -5,7 +5,6 @@
 
 use super::health::{
     HealthConfig, HealthError, HealthEvent, HealthStatus, ModelHealth, ModelHealthSummary,
-    RateLimitInfo,
 };
 use super::transition_engine::{CallResult, HealthTransitionEngine};
 use std::collections::HashMap;
@@ -293,8 +292,10 @@ impl HealthManager {
     pub async fn statistics(&self) -> HealthStatistics {
         let states = self.health_states.read().await;
 
-        let mut stats = HealthStatistics::default();
-        stats.total = states.len();
+        let mut stats = HealthStatistics {
+            total: states.len(),
+            ..Default::default()
+        };
 
         for health in states.values() {
             match health.status {

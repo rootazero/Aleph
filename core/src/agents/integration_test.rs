@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::agents::{AgentMode, AgentRegistry, TaskTool};
+use crate::agents::{AgentRegistry, TaskTool};
 use crate::components::SubAgentHandler;
 use crate::event::{
     AetherEvent, EventBus, EventContext, EventHandler, SubAgentRequest, SubAgentResult,
@@ -22,7 +22,7 @@ fn create_context(bus: &EventBus) -> EventContext {
 
 #[tokio::test]
 async fn test_full_subagent_lifecycle() {
-    let (registry, bus, handler, tool) = create_test_setup();
+    let (_registry, bus, handler, tool) = create_test_setup();
     let mut subscriber = bus.subscribe();
     let ctx = create_context(&bus);
 
@@ -97,7 +97,7 @@ async fn test_tool_filter_by_agent() {
 
 #[tokio::test]
 async fn test_max_iterations_enforcement() {
-    let (registry, bus, handler, _) = create_test_setup();
+    let (_registry, bus, handler, _) = create_test_setup();
     let ctx = create_context(&bus);
 
     // Start explore agent (max_iterations = 20)

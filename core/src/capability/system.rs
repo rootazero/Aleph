@@ -551,11 +551,6 @@ mod tests {
             }
         }
 
-        fn with_priority(mut self, priority: u32) -> Self {
-            self.priority = priority;
-            self
-        }
-
         fn with_available(mut self, available: bool) -> Self {
             self.available = available;
             self

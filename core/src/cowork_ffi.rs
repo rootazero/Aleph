@@ -1211,7 +1211,7 @@ impl From<crate::dispatcher::model_router::CacheHitType> for CacheHitTypeFFI {
     fn from(hit_type: crate::dispatcher::model_router::CacheHitType) -> Self {
         match hit_type {
             crate::dispatcher::model_router::CacheHitType::Exact => CacheHitTypeFFI::Exact,
-            crate::dispatcher::model_router::CacheHitType::Semantic { .. } => {
+            crate::dispatcher::model_router::CacheHitType::Semantic => {
                 CacheHitTypeFFI::Semantic
             }
         }
@@ -1550,7 +1550,7 @@ impl From<crate::dispatcher::model_router::EnsembleMode> for EnsembleModeFFI {
             crate::dispatcher::model_router::EnsembleMode::BestOfN { .. } => {
                 EnsembleModeFFI::BestOfN
             }
-            crate::dispatcher::model_router::EnsembleMode::Voting { .. } => EnsembleModeFFI::Voting,
+            crate::dispatcher::model_router::EnsembleMode::Voting => EnsembleModeFFI::Voting,
             crate::dispatcher::model_router::EnsembleMode::Consensus { .. } => {
                 EnsembleModeFFI::Consensus
             }

@@ -19,8 +19,10 @@ use tokio::sync::RwLock;
 /// Budget limit scope for hierarchical cost control
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type", content = "id", rename_all = "snake_case")]
+#[derive(Default)]
 pub enum BudgetScope {
     /// Global limit across all usage
+    #[default]
     Global,
     /// Per-project limit
     Project(String),
@@ -83,11 +85,6 @@ impl BudgetScope {
     }
 }
 
-impl Default for BudgetScope {
-    fn default() -> Self {
-        Self::Global
-    }
-}
 
 // =============================================================================
 // Budget Period
@@ -181,7 +178,7 @@ impl BudgetPeriod {
                     .unwrap();
 
                 if next <= from {
-                    next = next + chrono::Duration::days(1);
+                    next += chrono::Duration::days(1);
                 }
                 next
             }
@@ -216,7 +213,7 @@ impl BudgetPeriod {
                     .unwrap();
 
                 if next <= from {
-                    next = next + chrono::Duration::weeks(1);
+                    next += chrono::Duration::weeks(1);
                 }
                 next
             }
@@ -559,11 +556,7 @@ impl BudgetCheckResult {
             Self::Allowed { remaining_usd } => {
                 format!("Budget OK: ${:.2} remaining", remaining_usd)
             }
-            Self::Warning {
-                threshold,
-                remaining_usd,
-                message,
-            } => message.clone(),
+            Self::Warning { message, .. } => message.clone(),
             Self::SoftBlocked {
                 limit_id,
                 spent_usd,
@@ -1016,7 +1009,7 @@ impl BudgetManager {
             }
 
             if let Some(state) = states.get_mut(&limit.id) {
-                let old_percent = state.used_percent;
+                let _old_percent = state.used_percent;
                 state.record_cost(cost, limit);
 
                 // Check for new warning thresholds

@@ -96,6 +96,7 @@ impl CachedResponse {
 
 /// Metadata for a cache entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct CacheMetadata {
     /// Task intent that generated this response
     pub task_intent: Option<TaskIntent>,
@@ -107,15 +108,6 @@ pub struct CacheMetadata {
     pub tags: Vec<String>,
 }
 
-impl Default for CacheMetadata {
-    fn default() -> Self {
-        Self {
-            task_intent: None,
-            features_hash: None,
-            tags: Vec::new(),
-        }
-    }
-}
 
 /// A cache entry storing prompt-response pair
 #[derive(Debug, Clone, Serialize, Deserialize)]

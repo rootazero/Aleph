@@ -57,7 +57,7 @@ use std::sync::Arc;
 use super::matcher::{ModelMatcher, ModelRouter};
 use super::profiles::{Capability, ModelProfile};
 use super::prompt_analyzer::{
-    ContextSize, Domain, Language, PromptAnalyzer, PromptAnalyzerConfig, PromptFeatures,
+    Domain, Language, PromptAnalyzer, PromptAnalyzerConfig, PromptFeatures,
     ReasoningLevel,
 };
 use super::semantic_cache::{
@@ -522,6 +522,7 @@ mod tests {
     use super::*;
     use crate::dispatcher::model_router::profiles::{CostTier, LatencyTier};
     use crate::dispatcher::model_router::rules::{CostStrategy, ModelRoutingRules};
+    use crate::dispatcher::model_router::ContextSize;
 
     fn create_test_profiles() -> Vec<ModelProfile> {
         vec![

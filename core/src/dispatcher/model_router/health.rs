@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime};
 
 /// Health status of an AI model
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum HealthStatus {
     /// Normal service - model is fully available
     Healthy,
@@ -24,14 +25,10 @@ pub enum HealthStatus {
     /// Half-open state - allowing limited test requests
     HalfOpen,
     /// Insufficient data to determine health
+    #[default]
     Unknown,
 }
 
-impl Default for HealthStatus {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
 
 impl HealthStatus {
     /// Check if the model can accept requests
@@ -199,8 +196,10 @@ impl UnhealthyReason {
 
 /// State of the circuit breaker
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum CircuitState {
     /// Circuit is closed, normal operation
+    #[default]
     Closed,
     /// Circuit is open, blocking requests
     Open,
@@ -208,11 +207,6 @@ pub enum CircuitState {
     HalfOpen,
 }
 
-impl Default for CircuitState {
-    fn default() -> Self {
-        Self::Closed
-    }
-}
 
 /// Circuit breaker state for a model
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -270,7 +264,7 @@ impl CircuitBreakerState {
     pub fn calculate_cooldown(&self, base_cooldown_secs: u64) -> Duration {
         // Exponential backoff: base × 2^(min(open_count, 5))
         // Max: base × 32 (e.g., 30s × 32 = 960s = 16 minutes)
-        let exponent = self.open_count.min(5) as u32;
+        let exponent = self.open_count.min(5);
         let multiplier = 2u64.pow(exponent);
         Duration::from_secs(base_cooldown_secs * multiplier)
     }
@@ -466,9 +460,7 @@ impl ModelHealth {
     pub fn can_call(&self) -> CallPermission {
         if self.status.can_call() {
             CallPermission::Allowed
-        } else if self.status.can_call_for_recovery() {
-            CallPermission::AllowedForRecovery
-        } else if self.circuit_breaker.allows_request() {
+        } else if self.status.can_call_for_recovery() || self.circuit_breaker.allows_request() {
             CallPermission::AllowedForRecovery
         } else {
             CallPermission::Blocked {
@@ -772,6 +764,7 @@ impl Default for ProbeConfig {
 
 /// Endpoint configuration for probing
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct ProbeEndpoint {
     /// Dedicated health check URL (if available)
     pub health_url: Option<String>,
@@ -781,15 +774,6 @@ pub struct ProbeEndpoint {
     pub timeout: Option<Duration>,
 }
 
-impl Default for ProbeEndpoint {
-    fn default() -> Self {
-        Self {
-            health_url: None,
-            test_prompt: None,
-            timeout: None,
-        }
-    }
-}
 
 // ============================================================================
 // Tests

@@ -123,6 +123,7 @@ impl CallRecord {
 /// Call outcome type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum CallOutcome {
     /// Successful completion
     Success,
@@ -142,6 +143,7 @@ pub enum CallOutcome {
     /// Network/connection error
     NetworkError,
     /// Unknown error
+    #[default]
     Unknown,
 }
 
@@ -174,11 +176,6 @@ impl CallOutcome {
     }
 }
 
-impl Default for CallOutcome {
-    fn default() -> Self {
-        CallOutcome::Unknown
-    }
-}
 
 /// User feedback for quality learning
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -319,7 +316,7 @@ impl ModelMetrics {
         let intent_metrics = self
             .intent_performance
             .entry(intent_key)
-            .or_insert_with(IntentMetrics::default);
+            .or_default();
         intent_metrics.update(record);
 
         // Update satisfaction if feedback present

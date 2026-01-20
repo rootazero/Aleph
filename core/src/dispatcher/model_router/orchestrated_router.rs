@@ -293,9 +293,11 @@ pub struct OrchestratedRouter {
     budget_manager: Option<Arc<BudgetManager>>,
 
     /// Metrics collector
+    #[allow(dead_code)]
     collector: Arc<dyn MetricsCollector + Send + Sync>,
 
     /// Dynamic scorer
+    #[allow(dead_code)]
     scorer: Arc<DynamicScorer>,
 
     /// Model profiles for failover chain building
@@ -709,7 +711,7 @@ impl OrchestratedRouter {
         FailoverChain {
             primary: primary_model.to_string(),
             alternatives,
-            selection_mode: self.config.default_failover_mode.clone(),
+            selection_mode: self.config.default_failover_mode,
             required_capabilities: required_caps,
             health_weight: 0.6,
             cost_weight: 0.4,

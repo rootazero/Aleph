@@ -82,6 +82,7 @@ use super::TaskIntent;
 
 /// Configuration for the P3 Intelligent Router
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct P3RouterConfig {
     /// P2 Router configuration (includes prompt analysis and cache)
     pub p2_config: P2RouterConfig,
@@ -111,17 +112,6 @@ pub enum UserIdMode {
     RequestBased,
 }
 
-impl Default for P3RouterConfig {
-    fn default() -> Self {
-        Self {
-            p2_config: P2RouterConfig::default(),
-            ab_testing_enabled: false,
-            ensemble_enabled: false,
-            ensemble_config: EnsembleEngineConfig::default(),
-            user_id_mode: UserIdMode::default(),
-        }
-    }
-}
 
 // =============================================================================
 // P3 Pre-Route Results

@@ -75,7 +75,9 @@ impl std::fmt::Display for ReasoningLevel {
 /// Technical domain classification
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TechnicalDomain {
+    #[default]
     Programming,
     Mathematics,
     Science,
@@ -84,11 +86,6 @@ pub enum TechnicalDomain {
     Other(String),
 }
 
-impl Default for TechnicalDomain {
-    fn default() -> Self {
-        TechnicalDomain::Programming
-    }
-}
 
 impl std::fmt::Display for TechnicalDomain {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -568,7 +565,7 @@ impl PromptAnalyzer {
 
         // Factor 2: Structure complexity (sentence count and average length)
         let sentences: Vec<&str> = text
-            .split(|c| c == '.' || c == '。' || c == '!' || c == '！' || c == '?' || c == '？')
+            .split(['.', '。', '!', '！', '?', '？'])
             .filter(|s| !s.trim().is_empty())
             .collect();
         let sentence_count = sentences.len().max(1) as f64;

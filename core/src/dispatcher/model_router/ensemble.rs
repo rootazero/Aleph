@@ -64,8 +64,10 @@ use tokio::sync::Semaphore;
 /// Ensemble execution strategy
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case", tag = "mode")]
+#[derive(Default)]
 pub enum EnsembleMode {
     /// Disabled - single model routing (no ensemble)
+    #[default]
     Disabled,
     /// Run N models, return best response by quality score
     BestOfN {
@@ -86,11 +88,6 @@ pub enum EnsembleMode {
     },
 }
 
-impl Default for EnsembleMode {
-    fn default() -> Self {
-        EnsembleMode::Disabled
-    }
-}
 
 impl EnsembleMode {
     /// Get human-readable display name
@@ -164,7 +161,7 @@ impl QualityMetric {
     }
 
     /// Parse from string
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "length" => QualityMetric::Length,
             "structure" => QualityMetric::Structure,
@@ -1001,7 +998,7 @@ impl EnsembleResult {
     }
 
     /// Create an error result
-    pub fn error(error: impl Into<String>) -> Self {
+    pub fn error(_error: impl Into<String>) -> Self {
         Self {
             response: String::new(),
             selected_model: String::new(),
@@ -2047,17 +2044,17 @@ I'm confident this is correct.
 
     #[test]
     fn test_quality_metric_parsing() {
-        assert_eq!(QualityMetric::from_str("length"), QualityMetric::Length);
+        assert_eq!(QualityMetric::parse("length"), QualityMetric::Length);
         assert_eq!(
-            QualityMetric::from_str("STRUCTURE"),
+            QualityMetric::parse("STRUCTURE"),
             QualityMetric::Structure
         );
         assert_eq!(
-            QualityMetric::from_str("length_and_structure"),
+            QualityMetric::parse("length_and_structure"),
             QualityMetric::LengthAndStructure
         );
         assert_eq!(
-            QualityMetric::from_str("custom_metric"),
+            QualityMetric::parse("custom_metric"),
             QualityMetric::Custom("custom_metric".to_string())
         );
     }
