@@ -89,6 +89,8 @@ lru = "0.12"
 # For tar.gz extraction (runtime manager - cross-platform)
 flate2 = "1.0"
 tar = "0.4"
+# For SHA-256 hashing (semantic cache)
+sha2 = "0.10"
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }

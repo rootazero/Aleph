@@ -295,6 +295,15 @@ pub use crate::cowork_ffi::{
     BudgetPeriodFFI,
     BudgetScopeFFI,
     BudgetStatusFFI,
+    // P2: Prompt Analysis types
+    ContextSizeFFI,
+    DomainFFI,
+    LanguageFFI,
+    PromptFeaturesFFI,
+    ReasoningLevelFFI,
+    // P2: Semantic Cache types
+    CacheHitTypeFFI,
+    CacheStatsFFI,
 };
 
 // Generation exports (media generation providers)

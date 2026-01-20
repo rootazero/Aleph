@@ -1017,6 +1017,234 @@ impl BudgetStatusFFI {
 }
 
 // ============================================================================
+// P2: Prompt Analysis FFI Types
+// ============================================================================
+
+/// Detected language for FFI
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LanguageFFI {
+    English,
+    Chinese,
+    Japanese,
+    Korean,
+    Mixed,
+    Unknown,
+}
+
+impl From<crate::dispatcher::model_router::Language> for LanguageFFI {
+    fn from(lang: crate::dispatcher::model_router::Language) -> Self {
+        match lang {
+            crate::dispatcher::model_router::Language::English => LanguageFFI::English,
+            crate::dispatcher::model_router::Language::Chinese => LanguageFFI::Chinese,
+            crate::dispatcher::model_router::Language::Japanese => LanguageFFI::Japanese,
+            crate::dispatcher::model_router::Language::Korean => LanguageFFI::Korean,
+            crate::dispatcher::model_router::Language::Mixed => LanguageFFI::Mixed,
+            crate::dispatcher::model_router::Language::Unknown => LanguageFFI::Unknown,
+        }
+    }
+}
+
+/// Reasoning level for FFI
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningLevelFFI {
+    Low,
+    Medium,
+    High,
+}
+
+impl From<crate::dispatcher::model_router::ReasoningLevel> for ReasoningLevelFFI {
+    fn from(level: crate::dispatcher::model_router::ReasoningLevel) -> Self {
+        match level {
+            crate::dispatcher::model_router::ReasoningLevel::Low => ReasoningLevelFFI::Low,
+            crate::dispatcher::model_router::ReasoningLevel::Medium => ReasoningLevelFFI::Medium,
+            crate::dispatcher::model_router::ReasoningLevel::High => ReasoningLevelFFI::High,
+        }
+    }
+}
+
+/// Suggested context size for FFI
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextSizeFFI {
+    Small,
+    Medium,
+    Large,
+}
+
+impl From<crate::dispatcher::model_router::ContextSize> for ContextSizeFFI {
+    fn from(size: crate::dispatcher::model_router::ContextSize) -> Self {
+        match size {
+            crate::dispatcher::model_router::ContextSize::Small => ContextSizeFFI::Small,
+            crate::dispatcher::model_router::ContextSize::Medium => ContextSizeFFI::Medium,
+            crate::dispatcher::model_router::ContextSize::Large => ContextSizeFFI::Large,
+        }
+    }
+}
+
+/// Detected domain for FFI (simplified)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DomainFFI {
+    General,
+    Creative,
+    Conversational,
+    TechnicalProgramming,
+    TechnicalMathematics,
+    TechnicalScience,
+    TechnicalEngineering,
+    TechnicalDataScience,
+    TechnicalOther,
+}
+
+impl From<crate::dispatcher::model_router::Domain> for DomainFFI {
+    fn from(domain: crate::dispatcher::model_router::Domain) -> Self {
+        match domain {
+            crate::dispatcher::model_router::Domain::General => DomainFFI::General,
+            crate::dispatcher::model_router::Domain::Creative => DomainFFI::Creative,
+            crate::dispatcher::model_router::Domain::Conversational => DomainFFI::Conversational,
+            crate::dispatcher::model_router::Domain::Technical(tech) => match tech {
+                crate::dispatcher::model_router::TechnicalDomain::Programming => {
+                    DomainFFI::TechnicalProgramming
+                }
+                crate::dispatcher::model_router::TechnicalDomain::Mathematics => {
+                    DomainFFI::TechnicalMathematics
+                }
+                crate::dispatcher::model_router::TechnicalDomain::Science => {
+                    DomainFFI::TechnicalScience
+                }
+                crate::dispatcher::model_router::TechnicalDomain::Engineering => {
+                    DomainFFI::TechnicalEngineering
+                }
+                crate::dispatcher::model_router::TechnicalDomain::DataScience => {
+                    DomainFFI::TechnicalDataScience
+                }
+                crate::dispatcher::model_router::TechnicalDomain::Other(_) => DomainFFI::TechnicalOther,
+            },
+        }
+    }
+}
+
+/// Prompt features extracted by PromptAnalyzer for FFI
+#[derive(Debug, Clone)]
+pub struct PromptFeaturesFFI {
+    /// Estimated token count
+    pub estimated_tokens: u32,
+    /// Complexity score (0.0 - 1.0)
+    pub complexity_score: f64,
+    /// Primary detected language
+    pub primary_language: LanguageFFI,
+    /// Confidence in language detection (0.0 - 1.0)
+    pub language_confidence: f64,
+    /// Ratio of code content (0.0 - 1.0)
+    pub code_ratio: f64,
+    /// Detected reasoning level
+    pub reasoning_level: ReasoningLevelFFI,
+    /// Detected domain
+    pub domain: DomainFFI,
+    /// Suggested context size for model selection
+    pub suggested_context_size: ContextSizeFFI,
+    /// Analysis time in microseconds
+    pub analysis_time_us: u64,
+    /// Whether prompt contains code blocks
+    pub has_code_blocks: bool,
+    /// Number of questions detected
+    pub question_count: u32,
+    /// Number of imperative statements detected
+    pub imperative_count: u32,
+}
+
+impl From<crate::dispatcher::model_router::PromptFeatures> for PromptFeaturesFFI {
+    fn from(features: crate::dispatcher::model_router::PromptFeatures) -> Self {
+        Self {
+            estimated_tokens: features.estimated_tokens,
+            complexity_score: features.complexity_score,
+            primary_language: features.primary_language.into(),
+            language_confidence: features.language_confidence,
+            code_ratio: features.code_ratio,
+            reasoning_level: features.reasoning_level.into(),
+            domain: features.domain.into(),
+            suggested_context_size: features.suggested_context_size.into(),
+            analysis_time_us: features.analysis_time_us,
+            has_code_blocks: features.has_code_blocks,
+            question_count: features.question_count,
+            imperative_count: features.imperative_count,
+        }
+    }
+}
+
+// ============================================================================
+// P2: Semantic Cache FFI Types
+// ============================================================================
+
+/// Cache hit type for FFI
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheHitTypeFFI {
+    /// Exact hash match
+    Exact,
+    /// Semantic similarity match
+    Semantic,
+}
+
+impl From<crate::dispatcher::model_router::CacheHitType> for CacheHitTypeFFI {
+    fn from(hit_type: crate::dispatcher::model_router::CacheHitType) -> Self {
+        match hit_type {
+            crate::dispatcher::model_router::CacheHitType::Exact => CacheHitTypeFFI::Exact,
+            crate::dispatcher::model_router::CacheHitType::Semantic { .. } => CacheHitTypeFFI::Semantic,
+        }
+    }
+}
+
+/// Cache statistics for FFI
+#[derive(Debug, Clone)]
+pub struct CacheStatsFFI {
+    /// Total number of entries in cache
+    pub total_entries: u64,
+    /// Total size in bytes
+    pub total_size_bytes: u64,
+    /// Number of cache hits
+    pub hit_count: u64,
+    /// Number of cache misses
+    pub miss_count: u64,
+    /// Hit rate (0.0 - 1.0)
+    pub hit_rate: f64,
+    /// Number of exact hash hits
+    pub exact_hits: u64,
+    /// Number of semantic similarity hits
+    pub semantic_hits: u64,
+    /// Total number of evictions
+    pub evictions: u64,
+}
+
+impl From<crate::dispatcher::model_router::CacheStats> for CacheStatsFFI {
+    fn from(stats: crate::dispatcher::model_router::CacheStats) -> Self {
+        Self {
+            total_entries: stats.total_entries as u64,
+            total_size_bytes: stats.total_size_bytes as u64,
+            hit_count: stats.hit_count,
+            miss_count: stats.miss_count,
+            hit_rate: stats.hit_rate,
+            exact_hits: stats.exact_hits,
+            semantic_hits: stats.semantic_hits,
+            evictions: stats.evictions,
+        }
+    }
+}
+
+impl CacheStatsFFI {
+    /// Create empty cache stats (when cache is disabled)
+    pub fn empty() -> Self {
+        Self {
+            total_entries: 0,
+            total_size_bytes: 0,
+            hit_count: 0,
+            miss_count: 0,
+            hit_rate: 0.0,
+            exact_hits: 0,
+            semantic_hits: 0,
+            evictions: 0,
+        }
+    }
+}
+
+// ============================================================================
 // Task FFI Structs
 // ============================================================================
 

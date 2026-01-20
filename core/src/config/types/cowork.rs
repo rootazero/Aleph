@@ -524,6 +524,14 @@ pub struct ModelRoutingConfigToml {
     /// Budget management configuration (P1 improvements)
     #[serde(default)]
     pub budget: super::dispatcher::BudgetConfigToml,
+
+    /// Prompt analysis configuration (P2 improvements)
+    #[serde(default)]
+    pub prompt_analysis: PromptAnalysisConfigToml,
+
+    /// Semantic cache configuration (P2 improvements)
+    #[serde(default)]
+    pub semantic_cache: SemanticCacheConfigToml,
 }
 
 fn default_enable_pipelines() -> bool {
@@ -549,6 +557,8 @@ impl Default for ModelRoutingConfigToml {
             health: HealthConfigToml::default(),
             retry: super::dispatcher::RetryConfigToml::default(),
             budget: super::dispatcher::BudgetConfigToml::default(),
+            prompt_analysis: PromptAnalysisConfigToml::default(),
+            semantic_cache: SemanticCacheConfigToml::default(),
         }
     }
 }
@@ -708,6 +718,12 @@ impl ModelRoutingConfigToml {
 
         // Validate budget configuration (P1 improvements)
         self.budget.validate()?;
+
+        // Validate prompt analysis configuration (P2 improvements)
+        self.prompt_analysis.validate()?;
+
+        // Validate semantic cache configuration (P2 improvements)
+        self.semantic_cache.validate()?;
 
         Ok(())
     }
@@ -1700,6 +1716,341 @@ fn default_probe_timeout_secs() -> u64 {
 
 fn default_probe_test_prompt() -> String {
     "Hi".to_string()
+}
+
+// =============================================================================
+// PromptAnalysisConfigToml (P2)
+// =============================================================================
+
+/// Prompt analysis configuration from TOML
+///
+/// Configures the prompt analyzer for intelligent model routing based on
+/// prompt content features like complexity, language, and domain.
+///
+/// # Example TOML
+/// ```toml
+/// [cowork.model_routing.prompt_analysis]
+/// enabled = true
+/// high_complexity_threshold = 0.7
+/// low_complexity_threshold = 0.3
+/// mixed_language_threshold = 0.3
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptAnalysisConfigToml {
+    /// Enable prompt analysis for routing
+    #[serde(default = "default_prompt_analysis_enabled")]
+    pub enabled: bool,
+
+    /// Threshold above which complexity is considered high
+    #[serde(default = "default_high_complexity_threshold")]
+    pub high_complexity_threshold: f64,
+
+    /// Threshold below which complexity is considered low
+    #[serde(default = "default_low_complexity_threshold")]
+    pub low_complexity_threshold: f64,
+
+    /// Threshold for mixed language detection (0.0 - 1.0)
+    #[serde(default = "default_mixed_language_threshold")]
+    pub mixed_language_threshold: f64,
+
+    /// Complexity weight for text length
+    #[serde(default = "default_complexity_length_weight")]
+    pub complexity_length_weight: f64,
+
+    /// Complexity weight for sentence structure
+    #[serde(default = "default_complexity_structure_weight")]
+    pub complexity_structure_weight: f64,
+
+    /// Complexity weight for technical terms
+    #[serde(default = "default_complexity_technical_weight")]
+    pub complexity_technical_weight: f64,
+
+    /// Complexity weight for multi-step indicators
+    #[serde(default = "default_complexity_multi_step_weight")]
+    pub complexity_multi_step_weight: f64,
+}
+
+impl Default for PromptAnalysisConfigToml {
+    fn default() -> Self {
+        Self {
+            enabled: default_prompt_analysis_enabled(),
+            high_complexity_threshold: default_high_complexity_threshold(),
+            low_complexity_threshold: default_low_complexity_threshold(),
+            mixed_language_threshold: default_mixed_language_threshold(),
+            complexity_length_weight: default_complexity_length_weight(),
+            complexity_structure_weight: default_complexity_structure_weight(),
+            complexity_technical_weight: default_complexity_technical_weight(),
+            complexity_multi_step_weight: default_complexity_multi_step_weight(),
+        }
+    }
+}
+
+impl PromptAnalysisConfigToml {
+    /// Convert to PromptAnalyzerConfig
+    pub fn to_prompt_analyzer_config(
+        &self,
+    ) -> crate::dispatcher::model_router::PromptAnalyzerConfig {
+        let mut config = crate::dispatcher::model_router::PromptAnalyzerConfig::default();
+        config.high_complexity_threshold = self.high_complexity_threshold;
+        config.low_complexity_threshold = self.low_complexity_threshold;
+        config.mixed_language_threshold = self.mixed_language_threshold;
+        config.complexity_weights.length = self.complexity_length_weight;
+        config.complexity_weights.structure = self.complexity_structure_weight;
+        config.complexity_weights.technical = self.complexity_technical_weight;
+        config.complexity_weights.multi_step = self.complexity_multi_step_weight;
+        config
+    }
+
+    /// Validate prompt analysis configuration
+    pub fn validate(&self) -> Result<(), String> {
+        if self.high_complexity_threshold <= self.low_complexity_threshold {
+            return Err(format!(
+                "high_complexity_threshold ({}) must be greater than low_complexity_threshold ({})",
+                self.high_complexity_threshold, self.low_complexity_threshold
+            ));
+        }
+
+        if self.high_complexity_threshold > 1.0 || self.high_complexity_threshold < 0.0 {
+            return Err(format!(
+                "high_complexity_threshold must be between 0.0 and 1.0, got {}",
+                self.high_complexity_threshold
+            ));
+        }
+
+        if self.low_complexity_threshold > 1.0 || self.low_complexity_threshold < 0.0 {
+            return Err(format!(
+                "low_complexity_threshold must be between 0.0 and 1.0, got {}",
+                self.low_complexity_threshold
+            ));
+        }
+
+        if self.mixed_language_threshold > 1.0 || self.mixed_language_threshold < 0.0 {
+            return Err(format!(
+                "mixed_language_threshold must be between 0.0 and 1.0, got {}",
+                self.mixed_language_threshold
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+// Prompt analysis default functions
+fn default_prompt_analysis_enabled() -> bool {
+    true
+}
+
+fn default_high_complexity_threshold() -> f64 {
+    0.7
+}
+
+fn default_low_complexity_threshold() -> f64 {
+    0.3
+}
+
+fn default_mixed_language_threshold() -> f64 {
+    0.3
+}
+
+fn default_complexity_length_weight() -> f64 {
+    0.2
+}
+
+fn default_complexity_structure_weight() -> f64 {
+    0.3
+}
+
+fn default_complexity_technical_weight() -> f64 {
+    0.3
+}
+
+fn default_complexity_multi_step_weight() -> f64 {
+    0.2
+}
+
+// =============================================================================
+// SemanticCacheConfigToml (P2)
+// =============================================================================
+
+/// Semantic cache configuration from TOML
+///
+/// Configures the semantic cache for storing and retrieving responses
+/// based on prompt similarity.
+///
+/// # Example TOML
+/// ```toml
+/// [cowork.model_routing.semantic_cache]
+/// enabled = true
+/// similarity_threshold = 0.85
+/// max_entries = 10000
+/// default_ttl_secs = 86400
+/// eviction_policy = "hybrid"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticCacheConfigToml {
+    /// Enable semantic caching
+    #[serde(default = "default_semantic_cache_enabled")]
+    pub enabled: bool,
+
+    /// Embedding model to use (default: fastembed built-in)
+    #[serde(default = "default_embedding_model")]
+    pub embedding_model: String,
+
+    /// Minimum cosine similarity for cache hit
+    #[serde(default = "default_similarity_threshold")]
+    pub similarity_threshold: f64,
+
+    /// Check exact hash match before semantic search
+    #[serde(default = "default_exact_match_priority")]
+    pub exact_match_priority: bool,
+
+    /// Maximum number of cached entries
+    #[serde(default = "default_max_cache_entries")]
+    pub max_entries: usize,
+
+    /// Default TTL in seconds (86400 = 24 hours)
+    #[serde(default = "default_cache_ttl_secs")]
+    pub default_ttl_secs: u64,
+
+    /// Maximum TTL in seconds (604800 = 7 days)
+    #[serde(default = "default_max_ttl_secs")]
+    pub max_ttl_secs: u64,
+
+    /// Eviction policy: "lru", "lfu", or "hybrid"
+    #[serde(default = "default_eviction_policy")]
+    pub eviction_policy: String,
+
+    /// Weight for age in hybrid eviction (0.0 - 1.0)
+    #[serde(default = "default_hybrid_age_weight")]
+    pub hybrid_age_weight: f64,
+
+    /// Weight for hit count in hybrid eviction (0.0 - 1.0)
+    #[serde(default = "default_hybrid_hits_weight")]
+    pub hybrid_hits_weight: f64,
+
+    /// Minimum response length to cache
+    #[serde(default = "default_min_response_length")]
+    pub min_response_length: usize,
+
+    /// Task intents to exclude from caching
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_intents: Vec<String>,
+
+    /// Use async (non-blocking) storage writes
+    #[serde(default = "default_async_storage")]
+    pub async_storage: bool,
+}
+
+impl Default for SemanticCacheConfigToml {
+    fn default() -> Self {
+        Self {
+            enabled: default_semantic_cache_enabled(),
+            embedding_model: default_embedding_model(),
+            similarity_threshold: default_similarity_threshold(),
+            exact_match_priority: default_exact_match_priority(),
+            max_entries: default_max_cache_entries(),
+            default_ttl_secs: default_cache_ttl_secs(),
+            max_ttl_secs: default_max_ttl_secs(),
+            eviction_policy: default_eviction_policy(),
+            hybrid_age_weight: default_hybrid_age_weight(),
+            hybrid_hits_weight: default_hybrid_hits_weight(),
+            min_response_length: default_min_response_length(),
+            exclude_intents: Vec::new(),
+            async_storage: default_async_storage(),
+        }
+    }
+}
+
+impl SemanticCacheConfigToml {
+    /// Validate semantic cache configuration
+    pub fn validate(&self) -> Result<(), String> {
+        if self.similarity_threshold < 0.0 || self.similarity_threshold > 1.0 {
+            return Err(format!(
+                "similarity_threshold must be between 0.0 and 1.0, got {}",
+                self.similarity_threshold
+            ));
+        }
+
+        if self.max_entries == 0 {
+            return Err("max_entries must be greater than 0".to_string());
+        }
+
+        if self.default_ttl_secs > self.max_ttl_secs {
+            return Err(format!(
+                "default_ttl_secs ({}) cannot exceed max_ttl_secs ({})",
+                self.default_ttl_secs, self.max_ttl_secs
+            ));
+        }
+
+        let valid_policies = ["lru", "lfu", "hybrid"];
+        if !valid_policies.contains(&self.eviction_policy.as_str()) {
+            return Err(format!(
+                "eviction_policy must be one of {:?}, got '{}'",
+                valid_policies, self.eviction_policy
+            ));
+        }
+
+        if self.eviction_policy == "hybrid" {
+            let total = self.hybrid_age_weight + self.hybrid_hits_weight;
+            if (total - 1.0).abs() > 0.01 {
+                tracing::warn!(
+                    "Hybrid eviction weights do not sum to 1.0 ({}), they will be normalized",
+                    total
+                );
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// Semantic cache default functions
+fn default_semantic_cache_enabled() -> bool {
+    true
+}
+
+fn default_embedding_model() -> String {
+    "bge-small-zh-v1.5".to_string()
+}
+
+fn default_similarity_threshold() -> f64 {
+    0.85
+}
+
+fn default_exact_match_priority() -> bool {
+    true
+}
+
+fn default_max_cache_entries() -> usize {
+    10000
+}
+
+fn default_cache_ttl_secs() -> u64 {
+    86400 // 24 hours
+}
+
+fn default_max_ttl_secs() -> u64 {
+    604800 // 7 days
+}
+
+fn default_eviction_policy() -> String {
+    "hybrid".to_string()
+}
+
+fn default_hybrid_age_weight() -> f64 {
+    0.4
+}
+
+fn default_hybrid_hits_weight() -> f64 {
+    0.6
+}
+
+fn default_min_response_length() -> usize {
+    50
+}
+
+fn default_async_storage() -> bool {
+    true
 }
 
 // =============================================================================

@@ -42,7 +42,10 @@ mod metrics;
 mod orchestrated_router;
 mod orchestrator;
 mod profiles;
+mod p2_router;
+mod prompt_analyzer;
 mod retry;
+mod semantic_cache;
 mod rules;
 mod scoring;
 mod transition_engine;
@@ -91,6 +94,24 @@ pub use orchestrator::{
 pub use orchestrated_router::{
     BudgetCheckResultSummary, OrchestratedRouter, OrchestratedRouterConfig, RouterEvent,
     RoutingExecutionError, RoutingRequest, RoutingResult,
+};
+
+// Prompt Analyzer (P2)
+pub use prompt_analyzer::{
+    ComplexityWeights, ContextSize, Domain, Language, PromptAnalysisError, PromptAnalyzer,
+    PromptAnalyzerConfig, PromptFeatures, ReasoningLevel, TechnicalDomain,
+};
+
+// Semantic Cache (P2)
+pub use semantic_cache::{
+    CacheEntry, CacheHit, CacheHitType, CacheMetadata, CacheStats, CachedResponse,
+    EmbeddingError, EvictionPolicy, FastEmbedEmbedder, InMemoryVectorStore, SemanticCacheConfig,
+    SemanticCacheError, SemanticCacheManager, TextEmbedder,
+};
+
+// P2 Intelligent Router (P2) - Integrates Prompt Analysis + Semantic Cache
+pub use p2_router::{
+    P2IntelligentRouter, P2RouterConfig, P2RouterError, PreRouteResult, RoutingDecision,
 };
 
 // Re-export StageResult from cowork_types module for backward compatibility
