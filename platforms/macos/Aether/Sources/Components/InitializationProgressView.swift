@@ -20,6 +20,7 @@ enum InitializationState {
 }
 
 /// View model for initialization progress
+@MainActor
 class InitializationProgressViewModel: ObservableObject {
     @Published var state: InitializationState = .notStarted
     @Published var currentPhase: String = ""
@@ -30,7 +31,7 @@ class InitializationProgressViewModel: ObservableObject {
     private let totalPhases: Double = 6.0 // 6 phases in unified initialization
 
     func updatePhaseStarted(phase: String, current: UInt32, total: UInt32) {
-        DispatchQueue.main.async {
+        Task { @MainActor in
             self.currentPhase = phase
             self.currentMessage = ""
             self.state = .inProgress(phase: phase, current: Int(current), total: Int(total), message: "")
@@ -41,7 +42,7 @@ class InitializationProgressViewModel: ObservableObject {
     }
 
     func updatePhaseProgress(phase: String, progress: Double, message: String) {
-        DispatchQueue.main.async {
+        Task { @MainActor in
             self.currentPhase = phase
             self.currentMessage = message
 
@@ -55,7 +56,7 @@ class InitializationProgressViewModel: ObservableObject {
     }
 
     func updateDownloadProgress(item: String, downloaded: UInt64, total: UInt64) {
-        DispatchQueue.main.async {
+        Task { @MainActor in
             self.state = .downloading(item: item, downloaded: downloaded, total: total)
 
             if total > 0 {
@@ -65,7 +66,7 @@ class InitializationProgressViewModel: ObservableObject {
     }
 
     func updatePhaseCompleted(phase: String) {
-        DispatchQueue.main.async {
+        Task { @MainActor in
             // Update progress to next phase start
             if let current = self.getCurrentPhaseNumber(phase) {
                 self.overallProgress = Double(current) / self.totalPhases
@@ -74,20 +75,20 @@ class InitializationProgressViewModel: ObservableObject {
     }
 
     func updateError(phase: String, message: String, isRetryable: Bool) {
-        DispatchQueue.main.async {
+        Task { @MainActor in
             self.state = .failed(phase: phase, error: message, isRetryable: isRetryable)
         }
     }
 
     func markCompleted() {
-        DispatchQueue.main.async {
+        Task { @MainActor in
             self.state = .completed
             self.overallProgress = 1.0
         }
     }
 
     func markFailed(phase: String, error: String) {
-        DispatchQueue.main.async {
+        Task { @MainActor in
             self.state = .failed(phase: phase, error: error, isRetryable: true)
         }
     }
@@ -107,7 +108,8 @@ class InitializationProgressViewModel: ObservableObject {
 }
 
 /// Swift implementation of InitProgressHandlerFFI for UniFFI callback
-class InitProgressHandlerImpl: InitProgressHandlerFfi {
+/// Note: This handler bridges Rust callbacks to Swift's MainActor-isolated view model
+final class InitProgressHandlerImpl: InitProgressHandlerFfi, @unchecked Sendable {
     weak var viewModel: InitializationProgressViewModel?
 
     init(viewModel: InitializationProgressViewModel) {
@@ -116,25 +118,35 @@ class InitProgressHandlerImpl: InitProgressHandlerFfi {
 
     func onPhaseStarted(phase: String, current: UInt32, total: UInt32) {
         print("[Init] Phase \(current)/\(total): \(phase)")
-        viewModel?.updatePhaseStarted(phase: phase, current: current, total: total)
+        Task { @MainActor [weak viewModel] in
+            viewModel?.updatePhaseStarted(phase: phase, current: current, total: total)
+        }
     }
 
     func onPhaseProgress(phase: String, progress: Double, message: String) {
-        viewModel?.updatePhaseProgress(phase: phase, progress: progress, message: message)
+        Task { @MainActor [weak viewModel] in
+            viewModel?.updatePhaseProgress(phase: phase, progress: progress, message: message)
+        }
     }
 
     func onPhaseCompleted(phase: String) {
         print("[Init] ✅ Phase completed: \(phase)")
-        viewModel?.updatePhaseCompleted(phase: phase)
+        Task { @MainActor [weak viewModel] in
+            viewModel?.updatePhaseCompleted(phase: phase)
+        }
     }
 
     func onDownloadProgress(item: String, downloaded: UInt64, total: UInt64) {
-        viewModel?.updateDownloadProgress(item: item, downloaded: downloaded, total: total)
+        Task { @MainActor [weak viewModel] in
+            viewModel?.updateDownloadProgress(item: item, downloaded: downloaded, total: total)
+        }
     }
 
     func onError(phase: String, message: String, isRetryable: Bool) {
         print("[Init] ❌ Error in phase \(phase): \(message) (retryable: \(isRetryable))")
-        viewModel?.updateError(phase: phase, message: message, isRetryable: isRetryable)
+        Task { @MainActor [weak viewModel] in
+            viewModel?.updateError(phase: phase, message: message, isRetryable: isRetryable)
+        }
     }
 }
 
@@ -143,8 +155,8 @@ struct InitializationProgressView: View {
     @StateObject private var viewModel = InitializationProgressViewModel()
     @State private var isInitializing = false
 
-    let onCompletion: () -> Void
-    let onFailure: (String) -> Void
+    let onCompletion: @Sendable () -> Void
+    let onFailure: @Sendable (String) -> Void
 
     var body: some View {
         VStack(spacing: 24) {
@@ -280,7 +292,7 @@ struct InitializationProgressView: View {
 
         NSLog("[Init] Starting background task for unified initialization")
         // Run initialization in background
-        DispatchQueue.global(qos: .userInitiated).async {
+        Task.detached(priority: .userInitiated) { [viewModel, onCompletion, onFailure] in
             NSLog("[Init] Calling runInitialization FFI...")
             print("[Init] Starting unified initialization...")
 
@@ -289,12 +301,12 @@ struct InitializationProgressView: View {
 
             if result.success {
                 print("[Init] ✅ Initialization completed successfully")
-                viewModel.markCompleted()
+                await viewModel.markCompleted()
 
                 // Wait a moment to show completion state
-                Thread.sleep(forTimeInterval: 1.0)
+                try? await Task.sleep(seconds: 1.0)
 
-                DispatchQueue.main.async {
+                await MainActor.run {
                     isInitializing = false
                     onCompletion()
                 }
@@ -302,9 +314,9 @@ struct InitializationProgressView: View {
                 let errorPhase = result.errorPhase ?? "unknown"
                 let errorMessage = result.errorMessage ?? "Unknown error"
                 print("[Init] ❌ Initialization failed: \(errorMessage)")
-                viewModel.markFailed(phase: errorPhase, error: errorMessage)
+                await viewModel.markFailed(phase: errorPhase, error: errorMessage)
 
-                DispatchQueue.main.async {
+                await MainActor.run {
                     isInitializing = false
                     onFailure(errorMessage)
                 }

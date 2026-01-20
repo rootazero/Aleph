@@ -330,7 +330,7 @@ struct SearchProviderCard: View {
     }
 
     /// Test connection to provider
-    private func testConnection() async {
+    func testConnection() async {
         guard isConfigured else { return }
 
         status = .testing

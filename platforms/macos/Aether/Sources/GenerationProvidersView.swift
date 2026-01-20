@@ -11,7 +11,7 @@ import SwiftUI
 // MARK: - Generation Category
 
 /// Categories for generation providers
-enum GenerationCategory: String, CaseIterable, Identifiable {
+enum GenerationCategory: String, CaseIterable, Identifiable, Sendable {
     case image = "image"
     case video = "video"
     case audio = "audio"
@@ -38,7 +38,7 @@ enum GenerationCategory: String, CaseIterable, Identifiable {
 // MARK: - Generation Preset Provider
 
 /// Generation provider preset definition
-struct GenerationPresetProvider: Identifiable, Equatable {
+struct GenerationPresetProvider: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
     let iconName: String
@@ -635,7 +635,7 @@ struct GenerationProvidersView: View {
         isAddingNew = true
     }
 
-    private func testConnection() {
+    func testConnection() {
         // Implementation in GenerationProviderEditPanel handles actual testing
     }
 
@@ -1239,7 +1239,7 @@ struct GenerationProviderEditPanel: View {
         savedBaseURL = baseURL
     }
 
-    private func testGenerationConnection() {
+    func testGenerationConnection() {
         guard canTestConnection else { return }
 
         localIsTesting = true

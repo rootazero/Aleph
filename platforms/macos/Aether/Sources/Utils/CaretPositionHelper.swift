@@ -101,12 +101,14 @@ enum CaretPositionHelper {
         )
 
         guard focusedResult == .success,
-              let focusedElement = focusedElementRef else {
+              let focusedElement = focusedElementRef,
+              CFGetTypeID(focusedElement) == AXUIElementGetTypeID() else {
             print("[CaretPositionHelper] Failed to get focused element: \(focusedResult.rawValue)")
             return nil
         }
 
-        // Cast to AXUIElement
+        // Cast to AXUIElement - safe after type ID check
+        // swiftlint:disable:next force_cast
         let element = focusedElement as! AXUIElement
 
         // Get selected text range (caret position when no text is selected)
@@ -140,6 +142,7 @@ enum CaretPositionHelper {
 
         // Extract CGRect from AXValue
         var rect = CGRect.zero
+        // swiftlint:disable:next force_cast
         let extractSuccess = AXValueGetValue(boundsValue as! AXValue, .cgRect, &rect)
 
         guard extractSuccess else {

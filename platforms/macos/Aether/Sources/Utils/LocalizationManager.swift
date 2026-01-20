@@ -19,7 +19,11 @@ import Foundation
 /// // Instead of: NSLocalizedString("menu.about", comment: "")
 /// // Use: L10n.string("menu.about")
 /// ```
-final class LocalizationManager {
+///
+/// Thread Safety:
+/// - Marked as @unchecked Sendable because localization lookups are inherently read-only after initialization
+/// - Language changes are expected to happen infrequently and on main thread
+final class LocalizationManager: @unchecked Sendable {
 
     // MARK: - Singleton
 

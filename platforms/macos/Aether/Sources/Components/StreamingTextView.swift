@@ -36,7 +36,7 @@ struct StreamingTextView: View {
             }
             .onAppear {
                 // Animate initial text
-                if text.count > 0 {
+                if !text.isEmpty {
                     animateNewText(from: 0, to: text.count)
                 }
             }

@@ -19,7 +19,7 @@ struct PerformantTextView: NSViewRepresentable {
     var fontSize: CGFloat = 13
     var maxWidth: CGFloat = 700
 
-    class Coordinator: NSObject, NSTextStorageDelegate {
+    class Coordinator: NSObject, NSTextStorageDelegate, @unchecked Sendable {
         var parent: PerformantTextView
         var lastTextLength: Int = 0
         weak var textView: AutoSizingTextView?
@@ -35,8 +35,10 @@ struct PerformantTextView: NSViewRepresentable {
             changeInLength delta: Int
         ) {
             // Trigger size recalculation when text changes
-            DispatchQueue.main.async { [weak self] in
-                self?.textView?.invalidateIntrinsicContentSize()
+            // Capture textView reference before Task to avoid sending self
+            let tv = textView
+            Task { @MainActor in
+                tv?.invalidateIntrinsicContentSize()
             }
         }
     }

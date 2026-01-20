@@ -524,11 +524,11 @@ struct MemoryView: View {
             // User wants to enable memory - check if model exists
             isCheckingModel = true
 
-            DispatchQueue.global(qos: .userInitiated).async {
+            Task.detached(priority: .userInitiated) {
                 // Check if embedding model exists using new FFI function
                 let modelExists = checkEmbeddingModelExists()
 
-                DispatchQueue.main.async {
+                await MainActor.run {
                     isCheckingModel = false
 
                     if modelExists {
@@ -571,11 +571,11 @@ struct MemoryView: View {
         isCompressing = true
         lastCompressionResult = nil
 
-        DispatchQueue.global(qos: .userInitiated).async {
+        Task.detached(priority: .userInitiated) { [core] in
             do {
                 let result = try core.triggerCompression()
 
-                DispatchQueue.main.async {
+                await MainActor.run {
                     isCompressing = false
                     lastCompressionResult = result
                     // Refresh stats after compression
@@ -583,7 +583,7 @@ struct MemoryView: View {
                     loadStats()
                 }
             } catch {
-                DispatchQueue.main.async {
+                await MainActor.run {
                     isCompressing = false
                     errorMessage = "Compression failed: \(error.localizedDescription)"
                 }

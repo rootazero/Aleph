@@ -18,6 +18,10 @@ import Carbon.HIToolbox
 ///
 /// Simulates keyboard shortcuts (Cmd+X, Cmd+C, Cmd+V) and typewriter text input.
 /// Uses macOS CGEvent API for system-level keyboard event injection.
+///
+/// Thread Safety:
+/// - Marked as @MainActor since keyboard event injection should happen on main thread
+@MainActor
 class KeyboardSimulator {
 
     // MARK: - Singleton

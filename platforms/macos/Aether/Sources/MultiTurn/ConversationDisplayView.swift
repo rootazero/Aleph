@@ -150,7 +150,7 @@ struct ConversationDisplayView: View {
 
     private var loadingIndicator: some View {
         HStack(spacing: 6) {
-            ForEach(0..<3, id: \.self) { index in
+            ForEach(0..<3, id: \.self) { _ in
                 Circle()
                     .fill(GlassColors.secondaryText)
                     .frame(width: 6, height: 6)

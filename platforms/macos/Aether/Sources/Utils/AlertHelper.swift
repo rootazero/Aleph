@@ -20,6 +20,7 @@ import SwiftUI
 ///   - title: Toast title text
 ///   - message: Toast message text
 ///   - autoDismiss: Whether to auto-dismiss (default: true for info)
+@MainActor
 func showInfoToast(title: String, message: String, autoDismiss: Bool = true) {
     if let appDelegate = NSApp.delegate as? AppDelegate,
        let eventHandler = appDelegate.eventHandler {
@@ -38,6 +39,7 @@ func showInfoToast(title: String, message: String, autoDismiss: Bool = true) {
 ///   - title: Toast title text
 ///   - message: Toast message text
 ///   - autoDismiss: Whether to auto-dismiss (default: false for warnings)
+@MainActor
 func showWarningToast(title: String, message: String, autoDismiss: Bool = false) {
     if let appDelegate = NSApp.delegate as? AppDelegate,
        let eventHandler = appDelegate.eventHandler {
@@ -56,6 +58,7 @@ func showWarningToast(title: String, message: String, autoDismiss: Bool = false)
 ///   - title: Toast title text
 ///   - message: Toast message text
 ///   - autoDismiss: Whether to auto-dismiss (default: false for errors)
+@MainActor
 func showErrorToast(title: String, message: String, autoDismiss: Bool = false) {
     if let appDelegate = NSApp.delegate as? AppDelegate,
        let eventHandler = appDelegate.eventHandler {

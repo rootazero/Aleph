@@ -8,7 +8,7 @@ struct ThemeSwitcher: View {
     @ObservedObject var themeManager: ThemeManager
 
     /// Button size
-    private let buttonSize: CGSize = CGSize(width: 32, height: 28)
+    private let buttonSize = CGSize(width: 32, height: 28)
 
     // MARK: - Body
 

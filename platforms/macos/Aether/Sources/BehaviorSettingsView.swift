@@ -507,6 +507,7 @@ struct TypingSpeedPreviewSheet: View {
     @State private var displayedText: String = ""
     @State private var isAnimating: Bool = false
 
+    // swiftlint:disable:next line_length
     private let sampleText = "This is a preview of the typewriter effect at your selected speed. Watch how each character appears one by one, creating a natural typing animation that brings your AI responses to life."
 
     var body: some View {
@@ -576,17 +577,15 @@ struct TypingSpeedPreviewSheet: View {
         let delayBetweenChars = 1.0 / charactersPerSecond
 
         let characters = Array(sampleText)
-        var currentIndex = 0
 
-        Timer.scheduledTimer(withTimeInterval: delayBetweenChars, repeats: true) { timer in
-            guard currentIndex < characters.count else {
-                timer.invalidate()
-                isAnimating = false
-                return
+        // Use Task-based animation for Swift 6 concurrency safety
+        Task { @MainActor in
+            for character in characters {
+                guard isAnimating else { break }
+                displayedText.append(character)
+                try? await Task.sleep(seconds: delayBetweenChars)
             }
-
-            displayedText.append(characters[currentIndex])
-            currentIndex += 1
+            isAnimating = false
         }
     }
 

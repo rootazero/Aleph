@@ -6,9 +6,13 @@
 //
 
 import Cocoa
-import ApplicationServices
+@preconcurrency import ApplicationServices
 
 /// Context capture utility for retrieving active application and window information
+///
+/// Thread Safety:
+/// - Marked as @MainActor since NSWorkspace and Accessibility API operations should happen on main thread
+@MainActor
 class ContextCapture {
 
     // MARK: - Public API
@@ -54,15 +58,20 @@ class ContextCapture {
             &focusedWindow
         )
 
-        guard result == .success, let windowElement = focusedWindow else {
+        guard result == .success,
+              let windowRef = focusedWindow,
+              CFGetTypeID(windowRef) == AXUIElementGetTypeID() else {
             print("[ContextCapture] Failed to get focused window: \(result.rawValue)")
             return nil
         }
 
+        // swiftlint:disable:next force_cast
+        let windowElement = windowRef as! AXUIElement
+
         // Get the window title
         var windowTitle: CFTypeRef?
         let titleResult = AXUIElementCopyAttributeValue(
-            windowElement as! AXUIElement,
+            windowElement,
             kAXTitleAttribute as CFString,
             &windowTitle
         )
@@ -96,7 +105,7 @@ class ContextCapture {
     /// Note: This will only show the prompt once per app install. User must manually grant in System Settings.
     static func requestAccessibilityPermission() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        let _ = AXIsProcessTrustedWithOptions(options)
+        _ = AXIsProcessTrustedWithOptions(options)
     }
 
 }

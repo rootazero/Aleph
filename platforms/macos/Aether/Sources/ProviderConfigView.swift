@@ -330,7 +330,7 @@ struct ProviderConfigView: View {
 
     // MARK: - Actions
 
-    private func testConnection() {
+    func testConnection() {
         guard isFormValid() else { return }
 
         isTesting = true

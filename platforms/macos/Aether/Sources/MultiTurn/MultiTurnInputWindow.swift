@@ -45,7 +45,8 @@ final class MultiTurnInputWindow: NSWindow {
     var onTopicSelected: ((Topic) -> Void)?
 
     /// Local event monitor for ESC key
-    private var escapeMonitor: Any?
+    /// nonisolated(unsafe) for cleanup in deinit
+    nonisolated(unsafe) private var escapeMonitor: Any?
 
     // MARK: - Initialization
 

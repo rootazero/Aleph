@@ -72,6 +72,10 @@ private struct AnyDependencyFactory {
 /// 2. `initializeCoreServices()` called after permissions granted
 /// 3. `initializeCoordinators()` called after core is ready
 /// 4. Components access dependencies through container
+///
+/// Thread Safety:
+/// - Marked as @MainActor since most dependencies are UI-related
+@MainActor
 final class DependencyContainer: ObservableObject {
 
     // MARK: - Singleton
@@ -258,9 +262,11 @@ final class DependencyContainer: ObservableObject {
 
         // === Core Initialization (rig-core based, unified interface) ===
         print("[DependencyContainer] Initializing core...")
-        eventHandler = EventHandler(haloWindow: nil)
-        core = try initCore(configPath: configPath, handler: eventHandler!)
-        eventHandler?.setCore(core!)
+        let handler = EventHandler(haloWindow: nil)
+        eventHandler = handler
+        let coreInstance = try initCore(configPath: configPath, handler: handler)
+        core = coreInstance
+        eventHandler?.setCore(coreInstance)
         print("[DependencyContainer] core initialized successfully")
 
         isCoreInitialized = true

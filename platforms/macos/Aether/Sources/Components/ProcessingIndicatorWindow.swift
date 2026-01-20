@@ -73,7 +73,7 @@ class ProcessingIndicatorWindow: NSWindow {
 
         // Find the screen containing the position
         let targetScreen = NSScreen.screens.first { screen in
-            NSPointInRect(position, screen.frame)
+            screen.frame.contains(position)
         } ?? NSScreen.main ?? NSScreen.screens.first
 
         guard let screen = targetScreen else {

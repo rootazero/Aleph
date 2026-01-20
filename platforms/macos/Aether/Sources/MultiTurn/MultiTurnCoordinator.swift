@@ -9,9 +9,27 @@
 import AppKit
 import SwiftUI
 
+// MARK: - Global Access
+
+/// Global accessor for multi-turn mode state
+/// This function is nonisolated and can be called from any thread (e.g., FFI callbacks)
+/// Uses nonisolated(unsafe) backing storage for thread-safe reads
+nonisolated func isMultiTurnModeActive() -> Bool {
+    return _multiTurnActiveState
+}
+
+/// Backing storage for multi-turn active state
+/// nonisolated(unsafe) because Bool reads are atomic and we only need eventual consistency
+/// Updated by MultiTurnCoordinator when state changes
+nonisolated(unsafe) private var _multiTurnActiveState: Bool = false
+
 // MARK: - MultiTurnCoordinator
 
 /// Coordinator for multi-turn conversation mode
+///
+/// Thread Safety:
+/// - Marked as @MainActor since it manages UI windows and state
+@MainActor
 final class MultiTurnCoordinator {
 
     // MARK: - Singleton
@@ -46,7 +64,9 @@ final class MultiTurnCoordinator {
     // MARK: - State
 
     private var currentTopic: Topic?
-    private var isActive: Bool = false
+    // nonisolated(unsafe) to allow cross-thread reads - Bool reads are atomic
+    // Writes still happen on MainActor, reads may see slightly stale values (acceptable)
+    nonisolated(unsafe) private var isActive: Bool = false
 
     /// Typewriter task (can be cancelled)
     private var typewriterTask: Task<Void, Never>?
@@ -86,6 +106,7 @@ final class MultiTurnCoordinator {
     private func start() {
         print("[MultiTurnCoordinator] Starting new session")
         isActive = true
+        _multiTurnActiveState = true  // Sync global state for FFI callbacks
 
         // Create new topic
         currentTopic = ConversationStore.shared.createTopic()
@@ -107,6 +128,7 @@ final class MultiTurnCoordinator {
     func exit() {
         print("[MultiTurnCoordinator] Exiting")
         isActive = false
+        _multiTurnActiveState = false  // Sync global state for FFI callbacks
 
         // Cancel any ongoing typewriter output
         typewriterTask?.cancel()
@@ -276,7 +298,7 @@ final class MultiTurnCoordinator {
                 // Batch update: every batchSize chars OR every throttleInterval OR last char
                 let timeSinceLastUpdate = Date().timeIntervalSince(lastUpdateTime)
                 let isLastChar = index == responseChars.count - 1
-                let shouldUpdate = (index + 1) % batchSize == 0
+                let shouldUpdate = (index + 1).isMultiple(of: batchSize)
                     || timeSinceLastUpdate >= throttleInterval
                     || isLastChar
 
@@ -349,7 +371,8 @@ final class MultiTurnCoordinator {
     // MARK: - State Query
 
     /// Check if multi-turn mode is currently active
-    var isMultiTurnActive: Bool {
+    /// nonisolated for cross-thread access from FFI callbacks
+    nonisolated var isMultiTurnActive: Bool {
         isActive
     }
 

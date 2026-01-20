@@ -12,6 +12,10 @@ import SwiftUI
 // MARK: - MultiTurnInputViewModel
 
 /// View model for multi-turn input
+///
+/// Thread Safety:
+/// - Marked as @MainActor since it drives SwiftUI views
+@MainActor
 final class MultiTurnInputViewModel: ObservableObject {
 
     // MARK: - Published Properties

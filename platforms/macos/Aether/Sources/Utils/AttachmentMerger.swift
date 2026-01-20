@@ -115,7 +115,7 @@ struct AttachmentMerger {
             finalAttachments: finalAttachments,
             clipboardAttachmentCount: context.clipboardAttachments.count,
             windowAttachmentCount: context.windowAttachments.count,
-            hasClipboardContext: context.clipboardTextContext != nil && !context.clipboardTextContext!.isEmpty
+            hasClipboardContext: context.clipboardTextContext.map { !$0.isEmpty } ?? false
         )
     }
 

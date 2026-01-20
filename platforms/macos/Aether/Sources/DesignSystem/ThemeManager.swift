@@ -58,6 +58,10 @@ enum ThemeMode: String, CaseIterable {
 }
 
 /// Manages application theme and persists user preference
+///
+/// Thread Safety:
+/// - Marked as @MainActor since all UI/appearance operations must happen on main thread
+@MainActor
 final class ThemeManager: ObservableObject {
     // MARK: - Properties
 
@@ -97,35 +101,33 @@ final class ThemeManager: ObservableObject {
 
     /// Apply the current theme to the application
     func applyTheme() {
-        DispatchQueue.mainAsync(weakRef: self) { slf in
-            // Set application-wide appearance first
-            if slf.currentTheme == .auto {
-                NSApp.appearance = nil
-            } else {
-                NSApp.appearance = slf.currentTheme.appearance
-            }
-
-            // Get all windows and apply appearance
-            let windows = NSApplication.shared.windows
-
-            // Apply appearance to each window
-            for window in windows {
-                if slf.currentTheme == .auto {
-                    // Remove custom appearance to follow system
-                    window.appearance = nil
-                } else {
-                    // Set specific appearance
-                    window.appearance = slf.currentTheme.appearance
-                }
-
-                // Force window to update its appearance
-                window.invalidateShadow()
-                window.displayIfNeeded()
-            }
-
-            // Notify that the theme has changed
-            slf.objectWillChange.send()
+        // Set application-wide appearance first
+        if currentTheme == .auto {
+            NSApp.appearance = nil
+        } else {
+            NSApp.appearance = currentTheme.appearance
         }
+
+        // Get all windows and apply appearance
+        let windows = NSApplication.shared.windows
+
+        // Apply appearance to each window
+        for window in windows {
+            if currentTheme == .auto {
+                // Remove custom appearance to follow system
+                window.appearance = nil
+            } else {
+                // Set specific appearance
+                window.appearance = currentTheme.appearance
+            }
+
+            // Force window to update its appearance
+            window.invalidateShadow()
+            window.displayIfNeeded()
+        }
+
+        // Notify that the theme has changed
+        objectWillChange.send()
     }
 
     /// Switch to the next theme mode (for keyboard shortcut support)

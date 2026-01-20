@@ -19,7 +19,7 @@ options:
 
 settings:
   base:
-    SWIFT_VERSION: 5.0
+    SWIFT_VERSION: 6.0
     MARKETING_VERSION: 0.1.0
     CURRENT_PROJECT_VERSION: 1
     MACOSX_DEPLOYMENT_TARGET: 15.0
@@ -32,6 +32,8 @@ settings:
     SWIFT_EMIT_LOC_STRINGS: YES
     SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
     STRING_CATALOG_GENERATE_SYMBOLS: YES
+    # Swift 6 concurrency checking: targeted (gradual migration), complete (full enforcement)
+    SWIFT_STRICT_CONCURRENCY: targeted
     # Limit to arm64 only to match Rust library architecture
     ARCHS: arm64
     ONLY_ACTIVE_ARCH: NO
@@ -119,6 +121,20 @@ targets:
         embed: true
         link: true
       - package: GRDB
+    postCompileScripts:
+      - name: "SwiftLint"
+        script: |
+          # Run SwiftLint if installed
+          if command -v swiftlint &> /dev/null; then
+              swiftlint lint --config "${PROJECT_DIR}/.swiftlint.yml" --quiet
+          elif [ -f "/opt/homebrew/bin/swiftlint" ]; then
+              /opt/homebrew/bin/swiftlint lint --config "${PROJECT_DIR}/.swiftlint.yml" --quiet
+          elif [ -f "/usr/local/bin/swiftlint" ]; then
+              /usr/local/bin/swiftlint lint --config "${PROJECT_DIR}/.swiftlint.yml" --quiet
+          else
+              echo "warning: SwiftLint not installed. Install with: brew install swiftlint"
+          fi
+        basedOnDependencyAnalysis: false
     preBuildScripts:
       - name: "Build Rust Core"
         script: |

@@ -79,6 +79,10 @@ enum FocusDetectionResult {
 ///     NSLog("Focus detection error: \(error)")
 /// }
 /// ```
+///
+/// Thread Safety:
+/// - Marked as @MainActor since Accessibility API operations should happen on main thread
+@MainActor
 final class FocusDetector {
 
     // MARK: - Constants
@@ -119,11 +123,14 @@ final class FocusDetector {
             &focusedRef
         )
 
-        guard focusResult == .success, let focused = focusedRef else {
+        guard focusResult == .success,
+              let focused = focusedRef,
+              CFGetTypeID(focused) == AXUIElementGetTypeID() else {
             NSLog("[FocusDetector] No focused element found (error: %d)", focusResult.rawValue)
             return .notFocused
         }
 
+        // swiftlint:disable:next force_cast
         let element = focused as! AXUIElement
 
         // Check if element is a text input type
@@ -292,6 +299,7 @@ final class FocusDetector {
         }
 
         var bounds = CGRect.zero
+        // swiftlint:disable:next force_cast
         guard AXValueGetValue(boundsValue as! AXValue, .cgRect, &bounds) else {
             return nil
         }
@@ -318,6 +326,7 @@ final class FocusDetector {
         }
 
         var range = CFRange(location: 0, length: 0)
+        // swiftlint:disable:next force_cast
         guard AXValueGetValue(rangeValue as! AXValue, .cfRange, &range) else {
             return nil
         }
@@ -345,6 +354,7 @@ final class FocusDetector {
         }
 
         var bounds = CGRect.zero
+        // swiftlint:disable:next force_cast
         guard AXValueGetValue(boundsValue as! AXValue, .cgRect, &bounds) else {
             return nil
         }
@@ -379,8 +389,12 @@ final class FocusDetector {
         var position = CGPoint.zero
         var size = CGSize.zero
 
-        guard AXValueGetValue(posValue as! AXValue, .cgPoint, &position),
-              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else {
+        // swiftlint:disable:next force_cast
+        let posAXValue = posValue as! AXValue
+        // swiftlint:disable:next force_cast
+        let sizeAXValue = sizeValue as! AXValue
+        guard AXValueGetValue(posAXValue, .cgPoint, &position),
+              AXValueGetValue(sizeAXValue, .cgSize, &size) else {
             return nil
         }
 

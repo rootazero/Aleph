@@ -41,7 +41,8 @@ final class ScreenCaptureOverlayView: NSView {
     private var currentRect: CGRect?
 
     /// Tracking area for mouse events
-    private var trackingArea: NSTrackingArea?
+    /// nonisolated(unsafe) to allow cleanup in deinit
+    nonisolated(unsafe) private var trackingArea: NSTrackingArea?
 
     /// Flag indicating the view is being dismissed - prevents callbacks and updates
     /// CRITICAL: This flag is essential for preventing EXC_BAD_ACCESS crashes.
@@ -136,12 +137,9 @@ final class ScreenCaptureOverlayView: NSView {
 
     deinit {
         debugLog(" >>> deinit START")
-        // Defensive cleanup - should already be done by prepareForDismissal()
-        if let area = trackingArea {
-            debugLog(" deinit: removing tracking area")
-            removeTrackingArea(area)
-            trackingArea = nil
-        }
+        // Note: cleanup should be done by prepareForDismissal() before deinit
+        // We just clear the reference here - actual removal was done earlier
+        trackingArea = nil
         debugLog(" >>> deinit COMPLETE")
     }
 

@@ -58,7 +58,7 @@ struct GeneralSettingsView: View {
                 Form {
                     Section(header: Text(L("settings.general.sound"))) {
                         Toggle(L("settings.general.sound_effects"), isOn: $soundEnabled)
-                            .onChange(of: soundEnabled) { _, newValue in
+                            .onChange(of: soundEnabled) { _, _ in
                                 showComingSoonAlert(feature: L("settings.general.sound_effects"))
                             }
                     }
@@ -76,7 +76,7 @@ struct GeneralSettingsView: View {
                             Text("English").tag("en" as String?)
                             Text("简体中文").tag("zh-Hans" as String?)
                         }
-                        .onChange(of: selectedLanguage) { oldValue, newValue in
+                        .onChange(of: selectedLanguage) { _, newValue in
                             saveLanguagePreference(newValue)
                         }
                     }

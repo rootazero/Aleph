@@ -7,7 +7,7 @@
 //
 
 import Cocoa
-import ApplicationServices
+@preconcurrency import ApplicationServices
 import IOKit
 import IOKit.hid
 import Combine
@@ -32,7 +32,7 @@ class PermissionChecker {
     /// Note: This will only show the prompt once per app install. User must manually grant in System Settings.
     static func requestAccessibilityPermission() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        let _ = AXIsProcessTrustedWithOptions(options)
+        _ = AXIsProcessTrustedWithOptions(options)
     }
 
     // MARK: - Screen Recording Permission
@@ -54,7 +54,7 @@ class PermissionChecker {
     /// The user must manually grant in System Settings.
     static func requestScreenRecordingPermission() {
         // CGRequestScreenCaptureAccess() will prompt the user for permission
-        let _ = CGRequestScreenCaptureAccess()
+        _ = CGRequestScreenCaptureAccess()
     }
 
     // MARK: - Input Monitoring Permission
@@ -117,7 +117,7 @@ class PermissionChecker {
     static func requestInputMonitoringPermission() {
         if #available(macOS 10.15, *) {
             // Trigger permission check - this may show a system prompt on first run
-            let _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+            _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
         }
     }
 

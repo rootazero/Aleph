@@ -1004,6 +1004,7 @@ private struct CoworkChangeTrackingModifier: ViewModifier {
 }
 
 private extension View {
+    // swiftlint:disable:next function_parameter_count
     func applyCoworkChangeTracking(
         enabled: Bool,
         requireConfirmation: Bool,

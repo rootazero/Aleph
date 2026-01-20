@@ -79,7 +79,7 @@ struct RootContentView: View {
             // Set up window delegate for close interception
             setupWindowDelegate()
         }
-        .onChange(of: selectedTab) { oldTab, newTab in
+        .onChange(of: selectedTab) { oldTab, _ in
             // Check for unsaved changes before allowing tab switch
             if hasAnyUnsavedChanges {
                 // Show confirmation dialog
@@ -105,7 +105,7 @@ struct RootContentView: View {
                 loadProviders()
             }
         }
-        .onChange(of: hasAnyUnsavedChanges) { _, newValue in
+        .onChange(of: hasAnyUnsavedChanges) { _, _ in
             // Update window delegate's state for close interception
             updateWindowDelegateState()
         }

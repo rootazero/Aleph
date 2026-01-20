@@ -23,6 +23,10 @@ enum TextReadResult {
 }
 
 /// Reads text content from active window using Accessibility API
+///
+/// Thread Safety:
+/// - Marked as @MainActor since Accessibility API calls should happen on main thread
+@MainActor
 class AccessibilityTextReader {
 
     // MARK: - Singleton
@@ -67,12 +71,15 @@ class AccessibilityTextReader {
             &focusedElement
         )
 
-        guard result == .success, let element = focusedElement else {
+        guard result == .success,
+              let element = focusedElement,
+              CFGetTypeID(element as CFTypeRef) == AXUIElementGetTypeID() else {
             print("[AccessibilityTextReader] ❌ No focused element (result: \(result.rawValue))")
             return .noFocusedElement
         }
 
-        // AXUIElement is a CoreFoundation type (CFTypeRef), not a Swift class
+        // AXUIElement is a CoreFoundation type - safe cast after type ID check
+        // swiftlint:disable:next force_cast
         let axElement = element as! AXUIElement
 
         // Strategy 1: Try to read entire contents
@@ -178,11 +185,14 @@ class AccessibilityTextReader {
             &parentValue
         )
 
-        guard result == .success, let parent = parentValue else {
+        guard result == .success,
+              let parent = parentValue,
+              CFGetTypeID(parent as CFTypeRef) == AXUIElementGetTypeID() else {
             return nil
         }
 
-        // AXUIElement is a CoreFoundation type
+        // AXUIElement is a CoreFoundation type - safe cast after type ID check
+        // swiftlint:disable:next force_cast
         let parentElement = parent as! AXUIElement
 
         // Try reading value from parent
@@ -211,10 +221,13 @@ class AccessibilityTextReader {
             &focusedElement
         )
 
-        guard result == .success, let element = focusedElement else {
+        guard result == .success,
+              let element = focusedElement,
+              CFGetTypeID(element as CFTypeRef) == AXUIElementGetTypeID() else {
             return nil
         }
 
+        // swiftlint:disable:next force_cast
         let axElement = element as! AXUIElement
 
         var roleValue: AnyObject?

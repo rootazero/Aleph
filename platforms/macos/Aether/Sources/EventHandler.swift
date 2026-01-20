@@ -18,7 +18,12 @@ import SwiftUI
 /// - Streaming response chunks
 /// - Completion and error states
 /// - Memory storage confirmation
-class EventHandler: AetherEventHandler {
+///
+/// Thread Safety:
+/// - Marked as @unchecked Sendable because callbacks are invoked from Rust background threads
+/// - All UI updates are dispatched to MainActor via Task
+/// - Weak references prevent retain cycles and allow safe access from any thread
+class EventHandler: AetherEventHandler, @unchecked Sendable {
 
     // MARK: - Dependencies
 
@@ -40,8 +45,9 @@ class EventHandler: AetherEventHandler {
     private var currentToolName: String?
 
     // Check for multi-turn conversation mode
+    // Uses global function for thread-safe access from FFI callbacks
     private var isInMultiTurnMode: Bool {
-        MultiTurnCoordinator.shared.isMultiTurnActive
+        isMultiTurnModeActive()
     }
 
     // MARK: - Agentic Session State (Phase 5)
@@ -93,15 +99,16 @@ class EventHandler: AetherEventHandler {
     func onThinking() {
         print("[EventHandler] AI thinking...")
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Skip halo in multi-turn mode
-            guard !slf.isInMultiTurnMode else {
+            guard !self.isInMultiTurnMode else {
                 print("[EventHandler] Skipping thinking state (multi-turn mode)")
                 return
             }
 
-            slf.haloWindow?.updateState(.processingWithAI(providerName: nil))
-            slf.haloWindow?.showAtCurrentPosition()
+            self.haloWindow?.updateState(.processingWithAI(providerName: nil))
+            self.haloWindow?.showAtCurrentPosition()
         }
     }
 
@@ -111,16 +118,17 @@ class EventHandler: AetherEventHandler {
         print("[EventHandler] Tool started: \(toolName)")
         currentToolName = toolName
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Skip halo in multi-turn mode
-            guard !slf.isInMultiTurnMode else {
+            guard !self.isInMultiTurnMode else {
                 print("[EventHandler] Skipping tool start state (multi-turn mode)")
                 return
             }
 
             // Show processing state with tool name
-            slf.haloWindow?.updateState(.processing(streamingText: "Using \(toolName)..."))
-            slf.haloWindow?.showAtCurrentPosition()
+            self.haloWindow?.updateState(.processing(streamingText: "Using \(toolName)..."))
+            self.haloWindow?.showAtCurrentPosition()
         }
     }
 
@@ -132,15 +140,16 @@ class EventHandler: AetherEventHandler {
         print("[EventHandler] Tool result: \(toolName) - \(result.prefix(100))...")
         currentToolName = nil
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Skip halo in multi-turn mode
-            guard !slf.isInMultiTurnMode else {
+            guard !self.isInMultiTurnMode else {
                 print("[EventHandler] Skipping tool result state (multi-turn mode)")
                 return
             }
 
             // Update state to show tool completed
-            slf.haloWindow?.updateState(.processing(streamingText: "Completed: \(toolName)"))
+            self.haloWindow?.updateState(.processing(streamingText: "Completed: \(toolName)"))
         }
     }
 
@@ -154,11 +163,12 @@ class EventHandler: AetherEventHandler {
 
         accumulatedText = text
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Skip halo in multi-turn mode
-            guard !slf.isInMultiTurnMode else { return }
+            guard !self.isInMultiTurnMode else { return }
 
-            slf.haloWindow?.updateState(.processing(streamingText: text))
+            self.haloWindow?.updateState(.processing(streamingText: text))
         }
     }
 
@@ -171,10 +181,11 @@ class EventHandler: AetherEventHandler {
         accumulatedText = ""
         currentToolName = nil
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Notify InputCoordinator if processing is pending
-            if slf.inputCoordinator?.isProcessingPending == true {
-                slf.inputCoordinator?.handleCompletion(response: response)
+            if self.inputCoordinator?.isProcessingPending == true {
+                self.inputCoordinator?.handleCompletion(response: response)
                 return
             }
 
@@ -185,18 +196,17 @@ class EventHandler: AetherEventHandler {
             }
 
             // Skip halo in multi-turn mode - conversation UI handles it
-            guard !slf.isInMultiTurnMode else {
+            guard !self.isInMultiTurnMode else {
                 print("[EventHandler] Skipping completion state (multi-turn mode)")
                 return
             }
 
             // Show success state then auto-hide
-            slf.haloWindow?.updateState(.success(message: nil))
+            self.haloWindow?.updateState(.success(message: nil))
 
             // Auto-hide after brief display
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak slf] in
-                slf?.haloWindow?.hide()
-            }
+            try? await Task.sleep(seconds: 0.8)
+            self.haloWindow?.hide()
         }
     }
 
@@ -209,12 +219,13 @@ class EventHandler: AetherEventHandler {
         accumulatedText = ""
         currentToolName = nil
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Notify InputCoordinator if processing is pending
-            if slf.inputCoordinator?.isProcessingPending == true {
-                slf.inputCoordinator?.handleError(message: message)
+            if self.inputCoordinator?.isProcessingPending == true {
+                self.inputCoordinator?.handleError(message: message)
                 // Still show error notification
-                slf.showErrorNotification(message: message)
+                self.showErrorNotification(message: message)
                 return
             }
 
@@ -226,7 +237,7 @@ class EventHandler: AetherEventHandler {
             }
 
             // Show error notification even in multi-turn mode
-            slf.showErrorNotification(message: message)
+            self.showErrorNotification(message: message)
         }
     }
 
@@ -235,7 +246,7 @@ class EventHandler: AetherEventHandler {
         print("[EventHandler] Memory stored")
 
         // Subtle feedback - could show toast or just log
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor in
             // Optionally show brief memory stored indicator
             // For now, just log - memory storage is typically transparent to user
         }
@@ -246,10 +257,11 @@ class EventHandler: AetherEventHandler {
     func onAgentModeDetected(task: ExecutableTaskFfi) {
         print("[EventHandler] Agent mode detected: category=\(task.category), action=\(task.action), confidence=\(task.confidence)")
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Skip agent mode notification in multi-turn mode for now
             // (multi-turn conversation UI will handle agent plans separately)
-            guard !slf.isInMultiTurnMode else {
+            guard !self.isInMultiTurnMode else {
                 print("[EventHandler] Skipping agent mode notification (multi-turn mode)")
                 return
             }
@@ -270,7 +282,7 @@ class EventHandler: AetherEventHandler {
     func onToolsChanged(toolCount: UInt32) {
         print("[EventHandler] Tools changed: \(toolCount) tools registered")
 
-        DispatchQueue.mainAsync(weakRef: self) { _ in
+        Task { @MainActor in
             // Post notification for any UI that needs to refresh tool lists
             NotificationCenter.default.post(
                 name: Notification.Name("ToolsDidChange"),
@@ -285,7 +297,7 @@ class EventHandler: AetherEventHandler {
     func onMcpStartupComplete(report: McpStartupReportFfi) {
         print("[EventHandler] MCP startup complete: \(report.succeededServers.count) succeeded, \(report.failedServers.count) failed")
 
-        DispatchQueue.mainAsync(weakRef: self) { _ in
+        Task { @MainActor in
             // Post notification with startup report
             NotificationCenter.default.post(
                 name: Notification.Name("McpStartupComplete"),
@@ -309,7 +321,8 @@ class EventHandler: AetherEventHandler {
             print("[EventHandler]   \(update.runtimeId): \(update.currentVersion) → \(update.latestVersion)")
         }
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Post notification for UI components
             NotificationCenter.default.post(
                 name: .runtimeUpdatesAvailable,
@@ -323,7 +336,7 @@ class EventHandler: AetherEventHandler {
                     ? L("notification.runtime_update_single", updates[0].runtimeId, updates[0].latestVersion)
                     : L("notification.runtime_updates_multiple", String(updates.count))
 
-                slf.showToast(
+                self.showToast(
                     type: .info,
                     title: L("notification.runtime_updates_title"),
                     message: message,
@@ -347,7 +360,8 @@ class EventHandler: AetherEventHandler {
         completedStepCount = 0
         activeToolCalls.removeAll()
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Post notification for UI components
             NotificationCenter.default.post(
                 name: .agenticSessionStarted,
@@ -356,11 +370,11 @@ class EventHandler: AetherEventHandler {
             )
 
             // Skip Halo in multi-turn mode
-            guard !slf.isInMultiTurnMode else { return }
+            guard !self.isInMultiTurnMode else { return }
 
             // Show processing state
-            slf.haloWindow?.updateState(.processingWithAI(providerName: L("halo.agentic_session")))
-            slf.haloWindow?.showAtCurrentPosition()
+            self.haloWindow?.updateState(.processingWithAI(providerName: L("halo.agentic_session")))
+            self.haloWindow?.showAtCurrentPosition()
         }
     }
 
@@ -375,35 +389,36 @@ class EventHandler: AetherEventHandler {
         activeToolCalls.insert(callId)
         currentToolName = toolName
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Post notification
             NotificationCenter.default.post(
                 name: .agenticToolCallStarted,
                 object: nil,
                 userInfo: [
-                    "sessionId": slf.currentAgenticSessionId ?? "",
+                    "sessionId": self.currentAgenticSessionId ?? "",
                     "callId": callId,
                     "toolName": toolName
                 ]
             )
 
             // Skip Halo in multi-turn mode
-            guard !slf.isInMultiTurnMode else { return }
+            guard !self.isInMultiTurnMode else { return }
 
             // Update Halo to show tool execution
-            if slf.isInAgenticSession {
+            if self.isInAgenticSession {
                 // Show agent progress with current tool
-                let progress = slf.currentPlanSteps.isEmpty ? 0.0 :
-                    Float(slf.completedStepCount) / Float(slf.currentPlanSteps.count)
-                slf.haloWindow?.updateState(.agentProgress(
-                    planId: slf.currentAgenticSessionId ?? "",
+                let progress = self.currentPlanSteps.isEmpty ? 0.0 :
+                    Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
+                self.haloWindow?.updateState(.agentProgress(
+                    planId: self.currentAgenticSessionId ?? "",
                     progress: progress,
                     currentOperation: toolName,
-                    completedCount: slf.completedStepCount,
-                    totalCount: slf.currentPlanSteps.count
+                    completedCount: self.completedStepCount,
+                    totalCount: self.currentPlanSteps.count
                 ))
             } else {
-                slf.haloWindow?.updateState(.processing(streamingText: "🔧 \(toolName)"))
+                self.haloWindow?.updateState(.processing(streamingText: "🔧 \(toolName)"))
             }
         }
     }
@@ -421,13 +436,14 @@ class EventHandler: AetherEventHandler {
         let toolName = currentToolName ?? "tool"
         currentToolName = nil
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Post notification
             NotificationCenter.default.post(
                 name: .agenticToolCallCompleted,
                 object: nil,
                 userInfo: [
-                    "sessionId": slf.currentAgenticSessionId ?? "",
+                    "sessionId": self.currentAgenticSessionId ?? "",
                     "callId": callId,
                     "toolName": toolName,
                     "output": String(output.prefix(500))
@@ -435,17 +451,17 @@ class EventHandler: AetherEventHandler {
             )
 
             // Skip Halo in multi-turn mode
-            guard !slf.isInMultiTurnMode else { return }
+            guard !self.isInMultiTurnMode else { return }
 
             // Update progress
-            if slf.isInAgenticSession && !slf.currentPlanSteps.isEmpty {
-                let progress = Float(slf.completedStepCount) / Float(slf.currentPlanSteps.count)
-                slf.haloWindow?.updateState(.agentProgress(
-                    planId: slf.currentAgenticSessionId ?? "",
+            if self.isInAgenticSession && !self.currentPlanSteps.isEmpty {
+                let progress = Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
+                self.haloWindow?.updateState(.agentProgress(
+                    planId: self.currentAgenticSessionId ?? "",
                     progress: progress,
                     currentOperation: "✓ \(toolName)",
-                    completedCount: slf.completedStepCount,
-                    totalCount: slf.currentPlanSteps.count
+                    completedCount: self.completedStepCount,
+                    totalCount: self.currentPlanSteps.count
                 ))
             }
         }
@@ -463,13 +479,14 @@ class EventHandler: AetherEventHandler {
         activeToolCalls.remove(callId)
         let toolName = currentToolName ?? "tool"
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Post notification
             NotificationCenter.default.post(
                 name: .agenticToolCallFailed,
                 object: nil,
                 userInfo: [
-                    "sessionId": slf.currentAgenticSessionId ?? "",
+                    "sessionId": self.currentAgenticSessionId ?? "",
                     "callId": callId,
                     "toolName": toolName,
                     "error": error,
@@ -478,19 +495,19 @@ class EventHandler: AetherEventHandler {
             )
 
             // Skip Halo in multi-turn mode
-            guard !slf.isInMultiTurnMode else { return }
+            guard !self.isInMultiTurnMode else { return }
 
             // Show error in progress (if retryable, indicate retry)
-            if slf.isInAgenticSession {
+            if self.isInAgenticSession {
                 let statusText = isRetryable ? "⟳ \(toolName) (retrying...)" : "✗ \(toolName)"
-                let progress = slf.currentPlanSteps.isEmpty ? 0.0 :
-                    Float(slf.completedStepCount) / Float(slf.currentPlanSteps.count)
-                slf.haloWindow?.updateState(.agentProgress(
-                    planId: slf.currentAgenticSessionId ?? "",
+                let progress = self.currentPlanSteps.isEmpty ? 0.0 :
+                    Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
+                self.haloWindow?.updateState(.agentProgress(
+                    planId: self.currentAgenticSessionId ?? "",
                     progress: progress,
                     currentOperation: statusText,
-                    completedCount: slf.completedStepCount,
-                    totalCount: slf.currentPlanSteps.count
+                    completedCount: self.completedStepCount,
+                    totalCount: self.currentPlanSteps.count
                 ))
             }
         }
@@ -507,7 +524,8 @@ class EventHandler: AetherEventHandler {
         // Update iteration count
         currentIteration = iteration
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Post notification
             NotificationCenter.default.post(
                 name: .agenticLoopProgress,
@@ -520,18 +538,18 @@ class EventHandler: AetherEventHandler {
             )
 
             // Skip Halo in multi-turn mode
-            guard !slf.isInMultiTurnMode else { return }
+            guard !self.isInMultiTurnMode else { return }
 
             // Update Halo with iteration info
-            if slf.isInAgenticSession {
-                let progress = slf.currentPlanSteps.isEmpty ? 0.0 :
-                    Float(slf.completedStepCount) / Float(slf.currentPlanSteps.count)
-                slf.haloWindow?.updateState(.agentProgress(
+            if self.isInAgenticSession {
+                let progress = self.currentPlanSteps.isEmpty ? 0.0 :
+                    Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
+                self.haloWindow?.updateState(.agentProgress(
                     planId: sessionId,
                     progress: progress,
                     currentOperation: status,
-                    completedCount: slf.completedStepCount,
-                    totalCount: slf.currentPlanSteps.count
+                    completedCount: self.completedStepCount,
+                    totalCount: self.currentPlanSteps.count
                 ))
             }
         }
@@ -551,7 +569,8 @@ class EventHandler: AetherEventHandler {
         currentPlanSteps = steps
         completedStepCount = 0
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Post notification
             NotificationCenter.default.post(
                 name: .agenticPlanCreated,
@@ -563,7 +582,7 @@ class EventHandler: AetherEventHandler {
             )
 
             // Skip Halo in multi-turn mode
-            guard !slf.isInMultiTurnMode else { return }
+            guard !self.isInMultiTurnMode else { return }
 
             // Show plan progress view
             let stepProgress = steps.enumerated().map { index, description in
@@ -577,7 +596,7 @@ class EventHandler: AetherEventHandler {
                 )
             }
 
-            slf.haloWindow?.updateState(.planProgress(progressInfo: PlanProgressInfo(
+            self.haloWindow?.updateState(.planProgress(progressInfo: PlanProgressInfo(
                 planId: sessionId,
                 description: L("halo.executing_plan"),
                 totalSteps: UInt32(steps.count),
@@ -587,7 +606,7 @@ class EventHandler: AetherEventHandler {
                 status: .running,
                 errorMessage: nil
             )))
-            slf.haloWindow?.showAtCurrentPosition()
+            self.haloWindow?.showAtCurrentPosition()
         }
     }
 
@@ -606,7 +625,8 @@ class EventHandler: AetherEventHandler {
         completedStepCount = 0
         activeToolCalls.removeAll()
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Post notification
             NotificationCenter.default.post(
                 name: .agenticSessionCompleted,
@@ -618,16 +638,15 @@ class EventHandler: AetherEventHandler {
             )
 
             // Skip Halo in multi-turn mode
-            guard !slf.isInMultiTurnMode else { return }
+            guard !self.isInMultiTurnMode else { return }
 
             // Show success toast if we were tracking this session
             if wasInSession {
-                slf.haloWindow?.updateState(.success(message: summary))
+                self.haloWindow?.updateState(.success(message: summary))
 
                 // Auto-hide after brief display
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak slf] in
-                    slf?.haloWindow?.hide()
-                }
+                try? await Task.sleep(seconds: 1.5)
+                self.haloWindow?.hide()
             }
         }
     }
@@ -640,7 +659,8 @@ class EventHandler: AetherEventHandler {
     func onSubagentStarted(parentSessionId: String, childSessionId: String, agentId: String) {
         print("[EventHandler] Sub-agent started: agent=\(agentId), parent=\(parentSessionId), child=\(childSessionId)")
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Post notification
             NotificationCenter.default.post(
                 name: .agenticSubagentStarted,
@@ -653,18 +673,18 @@ class EventHandler: AetherEventHandler {
             )
 
             // Skip Halo in multi-turn mode
-            guard !slf.isInMultiTurnMode else { return }
+            guard !self.isInMultiTurnMode else { return }
 
             // Show sub-agent indicator in progress
-            if slf.isInAgenticSession {
-                let progress = slf.currentPlanSteps.isEmpty ? 0.0 :
-                    Float(slf.completedStepCount) / Float(slf.currentPlanSteps.count)
-                slf.haloWindow?.updateState(.agentProgress(
+            if self.isInAgenticSession {
+                let progress = self.currentPlanSteps.isEmpty ? 0.0 :
+                    Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
+                self.haloWindow?.updateState(.agentProgress(
                     planId: parentSessionId,
                     progress: progress,
                     currentOperation: "🤖 \(agentId)",
-                    completedCount: slf.completedStepCount,
-                    totalCount: slf.currentPlanSteps.count
+                    completedCount: self.completedStepCount,
+                    totalCount: self.currentPlanSteps.count
                 ))
             }
         }
@@ -678,7 +698,8 @@ class EventHandler: AetherEventHandler {
     func onSubagentCompleted(childSessionId: String, success: Bool, summary: String) {
         print("[EventHandler] Sub-agent completed: \(childSessionId) - success=\(success), summary=\(summary)")
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Post notification
             NotificationCenter.default.post(
                 name: .agenticSubagentCompleted,
@@ -691,20 +712,20 @@ class EventHandler: AetherEventHandler {
             )
 
             // Skip Halo in multi-turn mode
-            guard !slf.isInMultiTurnMode else { return }
+            guard !self.isInMultiTurnMode else { return }
 
             // Update progress with sub-agent result
-            if slf.isInAgenticSession {
+            if self.isInAgenticSession {
                 let statusIcon = success ? "✓" : "✗"
                 let truncatedSummary = summary.count > 30 ? String(summary.prefix(30)) + "..." : summary
-                let progress = slf.currentPlanSteps.isEmpty ? 0.0 :
-                    Float(slf.completedStepCount) / Float(slf.currentPlanSteps.count)
-                slf.haloWindow?.updateState(.agentProgress(
-                    planId: slf.currentAgenticSessionId ?? "",
+                let progress = self.currentPlanSteps.isEmpty ? 0.0 :
+                    Float(self.completedStepCount) / Float(self.currentPlanSteps.count)
+                self.haloWindow?.updateState(.agentProgress(
+                    planId: self.currentAgenticSessionId ?? "",
                     progress: progress,
                     currentOperation: "\(statusIcon) \(truncatedSummary)",
-                    completedCount: slf.completedStepCount,
-                    totalCount: slf.currentPlanSteps.count
+                    completedCount: self.completedStepCount,
+                    totalCount: self.currentPlanSteps.count
                 ))
             }
         }
@@ -721,20 +742,25 @@ class EventHandler: AetherEventHandler {
         }
 
         // Use toast notification in Halo
-        haloWindow?.updateState(.toast(
-            type: .error,
-            title: L("error.aether"),
-            message: message,
-            autoDismiss: false
-        ))
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            self.haloWindow?.updateState(.toast(
+                type: .error,
+                title: L("error.aether"),
+                message: message,
+                autoDismiss: false
+            ))
 
-        // Set dismiss callback
-        haloWindow?.viewModel.callbacks.toastOnDismiss = { [weak self] in
-            self?.haloWindow?.hide()
+            // Set dismiss callback
+            self.haloWindow?.viewModel.callbacks.toastOnDismiss = { [weak self] in
+                Task { @MainActor in
+                    self?.haloWindow?.hide()
+                }
+            }
+
+            // Show at screen center
+            self.haloWindow?.showToastCentered()
         }
-
-        // Show at screen center
-        haloWindow?.showToastCentered()
     }
 
     // MARK: - Helper Methods
@@ -745,8 +771,8 @@ class EventHandler: AetherEventHandler {
         accumulatedText = ""
         currentToolName = nil
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.haloWindow?.hide()
+        Task { @MainActor [weak self] in
+            self?.haloWindow?.hide()
         }
     }
 
@@ -781,10 +807,11 @@ class EventHandler: AetherEventHandler {
         toastDismissTimer?.invalidate()
         toastDismissTimer = nil
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
             // Update Halo state to toast
             let shouldAutoDismiss = autoDismiss && type == .info
-            slf.haloWindow?.updateState(.toast(
+            self.haloWindow?.updateState(.toast(
                 type: type,
                 title: title,
                 message: message,
@@ -792,17 +819,17 @@ class EventHandler: AetherEventHandler {
             ))
 
             // Set dismiss callback
-            slf.haloWindow?.viewModel.callbacks.toastOnDismiss = { [weak slf] in
-                slf?.dismissToast()
+            self.haloWindow?.viewModel.callbacks.toastOnDismiss = { [weak self] in
+                self?.dismissToast()
             }
 
             // Show at screen center
-            slf.haloWindow?.showToastCentered()
+            self.haloWindow?.showToastCentered()
 
             // Set auto-dismiss timer for info toasts
             if shouldAutoDismiss {
-                slf.toastDismissTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak slf] _ in
-                    slf?.dismissToast()
+                self.toastDismissTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { [weak self] _ in
+                    self?.dismissToast()
                 }
             }
         }
@@ -813,8 +840,8 @@ class EventHandler: AetherEventHandler {
         toastDismissTimer?.invalidate()
         toastDismissTimer = nil
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.haloWindow?.hide()
+        Task { @MainActor [weak self] in
+            self?.haloWindow?.hide()
         }
     }
 }

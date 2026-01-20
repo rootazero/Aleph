@@ -30,7 +30,7 @@ struct IMETextField: NSViewRepresentable {
     var placeholder: String
     var font: NSFont = .systemFont(ofSize: 14)
     var textColor: NSColor = .white
-    var placeholderColor: NSColor = NSColor.white.withAlphaComponent(0.3)
+    var placeholderColor = NSColor.white.withAlphaComponent(0.3)
     var backgroundColor: NSColor = .clear
     var autoFocus: Bool = true
     var textShadow: NSShadow? = nil  // Optional shadow for glass effect

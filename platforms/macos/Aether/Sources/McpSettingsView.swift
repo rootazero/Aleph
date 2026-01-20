@@ -242,7 +242,7 @@ struct McpSettingsView: View {
                         .frame(width: 80, alignment: .leading)
 
                     VStack(alignment: .leading, spacing: 4) {
-                        ForEach(Array((editingConfig?.args ?? []).enumerated()), id: \.offset) { index, arg in
+                        ForEach(Array((editingConfig?.args ?? []).enumerated()), id: \.offset) { index, _ in
                             HStack {
                                 TextField("argument", text: Binding(
                                     get: { editingConfig?.args[safe: index] ?? "" },

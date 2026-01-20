@@ -14,6 +14,10 @@ import SwiftUI
 // MARK: - UnifiedConversationViewModel
 
 /// Unified view model for conversation window
+///
+/// Thread Safety:
+/// - Marked as @MainActor since it drives SwiftUI views
+@MainActor
 @Observable
 final class UnifiedConversationViewModel {
 

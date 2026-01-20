@@ -90,7 +90,7 @@ final class HaloWindow: NSWindow {
 
     /// Update the Halo state
     func updateState(_ state: HaloState) {
-        DispatchQueue.main.async { [weak self] in
+        Task { @MainActor [weak self] in
             self?.viewModel.state = state
             self?.updateWindowSize()
             self?.updateInteractivity()
@@ -99,7 +99,7 @@ final class HaloWindow: NSWindow {
 
     /// Update typewriter progress
     func updateTypewriterProgress(_ progress: Float) {
-        DispatchQueue.main.async { [weak self] in
+        Task { @MainActor [weak self] in
             self?.viewModel.state = .typewriting(progress: progress)
         }
     }
@@ -274,7 +274,7 @@ final class HaloWindow: NSWindow {
 
         // Find target screen
         let targetScreen = NSScreen.screens.first { screen in
-            NSPointInRect(point, screen.frame)
+            screen.frame.contains(point)
         } ?? NSScreen.main ?? NSScreen.screens.first
 
         guard let screen = targetScreen else { return }

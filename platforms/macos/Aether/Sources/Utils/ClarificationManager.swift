@@ -17,15 +17,19 @@ import Combine
 ///
 /// Thread Safety:
 /// - `handleRequest` can be called from ANY thread (including Rust background threads)
-/// - UI state updates happen on main thread via DispatchQueue.main
+/// - UI state updates happen on main thread via Task { @MainActor in }
 /// - Uses lock for thread-safe access to shared state
+/// - Marked as @unchecked Sendable because we manually ensure thread safety via NSLock
+///
+/// Note: DispatchSemaphore is kept for FFI synchronization - cannot use async/await
+/// because Rust FFI requires synchronous blocking.
 ///
 /// Flow:
 /// 1. Rust calls `onClarificationNeeded()` (blocks Rust thread)
 /// 2. Manager posts notification to show clarification UI (on main thread)
 /// 3. User interacts with Halo (select option or enter text)
 /// 4. Manager signals completion, returns result to Rust
-class ClarificationManager: ObservableObject {
+final class ClarificationManager: ObservableObject, @unchecked Sendable {
     /// Shared instance for global access
     static let shared = ClarificationManager()
 
@@ -80,18 +84,19 @@ class ClarificationManager: ObservableObject {
         lock.unlock()
 
         // Update UI state on main thread
-        DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.resetState()
-            slf.currentRequest = request
-            slf.isActive = true
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            self.resetState()
+            self.currentRequest = request
+            self.isActive = true
 
             // Set default value if provided
             if let defaultValue = request.defaultValue {
                 if request.clarificationType == .select,
                    let index = Int(defaultValue) {
-                    slf.selectedIndex = index
+                    self.selectedIndex = index
                 } else if request.clarificationType == .text {
-                    slf.textInput = defaultValue
+                    self.textInput = defaultValue
                 }
             }
 
@@ -129,9 +134,9 @@ class ClarificationManager: ObservableObject {
         lock.unlock()
 
         // Cleanup UI on main thread
-        DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.isActive = false
-            slf.currentRequest = nil
+        Task { @MainActor [weak self] in
+            self?.isActive = false
+            self?.currentRequest = nil
         }
 
         print("[ClarificationManager] Returning result: \(response.resultType)")

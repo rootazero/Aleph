@@ -22,6 +22,12 @@ import os.log
 ///
 /// Provides read/write access to the system clipboard for text and images.
 /// Uses macOS NSPasteboard API directly for optimal performance and compatibility.
+///
+/// Thread Safety:
+/// - Marked as @MainActor since NSPasteboard operations should happen on main thread
+/// - Note: NSPasteboard itself is thread-safe but UI-related clipboard operations
+///   should be coordinated on the main thread for consistency
+@MainActor
 class ClipboardManager {
 
     // MARK: - Singleton
@@ -229,8 +235,8 @@ class ClipboardManager {
         var text = result.text
         if text == nil || text?.isEmpty == true {
             text = getText()
-            if text != nil {
-                logger.debug("Fallback to getText() returned text: \(text!.prefix(50))...")
+            if let fallbackText = text {
+                logger.debug("Fallback to getText() returned text: \(fallbackText.prefix(50))...")
             }
         }
 

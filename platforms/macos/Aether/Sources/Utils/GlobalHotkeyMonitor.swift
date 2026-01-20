@@ -16,7 +16,11 @@ import Cocoa
 /// with left/right differentiation via keyCode.
 ///
 /// Uses double-tap detection for Replace and Append hotkeys.
-class GlobalHotkeyMonitor {
+///
+/// Thread Safety:
+/// - Marked as @unchecked Sendable because CGEventTap callbacks run on event thread
+/// - Callbacks are explicitly dispatched to main thread
+class GlobalHotkeyMonitor: @unchecked Sendable {
     typealias HotkeyCallback = () -> Void
 
     // MARK: - Properties
@@ -128,7 +132,7 @@ class GlobalHotkeyMonitor {
             place: .headInsertEventTap,
             options: .listenOnly,  // Just listen, don't intercept
             eventsOfInterest: CGEventMask(eventMask),
-            callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
+            callback: { _, _, event, refcon -> Unmanaged<CGEvent>? in
                 guard let refcon = refcon else {
                     return Unmanaged.passRetained(event)
                 }

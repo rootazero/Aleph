@@ -79,7 +79,7 @@ struct ErrorActionView: View {
     private var actionButtons: some View {
         HStack(spacing: 12) {
             // Retry button for network and timeout errors
-            if (errorType == .network || errorType == .timeout), let onRetry = onRetry {
+            if errorType == .network || errorType == .timeout, let onRetry = onRetry {
                 ActionButton("Retry", icon: "arrow.clockwise", style: .secondary) {
                     onRetry()
                 }

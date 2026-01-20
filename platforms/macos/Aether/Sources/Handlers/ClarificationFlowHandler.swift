@@ -36,10 +36,12 @@ final class ClarificationFlowHandler: KeyboardFlowHandler {
     private var currentRequest: ClarificationRequest?
 
     /// Keyboard event monitor
-    private var keyMonitor: Any?
+    /// Note: nonisolated(unsafe) allows access from deinit for cleanup
+    nonisolated(unsafe) private var keyMonitor: Any?
 
     /// Observer for clarification notifications
-    private var notificationObserver: NSObjectProtocol?
+    /// Note: nonisolated(unsafe) allows access from deinit for cleanup
+    nonisolated(unsafe) private var notificationObserver: NSObjectProtocol?
 
     /// Reference to the window (for activation)
     private weak var window: HaloWindow?

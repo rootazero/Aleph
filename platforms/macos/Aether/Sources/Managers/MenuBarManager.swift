@@ -16,6 +16,10 @@ import AppKit
 /// - Create and configure the status item
 /// - Update menu bar icon based on state
 /// - Manage menu structure
+///
+/// Thread Safety:
+/// - Marked as @MainActor since all menu bar operations happen on main thread
+@MainActor
 final class MenuBarManager {
 
     // MARK: - Properties
@@ -83,7 +87,9 @@ final class MenuBarManager {
             keyEquivalent: ""
         )
         defaultProviderMenuItem?.submenu = NSMenu()
-        menu.addItem(defaultProviderMenuItem!)
+        if let providerItem = defaultProviderMenuItem {
+            menu.addItem(providerItem)
+        }
 
         menu.addItem(NSMenuItem.separator())
 
@@ -94,7 +100,9 @@ final class MenuBarManager {
             keyEquivalent: ","
         )
         settingsMenuItem?.target = target
-        menu.addItem(settingsMenuItem!)
+        if let settingsItem = settingsMenuItem {
+            menu.addItem(settingsItem)
+        }
 
         // Debug menu items (only in DEBUG builds)
         #if DEBUG
@@ -127,44 +135,41 @@ final class MenuBarManager {
     // MARK: - Icon Updates
 
     /// Update menu bar icon based on processing state
+    /// Note: Already on MainActor, no dispatch needed
     ///
     /// - Parameter state: The current processing state
     func updateIcon(for state: ProcessingState) {
-        DispatchQueue.mainAsync(weakRef: self) { slf in
-            guard let button = slf.statusItem?.button else { return }
+        guard let button = statusItem?.button else { return }
 
-            switch state {
-            case .processing:
-                button.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "Processing")
-                button.image?.isTemplate = true
-            default:
-                if let menuBarIcon = NSImage(named: "MenuBarIcon") {
-                    menuBarIcon.isTemplate = true
-                    button.image = menuBarIcon
-                }
+        switch state {
+        case .processing:
+            button.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "Processing")
+            button.image?.isTemplate = true
+        default:
+            if let menuBarIcon = NSImage(named: "MenuBarIcon") {
+                menuBarIcon.isTemplate = true
+                button.image = menuBarIcon
             }
         }
     }
 
     /// Update menu bar icon with a specific system symbol
+    /// Note: Already on MainActor, no dispatch needed
     ///
     /// - Parameter systemSymbol: SF Symbol name
     func updateIcon(systemSymbol: String) {
-        DispatchQueue.mainAsync(weakRef: self) { slf in
-            guard let button = slf.statusItem?.button else { return }
-            button.image = NSImage(systemSymbolName: systemSymbol, accessibilityDescription: "Aether")
-            button.image?.isTemplate = true
-        }
+        guard let button = statusItem?.button else { return }
+        button.image = NSImage(systemSymbolName: systemSymbol, accessibilityDescription: "Aether")
+        button.image?.isTemplate = true
     }
 
     /// Reset menu bar icon to default
+    /// Note: Already on MainActor, no dispatch needed
     func resetIcon() {
-        DispatchQueue.mainAsync(weakRef: self) { slf in
-            guard let button = slf.statusItem?.button else { return }
-            if let menuBarIcon = NSImage(named: "MenuBarIcon") {
-                menuBarIcon.isTemplate = true
-                button.image = menuBarIcon
-            }
+        guard let button = statusItem?.button else { return }
+        if let menuBarIcon = NSImage(named: "MenuBarIcon") {
+            menuBarIcon.isTemplate = true
+            button.image = menuBarIcon
         }
     }
 

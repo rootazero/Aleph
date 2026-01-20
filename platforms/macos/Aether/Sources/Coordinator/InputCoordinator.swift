@@ -19,6 +19,11 @@ import SwiftUI
 /// - Process input and route to AI providers
 /// - Manage frontmost app tracking
 /// - Coordinate with Halo for visual feedback
+///
+/// Thread Safety:
+/// - Marked as @MainActor since all input coordination happens on main thread
+/// - Uses KeyboardSimulator, ClipboardManager, NSWorkspace which require main thread
+@MainActor
 final class InputCoordinator {
 
     // MARK: - Dependencies
@@ -154,8 +159,8 @@ final class InputCoordinator {
         guard core != nil else {
             print("[InputCoordinator] ⚠️ Core not initialized")
             // Show error in Halo
-            DispatchQueue.mainAsync(weakRef: self) { slf in
-                slf.haloWindow?.updateState(.error(
+            Task { @MainActor [weak self] in
+                self?.haloWindow?.updateState(.error(
                     type: .unknown,
                     message: L("error.core_not_initialized"),
                     suggestion: L("error.core_not_initialized.suggestion")
@@ -264,17 +269,16 @@ final class InputCoordinator {
 
                     // Show error
                     let errorPosition = CaretPositionHelper.getBestPosition()
-                    DispatchQueue.mainAsync(weakRef: self) { slf in
-                        slf.haloWindow?.show(at: errorPosition)
-                        slf.haloWindow?.updateState(.error(
+                    Task { @MainActor [weak self] in
+                        self?.haloWindow?.show(at: errorPosition)
+                        self?.haloWindow?.updateState(.error(
                             type: .unknown,
                             message: L("error.no_text_in_window"),
                             suggestion: L("error.no_text_in_window.suggestion")
                         ))
                         // Auto-hide after 2 seconds
-                        DispatchQueue.mainAsyncAfter(delay: 2.0, weakRef: slf) { innerSlf in
-                            innerSlf.haloWindow?.hide()
-                        }
+                        try? await Task.sleep(seconds: 2.0)
+                        self?.haloWindow?.hide()
                     }
                     return
                 } else {
@@ -309,9 +313,9 @@ final class InputCoordinator {
                 clipboardManager.setText(original)
             }
             // Hide Halo and show error toast to user
-            DispatchQueue.mainAsync(weakRef: self) { slf in
-                slf.haloWindow?.hide()
-                slf.eventHandler?.showToast(
+            Task { @MainActor [weak self] in
+                self?.haloWindow?.hide()
+                self?.eventHandler?.showToast(
                     type: .warning,
                     title: L("error.file_size"),
                     message: error,
@@ -383,8 +387,14 @@ final class InputCoordinator {
         let windowContext = ContextCapture.captureContext()
         print("[InputCoordinator] Context: app=\(windowContext.bundleId ?? "unknown"), window=\(windowContext.windowTitle ?? "nil")")
 
+        // Capture core reference before entering detached task (avoid Sendable issues)
+        guard let capturedCore = self.core else {
+            print("[InputCoordinator] ERROR: Core is nil")
+            return
+        }
+
         // Process input asynchronously to avoid blocking UI
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        Task.detached(priority: .userInitiated) { [weak self, capturedCore] in
             guard let self = self else { return }
 
             do {
@@ -417,15 +427,12 @@ final class InputCoordinator {
                     conversationSessionId: nil
                 )
 
-                // async processing
-                guard let core = self.core else {
-                    print("[InputCoordinator] ERROR: Core became nil during processing")
-                    return
-                }
+                // Use captured core reference
+                let core = capturedCore
 
                 print("[InputCoordinator] 🚀 Using interface (rig-core)")
 
-                DispatchQueue.main.async {
+                await MainActor.run {
                     self.pendingOutputContext = outputContext
                     self.pendingOriginalClipboard = originalClipboardText
                 }
@@ -448,15 +455,16 @@ final class InputCoordinator {
             } catch {
                 print("[InputCoordinator] ❌ Error processing input: \(error)")
 
-                // Hide processing indicator
-                self.hideProcessingIndicator()
-
-                // CRITICAL: Clear clipboard monitor history to prevent error messages from being used as context
-                self.clipboardMonitor.clearHistory()
-                print("[InputCoordinator] 🗑️ Cleared clipboard monitor history after error")
+                // Hide processing indicator and clear clipboard monitor history (MainActor-isolated)
+                await MainActor.run {
+                    self.hideProcessingIndicator()
+                    // CRITICAL: Clear clipboard monitor history to prevent error messages from being used as context
+                    self.clipboardMonitor.clearHistory()
+                    print("[InputCoordinator] 🗑️ Cleared clipboard monitor history after error")
+                }
 
                 // CRITICAL: Restore original clipboard on error
-                DispatchQueue.main.async {
+                await MainActor.run {
                     if let original = originalClipboardText {
                         self.clipboardManager.setText(original)
                         print("[InputCoordinator] ♻️ Restored original clipboard content (after AI error)")
@@ -472,12 +480,15 @@ final class InputCoordinator {
                     let nsError = error as NSError
                     let suggestion = nsError.userInfo["suggestion"] as? String
 
-                    DispatchQueue.mainAsync(weakRef: self) { slf in
+                    await MainActor.run { [weak self] in
                         // Combine error message and suggestion for onError (single message parameter)
-                        let fullMessage = suggestion != nil
-                            ? "\(errorMessage)\n\(suggestion!)"
-                            : "\(errorMessage)\n\(L("error.check_connection"))"
-                        slf.eventHandler?.onError(message: fullMessage)
+                        let fullMessage: String
+                        if let sug = suggestion {
+                            fullMessage = "\(errorMessage)\n\(sug)"
+                        } else {
+                            fullMessage = "\(errorMessage)\n\(L("error.check_connection"))"
+                        }
+                        self?.eventHandler?.onError(message: fullMessage)
                     }
                 }
             }
@@ -488,7 +499,7 @@ final class InputCoordinator {
 
     /// Show processing indicator at cursor position (falls back to mouse position)
     private func showProcessingIndicator() {
-        DispatchQueue.main.async { [weak self] in
+        Task { @MainActor [weak self] in
             guard let self = self else { return }
             // Try cursor position first, fall back to mouse position
             let position = CaretPositionHelper.getBestPosition()
@@ -499,7 +510,7 @@ final class InputCoordinator {
 
     /// Hide processing indicator
     private func hideProcessingIndicator() {
-        DispatchQueue.main.async { [weak self] in
+        Task { @MainActor [weak self] in
             self?.haloWindow?.hide()
         }
     }
@@ -568,7 +579,7 @@ final class InputCoordinator {
 
         // Restore original clipboard
         if let original = pendingOriginalClipboard {
-            DispatchQueue.main.async { [weak self] in
+            Task { @MainActor [weak self] in
                 self?.clipboardManager.setText(original)
                 print("[InputCoordinator] ♻️ Restored original clipboard content (after error)")
             }

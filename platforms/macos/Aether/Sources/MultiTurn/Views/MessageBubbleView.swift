@@ -272,7 +272,7 @@ struct ImageContentView: View {
             }
 
             // Download the image
-            URLSession.shared.downloadTask(with: url) { tempURL, response, error in
+            URLSession.shared.downloadTask(with: url) { tempURL, _, error in
                 DispatchQueue.main.async {
                     if let error = error {
                         downloadState = .failed("Error")

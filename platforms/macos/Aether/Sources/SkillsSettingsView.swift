@@ -535,4 +535,3 @@ struct SkillInstallSheet: View {
         }
     }
 }
-

@@ -101,7 +101,8 @@ struct ExtractionResult {
 /// # Thread Safety
 ///
 /// All operations are thread-safe via DispatchQueue synchronization.
-final class ContentExtractorRegistry {
+/// Marked as @unchecked Sendable because thread safety is manually managed via DispatchQueue.
+final class ContentExtractorRegistry: @unchecked Sendable {
     // MARK: - Singleton
 
     static let shared = ContentExtractorRegistry()

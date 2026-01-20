@@ -31,10 +31,12 @@ final class UnifiedConversationWindow: NSWindow {
     private var hostingView: NSHostingView<UnifiedConversationView>?
 
     /// ESC key monitor
-    private var escapeMonitor: Any?
+    /// nonisolated(unsafe) for cleanup in deinit
+    nonisolated(unsafe) private var escapeMonitor: Any?
 
     /// Notification observers for progress tracking
-    private var notificationObservers: [NSObjectProtocol] = []
+    /// nonisolated(unsafe) for cleanup in deinit
+    nonisolated(unsafe) private var notificationObservers: [NSObjectProtocol] = []
 
     /// Callbacks
     var onSubmit: ((String, [PendingAttachment]) -> Void)?
@@ -234,7 +236,7 @@ final class UnifiedConversationWindow: NSWindow {
         case .empty:
             break  // No additional height
         case .conversation:
-            if viewModel.messages.count > 0 {
+            if !viewModel.messages.isEmpty {
                 height += min(200, Layout.maxContentHeight)
             }
         case .commandList(let prefix):

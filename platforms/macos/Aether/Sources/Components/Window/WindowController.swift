@@ -13,10 +13,14 @@ import AppKit
 /// Bridges SwiftUI button actions to AppKit NSWindow methods.
 /// Uses `NSApp.keyWindow` to dynamically retrieve the current active window.
 ///
+/// Thread Safety:
+/// - Marked as @MainActor since all window operations must happen on main thread
+///
 /// # Usage
 /// ```swift
 /// TrafficLightButton(color: .red, action: WindowController.shared.close)
 /// ```
+@MainActor
 final class WindowController {
     // MARK: - Singleton
 

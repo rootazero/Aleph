@@ -41,8 +41,7 @@ struct AdaptiveGlassModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
-            let _ = print("[AdaptiveGlassModifier] Using native macOS 26 glassEffect (.regular)")
-            // Use pure glassEffect without custom background layers
+            // macOS 26+: Use pure glassEffect without custom background layers
             // System automatically applies vibrant text colors for legibility
             // clipShape ensures content doesn't leak outside rounded corners
             content
@@ -50,8 +49,7 @@ struct AdaptiveGlassModifier: ViewModifier {
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         } else {
-            // Fallback for macOS 15-25
-            let _ = print("[AdaptiveGlassModifier] Using NSVisualEffectView fallback (macOS < 26)")
+            // Fallback for macOS 15-25: NSVisualEffectView
             content
                 .environment(\.isInGlass, true)
                 .background(

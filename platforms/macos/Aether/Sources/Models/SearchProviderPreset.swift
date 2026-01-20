@@ -6,6 +6,8 @@
 //  Phase 3 of add-search-settings-ui proposal.
 //
 
+// swiftlint:disable force_unwrapping
+
 import Foundation
 
 /// Field type for search provider configuration
@@ -215,3 +217,5 @@ struct SearchProviderPresets {
         all.first { $0.providerType == type }
     }
 }
+
+// swiftlint:enable force_unwrapping

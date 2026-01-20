@@ -886,7 +886,7 @@ struct ProviderEditPanel: View {
         }
     }
 
-    private func testConnection() {
+    func testConnection() {
         guard isFormValid() else { return }
 
         isTesting = true
@@ -954,7 +954,7 @@ struct ProviderEditPanel: View {
             do {
                 try await saveProviderConfig(persist: true)
 
-                // Reload config outside MainActor to avoid try! crash
+                // Reload config outside MainActor to avoid force-try crash
                 let config = try core.loadConfig()
 
                 await MainActor.run {
@@ -1073,7 +1073,7 @@ struct ProviderEditPanel: View {
             do {
                 try core.deleteProvider(name: provider.name)
 
-                // Reload config outside MainActor to avoid try! crash
+                // Reload config outside MainActor to avoid force-try crash
                 let config = try core.loadConfig()
 
                 await MainActor.run {

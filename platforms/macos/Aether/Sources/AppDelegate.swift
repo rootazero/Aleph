@@ -10,6 +10,7 @@ import SwiftUI
 import Combine
 import Carbon.HIToolbox
 
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // Menu bar manager for status item
     private var menuBarManager: MenuBarManager?
@@ -87,12 +88,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // UI Testing mode: Skip permission gate and open settings directly
         if isUITesting {
             print("[Aether] UI Testing mode detected, skipping permission gate")
-            DispatchQueue.mainAsyncAfter(delay: 0.3, weakRef: self) { slf in
-                slf.initializeRustCore()
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(seconds: 0.3)
+                self?.initializeRustCore()
                 // Open settings window for UI tests
-                DispatchQueue.mainAsyncAfter(delay: 0.5, weakRef: slf) { s in
-                    s.showSettings()
-                }
+                try? await Task.sleep(seconds: 0.5)
+                self?.showSettings()
             }
             return
         }
@@ -101,7 +102,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         // macOS needs time to update permission status after app launch
         // Without this delay, AXIsProcessTrusted() and IOHIDRequestAccess() may return
         // cached/stale values, causing false negatives even when permissions are granted
-        DispatchQueue.mainAsyncAfter(delay: 0.5, weakRef: self) { slf in
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(seconds: 0.5)
+            guard let self = self else { return }
+
             NSLog("[Aether] Checking permissions after startup delay...")
             print("[Aether] Checking permissions after startup delay...")
 
@@ -116,13 +120,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             if !hasAccessibility || !hasInputMonitoring {
                 // Show mandatory permission gate if any permission is missing
                 NSLog("[Aether] Missing permissions - showing permission gate")
-                slf.showPermissionGate()
+                self.showPermissionGate()
             } else {
                 NSLog("[Aether] ✅ All permissions granted, calling checkAndRunFirstTimeInit()...")
                 print("[Aether] ✅ All permissions granted, checking if first-run initialization needed...")
 
                 // Check if this is a fresh installation
-                slf.checkAndRunFirstTimeInit()
+                self.checkAndRunFirstTimeInit()
             }
         }
     }
@@ -515,8 +519,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             }
 
             // Show permission gate again
-            DispatchQueue.mainAsync(weakRef: self) { slf in
-                slf.showPermissionGate()
+            Task { @MainActor [weak self] in
+                self?.showPermissionGate()
             }
             return
         }
@@ -580,7 +584,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             rebuildProvidersMenu()
 
             // Set core reference in event handler for cancellation
-            eventHandler.setCore(core!)
+            if let coreInstance = core {
+                eventHandler.setCore(coreInstance)
+            }
 
             // Configure OutputCoordinator with dependencies
             outputCoordinator?.configure(core: core, haloWindow: haloWindow)
@@ -797,14 +803,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func showInitializationWindow() {
         let initView = InitializationProgressView(
             onCompletion: { [weak self] in
-                DispatchQueue.main.async {
+                Task { @MainActor in
                     print("[Aether] ✅ Initialization completed - proceeding with app startup")
                     self?.closeInitializationWindow()
                     self?.initializeAppComponents()
                 }
             },
             onFailure: { error in
-                DispatchQueue.main.async {
+                Task { @MainActor in
                     print("[Aether] ❌ Initialization failed: \(error)")
                     // The InitializationProgressView handles retry internally
                     // If user can't retry, they can quit from the window

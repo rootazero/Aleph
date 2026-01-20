@@ -54,6 +54,10 @@ struct OutputContext {
 /// - Handle cursor positioning before output
 /// - Manage ESC key monitoring for typewriter cancellation
 /// - Handle post-output actions (clipboard restore, success state)
+///
+/// Thread Safety:
+/// - Marked as @MainActor since keyboard simulation must happen on main thread
+@MainActor
 final class OutputCoordinator {
 
     // MARK: - Dependencies
@@ -177,54 +181,53 @@ final class OutputCoordinator {
             print("[OutputCoordinator] 🎯 Single-turn: useReplaceMode=\(context.useReplaceMode), useAppendMode=\(useAppendMode)")
         }
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
-            print("[OutputCoordinator] 🎯 Starting unified output phase...")
+        // Already on MainActor, no dispatch needed
+        print("[OutputCoordinator] 🎯 Starting unified output phase...")
 
-            // Reactivate target app
-            if let previousApp = slf.previousFrontmostApp,
-               previousApp.bundleIdentifier != Bundle.main.bundleIdentifier {
-                print("[OutputCoordinator] 🔄 Reactivating target app: \(previousApp.localizedName ?? "Unknown")")
-                previousApp.activate(options: [])
-                Thread.sleep(forTimeInterval: 0.15)
-            }
+        // Reactivate target app
+        if let previousApp = previousFrontmostApp,
+           previousApp.bundleIdentifier != Bundle.main.bundleIdentifier {
+            print("[OutputCoordinator] 🔄 Reactivating target app: \(previousApp.localizedName ?? "Unknown")")
+            previousApp.activate(options: [])
+            Thread.sleep(forTimeInterval: 0.15)
+        }
 
-            // Prepare cursor position
-            // - Single-turn: always prepare
-            // - Multi-turn first turn (turnId == 0): prepare for initial output (to handle replace mode correctly)
-            // - Multi-turn subsequent turns: skip (cursor already at correct position after previous output)
-            let shouldPreparePosition = context.sessionType == .singleTurn ||
-                                        (context.sessionType == .multiTurn && context.turnId == 0)
+        // Prepare cursor position
+        // - Single-turn: always prepare
+        // - Multi-turn first turn (turnId == 0): prepare for initial output (to handle replace mode correctly)
+        // - Multi-turn subsequent turns: skip (cursor already at correct position after previous output)
+        let shouldPreparePosition = context.sessionType == .singleTurn ||
+                                    (context.sessionType == .multiTurn && context.turnId == 0)
 
-            if shouldPreparePosition, let textSource = context.textSource {
-                slf.prepareOutputPosition(textSource: textSource, useCutMode: context.useReplaceMode)
-                Thread.sleep(forTimeInterval: 0.05)
-            }
+        if shouldPreparePosition, let textSource = context.textSource {
+            prepareOutputPosition(textSource: textSource, useCutMode: context.useReplaceMode)
+            Thread.sleep(forTimeInterval: 0.05)
+        }
 
-            // Add double newline for append mode (visual separation between original and response)
-            if useAppendMode {
-                print("[OutputCoordinator] ⏎ Adding double newline before response (append mode)")
-                // Use typeTextInstant which calls typeSpecialKey with privateState
-                // This properly isolates modifier key state and clears flags
-                // More reliable than simulateKeyPress across different apps (e.g., Notes)
-                KeyboardSimulator.shared.typeTextInstant("\n\n")
-                Thread.sleep(forTimeInterval: 0.05)
-            } else {
-                print("[OutputCoordinator] ✂️ No newline - replacing original text")
-            }
+        // Add double newline for append mode (visual separation between original and response)
+        if useAppendMode {
+            print("[OutputCoordinator] ⏎ Adding double newline before response (append mode)")
+            // Use typeTextInstant which calls typeSpecialKey with privateState
+            // This properly isolates modifier key state and clears flags
+            // More reliable than simulateKeyPress across different apps (e.g., Notes)
+            KeyboardSimulator.shared.typeTextInstant("\n\n")
+            Thread.sleep(forTimeInterval: 0.05)
+        } else {
+            print("[OutputCoordinator] ✂️ No newline - replacing original text")
+        }
 
-            // Execute output
-            if outputMode == "typewriter" {
-                slf.executeTypewriterOutput(
-                    text: truncatedResponse,
-                    speed: typingSpeed,
-                    context: context
-                )
-            } else {
-                slf.executeInstantOutput(
-                    text: truncatedResponse,
-                    context: context
-                )
-            }
+        // Execute output
+        if outputMode == "typewriter" {
+            executeTypewriterOutput(
+                text: truncatedResponse,
+                speed: typingSpeed,
+                context: context
+            )
+        } else {
+            executeInstantOutput(
+                text: truncatedResponse,
+                context: context
+            )
         }
     }
 
@@ -274,13 +277,15 @@ final class OutputCoordinator {
     private func handlePostOutput(context: OutputContext, responsePreview: String) {
         switch context.sessionType {
         case .singleTurn:
-            // Restore clipboard after delay
-            DispatchQueue.mainAsyncAfter(delay: 0.5, weakRef: self) { slf in
+            // Restore clipboard after delay - use Task since we're on MainActor
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                guard let self = self else { return }
                 if let original = context.originalClipboard {
-                    slf.clipboardManager.setText(original)
+                    self.clipboardManager.setText(original)
                     print("[OutputCoordinator] ♻️ Restored original clipboard content")
                 } else {
-                    slf.clipboardManager.clear()
+                    self.clipboardManager.clear()
                     print("[OutputCoordinator] ♻️ Cleared clipboard (original was empty)")
                 }
             }
@@ -396,9 +401,7 @@ final class OutputCoordinator {
         // Clear the cancellation token immediately
         typewriterCancellation = nil
 
-        // Hide Halo immediately (success state removed)
-        DispatchQueue.mainAsync(weakRef: self) { slf in
-            slf.haloWindow?.hide()
-        }
+        // Hide Halo immediately - already on MainActor
+        haloWindow?.hide()
     }
 }

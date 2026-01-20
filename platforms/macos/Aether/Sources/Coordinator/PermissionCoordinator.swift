@@ -17,6 +17,10 @@ import SwiftUI
 /// - Show/hide permission gate window
 /// - Track permission gate state
 /// - Coordinate with menu bar and input coordinator for state sync
+///
+/// Thread Safety:
+/// - Marked as @MainActor since all permission UI operations happen on main thread
+@MainActor
 final class PermissionCoordinator {
 
     // MARK: - Dependencies

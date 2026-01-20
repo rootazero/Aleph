@@ -33,7 +33,7 @@ final class VisionHotkeyManager {
     private var globalEventMonitor: Any?
 
     // Configurable hotkey (default: Cmd+Option+O)
-    private var ocrKeyCode: UInt16 = UInt16(kVK_ANSI_O)
+    private var ocrKeyCode = UInt16(kVK_ANSI_O)
     private var ocrModifiers: NSEvent.ModifierFlags = [.command, .option]
 
     // MARK: - Initialization
@@ -109,7 +109,7 @@ final class VisionHotkeyManager {
         let parts = hotkeyString.split(separator: "+").map { String($0) }
 
         var modifiers: NSEvent.ModifierFlags = []
-        var keyCode: UInt16 = UInt16(kVK_ANSI_4) // Default
+        var keyCode = UInt16(kVK_ANSI_4) // Default
 
         for part in parts {
             switch part.lowercased() {

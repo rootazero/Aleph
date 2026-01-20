@@ -170,28 +170,36 @@ struct AttachmentButton: View {
     }
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
-        var urls: [URL] = []
-        let group = DispatchGroup()
-
-        for provider in providers {
-            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                group.enter()
-                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                    if let data = item as? Data,
-                       let url = URL(dataRepresentation: data, relativeTo: nil) {
+        // Process files sequentially to avoid Sendable issues with NSItemProvider
+        Task { @MainActor in
+            var urls: [URL] = []
+            for provider in providers {
+                if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                    if let url = await loadURL(from: provider) {
                         urls.append(url)
                     }
-                    group.leave()
                 }
             }
-        }
-
-        group.notify(queue: .main) {
             if !urls.isEmpty {
                 onFilesSelected(urls)
             }
         }
 
         return true
+    }
+
+    /// Load URL from an item provider using async/await
+    @MainActor
+    private func loadURL(from provider: NSItemProvider) async -> URL? {
+        await withCheckedContinuation { continuation in
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                if let data = item as? Data,
+                   let url = URL(dataRepresentation: data, relativeTo: nil) {
+                    continuation.resume(returning: url)
+                } else {
+                    continuation.resume(returning: nil)
+                }
+            }
+        }
     }
 }

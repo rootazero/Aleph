@@ -76,9 +76,8 @@ final class LaunchAtLoginManager: ObservableObject {
                 print("[LaunchAtLoginManager] ❌ Error setting launch at login: \(error)")
 
                 // Revert the published value to match actual state
-                DispatchQueue.mainAsync(weakRef: self) { slf in
-                    slf.isEnabled = slf.getLaunchAtLoginStatus()
-                }
+                // Note: Already on MainActor, no dispatch needed
+                isEnabled = getLaunchAtLoginStatus()
 
                 // Show error to user
                 showError(error)
@@ -87,14 +86,13 @@ final class LaunchAtLoginManager: ObservableObject {
     }
 
     /// Show error alert to user
+    /// Note: Already on MainActor, no dispatch needed
     private func showError(_ error: Error) {
-        DispatchQueue.main.async {
-            let alert = NSAlert()
-            alert.messageText = L("settings.general.launch_at_login_error")
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: L("common.ok"))
-            alert.runModal()
-        }
+        let alert = NSAlert()
+        alert.messageText = L("settings.general.launch_at_login_error")
+        alert.informativeText = error.localizedDescription
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: L("common.ok"))
+        alert.runModal()
     }
 }

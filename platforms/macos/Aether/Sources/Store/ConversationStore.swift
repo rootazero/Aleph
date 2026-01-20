@@ -11,7 +11,10 @@ import GRDB
 // MARK: - ConversationStore
 
 /// Manages SQLite persistence for conversations
-final class ConversationStore {
+///
+/// Thread Safety:
+/// - Marked as @unchecked Sendable because GRDB's DatabaseQueue handles thread safety internally
+final class ConversationStore: @unchecked Sendable {
 
     // MARK: - Singleton
 

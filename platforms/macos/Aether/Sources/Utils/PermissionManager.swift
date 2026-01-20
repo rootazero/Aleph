@@ -14,6 +14,10 @@ import Combine
 /// Permission manager that passively monitors permission status
 /// without triggering automatic app restarts.
 /// Uses PermissionChecker for actual permission checks.
+///
+/// Thread Safety:
+/// - Marked as @MainActor since it publishes properties for SwiftUI
+@MainActor
 class PermissionManager: ObservableObject {
     // MARK: - Published Properties
 
@@ -23,7 +27,8 @@ class PermissionManager: ObservableObject {
 
     // MARK: - Private Properties
 
-    private var statusCheckTimer: Timer?
+    // Use nonisolated(unsafe) to allow cleanup in deinit
+    nonisolated(unsafe) private var statusCheckTimer: Timer?
     private let pollingInterval: TimeInterval = 2.0
 
     // Cache for Input Monitoring check to avoid excessive IOHIDManagerOpen calls
@@ -37,7 +42,9 @@ class PermissionManager: ObservableObject {
     }
 
     deinit {
-        stopMonitoring()
+        // Directly invalidate timer in deinit since stopMonitoring is MainActor-isolated
+        statusCheckTimer?.invalidate()
+        statusCheckTimer = nil
     }
 
     // MARK: - Public Methods
@@ -51,11 +58,15 @@ class PermissionManager: ObservableObject {
 
         print("PermissionManager: Starting permission monitoring (polling interval: \(pollingInterval)s)")
 
+        // Note: Timer fires on main thread but closure isn't MainActor-isolated by default
+        // Use assumeIsolated since Timer.scheduledTimer on main RunLoop guarantees main thread execution
         statusCheckTimer = Timer.scheduledTimer(
             withTimeInterval: pollingInterval,
             repeats: true
         ) { [weak self] _ in
-            self?.checkPermissions()
+            MainActor.assumeIsolated {
+                self?.checkPermissions()
+            }
         }
     }
 
@@ -79,26 +90,25 @@ class PermissionManager: ObservableObject {
     // MARK: - Private Methods
 
     /// Check all permissions and update published properties
+    /// Note: Already on MainActor, no dispatch needed
     private func checkPermissions() {
         let axStatus = PermissionChecker.hasAccessibilityPermission()
         let screenStatus = PermissionChecker.hasScreenRecordingPermission()
         let inputStatus = checkInputMonitoringCached()
 
-        DispatchQueue.mainAsync(weakRef: self) { slf in
-            if slf.accessibilityGranted != axStatus {
-                print("PermissionManager: Accessibility status changed: \(axStatus)")
-                slf.accessibilityGranted = axStatus
-            }
+        if accessibilityGranted != axStatus {
+            print("PermissionManager: Accessibility status changed: \(axStatus)")
+            accessibilityGranted = axStatus
+        }
 
-            if slf.screenRecordingGranted != screenStatus {
-                print("PermissionManager: Screen Recording status changed: \(screenStatus)")
-                slf.screenRecordingGranted = screenStatus
-            }
+        if screenRecordingGranted != screenStatus {
+            print("PermissionManager: Screen Recording status changed: \(screenStatus)")
+            screenRecordingGranted = screenStatus
+        }
 
-            if slf.inputMonitoringGranted != inputStatus {
-                print("PermissionManager: Input Monitoring status changed: \(inputStatus)")
-                slf.inputMonitoringGranted = inputStatus
-            }
+        if inputMonitoringGranted != inputStatus {
+            print("PermissionManager: Input Monitoring status changed: \(inputStatus)")
+            inputMonitoringGranted = inputStatus
         }
     }
 

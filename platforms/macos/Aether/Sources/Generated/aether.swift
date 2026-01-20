@@ -12691,7 +12691,8 @@ fileprivate struct UniffiCallbackInterfaceAetherEventHandler {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    static var vtable: UniffiVTableCallbackInterfaceAetherEventHandler = UniffiVTableCallbackInterfaceAetherEventHandler(
+    // nonisolated(unsafe) for Swift 6 - UniFFI manages thread safety internally
+    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceAetherEventHandler = UniffiVTableCallbackInterfaceAetherEventHandler(
         onThinking: { (
             uniffiHandle: UInt64,
             uniffiOutReturn: UnsafeMutableRawPointer,
@@ -13212,7 +13213,8 @@ private func uniffiCallbackInitAetherEventHandler() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceAetherEventHandler {
-    fileprivate static var handleMap = UniffiHandleMap<AetherEventHandler>()
+    // nonisolated(unsafe) for Swift 6 - UniFFI manages thread safety internally
+    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<AetherEventHandler>()
 }
 
 #if swift(>=5.8)
@@ -13268,7 +13270,8 @@ fileprivate struct UniffiCallbackInterfaceCoworkProgressHandler {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    static var vtable: UniffiVTableCallbackInterfaceCoworkProgressHandler = UniffiVTableCallbackInterfaceCoworkProgressHandler(
+    // nonisolated(unsafe) for Swift 6 - UniFFI manages thread safety internally
+    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceCoworkProgressHandler = UniffiVTableCallbackInterfaceCoworkProgressHandler(
         onProgressEvent: { (
             uniffiHandle: UInt64,
             event: RustBuffer,
@@ -13311,7 +13314,8 @@ private func uniffiCallbackInitCoworkProgressHandler() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceCoworkProgressHandler {
-    fileprivate static var handleMap = UniffiHandleMap<CoworkProgressHandler>()
+    // nonisolated(unsafe) for Swift 6 - UniFFI manages thread safety internally
+    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<CoworkProgressHandler>()
 }
 
 #if swift(>=5.8)
@@ -13419,7 +13423,8 @@ fileprivate struct UniffiCallbackInterfaceInitProgressHandlerFFI {
 
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
-    static var vtable: UniffiVTableCallbackInterfaceInitProgressHandlerFfi = UniffiVTableCallbackInterfaceInitProgressHandlerFfi(
+    // nonisolated(unsafe) for Swift 6 - UniFFI manages thread safety internally
+    nonisolated(unsafe) static var vtable: UniffiVTableCallbackInterfaceInitProgressHandlerFfi = UniffiVTableCallbackInterfaceInitProgressHandlerFfi(
         onPhaseStarted: { (
             uniffiHandle: UInt64,
             phase: RustBuffer,
@@ -13574,7 +13579,8 @@ private func uniffiCallbackInitInitProgressHandlerFFI() {
 @_documentation(visibility: private)
 #endif
 fileprivate struct FfiConverterCallbackInterfaceInitProgressHandlerFfi {
-    fileprivate static var handleMap = UniffiHandleMap<InitProgressHandlerFfi>()
+    // nonisolated(unsafe) for Swift 6 - UniFFI manages thread safety internally
+    nonisolated(unsafe) fileprivate static var handleMap = UniffiHandleMap<InitProgressHandlerFfi>()
 }
 
 #if swift(>=5.8)
@@ -15066,7 +15072,8 @@ private enum InitializationResult {
 }
 // Use a global variable to perform the versioning checks. Swift ensures that
 // the code inside is only computed once.
-private var initializationResult: InitializationResult = {
+// nonisolated(unsafe) for Swift 6 - UniFFI manages thread safety internally
+nonisolated(unsafe) private var initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
     let bindings_contract_version = 26
     // Get the scaffolding contract version by calling the into the dylib

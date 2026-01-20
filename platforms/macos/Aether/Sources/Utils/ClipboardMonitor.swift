@@ -17,6 +17,10 @@ struct ClipboardChange {
 }
 
 /// Monitors clipboard changes and tracks timestamps
+///
+/// Thread Safety:
+/// - Marked as @MainActor since Timer and NSPasteboard operations require main thread
+@MainActor
 class ClipboardMonitor {
 
     // MARK: - Singleton
@@ -68,11 +72,15 @@ class ClipboardMonitor {
         checkClipboardChange()
 
         // Set up timer to check every second
+        // Note: Timer fires on main thread but closure isn't MainActor-isolated by default
+        // Use assumeIsolated since Timer.scheduledTimer on main RunLoop guarantees main thread execution
         monitorTimer = Timer.scheduledTimer(
             withTimeInterval: 1.0,
             repeats: true
         ) { [weak self] _ in
-            self?.checkClipboardChange()
+            MainActor.assumeIsolated {
+                self?.checkClipboardChange()
+            }
         }
 
         isMonitoring = true

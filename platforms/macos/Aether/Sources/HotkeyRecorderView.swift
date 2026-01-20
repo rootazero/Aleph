@@ -195,11 +195,9 @@ struct HotkeyRecorderView: View {
 
         // Get the character from the event
         guard let characters = event.charactersIgnoringModifiers,
-              !characters.isEmpty else {
+              let char = characters.first else {
             return
         }
-
-        let char = characters.first!
         let newHotkey = Hotkey(
             modifiers: event.modifierFlags,
             keyCode: event.keyCode,
