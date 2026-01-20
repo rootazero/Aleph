@@ -81,8 +81,7 @@ use super::TaskIntent;
 // =============================================================================
 
 /// Configuration for the P3 Intelligent Router
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct P3RouterConfig {
     /// P2 Router configuration (includes prompt analysis and cache)
     pub p2_config: P2RouterConfig,
@@ -111,7 +110,6 @@ pub enum UserIdMode {
     /// Use request ID (random per request)
     RequestBased,
 }
-
 
 // =============================================================================
 // P3 Pre-Route Results

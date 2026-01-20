@@ -88,7 +88,6 @@ pub enum EnsembleMode {
     },
 }
 
-
 impl EnsembleMode {
     /// Get human-readable display name
     pub fn display_name(&self) -> &'static str {
@@ -2045,10 +2044,7 @@ I'm confident this is correct.
     #[test]
     fn test_quality_metric_parsing() {
         assert_eq!(QualityMetric::parse("length"), QualityMetric::Length);
-        assert_eq!(
-            QualityMetric::parse("STRUCTURE"),
-            QualityMetric::Structure
-        );
+        assert_eq!(QualityMetric::parse("STRUCTURE"), QualityMetric::Structure);
         assert_eq!(
             QualityMetric::parse("length_and_structure"),
             QualityMetric::LengthAndStructure

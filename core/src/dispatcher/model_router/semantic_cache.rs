@@ -95,8 +95,7 @@ impl CachedResponse {
 }
 
 /// Metadata for a cache entry
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CacheMetadata {
     /// Task intent that generated this response
     pub task_intent: Option<TaskIntent>,
@@ -107,7 +106,6 @@ pub struct CacheMetadata {
     /// Custom tags for filtering
     pub tags: Vec<String>,
 }
-
 
 /// A cache entry storing prompt-response pair
 #[derive(Debug, Clone, Serialize, Deserialize)]
