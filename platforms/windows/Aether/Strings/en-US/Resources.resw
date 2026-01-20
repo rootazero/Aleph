@@ -58,7 +58,7 @@
     <value>MCP Tools</value>
   </data>
   <data name="NavItem_Skills.Content" xml:space="preserve">
-    <value>Claude Skills</value>
+    <value>Skills</value>
   </data>
   <data name="NavItem_Cowork.Content" xml:space="preserve">
     <value>Cowork</value>

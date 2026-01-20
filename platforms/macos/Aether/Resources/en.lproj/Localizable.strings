@@ -462,8 +462,8 @@
 "settings.mcp.detail.status.error" = "Error";
 
 // MARK: - Settings Window - Skills Tab
-"settings.skills.title" = "Claude Skills";
-"settings.skills.description" = "Install and manage Claude Agent Skills. Skills inject specialized instructions to enhance AI capabilities.";
+"settings.skills.title" = "Skills";
+"settings.skills.description" = "Install and manage Skills. Skills inject specialized instructions to enhance AI capabilities.";
 "settings.skills.installed_skills" = "Installed Skills";
 "settings.skills.install" = "Install Skill";
 "settings.skills.install_skill" = "Install Skill";
@@ -720,7 +720,7 @@
 "settings.routing.preset.mcp.sub.list" = "List available MCP tools";
 "settings.routing.preset.mcp.sub.tool" = "Execute specific MCP tool";
 
-"settings.routing.preset.skills.description" = "Claude Skills - Execute custom workflows and automations";
+"settings.routing.preset.skills.description" = "Skills - Execute custom workflows and automations";
 "settings.routing.preset.skills.usage" = "/skill <name>";
 "settings.routing.preset.skills.sub.list" = "List available skills";
 "settings.routing.preset.skills.sub.skill" = "Execute specific skill";
@@ -812,7 +812,7 @@
 "tool.mcp.usage" = "/mcp <tool> [params]";
 
 // /skill tool
-"tool.skill.description" = "Claude Skills - Execute custom workflows and automations";
+"tool.skill.description" = "Skills - Execute custom workflows and automations";
 "tool.skill.hint" = "Skills";
 "tool.skill.usage" = "/skill <name>";
 

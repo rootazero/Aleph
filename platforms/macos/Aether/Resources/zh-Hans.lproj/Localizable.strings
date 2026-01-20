@@ -464,23 +464,23 @@
 "settings.mcp.detail.status.error" = "错误";
 
 // MARK: - Settings Window - Skills Tab
-"settings.skills.title" = "Claude 技能";
-"settings.skills.description" = "安装和管理 Claude Agent 技能。技能注入专业指令以增强 AI 能力。";
-"settings.skills.installed_skills" = "已安装技能";
-"settings.skills.install" = "安装技能";
-"settings.skills.install_skill" = "安装技能";
-"settings.skills.install_first" = "安装您的第一个技能";
-"settings.skills.loading" = "加载技能中...";
-"settings.skills.empty_title" = "尚未安装技能";
-"settings.skills.empty_description" = "技能通过专业指令增强 AI 能力。\n从 GitHub 仓库安装技能。";
+"settings.skills.title" = "Skills";
+"settings.skills.description" = "安装和管理 Skills。Skills 注入专业指令以增强 AI 能力。";
+"settings.skills.installed_skills" = "已安装 Skills";
+"settings.skills.install" = "安装 Skill";
+"settings.skills.install_skill" = "安装 Skill";
+"settings.skills.install_first" = "安装您的第一个 Skill";
+"settings.skills.loading" = "加载 Skills 中...";
+"settings.skills.empty_title" = "尚未安装 Skills";
+"settings.skills.empty_description" = "Skills 通过专业指令增强 AI 能力。\n从 GitHub 仓库安装 Skills。";
 "settings.skills.github_url" = "GitHub 仓库 URL";
 "settings.skills.url_placeholder" = "https://github.com/user/skill-repo";
 "settings.skills.url_example" = "示例：user/repo、github.com/user/repo 或完整 URL";
-"settings.skills.delete" = "删除技能";
-"settings.skills.delete_skill" = "删除技能";
-"settings.skills.delete_skill_message" = "确定要删除技能「%@」吗？此操作无法撤销。";
-"settings.skills.delete_failed" = "删除技能失败：%@";
-"settings.skills.install_failed" = "安装技能失败：%@";
+"settings.skills.delete" = "删除 Skill";
+"settings.skills.delete_skill" = "删除 Skill";
+"settings.skills.delete_skill_message" = "确定要删除 Skill「%@」吗？此操作无法撤销。";
+"settings.skills.delete_failed" = "删除 Skill 失败：%@";
+"settings.skills.install_failed" = "安装 Skill 失败：%@";
 "settings.skills.usage_hint" = "使用方式：/skill %@";
 "settings.skills.install_method_url" = "GitHub URL";
 "settings.skills.install_method_zip" = "ZIP 文件";
@@ -488,8 +488,8 @@
 "settings.skills.no_file_selected" = "未选择文件";
 "settings.skills.browse" = "浏览...";
 "settings.skills.select_zip" = "选择 ZIP 文件";
-"settings.skills.zip_description" = "选择包含技能的 ZIP 文件（每个技能需包含 SKILL.md）";
-"settings.skills.zip_no_skills" = "ZIP 文件中未找到有效的技能";
+"settings.skills.zip_description" = "选择包含 Skills 的 ZIP 文件（每个 Skill 需包含 SKILL.md）";
+"settings.skills.zip_no_skills" = "ZIP 文件中未找到有效的 Skill";
 
 // MARK: - Settings Window - Memory Tab
 "settings.memory.title" = "记忆管理";
@@ -722,10 +722,10 @@
 "settings.routing.preset.mcp.sub.list" = "列出可用的 MCP 工具";
 "settings.routing.preset.mcp.sub.tool" = "执行指定的 MCP 工具";
 
-"settings.routing.preset.skills.description" = "Claude 技能 - 执行自定义工作流和自动化";
-"settings.routing.preset.skills.usage" = "/skill <技能名>";
-"settings.routing.preset.skills.sub.list" = "列出可用的技能";
-"settings.routing.preset.skills.sub.skill" = "执行指定的技能";
+"settings.routing.preset.skills.description" = "Skills - 执行自定义工作流和自动化";
+"settings.routing.preset.skills.usage" = "/skill <Skill 名>";
+"settings.routing.preset.skills.sub.list" = "列出可用的 Skills";
+"settings.routing.preset.skills.sub.skill" = "执行指定的 Skill";
 
 "settings.routing.preset.video.description" = "YouTube 视频分析 - 通过字幕提取和分析视频内容";
 "settings.routing.preset.video.usage" = "/video <YouTube 链接>";
@@ -800,7 +800,7 @@
 // Tool source type labels
 "tool.source.builtin" = "系统";
 "tool.source.mcp" = "MCP";
-"tool.source.skill" = "技能";
+"tool.source.skill" = "Skill";
 "tool.source.custom" = "自定义";
 
 // /search tool
@@ -814,9 +814,9 @@
 "tool.mcp.usage" = "/mcp <工具名> [参数]";
 
 // /skill tool
-"tool.skill.description" = "Claude 技能 - 执行自定义工作流和自动化";
-"tool.skill.hint" = "技能";
-"tool.skill.usage" = "/skill <技能名>";
+"tool.skill.description" = "Skills - 执行自定义工作流和自动化";
+"tool.skill.hint" = "Skills";
+"tool.skill.usage" = "/skill <Skill 名>";
 
 // /video tool
 "tool.video.description" = "YouTube 视频分析 - 通过字幕提取和分析视频内容";
@@ -1028,7 +1028,7 @@
 "settings.policies.tool_safety.builtin_fallback" = "内置工具默认级别";
 "settings.policies.tool_safety.native_fallback" = "原生工具默认级别";
 "settings.policies.tool_safety.mcp_fallback" = "MCP 工具默认级别";
-"settings.policies.tool_safety.skill_fallback" = "技能工具默认级别";
+"settings.policies.tool_safety.skill_fallback" = "Skill 工具默认级别";
 "settings.policies.tool_safety.custom_fallback" = "自定义工具默认级别";
 
 // Intent Detection Policy

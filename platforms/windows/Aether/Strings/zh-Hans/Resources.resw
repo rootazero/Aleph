@@ -58,7 +58,7 @@
     <value>MCP 工具</value>
   </data>
   <data name="NavItem_Skills.Content" xml:space="preserve">
-    <value>Claude 技能</value>
+    <value>Skills</value>
   </data>
   <data name="NavItem_Cowork.Content" xml:space="preserve">
     <value>协作模式</value>

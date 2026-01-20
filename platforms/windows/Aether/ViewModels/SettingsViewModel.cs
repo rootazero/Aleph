@@ -258,7 +258,7 @@ public static class SettingsTabExtensions
         SettingsTab.Memory => "Memory Management",
         SettingsTab.Search => "Search Engine",
         SettingsTab.Mcp => "MCP Tools",
-        SettingsTab.Skills => "Claude Skills",
+        SettingsTab.Skills => "Skills",
         SettingsTab.Cowork => "Cowork",
         SettingsTab.Policies => "Policies",
         _ => tab.ToString()
