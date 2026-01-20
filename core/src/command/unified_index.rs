@@ -39,6 +39,29 @@ pub fn extract_keywords_from_description(description: &str) -> Vec<String> {
         .collect()
 }
 
+/// A scored match result
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScoredMatch {
+    /// Command source type
+    pub source_type: ToolSourceType,
+    /// Command name
+    pub command_name: String,
+    /// Match score (higher = better match)
+    pub score: f64,
+}
+
+impl ScoredMatch {
+    /// Get type priority for sorting (lower = higher priority)
+    fn type_priority(&self) -> u8 {
+        match self.source_type {
+            ToolSourceType::Builtin | ToolSourceType::Native => 0,
+            ToolSourceType::Skill => 1,
+            ToolSourceType::Mcp => 2,
+            ToolSourceType::Custom => 3,
+        }
+    }
+}
+
 /// An entry in the unified command index
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexEntry {
@@ -109,6 +132,40 @@ impl UnifiedCommandIndex {
                 .push(IndexEntry::new(source_type, command_name, 0.6));
         }
     }
+
+    /// Find commands matching the input text
+    /// Returns matches sorted by: type priority (asc), then score (desc)
+    pub fn find_matches(&self, input: &str) -> Vec<ScoredMatch> {
+        let input_lower = input.to_lowercase();
+        let mut scores: HashMap<String, ScoredMatch> = HashMap::new();
+
+        // Check each trigger keyword
+        for (trigger, entries) in &self.entries {
+            if input_lower.contains(trigger) {
+                for entry in entries {
+                    let key = format!("{:?}:{}", entry.source_type, entry.command_name);
+                    scores
+                        .entry(key)
+                        .and_modify(|m| m.score += entry.weight)
+                        .or_insert_with(|| ScoredMatch {
+                            source_type: entry.source_type,
+                            command_name: entry.command_name.clone(),
+                            score: entry.weight,
+                        });
+                }
+            }
+        }
+
+        // Sort by type priority (asc), then score (desc)
+        let mut matches: Vec<ScoredMatch> = scores.into_values().collect();
+        matches.sort_by(|a, b| {
+            a.type_priority()
+                .cmp(&b.type_priority())
+                .then(b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal))
+        });
+
+        matches
+    }
 }
 
 #[cfg(test)]
@@ -177,5 +234,50 @@ mod tests {
         assert!(!keywords.contains(&"and".to_string()));
         assert!(keywords.contains(&"quick".to_string()));
         assert!(keywords.contains(&"brown".to_string()));
+    }
+
+    #[test]
+    fn test_find_matches_basic() {
+        let mut index = UnifiedCommandIndex::new();
+
+        // Add a skill with triggers
+        let triggers1 = CommandTriggers::new(
+            vec!["知识图谱".to_string(), "graph".to_string()],
+            vec!["dependencies".to_string()],
+        );
+        index.add_command(ToolSourceType::Skill, "knowledge-graph", &triggers1);
+
+        // Add another command
+        let triggers2 = CommandTriggers::new(
+            vec!["翻译".to_string(), "translate".to_string()],
+            Vec::new(),
+        );
+        index.add_command(ToolSourceType::Custom, "translate", &triggers2);
+
+        // Test finding matches
+        let matches = index.find_matches("帮我画个知识图谱");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].command_name, "knowledge-graph");
+
+        let matches2 = index.find_matches("translate this to English");
+        assert_eq!(matches2.len(), 1);
+        assert_eq!(matches2[0].command_name, "translate");
+    }
+
+    #[test]
+    fn test_find_matches_priority_sorting() {
+        let mut index = UnifiedCommandIndex::new();
+
+        // Two commands with overlapping triggers
+        let triggers1 = CommandTriggers::new(vec!["analyze".to_string()], Vec::new());
+        index.add_command(ToolSourceType::Skill, "skill-analyze", &triggers1);
+
+        let triggers2 = CommandTriggers::new(vec!["analyze".to_string()], Vec::new());
+        index.add_command(ToolSourceType::Custom, "custom-analyze", &triggers2);
+
+        // Skill should come before Custom due to type priority
+        let matches = index.find_matches("analyze this code");
+        assert!(matches.len() >= 2);
+        assert_eq!(matches[0].source_type, ToolSourceType::Skill);
     }
 }
