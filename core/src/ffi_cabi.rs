@@ -87,6 +87,12 @@ pub type ToolCallback =
 /// Callback function type for memory stored notification
 pub type MemoryStoredCallback = extern "C" fn();
 
+/// Callback function type for confirmation required (unified planner integration)
+/// @param message Pointer to the confirmation message (UTF-8 encoded, null-terminated)
+/// @param plan_json Optional JSON describing the plan that requires confirmation
+pub type ConfirmationRequiredCallback =
+    extern "C" fn(message: *const c_char, plan_json: *const c_char);
+
 // =============================================================================
 // Initialization Callback Types
 // =============================================================================
@@ -135,6 +141,7 @@ struct Callbacks {
     error: Option<ErrorCallback>,
     tool: Option<ToolCallback>,
     memory_stored: Option<MemoryStoredCallback>,
+    confirmation_required: Option<ConfirmationRequiredCallback>,
     // Initialization callbacks
     init_phase_started: Option<InitPhaseStartedCallback>,
     init_phase_progress: Option<InitPhaseProgressCallback>,
@@ -150,6 +157,7 @@ static CALLBACKS: Mutex<Callbacks> = Mutex::new(Callbacks {
     error: None,
     tool: None,
     memory_stored: None,
+    confirmation_required: None,
     // Initialization callbacks
     init_phase_started: None,
     init_phase_progress: None,
@@ -335,6 +343,23 @@ pub extern "C" fn aether_register_memory_stored_callback(callback: MemoryStoredC
     }
 }
 
+/// Register a callback for confirmation required (unified planner integration)
+///
+/// This callback is invoked when the unified planner determines that an action
+/// or task graph requires user confirmation before execution.
+///
+/// # Arguments
+/// * `callback` - Function pointer to call when confirmation is required
+///
+/// # Safety
+/// The callback must be valid for the lifetime of the library usage.
+#[no_mangle]
+pub extern "C" fn aether_register_confirmation_callback(callback: ConfirmationRequiredCallback) {
+    if let Ok(mut cbs) = CALLBACKS.lock() {
+        cbs.confirmation_required = Some(callback);
+    }
+}
+
 /// Clear all registered callbacks
 #[no_mangle]
 pub extern "C" fn aether_clear_callbacks() {
@@ -345,6 +370,7 @@ pub extern "C" fn aether_clear_callbacks() {
         cbs.error = None;
         cbs.tool = None;
         cbs.memory_stored = None;
+        cbs.confirmation_required = None;
     }
 }
 

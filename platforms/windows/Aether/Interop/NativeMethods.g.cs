@@ -144,6 +144,21 @@ namespace Aether.Interop
         public static extern void aether_register_memory_stored_callback(delegate* unmanaged[Cdecl]<void> callback);
 
         /// <summary>
+        ///  Register a callback for confirmation required (unified planner integration)
+        ///
+        ///  This callback is invoked when the unified planner determines that an action
+        ///  or task graph requires user confirmation before execution.
+        ///
+        ///  # Arguments
+        ///  * `callback` - Function pointer to call when confirmation is required
+        ///
+        ///  # Safety
+        ///  The callback must be valid for the lifetime of the library usage.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "aether_register_confirmation_callback", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void aether_register_confirmation_callback(delegate* unmanaged[Cdecl]<byte*, byte*, void> callback);
+
+        /// <summary>
         ///  Clear all registered callbacks
         /// </summary>
         [DllImport(__DllName, EntryPoint = "aether_clear_callbacks", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
