@@ -34,6 +34,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Frictionless**: Brings AI intelligence directly to the cursor without context switching
 - **Native-First**: 100% native code - Rust core with platform-specific UI (Swift, C#, GTK)
 
+### ⚠️ Critical: Aether is an AI Agent
+
+**Aether 是 AI Agent，不是简单的工具路由器。**
+
+复杂多步骤任务是 Agent 的核心能力，必须支持：
+- **任务分解**: 将复杂请求分解为多个子任务（如："分析文档 → 生成prompt → 绘制图像"）
+- **依赖管理**: 子任务之间的依赖关系（DAG 调度）
+- **上下文传递**: 前一个任务的输出作为后一个任务的输入
+- **错误恢复**: 单个子任务失败时的处理策略
+
+**关键模块**:
+- `UnifiedPlanner`: LLM 驱动的任务分解，生成 ExecutionPlan
+- `UnifiedExecutor`: DAG 调度执行器，处理 TaskGraph
+- `RequestOrchestrator`: 请求入口，需要集成 Planner 支持复杂任务
+
+**没有多步骤任务支持，Aether 就不是真正的 Agent。**
+
 ---
 
 ## Technical Stack
