@@ -565,7 +565,8 @@ struct RuleEditorView: View {
                     tools: nil,
                     knowledgeBase: nil,
                     icon: nil,
-                    hint: nil
+                    hint: nil,
+                    triggers: nil
                 )
 
                 // Update rules array
