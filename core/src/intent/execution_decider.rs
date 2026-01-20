@@ -76,7 +76,7 @@ pub struct ToolInvocation {
 #[derive(Debug, Clone)]
 pub struct DecisionMetadata {
     /// Which layer made the decision
-    pub layer: DecisionLayer,
+    pub layer: IntentLayer,
     /// Confidence score (0.0 - 1.0)
     pub confidence: f32,
     /// Time taken to decide (microseconds)
@@ -85,33 +85,57 @@ pub struct DecisionMetadata {
     pub matched_pattern: Option<String>,
 }
 
-/// Decision layer indicator
+/// Intent decision layer indicator
+///
+/// These layers are distinct from Dispatcher's RoutingLayer:
+/// - IntentLayer (here): Decides "execute vs converse" (Phase 1)
+/// - RoutingLayer (Dispatcher): Decides "which tool/model" (Phase 2)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DecisionLayer {
-    /// L0: Slash command direct mapping
-    L0SlashCommand,
-    /// L1: Regex pattern match
-    L1Regex,
-    /// L2: Context signal match
-    L2Context,
-    /// L3: Semantic/LLM analysis
-    L3Semantic,
-    /// L4: Default fallback
-    L4Default,
+pub enum IntentLayer {
+    /// Slash command direct mapping (<1ms)
+    /// Example: /screenshot, /search
+    SlashCommand,
+    /// Regex pattern match (<5ms)
+    /// Example: "整理.*文件夹", "what is"
+    PatternMatch,
+    /// Context signal match (<20ms)
+    /// Example: file selected, clipboard type
+    ContextSignal,
+    /// Semantic/LLM analysis (<500ms)
+    /// Uses lightweight LLM for ambiguous cases
+    SemanticAnalysis,
+    /// Default fallback (<1ms)
+    /// Bias toward execution when uncertain
+    DefaultFallback,
 }
 
-impl DecisionLayer {
+impl IntentLayer {
     /// Get typical latency for this layer
     pub fn typical_latency(&self) -> &'static str {
         match self {
-            Self::L0SlashCommand => "<1ms",
-            Self::L1Regex => "<5ms",
-            Self::L2Context => "<20ms",
-            Self::L3Semantic => "<500ms",
-            Self::L4Default => "<1ms",
+            Self::SlashCommand => "<1ms",
+            Self::PatternMatch => "<5ms",
+            Self::ContextSignal => "<20ms",
+            Self::SemanticAnalysis => "<500ms",
+            Self::DefaultFallback => "<1ms",
+        }
+    }
+
+    /// Get layer description for logging
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::SlashCommand => "Slash command direct mapping",
+            Self::PatternMatch => "Regex pattern match",
+            Self::ContextSignal => "Context signal (file/app/clipboard)",
+            Self::SemanticAnalysis => "Semantic LLM analysis",
+            Self::DefaultFallback => "Default execution bias",
         }
     }
 }
+
+// Backward compatibility alias
+#[deprecated(since = "0.2.0", note = "Use IntentLayer instead")]
+pub type DecisionLayer = IntentLayer;
 
 /// Decision result with mode and metadata
 #[derive(Debug, Clone)]
@@ -357,18 +381,18 @@ impl ExecutionIntentDecider {
 
         // L0: Slash commands (direct tool invocation)
         if let Some(result) = self.check_slash_command(input) {
-            return self.finalize_result(result, DecisionLayer::L0SlashCommand, start, Some(input));
+            return self.finalize_result(result, IntentLayer::SlashCommand, start, Some(input));
         }
 
         // L1: Regex pattern matching
         if let Some((mode, pattern)) = self.check_regex_patterns(input) {
-            return self.finalize_result(mode, DecisionLayer::L1Regex, start, Some(&pattern));
+            return self.finalize_result(mode, IntentLayer::PatternMatch, start, Some(&pattern));
         }
 
         // L2: Context signals
         if let Some(ctx) = context {
             if let Some(mode) = self.check_context_signals(input, ctx) {
-                return self.finalize_result(mode, DecisionLayer::L2Context, start, None);
+                return self.finalize_result(mode, IntentLayer::ContextSignal, start, None);
             }
         }
 
@@ -384,7 +408,7 @@ impl ExecutionIntentDecider {
             ExecutionMode::Converse
         };
 
-        self.finalize_result(default_mode, DecisionLayer::L4Default, start, None)
+        self.finalize_result(default_mode, IntentLayer::DefaultFallback, start, None)
     }
 
     /// Check for slash command (L0)
@@ -476,11 +500,11 @@ impl ExecutionIntentDecider {
     ) -> DecisionResult {
         let latency_us = start.elapsed().as_micros() as u64;
         let confidence = match layer {
-            DecisionLayer::L0SlashCommand => 1.0,
-            DecisionLayer::L1Regex => 0.95,
-            DecisionLayer::L2Context => 0.8,
-            DecisionLayer::L3Semantic => 0.7,
-            DecisionLayer::L4Default => 0.5,
+            IntentLayer::SlashCommand => 1.0,
+            IntentLayer::PatternMatch => 0.95,
+            IntentLayer::ContextSignal => 0.8,
+            IntentLayer::SemanticAnalysis => 0.7,
+            IntentLayer::DefaultFallback => 0.5,
         };
 
         DecisionResult {
@@ -523,7 +547,7 @@ mod tests {
         let result = decider.decide("/screenshot", None);
 
         assert!(matches!(result.mode, ExecutionMode::DirectTool(_)));
-        assert_eq!(result.metadata.layer, DecisionLayer::L0SlashCommand);
+        assert_eq!(result.metadata.layer, IntentLayer::SlashCommand);
         assert_eq!(result.metadata.confidence, 1.0);
 
         if let ExecutionMode::DirectTool(inv) = result.mode {
@@ -553,7 +577,7 @@ mod tests {
             result.mode,
             ExecutionMode::Execute(TaskCategory::FileOrganize)
         ));
-        assert_eq!(result.metadata.layer, DecisionLayer::L1Regex);
+        assert_eq!(result.metadata.layer, IntentLayer::PatternMatch);
     }
 
     #[test]
@@ -573,7 +597,7 @@ mod tests {
 
         let result = decider.decide("什么是机器学习？", None);
         assert!(matches!(result.mode, ExecutionMode::Converse));
-        assert_eq!(result.metadata.layer, DecisionLayer::L1Regex);
+        assert_eq!(result.metadata.layer, IntentLayer::PatternMatch);
     }
 
     #[test]
@@ -597,7 +621,7 @@ mod tests {
             result.mode,
             ExecutionMode::Execute(TaskCategory::ImageGeneration)
         ));
-        assert_eq!(result.metadata.layer, DecisionLayer::L2Context);
+        assert_eq!(result.metadata.layer, IntentLayer::ContextSignal);
     }
 
     #[test]
@@ -610,7 +634,7 @@ mod tests {
             result.mode,
             ExecutionMode::Execute(TaskCategory::General)
         ));
-        assert_eq!(result.metadata.layer, DecisionLayer::L4Default);
+        assert_eq!(result.metadata.layer, IntentLayer::DefaultFallback);
     }
 
     #[test]

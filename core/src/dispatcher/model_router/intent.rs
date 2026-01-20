@@ -10,6 +10,7 @@
 //! 3. **Backward Compatible**: Can convert from legacy intent_type strings
 
 use super::Capability;
+use crate::intent::TaskCategory;
 use serde::{Deserialize, Serialize};
 
 /// Unified task intent for routing decisions
@@ -212,6 +213,64 @@ impl TaskIntent {
     pub fn requires_capability(&self) -> bool {
         self.required_capability().is_some()
     }
+
+    /// Convert from ExecutionIntentDecider's TaskCategory
+    ///
+    /// This bridges the ExecutionIntentDecider (Phase 1) with the Model Router (Phase 2).
+    /// The TaskCategory represents the execution intent, and this method maps it to
+    /// the appropriate TaskIntent for model selection.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use aethecore::intent::TaskCategory;
+    /// use aethecore::dispatcher::model_router::TaskIntent;
+    ///
+    /// let category = TaskCategory::FileOrganize;
+    /// let intent = TaskIntent::from_category(category);
+    /// // intent will be QuickTask, which routes to a fast model
+    /// ```
+    pub fn from_category(category: TaskCategory) -> Self {
+        match category {
+            // File operations → Quick tasks (simple, fast)
+            TaskCategory::FileOrganize
+            | TaskCategory::FileOperation
+            | TaskCategory::FileTransfer
+            | TaskCategory::FileCleanup => TaskIntent::QuickTask,
+
+            // Code execution → Code generation capability
+            TaskCategory::CodeExecution => TaskIntent::CodeGeneration,
+
+            // Image generation → Image generation capability
+            TaskCategory::ImageGeneration => TaskIntent::ImageGeneration,
+
+            // Document generation → Long document processing
+            TaskCategory::DocumentGeneration | TaskCategory::DocumentGenerate => {
+                TaskIntent::DocumentProcessing
+            }
+
+            // Web operations
+            TaskCategory::WebSearch => TaskIntent::Search,
+            TaskCategory::WebFetch => TaskIntent::QuickTask,
+
+            // Media operations
+            TaskCategory::MediaDownload => TaskIntent::VideoSearch,
+            TaskCategory::VideoGeneration => TaskIntent::ImageGeneration, // Reuse for now
+            TaskCategory::AudioGeneration | TaskCategory::SpeechGeneration => TaskIntent::QuickTask,
+
+            // App automation → Quick tasks
+            TaskCategory::AppLaunch | TaskCategory::AppAutomation => TaskIntent::QuickTask,
+
+            // Text/Data processing → Text analysis
+            TaskCategory::TextProcessing | TaskCategory::DataProcess => TaskIntent::TextAnalysis,
+
+            // System info → Quick tasks
+            TaskCategory::SystemInfo => TaskIntent::QuickTask,
+
+            // General fallback
+            TaskCategory::General => TaskIntent::GeneralChat,
+        }
+    }
 }
 
 impl std::fmt::Display for TaskIntent {
@@ -342,6 +401,71 @@ mod tests {
         assert_eq!(TaskIntent::from_string("review"), TaskIntent::CodeReview);
         assert_eq!(TaskIntent::from_string("draw"), TaskIntent::ImageGeneration);
         assert_eq!(TaskIntent::from_string("think"), TaskIntent::Reasoning);
+    }
+
+    #[test]
+    fn test_task_intent_from_category() {
+        // File operations → QuickTask
+        assert_eq!(
+            TaskIntent::from_category(TaskCategory::FileOrganize),
+            TaskIntent::QuickTask
+        );
+        assert_eq!(
+            TaskIntent::from_category(TaskCategory::FileOperation),
+            TaskIntent::QuickTask
+        );
+        assert_eq!(
+            TaskIntent::from_category(TaskCategory::FileTransfer),
+            TaskIntent::QuickTask
+        );
+        assert_eq!(
+            TaskIntent::from_category(TaskCategory::FileCleanup),
+            TaskIntent::QuickTask
+        );
+
+        // Code execution → CodeGeneration
+        assert_eq!(
+            TaskIntent::from_category(TaskCategory::CodeExecution),
+            TaskIntent::CodeGeneration
+        );
+
+        // Image generation
+        assert_eq!(
+            TaskIntent::from_category(TaskCategory::ImageGeneration),
+            TaskIntent::ImageGeneration
+        );
+
+        // Document generation → DocumentProcessing
+        assert_eq!(
+            TaskIntent::from_category(TaskCategory::DocumentGeneration),
+            TaskIntent::DocumentProcessing
+        );
+        assert_eq!(
+            TaskIntent::from_category(TaskCategory::DocumentGenerate),
+            TaskIntent::DocumentProcessing
+        );
+
+        // Web operations
+        assert_eq!(
+            TaskIntent::from_category(TaskCategory::WebSearch),
+            TaskIntent::Search
+        );
+        assert_eq!(
+            TaskIntent::from_category(TaskCategory::WebFetch),
+            TaskIntent::QuickTask
+        );
+
+        // Text processing → TextAnalysis
+        assert_eq!(
+            TaskIntent::from_category(TaskCategory::TextProcessing),
+            TaskIntent::TextAnalysis
+        );
+
+        // General → GeneralChat
+        assert_eq!(
+            TaskIntent::from_category(TaskCategory::General),
+            TaskIntent::GeneralChat
+        );
     }
 
     #[test]

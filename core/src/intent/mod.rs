@@ -116,6 +116,9 @@ pub use task_category::TaskCategory;
 
 // New unified decision layer
 pub use execution_decider::{
-    ContextSignals, DeciderConfig, DecisionLayer, DecisionMetadata, DecisionResult,
-    ExecutionIntentDecider, ExecutionMode, SlashCommand, ToolInvocation,
+    ContextSignals, DeciderConfig, DecisionMetadata, DecisionResult,
+    ExecutionIntentDecider, ExecutionMode, IntentLayer, SlashCommand, ToolInvocation,
 };
+// Backward compatibility
+#[allow(deprecated)]
+pub use execution_decider::DecisionLayer;

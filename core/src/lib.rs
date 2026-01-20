@@ -82,6 +82,7 @@ pub mod logging;
 pub mod mcp; // NEW: MCP (Model Context Protocol) capability
 pub mod memory;
 pub mod metrics;
+pub mod orchestrator; // NEW: Unified request orchestrator (Phase 1 + Phase 2 coordination)
 pub mod payload; // Structured context protocol with capability support
 pub mod planner; // NEW: Unified planner for 2-layer architecture
 pub mod prompt; // NEW: Unified prompt management (executor/conversational)
