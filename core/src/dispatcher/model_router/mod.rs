@@ -45,6 +45,7 @@ mod orchestrated_router;
 mod orchestrator;
 mod profiles;
 mod p2_router;
+mod p3_router;
 mod prompt_analyzer;
 mod retry;
 mod semantic_cache;
@@ -132,6 +133,12 @@ pub use ensemble::{
     EnsembleValidationError, LengthAndStructureScorer, LengthScorer, ModelExecutionResult,
     ParallelExecutor, QualityMetric, QualityScorer, RelevanceScorer, ResponseAggregator,
     StructureScorer, TokenUsage, create_scorer, jaccard_similarity,
+};
+
+// P3 Intelligent Router (P3) - Integrates A/B Testing + Ensemble with P2
+pub use p3_router::{
+    P3EnsembleDecision, P3IntelligentRouter, P3PreRouteResult, P3RouterConfig, P3RouterError,
+    P3RouterEvent, P3RoutingDecision, UserIdMode,
 };
 
 // Re-export StageResult from cowork_types module for backward compatibility

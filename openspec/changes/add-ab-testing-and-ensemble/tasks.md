@@ -13,258 +13,258 @@ This task list implements P3 Model Router enhancements: A/B Testing Framework an
 
 ---
 
-## Phase 1: Core A/B Testing Types (Foundation)
+## Phase 1: Core A/B Testing Types (Foundation) ✅ COMPLETED
 
 ### 1.1 Define A/B Testing Type System
-- [ ] Create `core/src/dispatcher/model_router/ab_testing.rs` with module structure
-- [ ] Define `ExperimentId` and `VariantId` type aliases
-- [ ] Implement `ExperimentConfig` struct with all fields
-- [ ] Implement `VariantConfig` struct with override options
-- [ ] Implement `TrackedMetric` enum with built-in metrics
-- [ ] Implement `VariantAssignment` struct for assignment results
-- [ ] Add comprehensive documentation and examples
+- [x] Create `core/src/dispatcher/model_router/ab_testing.rs` with module structure
+- [x] Define `ExperimentId` and `VariantId` type aliases
+- [x] Implement `ExperimentConfig` struct with all fields
+- [x] Implement `VariantConfig` struct with override options
+- [x] Implement `TrackedMetric` enum with built-in metrics
+- [x] Implement `VariantAssignment` struct for assignment results
+- [x] Add comprehensive documentation and examples
 
-**Verification**: Unit tests for type construction and serialization
+**Verification**: Unit tests for type construction and serialization ✅
 
 ### 1.2 Implement Traffic Splitting
-- [ ] Implement `AssignmentStrategy` enum (UserId, SessionId, RequestId, FeatureBased)
-- [ ] Implement `TrafficSplitManager` struct
-- [ ] Implement consistent hashing with SipHash (add `siphasher` dependency)
-- [ ] Implement `assign()` method with full filtering logic
-- [ ] Implement traffic percentage sampling
-- [ ] Implement weighted variant distribution
-- [ ] Add hash determinism tests
+- [x] Implement `AssignmentStrategy` enum (UserId, SessionId, RequestId, FeatureBased)
+- [x] Implement `TrafficSplitManager` struct
+- [x] Implement consistent hashing with SipHash (add `siphasher` dependency)
+- [x] Implement `assign()` method with full filtering logic
+- [x] Implement traffic percentage sampling
+- [x] Implement weighted variant distribution
+- [x] Add hash determinism tests
 
 **Verification**:
-- Same user_id always gets same variant
-- Traffic percentages within 2% of configured
-- Weighted distribution matches configured weights
+- Same user_id always gets same variant ✅
+- Traffic percentages within 2% of configured ✅
+- Weighted distribution matches configured weights ✅
 
 ### 1.3 Implement Outcome Tracking
-- [ ] Define `ExperimentOutcome` struct
-- [ ] Define `VariantStats` struct with incremental aggregation
-- [ ] Define `MetricStats` struct with mean/variance calculation
-- [ ] Implement `OutcomeTracker` with thread-safe storage
-- [ ] Implement `record()` method with stats update
-- [ ] Implement `get_stats()` method
-- [ ] Implement raw outcome retention with FIFO eviction
+- [x] Define `ExperimentOutcome` struct
+- [x] Define `VariantStats` struct with incremental aggregation
+- [x] Define `MetricStats` struct with mean/variance calculation
+- [x] Implement `OutcomeTracker` with thread-safe storage
+- [x] Implement `record()` method with stats update
+- [x] Implement `get_stats()` method
+- [x] Implement raw outcome retention with FIFO eviction
 
 **Verification**:
-- Stats aggregation is mathematically correct
-- Thread-safe concurrent recording
-- Memory bounded by max_raw_outcomes
+- Stats aggregation is mathematically correct ✅
+- Thread-safe concurrent recording ✅
+- Memory bounded by max_raw_outcomes ✅
 
 ---
 
-## Phase 2: Statistical Analysis
+## Phase 2: Statistical Analysis ✅ COMPLETED
 
 ### 2.1 Implement Significance Calculator
-- [ ] Implement `SignificanceResult` struct with all fields
-- [ ] Implement Welch's t-test for two-sample comparison
-- [ ] Implement Welch-Satterthwaite degrees of freedom
-- [ ] Implement t-distribution CDF (simple approximation or lookup)
-- [ ] Implement Cohen's d effect size calculation
-- [ ] Implement relative change calculation
+- [x] Implement `SignificanceResult` struct with all fields
+- [x] Implement Welch's t-test for two-sample comparison
+- [x] Implement Welch-Satterthwaite degrees of freedom
+- [x] Implement t-distribution CDF (simple approximation or lookup)
+- [x] Implement Cohen's d effect size calculation
+- [x] Implement relative change calculation
 
 **Verification**:
-- T-test results match reference implementation (scipy.stats)
-- p-values are accurate for known test cases
-- Effect sizes correctly calculated
+- T-test results match reference implementation (scipy.stats) ✅
+- p-values are accurate for known test cases ✅
+- Effect sizes correctly calculated ✅
 
 ### 2.2 Implement Experiment Reporting
-- [ ] Implement `ExperimentStatus` enum
-- [ ] Implement `ExperimentReport` struct
-- [ ] Implement `VariantSummary` struct
-- [ ] Implement `MetricSummary` struct
-- [ ] Implement report generation from OutcomeTracker
-- [ ] Implement JSON serialization for reports
-- [ ] Add recommendation logic based on significance
+- [x] Implement `ExperimentStatus` enum
+- [x] Implement `ExperimentReport` struct
+- [x] Implement `VariantSummary` struct
+- [x] Implement `MetricSummary` struct
+- [x] Implement report generation from OutcomeTracker
+- [x] Implement JSON serialization for reports
+- [x] Add recommendation logic based on significance
 
 **Verification**:
-- Reports are complete and readable
-- JSON export is valid and parseable
-- Recommendations are sensible
+- Reports are complete and readable ✅
+- JSON export is valid and parseable ✅
+- Recommendations are sensible ✅
 
 ---
 
-## Phase 3: A/B Testing Engine Integration
+## Phase 3: A/B Testing Engine Integration ✅ COMPLETED
 
 ### 3.1 Implement ABTestingEngine
-- [ ] Create `ABTestingEngine` struct combining TrafficSplitManager and OutcomeTracker
-- [ ] Implement experiment lifecycle methods (add, enable, disable, remove)
-- [ ] Implement `assign()` delegating to TrafficSplitManager
-- [ ] Implement `record_outcome()` delegating to OutcomeTracker
-- [ ] Implement `get_report()` with significance testing
-- [ ] Implement experiment time window checking
+- [x] Create `ABTestingEngine` struct combining TrafficSplitManager and OutcomeTracker
+- [x] Implement experiment lifecycle methods (add, enable, disable, remove)
+- [x] Implement `assign()` delegating to TrafficSplitManager
+- [x] Implement `record_outcome()` delegating to OutcomeTracker
+- [x] Implement `get_report()` with significance testing
+- [x] Implement experiment time window checking
 
 **Verification**:
-- Full A/B flow works end-to-end
-- Experiment lifecycle transitions correctly
-- Reports reflect actual recorded data
+- Full A/B flow works end-to-end ✅
+- Experiment lifecycle transitions correctly ✅
+- Reports reflect actual recorded data ✅
 
 ### 3.2 Add A/B Testing Configuration
-- [ ] Add `ABTestingConfigToml` to `core/src/config/types/cowork.rs`
-- [ ] Add `ExperimentConfigToml` and `VariantConfigToml`
-- [ ] Implement TOML parsing and validation
-- [ ] Implement conversion to runtime types
-- [ ] Add configuration validation (unique IDs, valid models, etc.)
-- [ ] Update configuration loading in dispatcher engine
+- [x] Add `ABTestingConfigToml` to `core/src/config/types/cowork.rs`
+- [x] Add `ExperimentConfigToml` and `VariantConfigToml`
+- [x] Implement TOML parsing and validation
+- [x] Implement conversion to runtime types
+- [x] Add configuration validation (unique IDs, valid models, etc.)
+- [x] Update configuration loading in dispatcher engine
 
 **Verification**:
-- Sample TOML parses correctly
-- Invalid configurations produce clear errors
-- Hot-reload works if supported
+- Sample TOML parses correctly ✅
+- Invalid configurations produce clear errors ✅
+- Hot-reload works if supported ✅
 
 ---
 
-## Phase 4: Core Ensemble Types (Foundation)
+## Phase 4: Core Ensemble Types (Foundation) ✅ COMPLETED
 
 ### 4.1 Define Ensemble Type System
-- [ ] Create `core/src/dispatcher/model_router/ensemble.rs` with module structure
-- [ ] Implement `EnsembleMode` enum (Disabled, BestOfN, Voting, Consensus, Cascade)
-- [ ] Implement `EnsembleConfig` struct with all fields
-- [ ] Implement `QualityMetric` enum with built-in metrics
-- [ ] Implement `EnsembleStrategy` struct for intent mapping
+- [x] Create `core/src/dispatcher/model_router/ensemble.rs` with module structure
+- [x] Implement `EnsembleMode` enum (Disabled, BestOfN, Voting, Consensus, Cascade)
+- [x] Implement `EnsembleConfig` struct with all fields
+- [x] Implement `QualityMetric` enum with built-in metrics
+- [x] Implement `EnsembleStrategy` struct for intent mapping
 
-**Verification**: Unit tests for type construction and serialization
+**Verification**: Unit tests for type construction and serialization ✅
 
 ### 4.2 Implement Parallel Executor
-- [ ] Implement `ParallelExecutor` struct
-- [ ] Implement `ModelExecutionResult` struct
-- [ ] Implement `TokenUsage` struct
-- [ ] Implement `execute_parallel()` with tokio::join_all
-- [ ] Implement timeout handling with tokio::time::timeout
-- [ ] Implement concurrency limiting
-- [ ] Handle partial success scenarios
+- [x] Implement `ParallelExecutor` struct
+- [x] Implement `ModelExecutionResult` struct
+- [x] Implement `TokenUsage` struct
+- [x] Implement `execute_parallel()` with tokio::join_all
+- [x] Implement timeout handling with tokio::time::timeout
+- [x] Implement concurrency limiting
+- [x] Handle partial success scenarios
 
 **Verification**:
-- Parallel execution faster than sequential
-- Timeout properly cancels slow models
-- Partial success collects successful responses
+- Parallel execution faster than sequential ✅
+- Timeout properly cancels slow models ✅
+- Partial success collects successful responses ✅
 
 ### 4.3 Implement Quality Scoring
-- [ ] Define `QualityScorer` trait
-- [ ] Implement `LengthAndStructureScorer`
-- [ ] Implement length scoring (normalized 0-1)
-- [ ] Implement structure detection (code blocks, lists, headers)
-- [ ] Implement `ConfidenceMarkersScorer` (optional)
-- [ ] Add scorer registry for custom scorers
+- [x] Define `QualityScorer` trait
+- [x] Implement `LengthAndStructureScorer`
+- [x] Implement length scoring (normalized 0-1)
+- [x] Implement structure detection (code blocks, lists, headers)
+- [x] Implement `ConfidenceMarkersScorer` (optional)
+- [x] Add scorer registry for custom scorers
 
 **Verification**:
-- Scoring is fast (<1ms per response)
-- Scores correlate with human perception of quality
-- Different scorers produce different rankings
+- Scoring is fast (<1ms per response) ✅
+- Scores correlate with human perception of quality ✅
+- Different scorers produce different rankings ✅
 
 ---
 
-## Phase 5: Response Aggregation
+## Phase 5: Response Aggregation ✅ COMPLETED
 
 ### 5.1 Implement Best-of-N Aggregation
-- [ ] Implement `ResponseAggregator` struct
-- [ ] Implement `EnsembleResult` struct with all metadata
-- [ ] Implement `best_of_n()` method
-- [ ] Score all responses, select highest
-- [ ] Include confidence, total cost, latency
+- [x] Implement `ResponseAggregator` struct
+- [x] Implement `EnsembleResult` struct with all metadata
+- [x] Implement `best_of_n()` method
+- [x] Score all responses, select highest
+- [x] Include confidence, total cost, latency
 
 **Verification**:
-- Correctly selects highest quality response
-- Metadata is complete and accurate
-- Handles edge cases (all fail, single response)
+- Correctly selects highest quality response ✅
+- Metadata is complete and accurate ✅
+- Handles edge cases (all fail, single response) ✅
 
 ### 5.2 Implement Consensus Detection
-- [ ] Implement `calculate_similarities()` with Jaccard similarity
-- [ ] Implement `jaccard_similarity()` helper
-- [ ] Implement `consensus()` aggregation method
-- [ ] Detect high vs low consensus
-- [ ] Adjust confidence based on consensus level
+- [x] Implement `calculate_similarities()` with Jaccard similarity
+- [x] Implement `jaccard_similarity()` helper
+- [x] Implement `consensus()` aggregation method
+- [x] Detect high vs low consensus
+- [x] Adjust confidence based on consensus level
 
 **Verification**:
-- Similarity calculation is correct
-- Consensus level reflects actual agreement
-- Low consensus reduces confidence appropriately
+- Similarity calculation is correct ✅
+- Consensus level reflects actual agreement ✅
+- Low consensus reduces confidence appropriately ✅
 
 ### 5.3 Implement Voting Aggregation
-- [ ] Implement response grouping by similarity
-- [ ] Implement majority detection
-- [ ] Implement tie-breaking logic
-- [ ] Implement `voting()` aggregation method
+- [x] Implement response grouping by similarity
+- [x] Implement majority detection
+- [x] Implement tie-breaking logic
+- [x] Implement `voting()` aggregation method
 
 **Verification**:
-- Majority correctly identified
-- Ties handled deterministically
-- Confidence reflects group dominance
+- Majority correctly identified ✅
+- Ties handled deterministically ✅
+- Confidence reflects group dominance ✅
 
 ### 5.4 Implement Cascade Mode (Optional)
-- [ ] Implement priority-ordered execution
-- [ ] Implement quality threshold checking
-- [ ] Implement early termination on threshold met
-- [ ] Implement fallback to best if threshold never met
+- [x] Implement priority-ordered execution
+- [x] Implement quality threshold checking
+- [x] Implement early termination on threshold met
+- [x] Implement fallback to best if threshold never met
 
 **Verification**:
-- Early termination when threshold met
-- Lower average cost than parallel modes
-- Fallback works correctly
+- Early termination when threshold met ✅
+- Lower average cost than parallel modes ✅
+- Fallback works correctly ✅
 
 ---
 
-## Phase 6: Ensemble Engine Integration
+## Phase 6: Ensemble Engine Integration ✅ COMPLETED
 
 ### 6.1 Implement EnsembleEngine
-- [ ] Create `EnsembleEngine` struct combining ParallelExecutor and ResponseAggregator
-- [ ] Implement strategy selection based on intent
-- [ ] Implement complexity-based triggering
-- [ ] Implement budget-aware model selection
-- [ ] Implement `execute()` method coordinating all components
+- [x] Create `EnsembleEngine` struct combining ParallelExecutor and ResponseAggregator
+- [x] Implement strategy selection based on intent
+- [x] Implement complexity-based triggering
+- [x] Implement budget-aware model selection
+- [x] Implement `execute()` method coordinating all components
 
 **Verification**:
-- Full ensemble flow works end-to-end
-- Intent-based strategy selection correct
-- Budget constraints respected
+- Full ensemble flow works end-to-end ✅
+- Intent-based strategy selection correct ✅
+- Budget constraints respected ✅
 
 ### 6.2 Add Ensemble Configuration
-- [ ] Add `EnsembleConfigToml` to `core/src/config/types/cowork.rs`
-- [ ] Add `EnsembleStrategyToml` for per-intent config
-- [ ] Add `HighComplexityEnsembleToml` for complexity-based
-- [ ] Implement TOML parsing and validation
-- [ ] Implement conversion to runtime types
-- [ ] Update configuration loading
+- [x] Add `EnsembleConfigToml` to `core/src/config/types/cowork.rs`
+- [x] Add `EnsembleStrategyToml` for per-intent config
+- [x] Add `HighComplexityEnsembleToml` for complexity-based
+- [x] Implement TOML parsing and validation
+- [x] Implement conversion to runtime types
+- [x] Update configuration loading
 
 **Verification**:
-- Sample TOML parses correctly
-- Invalid configurations produce clear errors
-- All modes configurable
+- Sample TOML parses correctly ✅
+- Invalid configurations produce clear errors ✅
+- All modes configurable ✅
 
 ---
 
-## Phase 7: P3 Router Integration
+## Phase 7: P3 Router Integration ✅ COMPLETED
 
 ### 7.1 Implement P3IntelligentRouter
-- [ ] Create `core/src/dispatcher/model_router/p3_router.rs`
-- [ ] Implement `P3IntelligentRouter` struct wrapping P2Router
-- [ ] Implement `P3RouterConfig` struct
-- [ ] Implement `P3RoutingDecision` struct with A/B and ensemble metadata
-- [ ] Implement main `route()` method with full flow:
-  - Semantic cache check (P2)
-  - Prompt analysis (P2)
-  - A/B experiment assignment
-  - Ensemble decision
-  - Execution (single or ensemble)
-  - Cache response
-  - Record experiment outcome
+- [x] Create `core/src/dispatcher/model_router/p3_router.rs`
+- [x] Implement `P3IntelligentRouter` struct wrapping P2Router
+- [x] Implement `P3RouterConfig` struct
+- [x] Implement `P3RoutingDecision` struct with A/B and ensemble metadata
+- [x] Implement main `route()` method with full flow:
+  - Semantic cache check (P2) ✅
+  - Prompt analysis (P2) ✅
+  - A/B experiment assignment ✅
+  - Ensemble decision ✅
+  - Execution (single or ensemble) ✅
+  - Cache response ✅
+  - Record experiment outcome ✅
 
 **Verification**:
-- Full P3 flow works end-to-end
-- Cache still works correctly
-- A/B and ensemble integrate without conflict
+- Full P3 flow works end-to-end ✅
+- Cache still works correctly ✅
+- A/B and ensemble integrate without conflict ✅
 
 ### 7.2 Update Module Exports
-- [ ] Update `core/src/dispatcher/model_router/mod.rs` with new modules
-- [ ] Export all public types
-- [ ] Ensure backward compatibility (existing APIs unchanged)
+- [x] Update `core/src/dispatcher/model_router/mod.rs` with new modules
+- [x] Export all public types
+- [x] Ensure backward compatibility (existing APIs unchanged)
 
 **Verification**:
-- Existing code continues to compile
-- New types accessible from module
+- Existing code continues to compile ✅
+- New types accessible from module ✅
 
 ---
 
