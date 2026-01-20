@@ -40,7 +40,7 @@ mod request;
 mod result;
 
 pub use request::{OrchestratorRequest, RequestContext};
-pub use result::{OrchestratorResult, ProcessingPhase};
+pub use result::{OrchestratorMode, OrchestratorResult, ProcessingPhase};
 
 use crate::dispatcher::model_router::TaskIntent;
 use crate::dispatcher::{DispatcherConfig, DispatcherIntegration, UnifiedTool};

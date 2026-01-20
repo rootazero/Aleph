@@ -473,6 +473,7 @@ dictionary ExperimentalPolicy {
   boolean use_unified_intent_decider;
   boolean use_new_prompt_system;
   boolean verbose_decision_logging;
+  boolean use_request_orchestrator;
 };
 
 // Keyword matching policy for intent detection

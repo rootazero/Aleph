@@ -60,6 +60,27 @@ impl RequestContext {
         self.clipboard_type = Some(clip_type.into());
         self
     }
+
+    /// Create context from FFI options (app_context and window_title)
+    ///
+    /// This factory method creates a RequestContext from the fields
+    /// typically available in ProcessOptions without creating a dependency.
+    pub fn from_ffi_options(
+        app_context: Option<String>,
+        window_title: Option<String>,
+    ) -> Option<Self> {
+        // Only create context if we have meaningful data
+        if app_context.is_none() && window_title.is_none() {
+            return None;
+        }
+
+        Some(Self {
+            selected_file: None,
+            active_app: app_context,
+            ui_mode: None,
+            clipboard_type: None,
+        })
+    }
 }
 
 /// Request to the orchestrator

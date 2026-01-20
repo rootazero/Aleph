@@ -18,7 +18,9 @@ use crate::dispatcher::ToolSourceType;
 use crate::executor::{ExecutionContext as ExecContext, ExecutorError, UnifiedExecutor};
 use crate::intent::{AgentModePrompt, ToolDescription};
 use crate::memory::{ContextAnchor, EmbeddingModel, MemoryIngestion, VectorDatabase};
+use crate::orchestrator::{OrchestratorMode, OrchestratorRequest, RequestContext, RequestOrchestrator};
 use crate::planner::{ExecutionPlan, PlannerConfig, ToolInfo, UnifiedPlanner};
+use crate::prompt::PromptBuilder;
 use crate::providers::{create_provider, AiProvider};
 use crate::skills::SkillsRegistry;
 use crate::utils::paths::get_skills_dir;
@@ -161,7 +163,34 @@ impl AetherCore {
             handler.on_thinking();
 
             // ================================================================
-            // L1: SLASH COMMAND CHECK
+            // EXPERIMENTAL: RequestOrchestrator-based processing
+            // ================================================================
+            // Check if the new orchestrator-based processing is enabled
+            if full_config_clone.policies.experimental.use_request_orchestrator {
+                info!("Using experimental RequestOrchestrator processing");
+                process_with_orchestrator(
+                    &runtime,
+                    &input,
+                    &app_context,
+                    &window_title,
+                    &config,
+                    tool_server_handle,
+                    registered_tools,
+                    &conversation_histories,
+                    &topic_id,
+                    attachments.as_deref(),
+                    &op_token,
+                    &handler,
+                    &memory_config,
+                    &memory_path,
+                    &input_for_memory,
+                    &generation_config,
+                );
+                return;
+            }
+
+            // ================================================================
+            // L1: SLASH COMMAND CHECK (Legacy Path)
             // ================================================================
             // Only parse slash commands (starting with '/').
             // For non-slash input, use the unified planner (L3).
@@ -1389,4 +1418,195 @@ fn build_media_model_selection_prompt(
         "Please respond to the user with this message, asking them to select a {} generation model:\n\n{}",
         type_name, model_list
     )
+}
+
+// ============================================================================
+// EXPERIMENTAL: RequestOrchestrator-based processing
+// ============================================================================
+
+/// Process input using the new RequestOrchestrator (experimental)
+///
+/// This function uses the two-phase architecture:
+/// - Phase 1: ExecutionIntentDecider decides "execute vs converse"
+/// - Phase 2: Dispatcher decides "which tool and model" (only for Execute mode)
+///
+/// Feature flag: `experimental.use_request_orchestrator`
+#[allow(clippy::too_many_arguments)]
+fn process_with_orchestrator(
+    runtime: &tokio::runtime::Handle,
+    input: &str,
+    app_context: &Option<String>,
+    _window_title: &Option<String>,
+    config: &crate::agents::RigAgentConfig,
+    tool_server_handle: rig::tool::server::ToolServerHandle,
+    registered_tools: Arc<std::sync::RwLock<Vec<String>>>,
+    conversation_histories: &Arc<
+        std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>,
+    >,
+    topic_id: &Option<String>,
+    attachments: Option<&[crate::core::MediaAttachment]>,
+    op_token: &CancellationToken,
+    handler: &Arc<dyn crate::ffi::AetherEventHandler>,
+    memory_config: &crate::config::MemoryConfig,
+    memory_path: &Option<String>,
+    input_for_memory: &str,
+    generation_config: &crate::config::GenerationConfig,
+) {
+    // Create the orchestrator
+    let orchestrator = RequestOrchestrator::new();
+
+    // Build context from FFI options
+    let context = RequestContext::from_ffi_options(app_context.clone(), None);
+
+    // Get available tools for the orchestrator
+    let tool_descriptions = get_builtin_tool_descriptions(generation_config);
+    let unified_tools: Vec<crate::dispatcher::UnifiedTool> = tool_descriptions
+        .iter()
+        .map(|td| {
+            crate::dispatcher::UnifiedTool::new(
+                &format!("builtin:{}", td.name),
+                &td.name,
+                &td.description,
+                crate::dispatcher::ToolSource::Native,
+            )
+        })
+        .collect();
+
+    // Create the request
+    let request = OrchestratorRequest::new(input).with_tools(unified_tools);
+    let request = if let Some(ctx) = context {
+        request.with_context(ctx)
+    } else {
+        request
+    };
+
+    // Process through the orchestrator
+    let result = match orchestrator.process(&request) {
+        Ok(r) => r,
+        Err(e) => {
+            error!(error = %e, "Orchestrator processing failed");
+            // Fallback to conversational mode on error
+            handler.on_error(format!("Orchestrator error: {}", e));
+            return;
+        }
+    };
+
+    info!(
+        mode = ?result.mode,
+        phase = ?result.phase,
+        confidence = result.confidence(),
+        latency_us = result.latency_us(),
+        "Orchestrator decision"
+    );
+
+    // Route based on orchestrator result
+    match result.mode {
+        OrchestratorMode::DirectTool { tool_id, args } => {
+            // Direct tool invocation - execute immediately
+            info!(tool_id = %tool_id, args = %args, "Direct tool execution via orchestrator");
+
+            // For now, inject a tool trigger prompt similar to existing slash command handling
+            let agent_prompt = AgentModePrompt::with_tools(tool_descriptions.clone())
+                .with_generation_config(generation_config)
+                .generate();
+
+            let processed_input = format!(
+                "{}\n\n---\n\n请使用 {} 工具处理: {}",
+                agent_prompt, tool_id, args
+            );
+
+            execute_with_agent_manager(
+                runtime,
+                &processed_input,
+                config,
+                tool_server_handle,
+                registered_tools,
+                conversation_histories,
+                topic_id,
+                attachments,
+                op_token,
+                handler,
+                memory_config,
+                memory_path,
+                input_for_memory,
+                app_context,
+                &None,
+            );
+        }
+
+        OrchestratorMode::Converse => {
+            // Conversation mode - use the prompt from orchestrator
+            info!("Conversational mode via orchestrator");
+
+            let prompt = result.prompt.unwrap_or_else(|| {
+                PromptBuilder::conversational_prompt(None)
+            });
+
+            // Execute without agent tools
+            execute_with_agent_manager(
+                runtime,
+                &format!("{}\n\n---\n\n{}", prompt, input),
+                config,
+                tool_server_handle,
+                registered_tools,
+                conversation_histories,
+                topic_id,
+                attachments,
+                op_token,
+                handler,
+                memory_config,
+                memory_path,
+                input_for_memory,
+                app_context,
+                &None,
+            );
+        }
+
+        OrchestratorMode::Execute { category, ref task_intent } => {
+            // Execute mode - use agent prompt with filtered tools
+            info!(
+                category = ?category,
+                task_intent = %task_intent,
+                tools_count = result.tools.len(),
+                "Execute mode via orchestrator"
+            );
+
+            // Notify UI of agent mode
+            let task = crate::intent::ExecutableTask {
+                category,
+                action: input.to_string(),
+                target: None,
+                confidence: result.confidence(),
+            };
+            handler.on_agent_mode_detected((&task).into());
+
+            // Use the prompt generated by orchestrator
+            let prompt = result.prompt.unwrap_or_else(|| {
+                // Fallback: generate agent prompt with all tools
+                AgentModePrompt::with_tools(tool_descriptions.clone())
+                    .with_generation_config(generation_config)
+                    .generate()
+            });
+
+            let processed_input = format!("{}\n\n---\n\n用户请求: {}", prompt, input);
+
+            execute_with_agent_manager(
+                runtime,
+                &processed_input,
+                config,
+                tool_server_handle,
+                registered_tools,
+                conversation_histories,
+                topic_id,
+                attachments,
+                op_token,
+                handler,
+                memory_config,
+                memory_path,
+                input_for_memory,
+                app_context,
+                &None,
+            );
+        }
+    }
 }
