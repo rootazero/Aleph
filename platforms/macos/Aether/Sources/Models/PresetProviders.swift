@@ -146,16 +146,6 @@ struct PresetProviders {
             defaultModel: "gpt-4o",
             description: "GitHub Copilot API for coding assistance",
             baseUrl: nil
-        ),
-        PresetProvider(
-            id: "claude-code-acp",
-            name: "Claude Code (ACP)",
-            iconName: "terminal",
-            color: "#d97757",
-            providerType: "claude",
-            defaultModel: "claude-3-5-sonnet-20241022",
-            description: "Anthropic Messages API Proxy for Claude Code",
-            baseUrl: nil
         )
     ]
 

@@ -61,7 +61,7 @@ struct ProviderIcon: View {
         case "openai":
             return "ProviderIcon-OpenAI"
         // Anthropic / Claude
-        case "claude", "anthropic", "claude-code-acp":
+        case "claude", "anthropic":
             return "ProviderIcon-Claude"
         // Google Gemini
         case "gemini", "google", "google-gemini":

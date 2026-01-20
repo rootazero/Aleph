@@ -217,20 +217,6 @@ public sealed partial class ProvidersSettingsPage : UserControl
             IsLocalProvider = false
         });
 
-        _providers.Add(new ProviderItem
-        {
-            Id = "claude-code-acp",
-            Name = "Claude Code (ACP)",
-            Description = "Anthropic Messages API Proxy",
-            Icon = "\uE8B9",
-            IconPath = new Uri("ms-appx:///Assets/ProviderIcons/Claude.svg"),  // Uses Claude icon
-            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 217, 119, 87)), // #d97757
-            ApiKeyPlaceholder = "",
-            ApiKeyUrl = "https://claude.ai/",
-            Models = new[] { "claude-3-5-sonnet-20241022", "claude-3-opus-20240229" },
-            IsLocalProvider = false,
-            RequiresBaseUrl = true
-        });
     }
 
     private void ProviderListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
