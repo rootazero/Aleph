@@ -29,8 +29,10 @@
 //! let profile = matcher.route(&task)?;
 //! ```
 
+mod budget;
 mod collector;
 mod context;
+mod failover;
 mod health;
 mod health_manager;
 mod intelligent_routing;
@@ -38,6 +40,7 @@ mod intent;
 mod matcher;
 mod metrics;
 mod profiles;
+mod retry;
 mod rules;
 mod scoring;
 mod transition_engine;
@@ -64,6 +67,17 @@ pub use health::{
 pub use transition_engine::{CallResult, HealthTransitionEngine, TransitionResult};
 pub use health_manager::{HealthManager, HealthStatistics};
 pub use intelligent_routing::{IntelligentRouter, IntelligentRoutingConfig, IntelligentRoutingResult};
+
+// Retry and Failover (P1)
+pub use retry::{BackoffStrategy, RetryPolicy, RetryableOutcome};
+pub use failover::{FailoverChain, FailoverConfig, FailoverSelectionMode};
+
+// Budget Management (P1)
+pub use budget::{
+    BudgetCheckResult, BudgetEnforcement, BudgetEvent, BudgetLimit, BudgetManager,
+    BudgetPeriod, BudgetScope, BudgetState, CostEstimate, CostEstimator, ModelPricing,
+    PricingSource,
+};
 
 // Re-export StageResult from cowork_types module for backward compatibility
 pub use super::cowork_types::StageResult;
