@@ -4,7 +4,9 @@
 //! for natural language command detection.
 
 use crate::command::CommandTriggers;
+use crate::config::RoutingRuleConfig;
 use crate::dispatcher::ToolSourceType;
+use crate::skills::SkillsRegistry;
 use std::collections::HashMap;
 
 /// Stop words to exclude from auto-extraction
@@ -166,12 +168,90 @@ impl UnifiedCommandIndex {
 
         matches
     }
+
+    /// Build index from a SkillsRegistry
+    pub fn build_from_skills(registry: &SkillsRegistry) -> Self {
+        let mut index = Self::new();
+
+        for skill in registry.list_skills() {
+            let triggers = CommandTriggers::new(
+                skill.frontmatter.triggers.clone(),
+                extract_keywords_from_description(&skill.frontmatter.description),
+            );
+            index.add_command(ToolSourceType::Skill, &skill.id, &triggers);
+        }
+
+        index
+    }
+
+    /// Build index from routing rules (Custom commands)
+    pub fn build_from_rules(rules: &[RoutingRuleConfig]) -> Self {
+        let mut index = Self::new();
+
+        for rule in rules {
+            // Only process command rules (starting with ^/)
+            if !rule.regex.starts_with("^/") {
+                continue;
+            }
+
+            // Extract command name from regex
+            let cmd_name = rule
+                .regex
+                .trim_start_matches("^/")
+                .split(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+                .next()
+                .unwrap_or_default();
+
+            if cmd_name.is_empty() {
+                continue;
+            }
+
+            let manual = rule.triggers.clone().unwrap_or_default();
+            let auto = rule
+                .hint
+                .as_ref()
+                .map(|h| extract_keywords_from_description(h))
+                .unwrap_or_default();
+
+            let triggers = CommandTriggers::new(manual, auto);
+            index.add_command(ToolSourceType::Custom, cmd_name, &triggers);
+        }
+
+        index
+    }
+
+    /// Merge another index into this one
+    pub fn merge(&mut self, other: Self) {
+        for (trigger, entries) in other.entries {
+            self.entries.entry(trigger).or_default().extend(entries);
+        }
+    }
+
+    /// Build a complete index from all sources
+    pub fn build_all(
+        skills_registry: Option<&SkillsRegistry>,
+        routing_rules: Option<&[RoutingRuleConfig]>,
+    ) -> Self {
+        let mut index = Self::new();
+
+        if let Some(registry) = skills_registry {
+            index.merge(Self::build_from_skills(registry));
+        }
+
+        if let Some(rules) = routing_rules {
+            index.merge(Self::build_from_rules(rules));
+        }
+
+        index
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::command::CommandTriggers;
+    use crate::config::RoutingRuleConfig;
+    use crate::skills::SkillsRegistry;
 
     #[test]
     fn test_index_entry_creation() {
@@ -279,5 +359,153 @@ mod tests {
         let matches = index.find_matches("analyze this code");
         assert!(matches.len() >= 2);
         assert_eq!(matches[0].source_type, ToolSourceType::Skill);
+    }
+
+    #[test]
+    fn test_build_from_skills() {
+        use tempfile::TempDir;
+        use std::fs;
+
+        let temp_dir = TempDir::new().unwrap();
+        let skills_dir = temp_dir.path().to_path_buf();
+
+        // Create a test skill with triggers
+        let skill_dir = skills_dir.join("test-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            r#"---
+name: test-skill
+description: A test skill for testing
+triggers:
+  - test
+  - 测试
+---
+
+# Test Skill
+Instructions here.
+"#,
+        ).unwrap();
+
+        let registry = SkillsRegistry::new(skills_dir);
+        registry.load_all().unwrap();
+
+        let index = UnifiedCommandIndex::build_from_skills(&registry);
+
+        let matches = index.find_matches("run a test");
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].command_name, "test-skill");
+    }
+
+    #[test]
+    fn test_build_from_rules() {
+        let rules = vec![
+            RoutingRuleConfig {
+                regex: "^/translate".to_string(),
+                hint: Some("Translate text".to_string()),
+                triggers: Some(vec!["翻译".to_string(), "translate".to_string()]),
+                ..Default::default()
+            },
+            RoutingRuleConfig {
+                regex: "^/code".to_string(),
+                hint: Some("Generate code".to_string()),
+                triggers: Some(vec!["code".to_string(), "coding".to_string()]),
+                ..Default::default()
+            },
+            // Keyword rule (should be skipped)
+            RoutingRuleConfig {
+                regex: "translate to English".to_string(),
+                triggers: Some(vec!["english".to_string()]),
+                ..Default::default()
+            },
+        ];
+
+        let index = UnifiedCommandIndex::build_from_rules(&rules);
+
+        // Should find translate command
+        let matches = index.find_matches("请帮我翻译这段话");
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].command_name, "translate");
+        assert_eq!(matches[0].source_type, ToolSourceType::Custom);
+
+        // Should find code command
+        let matches = index.find_matches("help me write some code");
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].command_name, "code");
+    }
+
+    #[test]
+    fn test_merge_indices() {
+        let mut index1 = UnifiedCommandIndex::new();
+        let triggers1 = CommandTriggers::new(vec!["skill1".to_string()], Vec::new());
+        index1.add_command(ToolSourceType::Skill, "skill-1", &triggers1);
+
+        let mut index2 = UnifiedCommandIndex::new();
+        let triggers2 = CommandTriggers::new(vec!["skill2".to_string()], Vec::new());
+        index2.add_command(ToolSourceType::Custom, "custom-1", &triggers2);
+
+        index1.merge(index2);
+
+        // Should find both
+        let matches1 = index1.find_matches("skill1 trigger");
+        assert_eq!(matches1.len(), 1);
+        assert_eq!(matches1[0].command_name, "skill-1");
+
+        let matches2 = index1.find_matches("skill2 trigger");
+        assert_eq!(matches2.len(), 1);
+        assert_eq!(matches2[0].command_name, "custom-1");
+    }
+
+    #[test]
+    fn test_build_all() {
+        use tempfile::TempDir;
+        use std::fs;
+
+        // Create skills registry
+        let temp_dir = TempDir::new().unwrap();
+        let skills_dir = temp_dir.path().to_path_buf();
+
+        let skill_dir = skills_dir.join("refine");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            r#"---
+name: refine
+description: Refine and improve text
+triggers:
+  - refine
+  - improve
+---
+
+# Refine Skill
+"#,
+        ).unwrap();
+
+        let registry = SkillsRegistry::new(skills_dir);
+        registry.load_all().unwrap();
+
+        // Create routing rules
+        let rules = vec![
+            RoutingRuleConfig {
+                regex: "^/translate".to_string(),
+                triggers: Some(vec!["translate".to_string()]),
+                ..Default::default()
+            },
+        ];
+
+        // Build unified index
+        let index = UnifiedCommandIndex::build_all(Some(&registry), Some(&rules));
+
+        // Should find skill
+        let matches = index.find_matches("please improve this text");
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].command_name, "refine");
+        assert_eq!(matches[0].source_type, ToolSourceType::Skill);
+
+        // Should find custom command
+        let matches = index.find_matches("translate this");
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].command_name, "translate");
+        assert_eq!(matches[0].source_type, ToolSourceType::Custom);
     }
 }
