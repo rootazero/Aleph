@@ -16,7 +16,16 @@
 //! # Usage
 //!
 //! ```ignore
-//! use aether_core::planner::{ExecutionPlan, PlannedTask, PlannerError};
+//! use aether_core::planner::{ExecutionPlan, PlannedTask, PlannerError, UnifiedPlanner};
+//! use std::sync::Arc;
+//!
+//! // Create a planner with an AI provider
+//! let planner = UnifiedPlanner::new(provider);
+//!
+//! // Plan execution for user input
+//! let plan = planner.plan("Read the config file").await?;
+//!
+//! // Or create plans manually:
 //!
 //! // Create a simple conversational plan
 //! let plan = ExecutionPlan::conversational();
@@ -37,9 +46,11 @@
 
 mod prompt;
 mod types;
+mod unified;
 
 pub use prompt::{
     build_planning_prompt, format_tools_for_prompt, get_system_prompt_with_tools, ToolInfo,
     PLANNING_SYSTEM_PROMPT,
 };
 pub use types::{ExecutionPlan, PlannedTask, PlannerError};
+pub use unified::{PlannerConfig, UnifiedPlanner};
