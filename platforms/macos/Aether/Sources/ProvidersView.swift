@@ -120,7 +120,7 @@ struct ProvidersView: View {
                 .padding(.top, DesignTokens.Spacing.lg)
                 .padding(.bottom, DesignTokens.Spacing.md)
 
-            // Bottom: Two-panel layout with auto-expanding edit panel
+            // Middle: Two-panel layout with auto-expanding edit panel
             HStack(spacing: DesignTokens.Spacing.md) {
                 // Left: Provider list (cards only)
                 providerCardsSection
@@ -154,7 +154,16 @@ struct ProvidersView: View {
             }
             .padding(.leading, DesignTokens.Spacing.sm)     // 8pt left padding
             .padding(.trailing, DesignTokens.Spacing.lg)    // 24pt right padding (align with ThemeSwitcher)
-            .padding(.bottom, DesignTokens.Spacing.lg)
+            .padding(.bottom, DesignTokens.Spacing.md)
+
+            // Bottom: Unified save bar
+            UnifiedSaveBar(
+                hasUnsavedChanges: hasUnsavedChanges,
+                isSaving: isSaving,
+                statusMessage: errorMessage,
+                onSave: { await saveSettings() },
+                onCancel: { cancelEditing() }
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
@@ -171,6 +180,18 @@ struct ProvidersView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Save Bar Actions
+
+    /// Save settings - delegated to edit panel via notification
+    private func saveSettings() async {
+        NotificationCenter.default.post(name: .providerSaveRequested, object: nil)
+    }
+
+    /// Cancel editing - delegated to edit panel via notification
+    private func cancelEditing() {
+        NotificationCenter.default.post(name: .providerCancelRequested, object: nil)
     }
 
     // MARK: - View Builders
