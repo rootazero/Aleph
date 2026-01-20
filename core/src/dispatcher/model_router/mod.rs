@@ -33,6 +33,7 @@ mod ab_testing;
 mod budget;
 mod collector;
 mod context;
+mod ensemble;
 mod failover;
 mod health;
 mod health_manager;
@@ -122,6 +123,14 @@ pub use ab_testing::{
     OutcomeTracker, SignificanceCalculator, SignificanceResult, TrackedMetric,
     TrafficSplitManager, VariantAssignment, VariantConfig, VariantId, VariantStats,
     VariantSummary,
+};
+
+// Multi-Model Ensemble (P3)
+pub use ensemble::{
+    ConfidenceMarkersScorer, EnsembleConfig, EnsembleMode, EnsembleResult, EnsembleStrategy,
+    EnsembleValidationError, LengthAndStructureScorer, LengthScorer, ModelExecutionResult,
+    ParallelExecutor, QualityMetric, QualityScorer, RelevanceScorer, ResponseAggregator,
+    StructureScorer, TokenUsage, create_scorer, jaccard_similarity,
 };
 
 // Re-export StageResult from cowork_types module for backward compatibility
