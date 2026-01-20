@@ -316,6 +316,9 @@ dictionary RoutingRuleConfig {
   // ===== Command Mode Display fields =====
   string? icon;              // SF Symbol name for command mode display
   string? hint;              // Short hint text for command mode (max ~80px width)
+
+  // ===== Natural Language Detection fields =====
+  sequence<string>? triggers;  // Trigger keywords for natural language command detection
 };
 
 // Shortcuts configuration (Phase 6 - Task 4.2)

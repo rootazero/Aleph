@@ -249,6 +249,7 @@ impl UnifiedToolsConfig {
                     requires_runtime: server.requires_runtime.clone(),
                     timeout_seconds: server.timeout_seconds,
                     enabled: true,
+                    triggers: None,
                 },
             );
         }
@@ -587,4 +588,8 @@ pub struct McpServerConfig {
     /// Enable this server (allows disabling without removing config)
     #[serde(default = "default_true")]
     pub enabled: bool,
+
+    /// Trigger keywords for natural language command detection
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triggers: Option<Vec<String>>,
 }

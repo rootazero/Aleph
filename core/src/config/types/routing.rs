@@ -127,6 +127,13 @@ pub struct RoutingRuleConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
 
+    // ===== Natural Language Detection fields =====
+    /// Trigger keywords for natural language command detection
+    /// When user input contains any of these keywords, this command may be auto-invoked.
+    /// Example: triggers = ["翻译", "translate", "转换语言"]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triggers: Option<Vec<String>>,
+
     // ===== Skills fields (reserved) =====
     /// Skills ID (e.g., "build-macos-apps", "pdf")
     /// Only valid when intent_type = "skills:xxx"
@@ -170,6 +177,7 @@ impl RoutingRuleConfig {
             context_format: None,
             icon: None,
             hint: None,
+            triggers: None,
             skill_id: None,
             skill_version: None,
             workflow: None,
@@ -193,6 +201,7 @@ impl RoutingRuleConfig {
             context_format: None,
             icon: None,
             hint: None,
+            triggers: None,
             skill_id: None,
             skill_version: None,
             workflow: None,
@@ -216,6 +225,7 @@ impl RoutingRuleConfig {
             context_format: None,
             icon: None,
             hint: None,
+            triggers: None,
             skill_id: None,
             skill_version: None,
             workflow: None,
@@ -491,5 +501,16 @@ mod tests {
         };
         let intent = rule.get_task_intent();
         assert!(matches!(intent, TaskIntent::Custom(ref s) if s == "my_custom_workflow"));
+    }
+
+    #[test]
+    fn test_routing_rule_with_triggers() {
+        let toml = r#"
+            regex = "^/translate"
+            hint = "翻译文本"
+            triggers = ["翻译", "translate", "转换语言"]
+        "#;
+        let rule: RoutingRuleConfig = toml::from_str(toml).unwrap();
+        assert_eq!(rule.triggers, Some(vec!["翻译".to_string(), "translate".to_string(), "转换语言".to_string()]));
     }
 }

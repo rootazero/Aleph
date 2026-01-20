@@ -752,6 +752,7 @@ impl ToolRegistry {
                 intent_type: t.routing_intent_type.clone(),
                 preferred_model: None,
                 context_format: t.routing_context_format.clone(),
+                triggers: None,
                 skill_id: None,
                 skill_version: None,
                 workflow: None,

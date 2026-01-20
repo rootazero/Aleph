@@ -949,6 +949,7 @@ fn test_unified_tools_config_serialization_round_trip() {
             requires_runtime: None,
             timeout_seconds: 30,
             enabled: true,
+            triggers: None,
         },
     );
 

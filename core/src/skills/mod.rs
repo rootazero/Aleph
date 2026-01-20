@@ -46,6 +46,11 @@ pub struct SkillFrontmatter {
     /// Allowed tools for this skill (reserved for MCP integration)
     #[serde(default, rename = "allowed-tools")]
     pub allowed_tools: Vec<String>,
+
+    /// Trigger keywords for natural language command detection
+    /// When user input contains any of these keywords, this skill may be auto-invoked.
+    #[serde(default)]
+    pub triggers: Vec<String>,
 }
 
 /// A parsed Skill from SKILL.md
