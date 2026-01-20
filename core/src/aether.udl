@@ -1296,6 +1296,17 @@ interface AetherCore {
     [Throws=AetherFfiError]
     void cowork_update_default_model(string model_id);
 
+    // ===== MODEL HEALTH MONITORING (model-router-intelligence) =====
+
+    // Get health summary for all tracked models
+    sequence<ModelHealthSummaryFFI> cowork_get_model_health_summaries();
+
+    // Get health summary for a specific model
+    ModelHealthSummaryFFI? cowork_get_model_health(string model_id);
+
+    // Get overall health statistics
+    HealthStatisticsFFI cowork_get_health_statistics();
+
     // ===== SESSION MANAGEMENT (Phase 5) =====
 
     // Resume a previously saved session
@@ -1550,6 +1561,43 @@ dictionary StageResultFFI {
   boolean success;       // Whether the stage completed successfully
   string? error;         // Error message if failed
 };
+
+// ===== MODEL HEALTH MONITORING (model-router-intelligence) =====
+
+// Health status of an AI model
+enum ModelHealthStatusFFI {
+  "Healthy",       // Normal service - model is fully available
+  "Degraded",      // Available but impaired (high latency, near rate limit)
+  "Unhealthy",     // Temporarily unavailable due to failures
+  "CircuitOpen",   // Circuit breaker triggered - blocking all requests
+  "HalfOpen",      // Half-open state - allowing limited test requests
+  "Unknown",       // Insufficient data to determine health
+};
+
+// Summarized health information for a single model (UI display)
+dictionary ModelHealthSummaryFFI {
+  string model_id;             // Model identifier
+  ModelHealthStatusFFI status; // Current health status
+  string status_text;          // Human-readable status text (e.g., "Healthy")
+  string status_emoji;         // Status emoji for display
+  string? reason;              // Reason for current status (if degraded/unhealthy)
+  u32 consecutive_successes;   // Count of consecutive successful calls
+  u32 consecutive_failures;    // Count of consecutive failed calls
+};
+
+// Overall health statistics for all tracked models
+dictionary HealthStatisticsFFI {
+  u32 total;         // Total number of tracked models
+  u32 healthy;       // Number of healthy models
+  u32 degraded;      // Number of degraded models
+  u32 unhealthy;     // Number of unhealthy models
+  u32 circuit_open;  // Number of models with open circuits
+  u32 half_open;     // Number of models in half-open state
+  u32 unknown;       // Number of models with unknown status
+  f64 healthy_percent;  // Percentage of healthy models (0.0-100.0)
+};
+
+// ===== END MODEL HEALTH MONITORING =====
 
 // ===== COWORK TASK ORCHESTRATION (add-cowork-task-orchestration) =====
 

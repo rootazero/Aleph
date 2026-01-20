@@ -291,7 +291,7 @@ pub struct AetherCore {
     /// Names of registered tools (for tracking and display)
     pub(crate) registered_tools: Arc<RwLock<Vec<String>>>,
     /// Cowork engine for task orchestration (lazily initialized)
-    pub(crate) cowork_engine: Arc<RwLock<Option<Arc<crate::cowork::CoworkEngine>>>>,
+    pub(crate) cowork_engine: Arc<RwLock<Option<Arc<crate::dispatcher::CoworkEngine>>>>,
     /// Conversation histories keyed by topic_id for multi-turn support
     pub(crate) conversation_histories: Arc<RwLock<HashMap<String, Vec<Message>>>>,
     /// Generation provider registry for media generation (image, speech, etc.)

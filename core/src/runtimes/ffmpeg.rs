@@ -11,7 +11,7 @@
 use super::download::{download_file, set_executable};
 use super::manager::{RuntimeManager, UpdateInfo};
 use crate::error::{AetherError, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::{debug, info};
 
@@ -65,10 +65,10 @@ impl FfmpegRuntime {
     }
 
     /// Extract ffmpeg binary from downloaded zip archive
-    async fn extract_ffmpeg_binary(&self, zip_path: &PathBuf) -> Result<()> {
+    async fn extract_ffmpeg_binary(&self, zip_path: &Path) -> Result<()> {
         use std::io::Read;
 
-        let zip_path_clone = zip_path.clone();
+        let zip_path_clone = zip_path.to_path_buf();
         let binary_path = self.binary_path();
 
         tokio::task::spawn_blocking(move || {

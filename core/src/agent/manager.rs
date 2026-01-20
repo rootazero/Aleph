@@ -69,7 +69,13 @@ pub struct RigAgentManager {
 }
 
 /// Built-in tool names
-const BUILTIN_TOOLS: &[&str] = &["search", "web_fetch", "youtube", "file_ops", "generate_image"];
+const BUILTIN_TOOLS: &[&str] = &[
+    "search",
+    "web_fetch",
+    "youtube",
+    "file_ops",
+    "generate_image",
+];
 
 /// Configuration for built-in tools
 #[derive(Clone, Default)]
@@ -84,8 +90,17 @@ pub struct BuiltinToolConfig {
 impl std::fmt::Debug for BuiltinToolConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BuiltinToolConfig")
-            .field("tavily_api_key", &self.tavily_api_key.as_ref().map(|_| "[REDACTED]"))
-            .field("generation_registry", &self.generation_registry.as_ref().map(|_| "[GenerationProviderRegistry]"))
+            .field(
+                "tavily_api_key",
+                &self.tavily_api_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "generation_registry",
+                &self
+                    .generation_registry
+                    .as_ref()
+                    .map(|_| "[GenerationProviderRegistry]"),
+            )
             .finish()
     }
 }

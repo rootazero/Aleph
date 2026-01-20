@@ -12,7 +12,7 @@
 //!
 //! Use `preferred_model` to override automatic model selection.
 
-use crate::cowork::model_router::TaskIntent;
+use crate::dispatcher::model_router::TaskIntent;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================

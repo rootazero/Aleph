@@ -110,7 +110,10 @@ impl ExecutionResult {
 
     /// Get all tool names that were called
     pub fn tool_names(&self) -> Vec<&str> {
-        self.tool_calls.iter().map(|c| c.tool_name.as_str()).collect()
+        self.tool_calls
+            .iter()
+            .map(|c| c.tool_name.as_str())
+            .collect()
     }
 }
 

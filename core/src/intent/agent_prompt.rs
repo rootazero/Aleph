@@ -113,7 +113,10 @@ impl AgentModePrompt {
         lines.push("**Use generate_image tool for image generation**".to_string());
         lines.push("".to_string());
         lines.push("**Model Alias Mapping (Important):**".to_string());
-        lines.push("- \"nanobanana\" / \"nano-banana\" / \"nano banana\" → provider: \"t8star-image\"".to_string());
+        lines.push(
+            "- \"nanobanana\" / \"nano-banana\" / \"nano banana\" → provider: \"t8star-image\""
+                .to_string(),
+        );
         lines.push("".to_string());
         lines.push("Available generation providers:".to_string());
 

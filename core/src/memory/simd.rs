@@ -36,8 +36,12 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     {
         // Runtime feature detection for AVX
         if is_x86_feature_detected!("avx") {
+            // SAFETY: We've verified AVX is available via is_x86_feature_detected!
+            // and the slices a and b are valid with equal lengths (checked above).
             unsafe { cosine_similarity_avx(a, b) }
         } else {
+            // SAFETY: SSE is always available on x86_64 and the slices a and b
+            // are valid with equal lengths (checked above).
             unsafe { cosine_similarity_sse(a, b) }
         }
     }
@@ -83,6 +87,11 @@ fn cosine_similarity_neon(a: &[f32], b: &[f32]) -> f32 {
     let chunks = len / 4;
     let remainder = len % 4;
 
+    // SAFETY: NEON intrinsics are always available on aarch64.
+    // Pointer arithmetic is safe because:
+    // - a and b are valid slices with equal lengths (checked by caller)
+    // - We only access indices within bounds (chunks*4 + remainder = len)
+    // - vld1q_f32 loads 4 contiguous f32s which fits within slice bounds
     unsafe {
         // Initialize accumulators (4 lanes each)
         let mut dot_acc = vdupq_n_f32(0.0);

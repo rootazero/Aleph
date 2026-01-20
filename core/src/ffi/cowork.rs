@@ -13,7 +13,7 @@ impl AetherCore {
     /// Lazily initializes the CoworkEngine on first use.
     pub(crate) fn get_or_create_cowork_engine(
         &self,
-    ) -> Result<Arc<crate::cowork::CoworkEngine>, AetherFfiError> {
+    ) -> Result<Arc<crate::dispatcher::CoworkEngine>, AetherFfiError> {
         // Check if engine already exists
         {
             let engine_guard = self.cowork_engine.read().unwrap();
@@ -37,7 +37,7 @@ impl AetherCore {
             let _config = self.full_config.lock().unwrap_or_else(|e| e.into_inner());
             match Config::load() {
                 Ok(cfg) => cfg.cowork.to_engine_config(),
-                Err(_) => crate::cowork::CoworkConfig::default(),
+                Err(_) => crate::dispatcher::CoworkConfig::default(),
             }
         };
 
@@ -69,7 +69,7 @@ impl AetherCore {
         })?;
 
         // Create the engine
-        let mut engine = crate::cowork::CoworkEngine::new(cowork_config, provider);
+        let mut engine = crate::dispatcher::CoworkEngine::new(cowork_config, provider);
 
         // Set fallback provider from default_provider config
         // This ensures model routing works even without explicit model_profiles
@@ -89,7 +89,7 @@ impl AetherCore {
     /// Get Cowork configuration
     pub fn cowork_get_config(&self) -> crate::cowork_ffi::CoworkConfigFFI {
         // Return current config or default
-        crate::cowork_ffi::CoworkConfigFFI::from(crate::cowork::CoworkConfig::default())
+        crate::cowork_ffi::CoworkConfigFFI::from(crate::dispatcher::CoworkConfig::default())
     }
 
     /// Update Cowork configuration
@@ -310,7 +310,7 @@ impl AetherCore {
                 crate::cowork_ffi::ModelRoutingRulesFFI::from(cfg.cowork.get_routing_rules())
             }
             Err(_) => crate::cowork_ffi::ModelRoutingRulesFFI::from(
-                crate::cowork::ModelRoutingRules::default(),
+                crate::dispatcher::ModelRoutingRules::default(),
             ),
         }
     }
@@ -320,7 +320,7 @@ impl AetherCore {
         &self,
         profile: crate::cowork_ffi::ModelProfileFFI,
     ) -> Result<(), AetherFfiError> {
-        let profile = crate::cowork::ModelProfile::from(profile);
+        let profile = crate::dispatcher::ModelProfile::from(profile);
         let profile_id = profile.id.clone();
 
         // Load current config
@@ -515,7 +515,7 @@ impl AetherCore {
             .map_err(|e| AetherFfiError::Config(format!("Failed to load config: {}", e)))?;
 
         // Convert FFI strategy to internal CostStrategy enum
-        let cost_strategy = crate::cowork::CostStrategy::from(strategy);
+        let cost_strategy = crate::dispatcher::CostStrategy::from(strategy);
         full_config.cowork.model_routing.cost_strategy = cost_strategy;
 
         // Save to file
@@ -551,5 +551,90 @@ impl AetherCore {
 
         info!(model_id = %model_id, "Default model updated");
         Ok(())
+    }
+
+    // ===== MODEL HEALTH MONITORING =====
+
+    /// Get health summary for all tracked models
+    ///
+    /// Returns a list of health summaries for all models being tracked by the health manager.
+    /// Each summary includes the model's current health status, any degradation/error reasons,
+    /// and consecutive success/failure counts.
+    pub fn cowork_get_model_health_summaries(
+        &self,
+    ) -> Vec<crate::cowork_ffi::ModelHealthSummaryFFI> {
+        // TODO: Integrate with HealthManager when it's added to CoworkEngine
+        // For now, generate summaries from configured model profiles
+        match crate::config::Config::load() {
+            Ok(cfg) => cfg
+                .cowork
+                .get_model_profiles()
+                .into_iter()
+                .map(|profile| crate::cowork_ffi::ModelHealthSummaryFFI {
+                    model_id: profile.id,
+                    status: crate::cowork_ffi::ModelHealthStatusFFI::Unknown,
+                    status_text: "Unknown".to_string(),
+                    status_emoji: "❓".to_string(),
+                    reason: None,
+                    consecutive_successes: 0,
+                    consecutive_failures: 0,
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Get health summary for a specific model
+    ///
+    /// Returns the health summary for a specific model by ID, or None if the model
+    /// is not found in the health tracking system.
+    pub fn cowork_get_model_health(
+        &self,
+        model_id: String,
+    ) -> Option<crate::cowork_ffi::ModelHealthSummaryFFI> {
+        // TODO: Integrate with HealthManager when it's added to CoworkEngine
+        // For now, return Unknown status if model exists
+        match crate::config::Config::load() {
+            Ok(cfg) => {
+                if cfg.cowork.model_profiles.contains_key(&model_id) {
+                    Some(crate::cowork_ffi::ModelHealthSummaryFFI {
+                        model_id,
+                        status: crate::cowork_ffi::ModelHealthStatusFFI::Unknown,
+                        status_text: "Unknown".to_string(),
+                        status_emoji: "❓".to_string(),
+                        reason: None,
+                        consecutive_successes: 0,
+                        consecutive_failures: 0,
+                    })
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        }
+    }
+
+    /// Get overall health statistics
+    ///
+    /// Returns aggregate statistics about the health status of all tracked models,
+    /// including counts of healthy, degraded, unhealthy, and circuit-open models.
+    pub fn cowork_get_health_statistics(&self) -> crate::cowork_ffi::HealthStatisticsFFI {
+        // TODO: Integrate with HealthManager when it's added to CoworkEngine
+        // For now, return statistics based on configured model count
+        let total = match crate::config::Config::load() {
+            Ok(cfg) => cfg.cowork.model_profiles.len() as u32,
+            Err(_) => 0,
+        };
+
+        crate::cowork_ffi::HealthStatisticsFFI {
+            total,
+            healthy: 0,
+            degraded: 0,
+            unhealthy: 0,
+            circuit_open: 0,
+            half_open: 0,
+            unknown: total,
+            healthy_percent: if total > 0 { 0.0 } else { 100.0 },
+        }
     }
 }

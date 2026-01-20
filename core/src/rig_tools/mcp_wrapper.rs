@@ -137,7 +137,12 @@ impl std::fmt::Display for McpToolWrapperError {
 
 impl std::error::Error for McpToolWrapperError {}
 
-// Ensure Send + Sync for thread safety (required by ToolDyn)
+// SAFETY: McpToolWrapper is Send + Sync because:
+// - tool_def (McpTool) contains only String and serde_json::Value (both Send + Sync)
+// - client (Arc<McpClient>) is Send + Sync (Arc<T> is Send + Sync when T: Send + Sync,
+//   and McpClient uses RwLock for interior mutability which is Send + Sync)
+// - server_name (String) is Send + Sync
+// This is required by ToolDyn trait which has Send + Sync bounds.
 unsafe impl Send for McpToolWrapper {}
 unsafe impl Sync for McpToolWrapper {}
 

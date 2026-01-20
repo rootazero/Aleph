@@ -1,55 +1,69 @@
-//! Dispatcher Layer - Tool Registry and Confirmation
+//! Dispatcher Layer - Core Scheduling Center
 //!
-//! This module implements the Dispatcher Layer that provides:
+//! This module is Aether's core dispatch center, responsible for:
 //!
-//! - **Unified Tool Registry**: Aggregates all tool sources (Native, MCP, Skills, Custom)
+//! - **Model Routing**: Intelligent model selection based on task characteristics
+//! - **Tool Registry**: Aggregates all tool sources (Native, MCP, Skills, Custom)
+//! - **Task Orchestration**: DAG-based task scheduling and execution
 //! - **Confirmation System**: User confirmation for tool execution
-//! - **Async Confirmation**: Background confirmation handling
 //!
 //! # Architecture
 //!
 //! ```text
 //! User Input
 //!      ↓
-//! ┌─────────────────────┐
-//! │   Dispatcher Layer  │
-//! │                     │
-//! │  ┌───────────────┐  │
-//! │  │ ToolRegistry  │  │  ← Aggregates Native/MCP/Skills/Custom
-//! │  └───────┬───────┘  │
-//! │          ↓          │
-//! │  ┌───────────────┐  │
-//! │  │ Confirmation  │  │  ← User confirmation if needed
-//! │  └───────────────┘  │
-//! └──────────┼──────────┘
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                    Dispatcher Layer                         │
+//! │                                                              │
+//! │  ┌───────────────┐    ┌───────────────┐    ┌─────────────┐  │
+//! │  │ ToolRegistry  │    │  ModelRouter  │    │  Cowork     │  │
+//! │  └───────┬───────┘    └───────┬───────┘    │  Engine     │  │
+//! │          │                    │            └──────┬──────┘  │
+//! │          ▼                    ▼                   ▼         │
+//! │  ┌───────────────┐    ┌───────────────┐    ┌─────────────┐  │
+//! │  │ Confirmation  │    │   Executors   │    │  Scheduler  │  │
+//! │  └───────────────┘    └───────────────┘    └─────────────┘  │
+//! └──────────────────────────────────────────────────────────────┘
 //!            ↓
-//!    rig-core Agent
+//!     rig-core Agent
 //! ```
 //!
 //! # Usage
 //!
 //! ```rust,ignore
-//! use aethecore::dispatcher::{ToolRegistry, UnifiedTool, ToolSource};
+//! use aethecore::dispatcher::{
+//!     ToolRegistry, UnifiedTool, ToolSource,
+//!     CoworkEngine, CoworkConfig, ModelRouter
+//! };
 //!
-//! // Create registry
+//! // Create tool registry
 //! let registry = ToolRegistry::new();
-//!
-//! // Refresh from all sources
 //! registry.refresh_all().await;
 //!
-//! // Query tools
-//! let tools = registry.list_all().await;
-//! for tool in tools {
-//!     println!("{}: {} [{:?}]", tool.name, tool.description, tool.source);
-//! }
+//! // Create cowork engine for task orchestration
+//! let engine = CoworkEngine::new(config, provider);
+//! let graph = engine.plan("Organize my downloads folder").await?;
+//! let summary = engine.execute(graph).await?;
 //! ```
 
+// === Tool Management ===
 mod async_confirmation;
 mod confirmation;
 mod integration;
 mod registry;
 mod types;
 
+// === Task Orchestration (formerly cowork) ===
+pub mod executor;
+pub mod model_router;
+pub mod monitor;
+pub mod planner;
+pub mod scheduler;
+pub mod cowork_types;
+
+mod engine;
+
+// === Re-exports: Tool Management ===
 pub use async_confirmation::{
     AsyncConfirmationConfig, AsyncConfirmationHandler, ConfirmationState, PendingConfirmation,
     PendingConfirmationInfo, PendingConfirmationStore, UserConfirmationDecision,
@@ -66,6 +80,22 @@ pub use registry::ToolRegistry;
 pub use types::{
     ConflictInfo, ConflictResolution, RoutingLayer, ToolCategory, ToolDefinition, ToolPriority,
     ToolResult, ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo,
+};
+
+// === Re-exports: Task Orchestration ===
+pub use engine::{CoworkConfig, CoworkEngine, ExecutionState};
+pub use executor::{ExecutionContext, ExecutorRegistry, NoopExecutor, TaskExecutor};
+pub use model_router::{
+    Capability, CostStrategy, CostTier, FallbackProvider, LatencyTier, ModelMatcher, ModelProfile,
+    ModelRouter, ModelRoutingRules, RoutingError, StageResult, TaskContextManager, TaskIntent,
+};
+pub use monitor::{ProgressEvent, ProgressMonitor, ProgressSubscriber, TaskMonitor};
+pub use planner::{LlmTaskPlanner, TaskPlanner};
+pub use scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
+pub use cowork_types::{
+    AiTask, AppAuto, CodeExec, DocGen, ExecutionSummary, FileOp, GraphValidationError, Language,
+    Task, TaskCountByStatus, TaskDependency, TaskGraph, TaskGraphMeta, TaskResult as CoworkTaskResult,
+    TaskStatus, TaskType,
 };
 
 #[cfg(test)]

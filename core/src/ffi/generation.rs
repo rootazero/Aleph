@@ -1010,7 +1010,7 @@ impl AetherCore {
             }
 
             // Check if it's already an actual model name
-            for (_, actual_model) in &provider_config.models {
+            for actual_model in provider_config.models.values() {
                 if actual_model.eq_ignore_ascii_case(model_alias) {
                     return actual_model.clone();
                 }

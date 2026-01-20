@@ -477,5 +477,4 @@ When creating a knowledge graph, follow these steps:
         assert_eq!(cmd.command_name, "search");
         assert!(cmd.arguments.is_none());
     }
-
 }

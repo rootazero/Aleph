@@ -144,8 +144,7 @@ impl ToolSafetyPolicy {
 }
 
 fn default_high_risk_keywords() -> Vec<String> {
-    vec![
-        "delete",
+    ["delete",
         "remove",
         "drop",
         "shell",
@@ -155,27 +154,22 @@ fn default_high_risk_keywords() -> Vec<String> {
         "terminal",
         "destroy",
         "erase",
-        "purge",
-    ]
+        "purge"]
     .iter()
     .map(|s| s.to_string())
     .collect()
 }
 
 fn default_low_risk_keywords() -> Vec<String> {
-    vec![
-        "send", "notify", "post", "publish", "email", "message", "commit", "push",
-    ]
+    ["send", "notify", "post", "publish", "email", "message", "commit", "push"]
     .iter()
     .map(|s| s.to_string())
     .collect()
 }
 
 fn default_reversible_keywords() -> Vec<String> {
-    vec![
-        "create", "copy", "move", "rename", "update", "write", "edit", "modify", "set", "add",
-        "insert",
-    ]
+    ["create", "copy", "move", "rename", "update", "write", "edit", "modify", "set", "add",
+        "insert"]
     .iter()
     .map(|s| s.to_string())
     .collect()

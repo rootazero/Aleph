@@ -16,7 +16,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use aether_core::planner::{ExecutionPlan, PlannedTask, PlannerError, UnifiedPlanner};
+//! use aethecore::planner::{ExecutionPlan, PlannedTask, PlannerError, UnifiedPlanner};
 //! use std::sync::Arc;
 //!
 //! // Create a planner with an AI provider

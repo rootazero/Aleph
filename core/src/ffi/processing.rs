@@ -11,7 +11,7 @@ use super::{AetherCore, AetherFfiError};
 use crate::agent::RigAgentManager;
 use crate::command::{CommandContext, CommandParser, ParsedCommand};
 use crate::config::RoutingRuleConfig;
-use crate::cowork::executor::{
+use crate::dispatcher::executor::{
     CodeExecutor, ExecutorRegistry, FileOpsExecutor, PathPermissionChecker,
 };
 use crate::dispatcher::ToolSourceType;
@@ -216,9 +216,10 @@ impl AetherCore {
                                 info!(tool = %tool_name, args = %args, "Builtin tool command");
 
                                 // Inject agent prompt with tool hint
-                                let agent_prompt = AgentModePrompt::with_tools(tool_descriptions.clone())
-                                    .with_generation_config(&generation_config)
-                                    .generate();
+                                let agent_prompt =
+                                    AgentModePrompt::with_tools(tool_descriptions.clone())
+                                        .with_generation_config(&generation_config)
+                                        .generate();
                                 let tool_hint = match tool_name.as_str() {
                                     "search" => format!("请使用 search 工具搜索以下内容: {}", args),
                                     "youtube" => {
@@ -300,9 +301,10 @@ impl AetherCore {
                             );
 
                             // Inject agent prompt with MCP tool hint
-                            let agent_prompt = AgentModePrompt::with_tools(tool_descriptions.clone())
-                                .with_generation_config(&generation_config)
-                                .generate();
+                            let agent_prompt =
+                                AgentModePrompt::with_tools(tool_descriptions.clone())
+                                    .with_generation_config(&generation_config)
+                                    .generate();
                             format!(
                                 "{}\n\n---\n\n请使用 {} 工具处理: {}",
                                 agent_prompt, server_name, args
@@ -341,7 +343,10 @@ impl AetherCore {
                 // ================================================================
                 // No slash command detected - use AI unified planner to decide
                 // the execution strategy (conversational, single action, or task graph).
-                info!(input_len = input.len(), "Using unified planner for non-slash input");
+                info!(
+                    input_len = input.len(),
+                    "Using unified planner for non-slash input"
+                );
 
                 // Create AI provider for planner
                 let planner_provider = create_planner_provider(&full_config_clone);
@@ -359,8 +364,9 @@ impl AetherCore {
                     );
 
                     let planner_config = PlannerConfig::default();
-                    let planner = UnifiedPlanner::with_config(Arc::clone(&provider), planner_config)
-                        .with_tools(tools);
+                    let planner =
+                        UnifiedPlanner::with_config(Arc::clone(&provider), planner_config)
+                            .with_tools(tools);
 
                     // Plan the execution
                     let plan_result = runtime.block_on(async {
@@ -648,7 +654,9 @@ fn execute_plan(
     config: &crate::agent::RigAgentConfig,
     tool_server_handle: rig::tool::server::ToolServerHandle,
     registered_tools: Arc<std::sync::RwLock<Vec<String>>>,
-    conversation_histories: &Arc<std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>>,
+    conversation_histories: &Arc<
+        std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>,
+    >,
     topic_id: &Option<String>,
     attachments: Option<&[crate::core::MediaAttachment]>,
     op_token: &CancellationToken,
@@ -753,10 +761,7 @@ fn execute_plan(
 
             if requires_confirmation {
                 // TODO: Add confirmation UI callback
-                handler.on_confirmation_required(format!(
-                    "Execute tool '{}'?",
-                    tool_name
-                ));
+                handler.on_confirmation_required(format!("Execute tool '{}'?", tool_name));
             }
 
             // Build prompt that instructs the agent to use the specific tool
@@ -836,15 +841,15 @@ fn execute_plan(
             // Register CodeExecutor with default settings
             let permission_checker = PathPermissionChecker::default();
             let code_executor = CodeExecutor::new(
-                true,                            // enabled
-                "bash".to_string(),              // default_runtime
-                300,                             // timeout_seconds
-                false,                           // sandbox_enabled (for now)
-                vec![],                          // allowed_runtimes (all)
-                true,                            // allow_network
-                vec![],                          // blocked_commands
+                true,               // enabled
+                "bash".to_string(), // default_runtime
+                300,                // timeout_seconds
+                false,              // sandbox_enabled (for now)
+                vec![],             // allowed_runtimes (all)
+                true,               // allow_network
+                vec![],             // blocked_commands
                 permission_checker,
-                None,                            // working_directory
+                None,                                         // working_directory
                 vec!["PATH".to_string(), "HOME".to_string()], // pass_env
             );
             executor_registry.register("code_exec", Arc::new(code_executor));
@@ -852,15 +857,11 @@ fn execute_plan(
             let executor_registry = Arc::new(executor_registry);
 
             // Create unified executor
-            let executor = UnifiedExecutor::new(
-                agent_manager,
-                executor_registry,
-                Arc::clone(handler),
-            );
+            let executor =
+                UnifiedExecutor::new(agent_manager, executor_registry, Arc::clone(handler));
 
             // Build execution context
-            let exec_context = ExecContext::new()
-                .with_stream(true);
+            let exec_context = ExecContext::new().with_stream(true);
             let exec_context = if let Some(ref app) = app_context {
                 exec_context.with_app_context(app.clone())
             } else {
@@ -944,7 +945,9 @@ fn execute_with_agent_manager(
     config: &crate::agent::RigAgentConfig,
     tool_server_handle: rig::tool::server::ToolServerHandle,
     registered_tools: Arc<std::sync::RwLock<Vec<String>>>,
-    conversation_histories: &Arc<std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>>,
+    conversation_histories: &Arc<
+        std::sync::RwLock<std::collections::HashMap<String, Vec<rig::completion::Message>>>,
+    >,
     topic_id: &Option<String>,
     attachments: Option<&[crate::core::MediaAttachment]>,
     op_token: &CancellationToken,
@@ -956,11 +959,8 @@ fn execute_with_agent_manager(
     window_title: &Option<String>,
 ) {
     // Create manager with shared ToolServerHandle (all tools persist across calls)
-    let manager = RigAgentManager::with_shared_handle(
-        config.clone(),
-        tool_server_handle,
-        registered_tools,
-    );
+    let manager =
+        RigAgentManager::with_shared_handle(config.clone(), tool_server_handle, registered_tools);
 
     // Get or create conversation history for this topic
     let topic_key = topic_id
@@ -1252,6 +1252,7 @@ impl MediaGenerationType {
     }
 
     /// Get the tool name for this media type
+    #[allow(dead_code)]
     fn tool_name(&self) -> &'static str {
         match self {
             MediaGenerationType::Image => "generate_image",
@@ -1262,7 +1263,7 @@ impl MediaGenerationType {
     }
 
     /// Convert to crate::generation::GenerationType
-    fn to_generation_type(&self) -> crate::generation::GenerationType {
+    fn to_generation_type(self) -> crate::generation::GenerationType {
         match self {
             MediaGenerationType::Image => crate::generation::GenerationType::Image,
             MediaGenerationType::Video => crate::generation::GenerationType::Video,
@@ -1275,7 +1276,10 @@ impl MediaGenerationType {
     fn get_aliases(&self) -> &'static [(&'static str, &'static [&'static str])] {
         match self {
             MediaGenerationType::Image => &[
-                ("t8star-image", &["nanobanana", "nano-banana", "nano banana"]),
+                (
+                    "t8star-image",
+                    &["nanobanana", "nano-banana", "nano banana"],
+                ),
                 ("midjourney", &["mj", "MJ"]),
                 ("dalle", &["dall-e", "DALL-E", "dall·e"]),
                 ("stability", &["stable diffusion", "sd", "SD"]),
@@ -1288,15 +1292,10 @@ impl MediaGenerationType {
                 ("sora", &[]),
                 ("kling", &[]),
             ],
-            MediaGenerationType::Audio => &[
-                ("suno", &[]),
-                ("udio", &[]),
-                ("mubert", &[]),
-            ],
-            MediaGenerationType::Speech => &[
-                ("elevenlabs", &["11labs"]),
-                ("openai-tts", &["openai tts"]),
-            ],
+            MediaGenerationType::Audio => &[("suno", &[]), ("udio", &[]), ("mubert", &[])],
+            MediaGenerationType::Speech => {
+                &[("elevenlabs", &["11labs"]), ("openai-tts", &["openai tts"])]
+            }
         }
     }
 
@@ -1336,7 +1335,10 @@ fn build_media_model_selection_prompt(
     }
 
     // Build model list with common aliases
-    let mut model_list = format!("## {} Generation Model Selection\n\n", type_name.to_uppercase());
+    let mut model_list = format!(
+        "## {} Generation Model Selection\n\n",
+        type_name.to_uppercase()
+    );
     model_list.push_str(&format!(
         "I detected you want to generate {}. Please select which model to use:\n\n",
         type_name

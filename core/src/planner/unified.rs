@@ -13,7 +13,7 @@ use tracing::{debug, info};
 
 use super::prompt::{build_planning_prompt, get_system_prompt_with_tools, ToolInfo};
 use super::types::{ExecutionPlan, PlannedTask, PlannerError};
-use crate::cowork::types::{AiTask, AppAuto, CodeExec, DocGen, FileOp, Language, TaskType};
+use crate::dispatcher::cowork_types::{AiTask, AppAuto, CodeExec, DocGen, FileOp, Language, TaskType};
 use crate::providers::AiProvider;
 
 /// Configuration for the unified planner
@@ -108,7 +108,10 @@ impl UnifiedPlanner {
 
         let response = match result {
             Ok(Ok(response)) => {
-                info!(response_len = response.len(), "Planner LLM response received");
+                info!(
+                    response_len = response.len(),
+                    "Planner LLM response received"
+                );
                 debug!("LLM response content: {}", response);
                 response
             }
@@ -127,14 +130,17 @@ impl UnifiedPlanner {
     /// Parse LLM response into an ExecutionPlan
     fn parse_response(&self, response: &str) -> Result<ExecutionPlan, PlannerError> {
         // Extract JSON from response
-        let json_str = extract_json(response).map_err(|e| PlannerError::parse_error(e))?;
+        let json_str = extract_json(response).map_err(PlannerError::parse_error)?;
 
-        info!(json_len = json_str.len(), "Extracted plan JSON from response");
+        info!(
+            json_len = json_str.len(),
+            "Extracted plan JSON from response"
+        );
         debug!("Extracted JSON content: {}", json_str);
 
         // Parse as RawPlanResponse
-        let raw: RawPlanResponse =
-            serde_json::from_str(&json_str).map_err(|e| PlannerError::parse_error(e.to_string()))?;
+        let raw: RawPlanResponse = serde_json::from_str(&json_str)
+            .map_err(|e| PlannerError::parse_error(e.to_string()))?;
 
         self.convert_raw_plan(raw)
     }
@@ -147,9 +153,9 @@ impl UnifiedPlanner {
             }),
 
             "single_action" => {
-                let tool_name = raw
-                    .tool_name
-                    .ok_or_else(|| PlannerError::parse_error("Missing tool_name for single_action"))?;
+                let tool_name = raw.tool_name.ok_or_else(|| {
+                    PlannerError::parse_error("Missing tool_name for single_action")
+                })?;
                 let parameters = raw.parameters.unwrap_or(serde_json::Value::Null);
                 let requires_confirmation = raw.requires_confirmation.unwrap_or(false);
 
@@ -227,22 +233,11 @@ impl UnifiedPlanner {
 /// Check if a tool name represents a destructive operation
 fn is_destructive_tool(tool_name: &str) -> bool {
     let destructive_tools = [
-        "delete",
-        "remove",
-        "rm",
-        "unlink",
-        "drop",
-        "truncate",
-        "destroy",
-        "wipe",
-        "erase",
-        "purge",
+        "delete", "remove", "rm", "unlink", "drop", "truncate", "destroy", "wipe", "erase", "purge",
     ];
 
     let tool_lower = tool_name.to_lowercase();
-    destructive_tools
-        .iter()
-        .any(|d| tool_lower.contains(d))
+    destructive_tools.iter().any(|d| tool_lower.contains(d))
 }
 
 /// Check if a task type represents a destructive operation
@@ -333,7 +328,7 @@ fn parse_task_type(value: &serde_json::Value) -> Result<TaskType, PlannerError> 
             "app_automation" => Ok(TaskType::AppAutomation(AppAuto::Launch {
                 bundle_id: String::new(),
             })),
-            "ai_inference" | _ => Ok(TaskType::AiInference(AiTask {
+            _ => Ok(TaskType::AiInference(AiTask {
                 prompt: String::new(),
                 requires_privacy: false,
                 has_images: false,
@@ -343,9 +338,9 @@ fn parse_task_type(value: &serde_json::Value) -> Result<TaskType, PlannerError> 
     }
 
     // Handle object format with "type" field
-    let obj = value.as_object().ok_or_else(|| {
-        PlannerError::parse_error("task_type must be string or object")
-    })?;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| PlannerError::parse_error("task_type must be string or object"))?;
 
     let type_field = obj
         .get("type")
@@ -408,7 +403,7 @@ fn parse_file_operation(
             let dir = get_path_from_obj(obj, "dir").unwrap_or_else(|_| PathBuf::from("."));
             FileOp::Search { pattern, dir }
         }
-        "list" | _ => {
+        _ => {
             let path = get_path_from_obj(obj, "path").unwrap_or_else(|_| PathBuf::from("."));
             FileOp::List { path }
         }
@@ -421,7 +416,10 @@ fn parse_file_operation(
 fn parse_code_execution(
     obj: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<TaskType, PlannerError> {
-    let exec = obj.get("exec").and_then(|v| v.as_str()).unwrap_or("command");
+    let exec = obj
+        .get("exec")
+        .and_then(|v| v.as_str())
+        .unwrap_or("command");
 
     let code_exec = match exec {
         "script" => {
@@ -437,7 +435,7 @@ fn parse_code_execution(
             let path = get_path_from_obj(obj, "path")?;
             CodeExec::File { path }
         }
-        "command" | _ => {
+        _ => {
             let cmd = obj
                 .get("cmd")
                 .and_then(|v| v.as_str())
@@ -470,12 +468,18 @@ fn parse_document_generation(
 
     let doc_gen = match format {
         "excel" => {
-            let template = obj.get("template").and_then(|v| v.as_str()).map(PathBuf::from);
+            let template = obj
+                .get("template")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from);
             let output = get_path_from_obj(obj, "output")?;
             DocGen::Excel { template, output }
         }
         "powerpoint" => {
-            let template = obj.get("template").and_then(|v| v.as_str()).map(PathBuf::from);
+            let template = obj
+                .get("template")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from);
             let output = get_path_from_obj(obj, "output")?;
             DocGen::PowerPoint { template, output }
         }
@@ -484,7 +488,7 @@ fn parse_document_generation(
             let output = get_path_from_obj(obj, "output")?;
             DocGen::Pdf { style, output }
         }
-        "markdown" | _ => {
+        _ => {
             let output =
                 get_path_from_obj(obj, "output").unwrap_or_else(|_| PathBuf::from("output.md"));
             DocGen::Markdown { output }
@@ -520,7 +524,7 @@ fn parse_app_automation(
                 .to_string();
             AppAuto::AppleScript { script }
         }
-        "ui_action" | _ => {
+        _ => {
             let ui_action = obj
                 .get("ui_action")
                 .and_then(|v| v.as_str())
@@ -555,7 +559,10 @@ fn parse_ai_inference(
         .get("has_images")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let output_format = obj.get("output_format").and_then(|v| v.as_str()).map(String::from);
+    let output_format = obj
+        .get("output_format")
+        .and_then(|v| v.as_str())
+        .map(String::from);
 
     Ok(TaskType::AiInference(AiTask {
         prompt,
@@ -574,7 +581,7 @@ fn parse_language(value: Option<&serde_json::Value>) -> Language {
         "javascript" | "js" => Language::JavaScript,
         "ruby" => Language::Ruby,
         "rust" => Language::Rust,
-        "shell" | "bash" | "sh" | _ => Language::Shell,
+        _ => Language::Shell,
     }
 }
 
@@ -874,13 +881,34 @@ Done!"#;
 
     #[test]
     fn test_parse_language() {
-        assert_eq!(parse_language(Some(&serde_json::json!("python"))), Language::Python);
-        assert_eq!(parse_language(Some(&serde_json::json!("javascript"))), Language::JavaScript);
-        assert_eq!(parse_language(Some(&serde_json::json!("js"))), Language::JavaScript);
-        assert_eq!(parse_language(Some(&serde_json::json!("ruby"))), Language::Ruby);
-        assert_eq!(parse_language(Some(&serde_json::json!("rust"))), Language::Rust);
-        assert_eq!(parse_language(Some(&serde_json::json!("shell"))), Language::Shell);
-        assert_eq!(parse_language(Some(&serde_json::json!("bash"))), Language::Shell);
+        assert_eq!(
+            parse_language(Some(&serde_json::json!("python"))),
+            Language::Python
+        );
+        assert_eq!(
+            parse_language(Some(&serde_json::json!("javascript"))),
+            Language::JavaScript
+        );
+        assert_eq!(
+            parse_language(Some(&serde_json::json!("js"))),
+            Language::JavaScript
+        );
+        assert_eq!(
+            parse_language(Some(&serde_json::json!("ruby"))),
+            Language::Ruby
+        );
+        assert_eq!(
+            parse_language(Some(&serde_json::json!("rust"))),
+            Language::Rust
+        );
+        assert_eq!(
+            parse_language(Some(&serde_json::json!("shell"))),
+            Language::Shell
+        );
+        assert_eq!(
+            parse_language(Some(&serde_json::json!("bash"))),
+            Language::Shell
+        );
         assert_eq!(parse_language(None), Language::Shell);
     }
 

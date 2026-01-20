@@ -202,7 +202,7 @@ impl ToolInfo {
     /// # Examples
     ///
     /// ```
-    /// use aether_core::planner::ToolInfo;
+    /// use aethecore::planner::ToolInfo;
     ///
     /// let tool = ToolInfo::new("read_file", "Read contents of a file from the filesystem");
     /// assert_eq!(tool.name, "read_file");
@@ -231,7 +231,7 @@ impl ToolInfo {
 /// # Examples
 ///
 /// ```
-/// use aether_core::planner::{ToolInfo, format_tools_for_prompt};
+/// use aethecore::planner::{ToolInfo, format_tools_for_prompt};
 ///
 /// let tools = vec![
 ///     ToolInfo::new("read_file", "Read a file"),
@@ -270,7 +270,7 @@ pub fn format_tools_for_prompt(tools: &[ToolInfo]) -> String {
 /// # Examples
 ///
 /// ```
-/// use aether_core::planner::build_planning_prompt;
+/// use aethecore::planner::build_planning_prompt;
 ///
 /// let prompt = build_planning_prompt("Read the config file", "");
 /// assert!(prompt.contains("Read the config file"));
@@ -299,7 +299,7 @@ pub fn build_planning_prompt(user_input: &str, _tools_description: &str) -> Stri
 /// # Examples
 ///
 /// ```
-/// use aether_core::planner::{ToolInfo, get_system_prompt_with_tools};
+/// use aethecore::planner::{ToolInfo, get_system_prompt_with_tools};
 ///
 /// let tools = vec![ToolInfo::new("test_tool", "A test tool")];
 /// let prompt = get_system_prompt_with_tools(&tools);

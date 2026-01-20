@@ -13,6 +13,19 @@
 //! The csbindgen tool will generate `NativeMethods.g.cs` containing
 //! C# P/Invoke declarations for these functions.
 //!
+//! # Safety
+//!
+//! All `unsafe extern "C"` functions in this module follow these safety contracts:
+//!
+//! - **Pointer parameters**: Must be valid, non-null, and properly aligned unless
+//!   documented otherwise. Null checks are performed and return `AETHER_ERR_INVALID_ARG`.
+//! - **String parameters** (`*const c_char`): Must be valid null-terminated UTF-8 strings.
+//!   Invalid UTF-8 returns `AETHER_ERR_INVALID_UTF8`.
+//! - **Output parameters** (`*mut *mut c_char`): Must be valid pointers to receive allocated
+//!   strings. Caller is responsible for freeing with `aether_free_string`.
+//! - **Memory ownership**: Strings returned via output parameters are allocated by Rust
+//!   and must be freed by calling `aether_free_string`. Never free with C's `free()`.
+//!
 //! # Error Codes
 //!
 //! | Code | Meaning |

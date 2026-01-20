@@ -62,9 +62,8 @@ pub mod components; // NEW: Core event handler components for agentic loop
 mod config;
 pub mod conversation; // NEW: Multi-turn conversation support
 mod core;
-pub mod cowork; // NEW: Cowork task orchestration (Phase 1)
-pub mod cowork_ffi; // NEW: Cowork FFI bindings
-pub mod dispatcher; // NEW: Intelligent tool routing (Dispatcher Layer)
+pub mod cowork_ffi; // Cowork FFI bindings
+pub mod dispatcher; // Core dispatch center: model routing, tool registry, task orchestration
 mod error;
 pub mod event; // NEW: Event-driven architecture for agentic loop
 mod event_handler;
@@ -278,6 +277,11 @@ pub use crate::cowork_ffi::{
     CoworkTaskTypeCategory,
     FfiProgressSubscriber,
     FileOpsConfigFFI,
+    // Health monitoring types
+    HealthStatisticsFFI,
+    ModelHealthStatusFFI,
+    ModelHealthSummaryFFI,
+    // Model profile types
     ModelCapabilityFFI,
     ModelCostStrategyFFI,
     ModelCostTierFFI,

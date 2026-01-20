@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::cowork::types::{Task, TaskType};
+use crate::dispatcher::cowork_types::{Task, TaskType};
 
 /// Execution plan - output of the unified planner
 ///
@@ -261,7 +261,7 @@ impl PlannerError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cowork::types::{AiTask, FileOp};
+    use crate::dispatcher::cowork_types::{AiTask, FileOp};
     use std::path::PathBuf;
 
     #[test]

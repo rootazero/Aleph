@@ -21,10 +21,10 @@ use super::types::{
     ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult, ToolCallRecord,
 };
 use crate::agent::RigAgentManager;
-use crate::cowork::executor::ExecutionContext as CoworkExecutionContext;
-use crate::cowork::executor::ExecutorRegistry;
-use crate::cowork::scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
-use crate::cowork::types::{TaskGraph, TaskStatus};
+use crate::dispatcher::executor::ExecutionContext as CoworkExecutionContext;
+use crate::dispatcher::executor::ExecutorRegistry;
+use crate::dispatcher::scheduler::{DagScheduler, SchedulerConfig, TaskScheduler};
+use crate::dispatcher::cowork_types::{TaskGraph, TaskStatus};
 use crate::ffi::AetherEventHandler;
 use crate::planner::{ExecutionPlan, PlannedTask};
 
@@ -148,15 +148,15 @@ impl UnifiedExecutor {
                 tool_name,
                 parameters,
                 ..
-            } => self.execute_single_action(tool_name, parameters, context).await,
+            } => {
+                self.execute_single_action(tool_name, parameters, context)
+                    .await
+            }
             ExecutionPlan::TaskGraph {
                 tasks,
                 dependencies,
                 ..
-            } => {
-                self.execute_task_graph(tasks, dependencies, context)
-                    .await
-            }
+            } => self.execute_task_graph(tasks, dependencies, context).await,
         };
 
         let elapsed = start.elapsed();
@@ -200,8 +200,7 @@ impl UnifiedExecutor {
         let prompt = enhanced_prompt.unwrap_or_default();
         if prompt.is_empty() {
             // No prompt means nothing to process
-            return Ok(ExecutionResult::success("")
-                .with_execution_time(start.elapsed()));
+            return Ok(ExecutionResult::success("").with_execution_time(start.elapsed()));
         }
 
         // Process through the agent (streaming is handled internally by agent)
@@ -327,10 +326,7 @@ impl UnifiedExecutor {
         }
 
         // Build TaskGraph from PlannedTasks
-        let mut graph = TaskGraph::new(
-            uuid::Uuid::new_v4().to_string(),
-            "Execution Plan",
-        );
+        let mut graph = TaskGraph::new(uuid::Uuid::new_v4().to_string(), "Execution Plan");
 
         // Add tasks to graph
         for planned in &tasks {
@@ -354,14 +350,9 @@ impl UnifiedExecutor {
         }
 
         // Notify plan created
-        let step_descriptions: Vec<String> = tasks
-            .iter()
-            .map(|t| t.description.clone())
-            .collect();
-        self.event_handler.on_plan_created(
-            graph.id.clone(),
-            step_descriptions,
-        );
+        let step_descriptions: Vec<String> = tasks.iter().map(|t| t.description.clone()).collect();
+        self.event_handler
+            .on_plan_created(graph.id.clone(), step_descriptions);
 
         // Convert executor context
         let cowork_ctx = self.convert_context(&context, &graph.id);
@@ -527,8 +518,7 @@ impl UnifiedExecutor {
 
     /// Convert executor context to cowork execution context
     fn convert_context(&self, _ctx: &ExecutionContext, graph_id: &str) -> CoworkExecutionContext {
-        CoworkExecutionContext::new(graph_id)
-            .with_dry_run(false)
+        CoworkExecutionContext::new(graph_id).with_dry_run(false)
     }
 
     /// Get the current configuration
@@ -607,7 +597,7 @@ mod tests {
 
     #[test]
     fn test_planned_task_to_task_id_format() {
-        use crate::cowork::types::{FileOp, TaskType};
+        use crate::dispatcher::cowork_types::{FileOp, TaskType};
         use std::path::PathBuf;
 
         let planned = PlannedTask::new(
@@ -629,7 +619,7 @@ mod tests {
 
     #[test]
     fn test_execution_plan_task_count() {
-        use crate::cowork::types::{FileOp, TaskType};
+        use crate::dispatcher::cowork_types::{FileOp, TaskType};
         use std::path::PathBuf;
 
         let plan = ExecutionPlan::conversational();
@@ -672,8 +662,7 @@ mod tests {
             TaskExecutionResult::failure("t2", "Task 2", "Error"),
         ];
 
-        let result = ExecutionResult::success("Done")
-            .with_task_results(task_results);
+        let result = ExecutionResult::success("Done").with_task_results(task_results);
 
         assert!(result.task_results.is_some());
         let tasks = result.task_results.unwrap();

@@ -103,9 +103,9 @@ impl ImageGenerateTool {
             })?;
 
             if let Some(name) = &args.provider {
-                let provider = registry
-                    .get(name)
-                    .ok_or_else(|| ToolError::InvalidArgs(format!("Provider '{}' not found", name)))?;
+                let provider = registry.get(name).ok_or_else(|| {
+                    ToolError::InvalidArgs(format!("Provider '{}' not found", name))
+                })?;
 
                 // Check if provider supports image generation
                 if !provider.supports(GenerationType::Image) {
@@ -148,10 +148,8 @@ impl ImageGenerateTool {
         let request = GenerationRequest::image(&args.prompt).with_params(params);
 
         // Execute generation
-        let output: crate::generation::GenerationOutput = provider
-            .generate(request)
-            .await
-            .map_err(ToolError::from)?;
+        let output: crate::generation::GenerationOutput =
+            provider.generate(request).await.map_err(ToolError::from)?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
 

@@ -25,8 +25,8 @@
 //! # Usage
 //!
 //! ```ignore
-//! use aether_core::executor::{ExecutionResult, ExecutionContext, ExecutorError};
-//! use aether_core::executor::{UnifiedExecutor, ExecutorConfig};
+//! use aethecore::executor::{ExecutionResult, ExecutionContext, ExecutorError};
+//! use aethecore::executor::{UnifiedExecutor, ExecutorConfig};
 //!
 //! // Create executor with default config
 //! let executor = UnifiedExecutor::new(agent_manager, executor_registry, event_handler);
