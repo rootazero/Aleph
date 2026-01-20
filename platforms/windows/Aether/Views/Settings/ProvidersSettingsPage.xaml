@@ -55,11 +55,13 @@
                                         Width="28" Height="28"
                                         Background="{Binding IconBackground}"
                                         CornerRadius="6">
-                                    <FontIcon Glyph="{Binding Icon}"
-                                              FontSize="14"
-                                              Foreground="White"
-                                              HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"/>
+                                    <Image Width="16" Height="16"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center">
+                                        <Image.Source>
+                                            <SvgImageSource UriSource="{Binding IconPath}"/>
+                                        </Image.Source>
+                                    </Image>
                                 </Border>
 
                                 <!-- Provider Name -->
@@ -102,10 +104,10 @@
                                     Width="48" Height="48"
                                     Background="{ThemeResource AccentFillColorDefaultBrush}"
                                     CornerRadius="8">
-                                <FontIcon x:Name="ProviderIconGlyph"
-                                          Glyph="&#xE8B9;"
-                                          FontSize="24"
-                                          Foreground="White"/>
+                                <Image x:Name="ProviderIconImage"
+                                       Width="24" Height="24"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"/>
                             </Border>
 
                             <StackPanel Grid.Column="1" Margin="16,0,0,0" VerticalAlignment="Center">

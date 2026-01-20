@@ -45,6 +45,13 @@
     <None Include="libs\aethecore.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('libs\aethecore.dll')" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- SVG Assets (AppIcon and Provider Icons) -->
+    <Content Include="Assets\**\*.svg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
   <!-- Localization resources are auto-included by SDK (EnableDefaultPriItems) -->
 
   <!-- NativeMethods.g.cs is auto-included by SDK from Interop folder -->

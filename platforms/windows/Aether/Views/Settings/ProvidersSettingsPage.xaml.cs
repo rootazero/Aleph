@@ -77,12 +77,13 @@ public sealed partial class ProvidersSettingsPage : UserControl
         {
             Id = "openai",
             Name = "OpenAI",
-            Description = "GPT-4, GPT-3.5 and other models",
+            Description = "GPT-4o and GPT-3.5 models",
             Icon = "\uE8B9",
-            IconBackground = new SolidColorBrush(Microsoft.UI.Colors.Green),
+            IconPath = new Uri("ms-appx:///Assets/ProviderIcons/OpenAI.svg"),
+            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 16, 163, 127)), // #10a37f
             ApiKeyPlaceholder = "sk-...",
             ApiKeyUrl = "https://platform.openai.com/api-keys",
-            Models = new[] { "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo" },
+            Models = new[] { "gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo" },
             IsLocalProvider = false
         });
 
@@ -90,9 +91,10 @@ public sealed partial class ProvidersSettingsPage : UserControl
         {
             Id = "anthropic",
             Name = "Anthropic",
-            Description = "Claude 3.5 Sonnet, Claude 3 Opus",
+            Description = "Claude models for analysis and coding",
             Icon = "\uE8B9",
-            IconBackground = new SolidColorBrush(Microsoft.UI.Colors.Orange),
+            IconPath = new Uri("ms-appx:///Assets/ProviderIcons/Claude.svg"),
+            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 217, 119, 87)), // #d97757
             ApiKeyPlaceholder = "sk-ant-...",
             ApiKeyUrl = "https://console.anthropic.com/",
             Models = new[] { "claude-3-5-sonnet-20241022", "claude-3-opus-20240229", "claude-3-sonnet-20240229" },
@@ -101,11 +103,12 @@ public sealed partial class ProvidersSettingsPage : UserControl
 
         _providers.Add(new ProviderItem
         {
-            Id = "gemini",
+            Id = "google-gemini",
             Name = "Google Gemini",
-            Description = "Gemini Pro, Gemini Flash",
+            Description = "Multimodal AI models",
             Icon = "\uE8B9",
-            IconBackground = new SolidColorBrush(Microsoft.UI.Colors.Blue),
+            IconPath = new Uri("ms-appx:///Assets/ProviderIcons/Gemini.svg"),
+            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 66, 133, 244)), // #4285f4
             ApiKeyPlaceholder = "AIza...",
             ApiKeyUrl = "https://makersuite.google.com/app/apikey",
             Models = new[] { "gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro" },
@@ -116,14 +119,116 @@ public sealed partial class ProvidersSettingsPage : UserControl
         {
             Id = "ollama",
             Name = "Ollama",
-            Description = "Local models via Ollama",
+            Description = "Run models locally",
             Icon = "\uE8B9",
-            IconBackground = new SolidColorBrush(Microsoft.UI.Colors.Purple),
+            IconPath = new Uri("ms-appx:///Assets/ProviderIcons/Ollama.svg"),
+            IconBackground = new SolidColorBrush(Microsoft.UI.Colors.Black), // #000000
             ApiKeyPlaceholder = "",
             ApiKeyUrl = "https://ollama.ai/download",
             BaseUrl = "http://localhost:11434",
             Models = new[] { "llama3", "mistral", "codellama", "mixtral" },
             IsLocalProvider = true,
+            RequiresBaseUrl = true
+        });
+
+        _providers.Add(new ProviderItem
+        {
+            Id = "deepseek",
+            Name = "DeepSeek",
+            Description = "AI models with reasoning",
+            Icon = "\uE8B9",
+            IconPath = new Uri("ms-appx:///Assets/ProviderIcons/DeepSeek.svg"),
+            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 0, 102, 204)), // #0066cc
+            ApiKeyPlaceholder = "sk-...",
+            ApiKeyUrl = "https://platform.deepseek.com/",
+            Models = new[] { "deepseek-chat", "deepseek-coder" },
+            IsLocalProvider = false
+        });
+
+        _providers.Add(new ProviderItem
+        {
+            Id = "moonshot",
+            Name = "Moonshot",
+            Description = "Long-context models",
+            Icon = "\uE8B9",
+            IconPath = new Uri("ms-appx:///Assets/ProviderIcons/Moonshot.svg"),
+            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 255, 107, 107)), // #ff6b6b
+            ApiKeyPlaceholder = "sk-...",
+            ApiKeyUrl = "https://platform.moonshot.cn/",
+            Models = new[] { "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k" },
+            IsLocalProvider = false
+        });
+
+        _providers.Add(new ProviderItem
+        {
+            Id = "openrouter",
+            Name = "OpenRouter",
+            Description = "Multiple AI models via unified API",
+            Icon = "\uE8B9",
+            IconPath = new Uri("ms-appx:///Assets/ProviderIcons/OpenRouter.svg"),
+            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 139, 92, 246)), // #8b5cf6
+            ApiKeyPlaceholder = "sk-or-...",
+            ApiKeyUrl = "https://openrouter.ai/keys",
+            Models = new[] { "anthropic/claude-3.5-sonnet", "openai/gpt-4-turbo", "google/gemini-pro" },
+            IsLocalProvider = false
+        });
+
+        _providers.Add(new ProviderItem
+        {
+            Id = "t8star",
+            Name = "T8Star",
+            Description = "OpenAI-compatible API proxy",
+            Icon = "\uE8B9",
+            IconPath = new Uri("ms-appx:///Assets/ProviderIcons/OpenAI.svg"),  // Uses OpenAI icon
+            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 255, 107, 53)), // #FF6B35
+            ApiKeyPlaceholder = "sk-...",
+            ApiKeyUrl = "https://t8star.com/",
+            Models = new[] { "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo" },
+            IsLocalProvider = false,
+            RequiresBaseUrl = true
+        });
+
+        _providers.Add(new ProviderItem
+        {
+            Id = "azure-openai",
+            Name = "Azure OpenAI",
+            Description = "Microsoft Azure hosted models",
+            Icon = "\uE8B9",
+            IconPath = new Uri("ms-appx:///Assets/ProviderIcons/Azure.svg"),
+            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 0, 120, 212)), // #0078d4
+            ApiKeyPlaceholder = "",
+            ApiKeyUrl = "https://azure.microsoft.com/products/ai-services/openai-service",
+            Models = new[] { "gpt-4", "gpt-35-turbo" },
+            IsLocalProvider = false,
+            RequiresBaseUrl = true
+        });
+
+        _providers.Add(new ProviderItem
+        {
+            Id = "github-copilot",
+            Name = "GitHub Copilot",
+            Description = "GitHub Copilot API",
+            Icon = "\uE8B9",
+            IconPath = new Uri("ms-appx:///Assets/ProviderIcons/Github.svg"),
+            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 36, 41, 46)), // #24292e
+            ApiKeyPlaceholder = "",
+            ApiKeyUrl = "https://github.com/features/copilot",
+            Models = new[] { "gpt-4o", "gpt-4" },
+            IsLocalProvider = false
+        });
+
+        _providers.Add(new ProviderItem
+        {
+            Id = "claude-code-acp",
+            Name = "Claude Code (ACP)",
+            Description = "Anthropic Messages API Proxy",
+            Icon = "\uE8B9",
+            IconPath = new Uri("ms-appx:///Assets/ProviderIcons/Claude.svg"),  // Uses Claude icon
+            IconBackground = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 217, 119, 87)), // #d97757
+            ApiKeyPlaceholder = "",
+            ApiKeyUrl = "https://claude.ai/",
+            Models = new[] { "claude-3-5-sonnet-20241022", "claude-3-opus-20240229" },
+            IsLocalProvider = false,
             RequiresBaseUrl = true
         });
     }
@@ -149,7 +254,10 @@ public sealed partial class ProvidersSettingsPage : UserControl
         ProviderNameText.Text = provider.Name;
         ProviderDescText.Text = provider.Description;
         ProviderIconBorder.Background = provider.IconBackground;
-        ProviderIconGlyph.Glyph = provider.Icon;
+        if (provider.IconPath != null)
+        {
+            ProviderIconImage.Source = new Microsoft.UI.Xaml.Media.Imaging.SvgImageSource(provider.IconPath);
+        }
 
         // Show/hide API key field based on provider type
         ApiKeyGrid.Visibility = provider.IsLocalProvider ? Visibility.Collapsed : Visibility.Visible;
@@ -355,6 +463,7 @@ public class ProviderItem
     public string Name { get; set; } = "";
     public string Description { get; set; } = "";
     public string Icon { get; set; } = "\uE8B9";
+    public Uri? IconPath { get; set; }  // Path to SVG icon
     public Brush IconBackground { get; set; } = new SolidColorBrush(Microsoft.UI.Colors.Gray);
     public Brush StatusColor { get; set; } = new SolidColorBrush(Microsoft.UI.Colors.Gray);
     public string? ApiKey { get; set; }

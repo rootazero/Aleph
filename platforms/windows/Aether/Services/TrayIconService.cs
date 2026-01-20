@@ -102,16 +102,18 @@ public sealed class TrayIconService : IDisposable
     {
         try
         {
-            // Use H.NotifyIcon's GeneratedIconSource to create a text-based icon
-            // This is the recommended approach for WinUI 3
+            // Use H.NotifyIcon's GeneratedIconSource to create a star-based icon
+            // representing the Aether dual-star branding (see Assets/AppIcon/AetherTray.svg)
+            // Note: Windows system tray requires .ico format, so we use GeneratedIconSource
+            // for a simplified star representation. The SVG is available for conversion to .ico.
             _trayIcon!.IconSource = new H.NotifyIcon.GeneratedIconSource
             {
-                Text = "A",  // "A" for Aether
+                Text = "✦",  // Four-pointed star for Aether branding
                 Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(
                     Microsoft.UI.Colors.White),
                 Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(
-                    Microsoft.UI.ColorHelper.FromArgb(255, 0, 120, 212)),  // Windows accent blue
-                FontSize = 20,
+                    Microsoft.UI.ColorHelper.FromArgb(255, 88, 86, 214)),  // Aether purple accent
+                FontSize = 22,
             };
             System.Diagnostics.Debug.WriteLine("[TrayIcon] Generated icon set successfully");
         }
