@@ -289,6 +289,12 @@ pub use crate::cowork_ffi::{
     ModelRoutingRulesFFI,
     StageResultFFI,
     TaskTypeMappingFFI,
+    // Budget management types (Model Router P1)
+    BudgetEnforcementFFI,
+    BudgetLimitStatusFFI,
+    BudgetPeriodFFI,
+    BudgetScopeFFI,
+    BudgetStatusFFI,
 };
 
 // Generation exports (media generation providers)

@@ -637,4 +637,57 @@ impl AetherCore {
             healthy_percent: if total > 0 { 0.0 } else { 100.0 },
         }
     }
+
+    // =========================================================================
+    // Budget Management (Model Router P1)
+    // =========================================================================
+
+    /// Get budget status overview
+    ///
+    /// Returns the overall budget status including all configured limits,
+    /// current spending, and warning/exceeded states.
+    ///
+    /// Note: Budget management is currently in preview. The configuration will
+    /// be integrated into the main config in a future release. For now, this
+    /// returns a disabled status unless budget limits are manually configured.
+    pub fn cowork_get_budget_status(&self) -> crate::cowork_ffi::BudgetStatusFFI {
+        // TODO: When BudgetManager is integrated into CoworkEngine, use actual states
+        // For now, return disabled status since budget config isn't in main config yet
+        //
+        // Future integration path:
+        // 1. Add ModelRouterConfigToml to CoworkConfigToml or DispatcherConfigToml
+        // 2. Load budget limits from config
+        // 3. Get actual BudgetManager state from CoworkEngine
+        crate::cowork_ffi::BudgetStatusFFI::disabled()
+    }
+
+    /// Get budget status for a specific scope
+    ///
+    /// Returns budget limits and status that apply to the given scope.
+    ///
+    /// Note: Budget management is currently in preview. Returns disabled status
+    /// until budget configuration is integrated into the main config.
+    pub fn cowork_get_budget_status_for_scope(
+        &self,
+        _scope_type: String,
+        _scope_id: Option<String>,
+    ) -> crate::cowork_ffi::BudgetStatusFFI {
+        // TODO: Implement when budget config is integrated
+        // Parse scope and filter limits accordingly
+        crate::cowork_ffi::BudgetStatusFFI::disabled()
+    }
+
+    /// Get a single budget limit status by ID
+    ///
+    /// Returns the status of a specific budget limit, or None if not found.
+    ///
+    /// Note: Budget management is currently in preview. Returns None
+    /// until budget configuration is integrated into the main config.
+    pub fn cowork_get_budget_limit(
+        &self,
+        _limit_id: String,
+    ) -> Option<crate::cowork_ffi::BudgetLimitStatusFFI> {
+        // TODO: Implement when budget config is integrated
+        None
+    }
 }

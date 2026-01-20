@@ -1307,6 +1307,17 @@ interface AetherCore {
     // Get overall health statistics
     HealthStatisticsFFI cowork_get_health_statistics();
 
+    // ===== BUDGET MANAGEMENT (model-router-p1-improvements) =====
+
+    // Get budget status overview
+    BudgetStatusFFI cowork_get_budget_status();
+
+    // Get budget status for a specific scope
+    BudgetStatusFFI cowork_get_budget_status_for_scope(string scope_type, string? scope_id);
+
+    // Get a single budget limit status by ID
+    BudgetLimitStatusFFI? cowork_get_budget_limit(string limit_id);
+
     // ===== SESSION MANAGEMENT (Phase 5) =====
 
     // Resume a previously saved session
@@ -1598,6 +1609,65 @@ dictionary HealthStatisticsFFI {
 };
 
 // ===== END MODEL HEALTH MONITORING =====
+
+// ===== BUDGET MANAGEMENT (model-router-p1-improvements) =====
+
+// Budget scope type
+[Enum]
+interface BudgetScopeFFI {
+  Global();
+  Project(string id);
+  Session(string id);
+  Model(string id);
+};
+
+// Budget period type
+enum BudgetPeriodFFI {
+  "Lifetime",  // Never resets
+  "Daily",     // Resets daily
+  "Weekly",    // Resets weekly
+  "Monthly",   // Resets monthly
+};
+
+// Budget enforcement action
+enum BudgetEnforcementFFI {
+  "WarnOnly",   // Log warning but allow
+  "SoftBlock",  // Block new requests
+  "HardBlock",  // Block immediately
+};
+
+// Status of a single budget limit
+dictionary BudgetLimitStatusFFI {
+  string limit_id;              // Limit unique identifier
+  BudgetScopeFFI scope;         // Scope this limit applies to
+  string scope_display;         // Scope as display string
+  BudgetPeriodFFI period;       // Budget period type
+  string period_display;        // Period as display string
+  f64 limit_usd;                // Configured limit in USD
+  f64 spent_usd;                // Current spend in USD
+  f64 remaining_usd;            // Remaining budget in USD
+  f64 used_percent;             // Percentage used (0.0 - 1.0)
+  BudgetEnforcementFFI enforcement;  // Enforcement action
+  boolean is_exceeded;          // Whether the limit is exceeded
+  boolean is_warning;           // Whether any warning threshold crossed
+  i64 next_reset_timestamp;     // Next reset timestamp (Unix seconds)
+  string next_reset_display;    // Human-readable time until reset
+};
+
+// Overall budget status summary
+dictionary BudgetStatusFFI {
+  boolean enabled;              // Whether budget management is enabled
+  u32 total_limits;             // Total configured limits
+  u32 exceeded_count;           // Limits currently exceeded
+  u32 warning_count;            // Limits with active warnings
+  f64 total_spent_usd;          // Total spent across all scopes
+  f64 min_remaining_usd;        // Minimum remaining across limits
+  sequence<BudgetLimitStatusFFI> limits;  // Per-limit status
+  string status_emoji;          // Status emoji for display
+  string status_message;        // Human-readable status
+};
+
+// ===== END BUDGET MANAGEMENT =====
 
 // ===== COWORK TASK ORCHESTRATION (add-cowork-task-orchestration) =====
 
