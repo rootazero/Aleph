@@ -7,6 +7,9 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 
+use crate::command::unified_index::UnifiedCommandIndex;
+use crate::dispatcher::ToolSourceType;
+
 /// Explicit command mention patterns
 /// Each tuple: (pattern, command_name_group_index)
 static EXPLICIT_PATTERNS: Lazy<Vec<(Regex, usize)>> = Lazy::new(|| {
@@ -51,9 +54,164 @@ pub fn extract_explicit_command(input: &str) -> Option<(String, Option<String>)>
     None
 }
 
+/// Detection type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectionType {
+    /// Explicit mention (e.g., "使用 X", "use X")
+    Explicit,
+    /// Implicit intent (keyword matching)
+    Implicit,
+}
+
+/// Detection result
+#[derive(Debug, Clone, PartialEq)]
+pub struct NLDetection {
+    /// Command name that was detected
+    pub command_name: String,
+    /// Source type of the command
+    pub source_type: ToolSourceType,
+    /// How it was detected
+    pub detection_type: DetectionType,
+    /// Confidence score (0.0 - 1.0)
+    pub confidence: f64,
+    /// Remaining input after command extraction (for explicit)
+    pub remaining_input: Option<String>,
+}
+
+/// Natural language command detector
+pub struct NaturalLanguageCommandDetector {
+    /// Unified command index for lookups
+    index: UnifiedCommandIndex,
+    /// Minimum confidence threshold for implicit detection
+    min_confidence: f64,
+}
+
+impl NaturalLanguageCommandDetector {
+    /// Create a new detector with the given index
+    pub fn new(index: UnifiedCommandIndex) -> Self {
+        Self {
+            index,
+            min_confidence: 0.3,
+        }
+    }
+
+    /// Set minimum confidence threshold for implicit detection
+    pub fn with_min_confidence(mut self, threshold: f64) -> Self {
+        self.min_confidence = threshold;
+        self
+    }
+
+    /// Detect command from natural language input
+    pub fn detect(&self, input: &str) -> Option<NLDetection> {
+        // L1: Try explicit detection first
+        if let Some(detection) = self.detect_explicit(input) {
+            return Some(detection);
+        }
+
+        // L2: Try implicit detection
+        self.detect_implicit(input)
+    }
+
+    /// L1: Explicit command detection
+    fn detect_explicit(&self, input: &str) -> Option<NLDetection> {
+        let (command_name, remaining) = extract_explicit_command(input)?;
+
+        // Verify command exists in index
+        let matches = self.index.find_matches(&command_name);
+
+        // If exact match found, use it
+        if let Some(m) = matches
+            .iter()
+            .find(|m| m.command_name.eq_ignore_ascii_case(&command_name))
+        {
+            return Some(NLDetection {
+                command_name: m.command_name.clone(),
+                source_type: m.source_type,
+                detection_type: DetectionType::Explicit,
+                confidence: 1.0,
+                remaining_input: remaining,
+            });
+        }
+
+        // Otherwise, return the command name as-is (let caller verify)
+        Some(NLDetection {
+            command_name,
+            source_type: ToolSourceType::Custom, // Default, caller should verify
+            detection_type: DetectionType::Explicit,
+            confidence: 1.0,
+            remaining_input: remaining,
+        })
+    }
+
+    /// L2: Implicit intent detection
+    fn detect_implicit(&self, input: &str) -> Option<NLDetection> {
+        let matches = self.index.find_matches(input);
+
+        // Get best match above threshold
+        let best = matches.into_iter().next()?;
+
+        // Normalize score
+        let normalized_score = (best.score / 3.0).min(1.0); // Assume max 3 trigger matches
+
+        if normalized_score >= self.min_confidence {
+            Some(NLDetection {
+                command_name: best.command_name,
+                source_type: best.source_type,
+                detection_type: DetectionType::Implicit,
+                confidence: normalized_score,
+                remaining_input: Some(input.to_string()),
+            })
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::command::{CommandTriggers, UnifiedCommandIndex};
+    use crate::dispatcher::ToolSourceType;
+
+    #[test]
+    fn test_nl_detector_explicit() {
+        let mut index = UnifiedCommandIndex::new();
+        let triggers = CommandTriggers::new(vec!["graph".to_string()], Vec::new());
+        index.add_command(ToolSourceType::Skill, "knowledge-graph", &triggers);
+
+        let detector = NaturalLanguageCommandDetector::new(index);
+
+        let result = detector.detect("使用 knowledge-graph 分析代码");
+        assert!(result.is_some());
+        let detection = result.unwrap();
+        assert_eq!(detection.command_name, "knowledge-graph");
+        assert_eq!(detection.detection_type, DetectionType::Explicit);
+        assert_eq!(detection.confidence, 1.0);
+    }
+
+    #[test]
+    fn test_nl_detector_implicit() {
+        let mut index = UnifiedCommandIndex::new();
+        let triggers = CommandTriggers::new(vec!["知识图谱".to_string()], Vec::new());
+        index.add_command(ToolSourceType::Skill, "knowledge-graph", &triggers);
+
+        let detector = NaturalLanguageCommandDetector::new(index);
+
+        let result = detector.detect("帮我画个知识图谱");
+        assert!(result.is_some());
+        let detection = result.unwrap();
+        assert_eq!(detection.command_name, "knowledge-graph");
+        assert_eq!(detection.detection_type, DetectionType::Implicit);
+    }
+
+    #[test]
+    fn test_nl_detector_no_match() {
+        let index = UnifiedCommandIndex::new();
+        let detector = NaturalLanguageCommandDetector::new(index);
+
+        let result = detector.detect("今天天气怎么样");
+        assert!(result.is_none());
+    }
 
     #[test]
     fn test_explicit_pattern_chinese_use() {
