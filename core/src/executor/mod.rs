@@ -19,11 +19,17 @@
 //! - [`TaskExecutionResult`]: Result of executing a single task
 //! - [`ExecutionContext`]: Context information for execution
 //! - [`ExecutorError`]: Error types for executor operations
+//! - [`UnifiedExecutor`]: The main executor implementation
+//! - [`ExecutorConfig`]: Configuration for the executor
 //!
 //! # Usage
 //!
 //! ```ignore
 //! use aether_core::executor::{ExecutionResult, ExecutionContext, ExecutorError};
+//! use aether_core::executor::{UnifiedExecutor, ExecutorConfig};
+//!
+//! // Create executor with default config
+//! let executor = UnifiedExecutor::new(agent_manager, executor_registry, event_handler);
 //!
 //! // Execute a plan and get the result
 //! let result = executor.execute(plan, context).await?;
@@ -47,7 +53,9 @@
 //! ```
 
 mod types;
+mod unified;
 
 pub use types::{
     ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult, ToolCallRecord,
 };
+pub use unified::{ExecutorConfig, UnifiedExecutor};
