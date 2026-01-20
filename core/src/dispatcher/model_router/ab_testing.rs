@@ -1918,10 +1918,7 @@ mod tests {
 
     #[test]
     fn test_tracked_metric_parsing() {
-        assert_eq!(
-            TrackedMetric::parse("latency_ms"),
-            TrackedMetric::LatencyMs
-        );
+        assert_eq!(TrackedMetric::parse("latency_ms"), TrackedMetric::LatencyMs);
         assert_eq!(TrackedMetric::parse("LATENCY"), TrackedMetric::LatencyMs);
         assert_eq!(TrackedMetric::parse("cost_usd"), TrackedMetric::CostUsd);
         assert_eq!(

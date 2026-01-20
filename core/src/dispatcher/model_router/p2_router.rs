@@ -57,8 +57,7 @@ use std::sync::Arc;
 use super::matcher::{ModelMatcher, ModelRouter};
 use super::profiles::{Capability, ModelProfile};
 use super::prompt_analyzer::{
-    Domain, Language, PromptAnalyzer, PromptAnalyzerConfig, PromptFeatures,
-    ReasoningLevel,
+    Domain, Language, PromptAnalyzer, PromptAnalyzerConfig, PromptFeatures, ReasoningLevel,
 };
 use super::semantic_cache::{
     CacheHit, CacheMetadata, CachedResponse, SemanticCacheConfig, SemanticCacheManager,

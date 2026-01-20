@@ -1211,9 +1211,7 @@ impl From<crate::dispatcher::model_router::CacheHitType> for CacheHitTypeFFI {
     fn from(hit_type: crate::dispatcher::model_router::CacheHitType) -> Self {
         match hit_type {
             crate::dispatcher::model_router::CacheHitType::Exact => CacheHitTypeFFI::Exact,
-            crate::dispatcher::model_router::CacheHitType::Semantic => {
-                CacheHitTypeFFI::Semantic
-            }
+            crate::dispatcher::model_router::CacheHitType::Semantic => CacheHitTypeFFI::Semantic,
         }
     }
 }

@@ -173,7 +173,11 @@ pub struct Knowledge {
 
 impl Knowledge {
     /// Create a new knowledge fragment with default confidence
-    pub fn new(key: impl Into<String>, value: impl Into<String>, source: impl Into<String>) -> Self {
+    pub fn new(
+        key: impl Into<String>,
+        value: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Self {
         Self {
             key: key.into(),
             value: value.into(),

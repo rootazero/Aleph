@@ -176,7 +176,6 @@ impl CallOutcome {
     }
 }
 
-
 /// User feedback for quality learning
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -313,10 +312,7 @@ impl ModelMetrics {
 
         // Update intent-specific metrics
         let intent_key = record.intent.to_task_type().to_string();
-        let intent_metrics = self
-            .intent_performance
-            .entry(intent_key)
-            .or_default();
+        let intent_metrics = self.intent_performance.entry(intent_key).or_default();
         intent_metrics.update(record);
 
         // Update satisfaction if feedback present

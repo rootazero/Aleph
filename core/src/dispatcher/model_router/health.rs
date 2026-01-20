@@ -11,8 +11,7 @@ use std::time::{Duration, SystemTime};
 // ============================================================================
 
 /// Health status of an AI model
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum HealthStatus {
     /// Normal service - model is fully available
     Healthy,
@@ -28,7 +27,6 @@ pub enum HealthStatus {
     #[default]
     Unknown,
 }
-
 
 impl HealthStatus {
     /// Check if the model can accept requests
@@ -195,8 +193,7 @@ impl UnhealthyReason {
 // ============================================================================
 
 /// State of the circuit breaker
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CircuitState {
     /// Circuit is closed, normal operation
     #[default]
@@ -206,7 +203,6 @@ pub enum CircuitState {
     /// Circuit is half-open, allowing test requests
     HalfOpen,
 }
-
 
 /// Circuit breaker state for a model
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -763,8 +759,7 @@ impl Default for ProbeConfig {
 }
 
 /// Endpoint configuration for probing
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProbeEndpoint {
     /// Dedicated health check URL (if available)
     pub health_url: Option<String>,
@@ -773,7 +768,6 @@ pub struct ProbeEndpoint {
     /// Custom timeout for this model
     pub timeout: Option<Duration>,
 }
-
 
 // ============================================================================
 // Tests

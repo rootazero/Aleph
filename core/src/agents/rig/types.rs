@@ -381,13 +381,23 @@ mod tests {
 
     #[test]
     fn test_tool_call_info_with_purpose() {
-        let info = ToolCallInfo::new("call_123", "search_files", serde_json::json!({"pattern": "*.toml"}))
-            .with_purpose("Find configuration files to determine build method")
-            .with_expected_outcome("List of config file paths")
-            .with_goal_relation(GoalRelation::GathersInformation);
+        let info = ToolCallInfo::new(
+            "call_123",
+            "search_files",
+            serde_json::json!({"pattern": "*.toml"}),
+        )
+        .with_purpose("Find configuration files to determine build method")
+        .with_expected_outcome("List of config file paths")
+        .with_goal_relation(GoalRelation::GathersInformation);
 
-        assert_eq!(info.purpose, Some("Find configuration files to determine build method".to_string()));
-        assert_eq!(info.expected_outcome, Some("List of config file paths".to_string()));
+        assert_eq!(
+            info.purpose,
+            Some("Find configuration files to determine build method".to_string())
+        );
+        assert_eq!(
+            info.expected_outcome,
+            Some("List of config file paths".to_string())
+        );
         assert_eq!(info.goal_relation, Some(GoalRelation::GathersInformation));
     }
 
@@ -398,10 +408,20 @@ mod tests {
         let result = ToolCallResult::success("call_123", "search_files", "Found 3 files", 150)
             .with_summary("Located config files: Cargo.toml, .env, settings.json")
             .with_goal_contribution("Config file locations confirmed")
-            .with_knowledge(Knowledge::new("config_path", "./Cargo.toml", "search_files"));
+            .with_knowledge(Knowledge::new(
+                "config_path",
+                "./Cargo.toml",
+                "search_files",
+            ));
 
-        assert_eq!(result.summary, Some("Located config files: Cargo.toml, .env, settings.json".to_string()));
-        assert_eq!(result.goal_contribution, Some("Config file locations confirmed".to_string()));
+        assert_eq!(
+            result.summary,
+            Some("Located config files: Cargo.toml, .env, settings.json".to_string())
+        );
+        assert_eq!(
+            result.goal_contribution,
+            Some("Config file locations confirmed".to_string())
+        );
         assert_eq!(result.extracted_knowledge.len(), 1);
     }
 }
