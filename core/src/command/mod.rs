@@ -12,10 +12,12 @@
 mod parser;
 mod registry;
 mod types;
+mod unified_index;
 
 pub use parser::{CommandContext, CommandParser, ParsedCommand};
 pub use registry::CommandRegistry;
 pub use types::{CommandExecutionResult, CommandNode, CommandTriggers, CommandType};
+pub use unified_index::{IndexEntry, UnifiedCommandIndex};
 
 // Re-export builtin hint localization
 pub use registry::get_builtin_hint;
