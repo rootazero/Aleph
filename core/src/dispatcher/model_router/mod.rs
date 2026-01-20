@@ -29,6 +29,7 @@
 //! let profile = matcher.route(&task)?;
 //! ```
 
+mod ab_testing;
 mod budget;
 mod collector;
 mod context;
@@ -112,6 +113,15 @@ pub use semantic_cache::{
 // P2 Intelligent Router (P2) - Integrates Prompt Analysis + Semantic Cache
 pub use p2_router::{
     P2IntelligentRouter, P2RouterConfig, P2RouterError, PreRouteResult, RoutingDecision,
+};
+
+// A/B Testing Framework (P3)
+pub use ab_testing::{
+    ABTestingEngine, AssignmentStrategy, ExperimentConfig, ExperimentId, ExperimentOutcome,
+    ExperimentReport, ExperimentStatus, ExperimentValidationError, MetricStats, MetricSummary,
+    OutcomeTracker, SignificanceCalculator, SignificanceResult, TrackedMetric,
+    TrafficSplitManager, VariantAssignment, VariantConfig, VariantId, VariantStats,
+    VariantSummary,
 };
 
 // Re-export StageResult from cowork_types module for backward compatibility
